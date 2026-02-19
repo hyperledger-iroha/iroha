@@ -305,3 +305,38 @@ test("connect journal rejects fractional retention", () => {
     (error) => error?.name === "ConnectJournalError" && /retentionMs/.test(error.message),
   );
 });
+
+test("indexeddb journal drops corrupted entries and keeps valid records", async () => {
+  const factory = new FakeIndexedDbFactory();
+  const journal = new ConnectQueueJournal("AQIDBAUGBwg", {
+    retentionMs: 5_000,
+    maxRecordsPerQueue: 8,
+    indexedDbFactory: factory,
+    indexedDbName: "iroha_connect_corrupted_records",
+  });
+  await journal.append(ConnectDirection.APP_TO_WALLET, 1, new Uint8Array([0x10]), {
+    receivedAtMs: 10,
+  });
+  await journal.append(ConnectDirection.APP_TO_WALLET, 2, new Uint8Array([0x20]), {
+    receivedAtMs: 20,
+  });
+
+  const db = factory.databases.get("iroha_connect_corrupted_records");
+  assert.ok(db, "indexeddb test database should exist");
+  const store = db.stores.get("records");
+  assert.ok(store, "records object store should exist");
+  store.entries[0].value.encoded = new Uint8Array([0x00, 0x01, 0x02]);
+  store.entries[0].value.encodedLength = 3;
+
+  const records = await journal.records(ConnectDirection.APP_TO_WALLET, { nowMs: 100 });
+  assert.deepEqual(
+    records.map((record) => Number(record.sequence)),
+    [2],
+  );
+
+  const popped = await journal.popOldest(ConnectDirection.APP_TO_WALLET, 2, { nowMs: 150 });
+  assert.deepEqual(
+    popped.map((record) => Number(record.sequence)),
+    [2],
+  );
+});

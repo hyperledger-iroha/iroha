@@ -13387,6 +13387,9 @@ test("getConnectStatus normalizes payload", async () => {
             frame_max_bytes: 1024,
             session_buffer_max_bytes: 2048,
             relay_enabled: true,
+            relay_strategy: "broadcast",
+            relay_effective_strategy: "local_only",
+            relay_p2p_attached: false,
             heartbeat_interval_ms: 5000,
             heartbeat_miss_tolerance: 2,
             heartbeat_min_interval_ms: 1000,
@@ -13398,7 +13401,11 @@ test("getConnectStatus normalizes payload", async () => {
           buffer_drops_total: 1,
           plaintext_control_drops_total: 2,
           monotonic_drops_total: 3,
+          sequence_violation_closes_total: 4,
+          role_direction_mismatch_total: 5,
           ping_miss_total: 4,
+          p2p_rebroadcasts_total: 6,
+          p2p_rebroadcast_skipped_total: 7,
         },
         headers: { "content-type": "application/json" },
       }),
@@ -13409,6 +13416,67 @@ test("getConnectStatus normalizes payload", async () => {
   assert.equal(status?.perIpSessions[0]?.ip, "127.0.0.1");
   assert.equal(status?.policy?.wsMaxSessions, 64);
   assert.equal(status?.policy?.relayEnabled, true);
+  assert.equal(status?.policy?.relayStrategy, "broadcast");
+  assert.equal(status?.policy?.relayEffectiveStrategy, "local_only");
+  assert.equal(status?.policy?.relayP2pAttached, false);
+  assert.equal(status?.sequenceViolationClosesTotal, 4);
+  assert.equal(status?.roleDirectionMismatchTotal, 5);
+  assert.equal(status?.p2pRebroadcastsTotal, 6);
+  assert.equal(status?.p2pRebroadcastSkippedTotal, 7);
+});
+
+test("getConnectStatus preserves relay-disabled effective local-only fields", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          enabled: true,
+          sessions_total: 1,
+          sessions_active: 1,
+          per_ip_sessions: [{ ip: "127.0.0.1", sessions: 1 }],
+          buffered_sessions: 0,
+          total_buffer_bytes: 0,
+          dedupe_size: 0,
+          policy: {
+            ws_max_sessions: 64,
+            ws_per_ip_max_sessions: 4,
+            ws_rate_per_ip_per_min: 60,
+            session_ttl_ms: 1000,
+            frame_max_bytes: 1024,
+            session_buffer_max_bytes: 2048,
+            relay_enabled: false,
+            relay_strategy: "broadcast",
+            relay_effective_strategy: "local_only",
+            relay_p2p_attached: true,
+            heartbeat_interval_ms: 5000,
+            heartbeat_miss_tolerance: 2,
+            heartbeat_min_interval_ms: 1000,
+          },
+          frames_in_total: 1,
+          frames_out_total: 1,
+          ciphertext_total: 1,
+          dedupe_drops_total: 0,
+          buffer_drops_total: 0,
+          plaintext_control_drops_total: 0,
+          monotonic_drops_total: 0,
+          sequence_violation_closes_total: 0,
+          role_direction_mismatch_total: 0,
+          ping_miss_total: 0,
+          p2p_rebroadcasts_total: 0,
+          p2p_rebroadcast_skipped_total: 0,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  const status = await client.getConnectStatus();
+  assert.ok(status);
+  assert.equal(status?.policy?.relayEnabled, false);
+  assert.equal(status?.policy?.relayStrategy, "broadcast");
+  assert.equal(status?.policy?.relayEffectiveStrategy, "local_only");
+  assert.equal(status?.policy?.relayP2pAttached, true);
+  assert.equal(status?.p2pRebroadcastsTotal, 0);
+  assert.equal(status?.p2pRebroadcastSkippedTotal, 0);
 });
 
 test("getConnectStatus rejects non-integer policy values", async () => {
@@ -13432,6 +13500,9 @@ test("getConnectStatus rejects non-integer policy values", async () => {
             frame_max_bytes: 1024,
             session_buffer_max_bytes: 2048,
             relay_enabled: true,
+            relay_strategy: "broadcast",
+            relay_effective_strategy: "local_only",
+            relay_p2p_attached: false,
             heartbeat_interval_ms: 5000,
             heartbeat_miss_tolerance: 2,
             heartbeat_min_interval_ms: 1000,
@@ -13443,7 +13514,11 @@ test("getConnectStatus rejects non-integer policy values", async () => {
           buffer_drops_total: 0,
           plaintext_control_drops_total: 0,
           monotonic_drops_total: 0,
+          sequence_violation_closes_total: 0,
+          role_direction_mismatch_total: 0,
           ping_miss_total: 0,
+          p2p_rebroadcasts_total: 0,
+          p2p_rebroadcast_skipped_total: 0,
         },
         headers: { "content-type": "application/json" },
       }),
@@ -15196,6 +15271,7 @@ test("issueOfflineCertificate posts draft and parses response", async () => {
   const certId = "deadbeef".repeat(8);
   const draft = {
     controller: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
+    operator: FIXTURE_AUTHORITY_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "10",
@@ -15220,6 +15296,7 @@ test("issueOfflineCertificate posts draft and parses response", async () => {
         certificate_id_hex: certId,
         certificate: {
           controller: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
+          operator: FIXTURE_AUTHORITY_ID,
           allowance: {
             asset: "usd#wonderland",
             amount: "10",
@@ -15264,6 +15341,7 @@ test("issueOfflineCertificate rejects invalid Numeric amounts", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const draft = {
     controller: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
+    operator: FIXTURE_AUTHORITY_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "1e-3",
@@ -15297,6 +15375,7 @@ test("issueOfflineCertificateRenewal posts to renewal path", async () => {
         certificate_id_hex: certId,
         certificate: {
           controller: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
+          operator: FIXTURE_AUTHORITY_ID,
           allowance: {
             asset: "usd#wonderland",
             amount: "10",
@@ -15324,6 +15403,7 @@ test("issueOfflineCertificateRenewal posts to renewal path", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await client.issueOfflineCertificateRenewal(certId.toUpperCase(), {
     controller: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
+    operator: FIXTURE_AUTHORITY_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "10",
@@ -15365,6 +15445,7 @@ test("registerOfflineAllowance posts certificate and parses response", async () 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const certificate = {
     controller: FIXTURE_ALICE_ID,
+    operator: FIXTURE_AUTHORITY_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "10",
@@ -15413,6 +15494,7 @@ test("renewOfflineAllowance posts to renewal path", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const certificate = {
     controller: FIXTURE_ALICE_ID,
+    operator: FIXTURE_AUTHORITY_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "10",
@@ -15458,6 +15540,7 @@ test("topUpOfflineAllowance chains issue and register", async () => {
         certificate_id_hex: certId,
         certificate: {
           controller: FIXTURE_ALICE_ID,
+          operator: FIXTURE_AUTHORITY_ID,
           allowance: {
             asset: "usd#wonderland",
             amount: "10",
@@ -15494,6 +15577,7 @@ test("topUpOfflineAllowance chains issue and register", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const draft = {
     controller: FIXTURE_ALICE_ID,
+    operator: FIXTURE_AUTHORITY_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "10",
@@ -15534,6 +15618,7 @@ test("topUpOfflineAllowanceRenewal chains issue and renew", async () => {
         certificate_id_hex: certId,
         certificate: {
           controller: FIXTURE_ALICE_ID,
+          operator: FIXTURE_AUTHORITY_ID,
           allowance: {
             asset: "usd#wonderland",
             amount: "10",
@@ -15570,6 +15655,7 @@ test("topUpOfflineAllowanceRenewal chains issue and renew", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const draft = {
     controller: FIXTURE_ALICE_ID,
+    operator: FIXTURE_AUTHORITY_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "10",

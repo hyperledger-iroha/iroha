@@ -358,9 +358,15 @@ fn reserve_offline_allowance(
     amount: &Numeric,
 ) -> Result<(), Error> {
     let escrow_account = resolve_offline_escrow_account(state_transaction, asset.definition())?;
-    let Some(escrow_account) = escrow_account else {
-        return Ok(());
-    };
+    let escrow_account = escrow_account.ok_or_else(|| {
+        labeled_invariant(
+            "escrow_missing",
+            format!(
+                "offline escrow account not configured for asset definition `{}`",
+                asset.definition(),
+            ),
+        )
+    })?;
     // Zero-amount allowances should not require a pre-existing asset entry.
     if amount.is_zero() {
         return Ok(());
@@ -1162,6 +1168,75 @@ pub mod isi {
         }
 
         #[test]
+        fn register_allowance_fails_without_escrow_when_not_required_and_metadata_disabled_or_missing()
+         {
+            for offline_enabled in [None, Some(false)] {
+                let mut certificate = sample_certificate();
+                let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+                certificate.operator_signature = Signature::new(
+                    operator_keys.private_key(),
+                    &certificate
+                        .operator_signing_bytes()
+                        .expect("certificate signing bytes"),
+                );
+
+                let controller = certificate.controller.clone();
+                let definition_id = certificate.allowance.asset.definition().clone();
+                let domain = Domain::new(controller.domain().clone()).build(&controller);
+                let controller_account = Account::new(controller.clone()).build(&controller);
+                let mut asset_definition =
+                    AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                        .build(&controller);
+                if let Some(offline_enabled) = offline_enabled {
+                    asset_definition.metadata_mut().insert(
+                        OFFLINE_ASSET_ENABLED_METADATA_KEY
+                            .parse()
+                            .expect("metadata key"),
+                        Json::new(offline_enabled),
+                    );
+                }
+                let world = World::with([domain], [controller_account], [asset_definition]);
+
+                let kura = Kura::blank_kura_for_testing();
+                let query = LiveQueryStore::start_test();
+                let mut state = State::new(world, Arc::clone(&kura), query);
+                state.settlement.offline.escrow_required = false;
+
+                let header = BlockHeader::new(
+                    nonzero!(2_u64),
+                    None,
+                    None,
+                    None,
+                    certificate.issued_at_ms + 1,
+                    0,
+                );
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+                transaction
+                    .world
+                    .deposit_numeric_asset(
+                        &certificate.allowance.asset,
+                        &certificate.allowance.amount,
+                    )
+                    .expect("prefund allowance asset");
+
+                let err = register_allowance(
+                    RegisterOfflineAllowance {
+                        certificate: certificate.clone(),
+                    },
+                    &controller,
+                    &mut transaction,
+                )
+                .expect_err("missing escrow should be rejected");
+                let expected = format!("{OFFLINE_REJECTION_REASON_PREFIX}escrow_missing");
+                assert!(
+                    err.to_string().contains(&expected),
+                    "unexpected error for offline_enabled={offline_enabled:?}: {err}"
+                );
+            }
+        }
+
+        #[test]
         fn register_allowance_derives_escrow_from_metadata_when_map_missing() {
             let mut certificate = sample_certificate();
             let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
@@ -1297,6 +1372,46 @@ pub mod isi {
                 .map(|asset| asset.as_ref().clone())
                 .unwrap_or_else(Numeric::zero);
             assert_eq!(deposit_balance, amount);
+        }
+
+        #[test]
+        fn credit_deposit_account_rejects_missing_escrow_when_not_required() {
+            let deposit = sample_account(0x03, "offline");
+            let definition_id =
+                AssetDefinitionId::from_str("xor#offline").expect("asset definition id");
+            let domain = Domain::new(deposit.domain().clone()).build(&deposit);
+            let deposit_account = Account::new(deposit.clone()).build(&deposit);
+            let mut asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer()).build(&deposit);
+            asset_definition.metadata_mut().insert(
+                OFFLINE_ASSET_ENABLED_METADATA_KEY
+                    .parse()
+                    .expect("metadata key"),
+                Json::new(false),
+            );
+            let world = World::with([domain], [deposit_account], [asset_definition]);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = false;
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_000, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let asset = AssetId::new(definition_id.clone(), deposit.clone());
+            let amount = Numeric::new(100, 0);
+            let err = credit_deposit_account(&mut transaction, &asset, &deposit, &amount)
+                .expect_err("missing escrow should reject settlement credit");
+            let expected = format!("{OFFLINE_REJECTION_REASON_PREFIX}escrow_missing");
+            assert!(err.to_string().contains(&expected));
+
+            let deposit_asset = AssetId::new(definition_id, deposit);
+            assert!(
+                transaction.world.assets.get(&deposit_asset).is_none(),
+                "deposit account must not be credited when escrow is missing"
+            );
         }
 
         fn sample_transfer_record_with_policy(
@@ -2646,12 +2761,23 @@ pub mod isi {
         let spec = state_transaction.numeric_spec_for(&definition_id)?;
         assert_numeric_spec_with(amount, spec)?;
         let escrow_account = resolve_offline_escrow_account(state_transaction, &definition_id)?;
-        if let Some(escrow_account) = escrow_account {
-            let escrow_asset = AssetId::new(definition_id, escrow_account);
-            state_transaction
+        let escrow_account = escrow_account.ok_or_else(|| {
+            labeled_invariant(
+                "escrow_missing",
+                format!(
+                    "offline escrow account not configured for asset definition `{definition_id}`",
+                ),
+            )
+        })?;
+        if amount.is_zero() {
+            return state_transaction
                 .world
-                .withdraw_numeric_asset(&escrow_asset, amount)?;
+                .deposit_numeric_asset(&deposit_asset, amount);
         }
+        let escrow_asset = AssetId::new(definition_id, escrow_account);
+        state_transaction
+            .world
+            .withdraw_numeric_asset(&escrow_asset, amount)?;
 
         state_transaction
             .world

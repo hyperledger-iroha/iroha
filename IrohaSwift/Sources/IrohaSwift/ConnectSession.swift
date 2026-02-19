@@ -45,14 +45,19 @@ public final class ConnectSession: @unchecked Sendable {
         case closed
     }
 
+    private struct MutableState {
+        var sequence: UInt64
+        var sessionState: SessionState
+        var directionKeys: ConnectDirectionKeys?
+        var flowControl: ConnectFlowController?
+    }
+
     private let client: ConnectClient
     private let sessionID: Data
-    private var sequence: UInt64 = 0
-    private var state: SessionState = .idle
-    private var directionKeys: ConnectDirectionKeys?
+    private let stateQueue = DispatchQueue(label: "org.hyperledger.iroha.connect-session.state")
+    private var mutableState: MutableState
     private let diagnostics: ConnectSessionDiagnostics
     private let customEventStreamBuilder: ConnectEventStreamBuilder?
-    private var flowControl: ConnectFlowController?
 
     public init(sessionID: Data,
                 client: ConnectClient,
@@ -62,28 +67,36 @@ public final class ConnectSession: @unchecked Sendable {
                 eventStreamBuilder: ConnectEventStreamBuilder? = nil) {
         self.sessionID = sessionID
         self.client = client
-        self.directionKeys = directionKeys
-        if let window = flowControl {
-            self.flowControl = ConnectFlowController(window: window)
-        }
+        let flowController = flowControl.map { ConnectFlowController(window: $0) }
+        self.mutableState = MutableState(sequence: 0,
+                                         sessionState: .idle,
+                                         directionKeys: directionKeys,
+                                         flowControl: flowController)
         self.diagnostics = diagnostics ?? ConnectSessionDiagnostics(sessionID: sessionID)
         self.customEventStreamBuilder = eventStreamBuilder
     }
 
     /// Sends an `Open` control frame towards the wallet.
     public func sendOpen(open: ConnectOpen) async throws {
-        try ensureNotClosed()
-        guard state == .idle else { return }
-        try await sendControl(.open(open), direction: .appToWallet)
-        state = .opened
+        guard let sequence = try reserveOpenSequence() else { return }
+        do {
+            try await sendControl(.open(open), direction: .appToWallet, sequence: sequence)
+        } catch {
+            rollbackOpenState()
+            throw error
+        }
     }
 
     /// Sends a `Close` control frame and closes the underlying socket.
     public func sendClose(close: ConnectClose = ConnectClose(role: .app, code: 1000, reason: nil, retryable: false)) async throws {
-        guard state != .closed else { return }
-        try await sendControl(.close(close), direction: .appToWallet)
+        guard let sequence = reserveCloseSequence() else { return }
+        do {
+            try await sendControl(.close(close), direction: .appToWallet, sequence: sequence)
+        } catch {
+            await client.close()
+            throw error
+        }
         await client.close()
-        state = .closed
     }
 
     /// Waits for the next control frame from the counterparty.
@@ -109,17 +122,24 @@ public final class ConnectSession: @unchecked Sendable {
 
     /// Update the symmetric keys used to decrypt ciphertext frames.
     public func setDirectionKeys(_ keys: ConnectDirectionKeys) {
-        directionKeys = keys
+        withLockedState { state in
+            state.directionKeys = keys
+        }
     }
 
     /// Install or update the flow-control window for inbound frames.
     public func setFlowControlWindow(_ window: ConnectFlowControlWindow) {
-        flowControl = ConnectFlowController(window: window)
+        withLockedState { state in
+            state.flowControl = ConnectFlowController(window: window)
+        }
     }
 
     /// Grant additional tokens for the given direction (for example when the peer sends a flow-control update).
     public func grantFlowControl(direction: ConnectDirection, tokens: UInt64) {
-        flowControl?.grant(direction: direction, tokens: tokens)
+        let controller = withLockedState { state in
+            state.flowControl
+        }
+        controller?.grant(direction: direction, tokens: tokens)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -174,30 +194,65 @@ public final class ConnectSession: @unchecked Sendable {
         guard case .ciphertext = frame.kind else {
             throw ConnectEnvelopeError.unsupportedFrameKind
         }
-        try flowControl?.consume(direction: frame.direction)
-        guard let keys = directionKeys else {
+        let (keys, flowController) = withLockedState { state in
+            (state.directionKeys, state.flowControl)
+        }
+        guard let keys else {
             throw ConnectSessionError.missingDecryptionKeys
         }
         let symmetricKey = frame.direction == .appToWallet ? keys.appToWallet : keys.walletToApp
-        return try ConnectEnvelope.decrypt(frame: frame, symmetricKey: symmetricKey)
+        let envelope = try ConnectEnvelope.decrypt(frame: frame, symmetricKey: symmetricKey)
+        try flowController?.consume(direction: frame.direction)
+        return envelope
     }
 
-    private func sendControl(_ control: ConnectControl, direction: ConnectDirection) async throws {
+    private func sendControl(_ control: ConnectControl,
+                             direction: ConnectDirection,
+                             sequence: UInt64) async throws {
         let frame = ConnectFrame(sessionID: sessionID,
                                  direction: direction,
-                                 sequence: nextSequence(),
+                                 sequence: sequence,
                                  kind: .control(control))
         try await client.send(frame: frame)
     }
 
-    private func nextSequence() -> UInt64 {
-        sequence &+= 1
-        return sequence
+    private func reserveOpenSequence() throws -> UInt64? {
+        try withLockedState { state in
+            if state.sessionState == .closed {
+                throw ConnectSessionError.sessionClosed
+            }
+            guard state.sessionState == .idle else {
+                return nil
+            }
+            state.sequence &+= 1
+            state.sessionState = .opened
+            return state.sequence
+        }
     }
 
-    private func ensureNotClosed() throws {
-        if state == .closed {
-            throw ConnectSessionError.sessionClosed
+    private func rollbackOpenState() {
+        withLockedState { state in
+            if state.sessionState == .opened {
+                state.sessionState = .idle
+            }
+        }
+    }
+
+    private func reserveCloseSequence() -> UInt64? {
+        withLockedState { state in
+            if state.sessionState == .closed {
+                return nil
+            }
+            state.sequence &+= 1
+            state.sessionState = .closed
+            return state.sequence
+        }
+    }
+
+    @discardableResult
+    private func withLockedState<T>(_ body: (inout MutableState) throws -> T) rethrows -> T {
+        try stateQueue.sync {
+            try body(&mutableState)
         }
     }
 

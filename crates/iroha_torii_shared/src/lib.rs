@@ -146,6 +146,34 @@ impl ErrorEnvelope {
     }
 }
 
+/// Queue pressure snapshot returned with transaction queue rejections.
+#[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
+pub struct QueueErrorSnapshot {
+    /// Queue state label (`healthy` or `saturated`).
+    pub state: String,
+    /// Current queued transaction count.
+    pub queued: u64,
+    /// Configured queue capacity.
+    pub capacity: u64,
+    /// Whether the queue is currently saturated.
+    pub saturated: bool,
+}
+
+/// Structured queue rejection payload returned by Torii.
+#[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
+pub struct QueueErrorEnvelope {
+    /// Stable queue rejection code (`queue_full`, `per_user_queue_limit`, ...).
+    pub code: String,
+    /// Human-readable queue rejection detail.
+    pub message: String,
+    /// Queue pressure snapshot at rejection time.
+    pub queue: QueueErrorSnapshot,
+    /// Suggested retry delay in seconds for transient queue errors.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub retry_after_seconds: Option<u64>,
+}
+
 /// Supported Torii API versions and defaults exposed over `/v1/api/versions`.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
 pub struct ApiVersionInfo {
@@ -193,13 +221,38 @@ pub struct ProofRetentionStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::ErrorEnvelope;
+    use super::{ErrorEnvelope, QueueErrorEnvelope, QueueErrorSnapshot};
 
     #[test]
     fn error_envelope_new_sets_fields() {
         let envelope = ErrorEnvelope::new("test_code", "test message");
         assert_eq!(envelope.code(), "test_code");
         assert_eq!(envelope.message(), "test message");
+    }
+
+    #[test]
+    fn queue_error_envelope_roundtrip_preserves_fields() {
+        let envelope = QueueErrorEnvelope {
+            code: "queue_full".to_owned(),
+            message: "transaction queue is at capacity".to_owned(),
+            queue: QueueErrorSnapshot {
+                state: "saturated".to_owned(),
+                queued: 24,
+                capacity: 24,
+                saturated: true,
+            },
+            retry_after_seconds: Some(1),
+        };
+        let bytes = norito::to_bytes(&envelope).expect("encode queue envelope");
+        let decoded: QueueErrorEnvelope =
+            norito::decode_from_bytes(&bytes).expect("decode queue envelope");
+        assert_eq!(decoded.code, "queue_full");
+        assert_eq!(decoded.message, "transaction queue is at capacity");
+        assert_eq!(decoded.queue.state, "saturated");
+        assert_eq!(decoded.queue.queued, 24);
+        assert_eq!(decoded.queue.capacity, 24);
+        assert!(decoded.queue.saturated);
+        assert_eq!(decoded.retry_after_seconds, Some(1));
     }
 }
 

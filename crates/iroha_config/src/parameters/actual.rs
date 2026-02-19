@@ -6121,7 +6121,7 @@ pub struct Connect {
     pub dedupe_cap: usize,
     /// Enable P2P re-broadcast relay.
     pub relay_enabled: bool,
-    /// Relay strategy string ("broadcast" for now).
+    /// Relay strategy string (`broadcast` or `local_only`).
     pub relay_strategy: &'static str,
     /// Optional hop TTL for relay (0 = disabled).
     pub p2p_ttl_hops: u8,

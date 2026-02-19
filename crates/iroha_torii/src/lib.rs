@@ -253,7 +253,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_primitives::addr::SocketAddr;
-use iroha_torii_shared::{ErrorEnvelope, uri};
+use iroha_torii_shared::{ErrorEnvelope, QueueErrorEnvelope, QueueErrorSnapshot, uri};
 use ivm::iso20022::{MsgError, parse_message};
 use mv::storage::StorageReadOnly;
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -7466,6 +7466,87 @@ async fn handler_events_sse(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_gov_stream(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, Error> {
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return Ok(routing::handle_v1_gov_stream(app.events.clone()).into_response());
+    }
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(&headers, None, "v1/gov/stream", app.api_token_enforced());
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    Ok(routing::handle_v1_gov_stream(app.events.clone()).into_response())
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+async fn handler_telemetry_live(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, Error> {
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return Ok(routing::handle_v1_telemetry_live(
+            app.state.clone(),
+            app.kura.clone(),
+            app.telemetry.clone(),
+            app.peer_telemetry.clone(),
+            app.events.clone(),
+        )?
+        .into_response());
+    }
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/telemetry/live",
+        app.api_token_enforced(),
+    );
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    Ok(routing::handle_v1_telemetry_live(
+        app.state.clone(),
+        app.kura.clone(),
+        app.telemetry.clone(),
+        app.peer_telemetry.clone(),
+        app.events.clone(),
+    )?
+    .into_response())
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_explorer_transactions_stream(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -14297,10 +14378,12 @@ impl Torii {
                 );
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             let router = {
-                router.route(
-                    "/v1/telemetry/peers-info",
-                    get(handler_telemetry_peers_info),
-                )
+                router
+                    .route(
+                        "/v1/telemetry/peers-info",
+                        get(handler_telemetry_peers_info),
+                    )
+                    .route("/v1/telemetry/live", get(handler_telemetry_live))
             };
             #[cfg(not(all(feature = "app_api", feature = "telemetry")))]
             let router = router;
@@ -14639,6 +14722,7 @@ impl Torii {
                     iroha_torii_shared::uri::GOV_PROTECTED_SET,
                     get(handler_gov_protected_get),
                 )
+                .route("/v1/gov/stream", get(handler_gov_stream))
                 .route("/v1/gov/unlocks/stats", get(handler_gov_unlock_stats))
                 .route(
                     iroha_torii_shared::uri::GOV_INSTANCES_BY_NS,
@@ -17060,23 +17144,6 @@ impl IntoResponse for Error {
             }
         }
     }
-}
-
-#[derive(Debug, Clone, norito::derive::NoritoSerialize)]
-struct QueueErrorSnapshot {
-    state: &'static str,
-    queued: u64,
-    capacity: u64,
-    saturated: bool,
-}
-
-#[derive(Debug, Clone, norito::derive::NoritoSerialize)]
-struct QueueErrorEnvelope {
-    code: &'static str,
-    message: &'static str,
-    queue: QueueErrorSnapshot,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    retry_after_seconds: Option<u64>,
 }
 
 #[allow(dead_code)]
@@ -20294,10 +20361,14 @@ impl Error {
             _ => None,
         };
         QueueErrorEnvelope {
-            code,
-            message,
+            code: code.to_owned(),
+            message: message.to_owned(),
             queue: QueueErrorSnapshot {
-                state: if saturated { "saturated" } else { "healthy" },
+                state: if saturated {
+                    "saturated".to_owned()
+                } else {
+                    "healthy".to_owned()
+                },
                 queued: backpressure.queued() as u64,
                 capacity: backpressure.capacity().get() as u64,
                 saturated,

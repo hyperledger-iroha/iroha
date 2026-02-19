@@ -11,6 +11,7 @@ use std::{
 use iroha_config::client_api::ConfigGetDTO;
 use iroha_crypto::PublicKey;
 use iroha_logger::prelude::*;
+use monitor::Metrics as PeerMetricsSnapshot;
 pub use monitor::Update;
 use tokio::sync::RwLock;
 use url::Url;
@@ -45,7 +46,7 @@ pub struct PeerConfigDto {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct PeerConfigSnapshot {
+pub(crate) struct PeerConfigSnapshot {
     pub public_key: Option<PublicKey>,
     pub queue_capacity: Option<u32>,
     pub network_block_gossip_size: Option<u32>,
@@ -65,6 +66,22 @@ pub struct PeerInfoDto {
     pub location: Option<GeoLocation>,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub connected_peers: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub struct PeerStatusDto {
+    pub url: String,
+    pub block: u32,
+    pub commit_time: ExplorerDurationDto,
+    pub avg_commit_time: ExplorerDurationDto,
+    pub queue_size: u32,
+    pub uptime: ExplorerDurationDto,
+}
+
+#[derive(Clone, Debug)]
+pub struct PeerTelemetrySnapshot {
+    pub peers_info: Vec<PeerInfoDto>,
+    pub peers_status: Vec<PeerStatusDto>,
 }
 
 #[derive(Clone, Debug)]
@@ -147,8 +164,8 @@ impl PeerTelemetryService {
                     .collect::<Vec<_>>();
                 state.connected_peers = Some(list);
             }
-            Update::Metrics(_) => {
-                // Peer metrics are used by `/v1/telemetry/live`; explorer only needs metadata.
+            Update::Metrics(metrics) => {
+                state.metrics = Some(metrics);
             }
         }
     }
@@ -156,6 +173,21 @@ impl PeerTelemetryService {
     pub async fn peers_info(&self) -> Vec<PeerInfoDto> {
         let guard = self.peers.read().await;
         guard.values().map(PeerState::info).collect()
+    }
+
+    pub async fn peers_status(&self) -> Vec<PeerStatusDto> {
+        let guard = self.peers.read().await;
+        guard.values().filter_map(PeerState::status).collect()
+    }
+
+    pub async fn snapshot(&self) -> PeerTelemetrySnapshot {
+        let guard = self.peers.read().await;
+        let peers_info = guard.values().map(PeerState::info).collect();
+        let peers_status = guard.values().filter_map(PeerState::status).collect();
+        PeerTelemetrySnapshot {
+            peers_info,
+            peers_status,
+        }
     }
 }
 
@@ -207,6 +239,7 @@ struct PeerState {
     config: Option<PeerConfigSnapshot>,
     geo: Option<GeoLocation>,
     connected_peers: Option<Vec<String>>,
+    metrics: Option<PeerMetricsSnapshot>,
 }
 
 impl PeerState {
@@ -218,6 +251,7 @@ impl PeerState {
             config: None,
             geo: None,
             connected_peers: None,
+            metrics: None,
         }
     }
 
@@ -231,6 +265,28 @@ impl PeerState {
             connected_peers: self.connected_peers.clone(),
         }
     }
+
+    fn status(&self) -> Option<PeerStatusDto> {
+        let metrics = self.metrics?;
+        Some(PeerStatusDto {
+            url: self.url.as_str().to_string(),
+            block: metrics.block,
+            commit_time: ExplorerDurationDto {
+                ms: duration_ms_u64(metrics.block_commit_time),
+            },
+            avg_commit_time: ExplorerDurationDto {
+                ms: duration_ms_u64(metrics.avg_commit_time),
+            },
+            queue_size: metrics.queue_size,
+            uptime: ExplorerDurationDto {
+                ms: duration_ms_u64(metrics.uptime),
+            },
+        })
+    }
+}
+
+fn duration_ms_u64(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 impl PeerConfigDto {
@@ -266,6 +322,7 @@ impl From<&ConfigGetDTO> for PeerConfigSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn geo_lookup_config_respects_disable_helper() {
@@ -287,5 +344,70 @@ mod tests {
             config.endpoint.as_ref().map(Url::as_str),
             Some(endpoint.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn peers_status_reflects_metrics_updates() {
+        let service = PeerTelemetryService::new(Vec::new(), GeoLookupConfig::disabled());
+        let url: ToriiUrl = "http://peer.example:8080".parse().expect("torii url");
+        service
+            .apply_update(
+                url.clone(),
+                Update::Metrics(monitor::Metrics {
+                    block: 42,
+                    block_commit_time: Duration::from_millis(850),
+                    avg_commit_time: Duration::from_millis(700),
+                    queue_size: 3,
+                    uptime: Duration::from_secs(3600),
+                }),
+            )
+            .await;
+
+        let statuses = service.peers_status().await;
+        assert_eq!(statuses.len(), 1);
+        let status = &statuses[0];
+        assert_eq!(status.url, url.as_str());
+        assert_eq!(status.block, 42);
+        assert_eq!(status.commit_time.ms, 850);
+        assert_eq!(status.avg_commit_time.ms, 700);
+        assert_eq!(status.queue_size, 3);
+        assert_eq!(status.uptime.ms, 3_600_000);
+    }
+
+    #[tokio::test]
+    async fn snapshot_returns_info_and_status_views() {
+        let service = PeerTelemetryService::new(Vec::new(), GeoLookupConfig::disabled());
+        let url: ToriiUrl = "http://peer.example:8080".parse().expect("torii url");
+        service
+            .apply_update(
+                url.clone(),
+                Update::Connected(Box::new(PeerConfigSnapshot {
+                    public_key: None,
+                    queue_capacity: Some(256),
+                    network_block_gossip_size: Some(64),
+                    network_block_gossip_period_ms: Some(1_500),
+                    network_tx_gossip_size: Some(32),
+                    network_tx_gossip_period_ms: Some(2_500),
+                })),
+            )
+            .await;
+        service
+            .apply_update(
+                url.clone(),
+                Update::Metrics(monitor::Metrics {
+                    block: 9,
+                    block_commit_time: Duration::from_millis(1200),
+                    avg_commit_time: Duration::from_millis(1100),
+                    queue_size: 1,
+                    uptime: Duration::from_secs(120),
+                }),
+            )
+            .await;
+
+        let snapshot = service.snapshot().await;
+        assert_eq!(snapshot.peers_info.len(), 1);
+        assert_eq!(snapshot.peers_status.len(), 1);
+        assert_eq!(snapshot.peers_info[0].url, url.as_str());
+        assert_eq!(snapshot.peers_status[0].url, url.as_str());
     }
 }

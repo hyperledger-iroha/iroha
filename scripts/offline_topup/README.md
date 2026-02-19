@@ -72,8 +72,8 @@ as `Numeric::from_str` (plain decimal with optional fractional part).
 Asset definitions intended for offline allowances must set metadata
 `offline.enabled = true`. The ledger derives a deterministic escrow account for the asset
 definition and records it in `settlement.offline.escrow_accounts` (creating the account if
-needed). If `settlement.offline.escrow_required=true`, registration will reject missing escrow
-bindings, so ensure the asset definition metadata is in place before submitting allowances.
+needed). Registration and settlement reject missing escrow bindings, so ensure the asset
+definition metadata is in place before submitting allowances.
 
 Each allowance entry emits:
 

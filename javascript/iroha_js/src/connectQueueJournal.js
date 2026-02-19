@@ -122,16 +122,16 @@ class MemoryJournalStore {
 
   async records(direction, nowMs) {
     this.#prune(direction, nowMs);
-    return this.queues[direction].map((entry) =>
-      ConnectJournalRecord.decode(entry.encoded).record,
-    );
+    this.#compactCorrupted(direction);
+    return this.queues[direction].map((entry) => decodeEntry(entry));
   }
 
   async popOldest(direction, count, nowMs) {
     this.#prune(direction, nowMs);
+    this.#compactCorrupted(direction);
     const queue = this.queues[direction];
     const removed = queue.splice(0, Math.min(count, queue.length));
-    return removed.map((entry) => ConnectJournalRecord.decode(entry.encoded).record);
+    return removed.map((entry) => decodeEntry(entry));
   }
 
   #prune(direction, nowMs) {
@@ -147,6 +147,17 @@ class MemoryJournalStore {
       const removed = queue.shift();
       totalBytes -= removed.encoded.length;
     }
+  }
+
+  #compactCorrupted(direction) {
+    const queue = this.queues[direction];
+    const compacted = [];
+    for (const entry of queue) {
+      if (decodeEntrySafe(entry) !== null) {
+        compacted.push(entry);
+      }
+    }
+    this.queues[direction] = compacted;
   }
 }
 
@@ -185,18 +196,27 @@ class IndexedDbJournalStore {
   async records(direction, nowMs) {
     return this.#withStore(async (store) => {
       const entries = await this.#collectAndPrune(store, direction, nowMs);
-      return entries.map(decodeEntry);
+      return this.#decodeEntries(store, entries);
     });
   }
 
   async popOldest(direction, count, nowMs) {
     return this.#withStore(async (store) => {
       const entries = await this.#collectAndPrune(store, direction, nowMs);
-      const removed = entries.splice(0, Math.min(count, entries.length));
-      for (const entry of removed) {
+      const records = [];
+      for (const entry of entries) {
+        const record = decodeEntrySafe(entry);
+        if (record === null) {
+          await requestToPromise(store.delete(entry.id));
+          continue;
+        }
+        if (records.length >= count) {
+          continue;
+        }
         await requestToPromise(store.delete(entry.id));
+        records.push(record);
       }
-      return removed.map(decodeEntry);
+      return records;
     });
   }
 
@@ -248,6 +268,19 @@ class IndexedDbJournalStore {
     const result = await callback(store);
     await transactionComplete(tx);
     return result;
+  }
+
+  async #decodeEntries(store, entries) {
+    const records = [];
+    for (const entry of entries) {
+      const record = decodeEntrySafe(entry);
+      if (record === null) {
+        await requestToPromise(store.delete(entry.id));
+        continue;
+      }
+      records.push(record);
+    }
+    return records;
   }
 }
 
@@ -459,6 +492,14 @@ async function iterateCursor(request, callback) {
 function decodeEntry(entry) {
   const { record } = ConnectJournalRecord.decode(new Uint8Array(entry.encoded));
   return record;
+}
+
+function decodeEntrySafe(entry) {
+  try {
+    return decodeEntry(entry);
+  } catch {
+    return null;
+  }
 }
 
 function currentTimestamp() {

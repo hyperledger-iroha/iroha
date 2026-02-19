@@ -537,9 +537,9 @@ against duplicate `(certificate_id, counter)` claims.
    the asset definition’s domain (seeded from `Hash("iroha.offline.escrow.v1|<chain_id>|<asset_def_id>")`)
    and ensures the account exists. The derived binding may be cached in
    `settlement.offline.escrow_accounts`, but the ledger will re-derive it from metadata if the map is empty.
-4. If `settlement.offline.escrow_required=true`, ledger transfers the allowance amount from
-   `allowance.asset.account()` (the controller’s online balance) into the escrow account for the asset definition. Missing
-   `offline.enabled` (and no configured binding) rejects the registration.
+4. Ledger requires an escrow binding for offline allowances and transfers the allowance amount from
+   `allowance.asset.account()` (the controller’s online balance) into the escrow account for the
+   asset definition. Missing `offline.enabled` (and no configured binding) rejects the registration.
 5. Ledger stores an `OfflineAllowanceRecord` keyed by `certificate_id` and seeds
    `remaining_amount = allowance.amount`.
 
@@ -549,8 +549,8 @@ against duplicate `(certificate_id, counter)` claims.
 2. All receipts undergo signature verification (`sender_signature` vs. spend key) and policy checks.
 3. Platform proofs are validated (App Attest chain, KeyMint attestation, monotonic counters).
 4. The resulting commitment and `remaining_amount` are updated atomically; the aggregate amount is
-   deposited into `deposit_account` under the requested asset definition. When escrow backing is
-   enabled, the deposit is funded by debiting the escrow account for the asset definition.
+   deposited into `deposit_account` under the requested asset definition, funded by debiting the
+   escrow account for the asset definition.
 5. Bundle IDs are deduplicated to prevent replay (`offline_to_online_transfers` storage).
 
 ### 5.3 `RegisterOfflineVerdictRevocation`
