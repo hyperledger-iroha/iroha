@@ -100,6 +100,7 @@ docs/source/da/_generated/threat_model_report.json
 .swift-module-cache/
 .gradle/
 .gradle-local/
+local.properties
 java/iroha_android/.gradle-home/
 .target_small/
 target-sm/

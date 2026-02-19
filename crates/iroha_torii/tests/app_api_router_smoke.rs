@@ -169,6 +169,61 @@ async fn app_api_router_smoke() {
         assert!(ct.contains("text/event-stream"));
     }
 
+    // 2c) App API: GET /v1/gov/stream — endpoint exists; allow OK/429.
+    let resp_gov_sse = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/v1/gov/stream"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        resp_gov_sse.status(),
+        StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
+    ));
+    if resp_gov_sse.status() == StatusCode::OK {
+        let ct = resp_gov_sse
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("");
+        assert!(ct.contains("text/event-stream"));
+    }
+
+    // 2d) App API: GET /v1/telemetry/live — endpoint exists; allow OK/429/403.
+    let resp_telemetry_live = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/v1/telemetry/live"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    #[cfg(feature = "telemetry")]
+    {
+        assert!(matches!(
+            resp_telemetry_live.status(),
+            StatusCode::OK | StatusCode::TOO_MANY_REQUESTS | StatusCode::FORBIDDEN
+        ));
+        if resp_telemetry_live.status() == StatusCode::OK {
+            let ct = resp_telemetry_live
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|h| h.to_str().ok())
+                .unwrap_or("");
+            assert!(ct.contains("text/event-stream"));
+        }
+    }
+    #[cfg(not(feature = "telemetry"))]
+    {
+        assert_eq!(resp_telemetry_live.status(), StatusCode::NOT_FOUND);
+    }
+
     // 3) App API: GET /v1/webhooks — ensure route exists; allow OK or 429
     let resp_webhooks = app
         .clone()

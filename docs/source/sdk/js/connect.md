@@ -70,17 +70,32 @@ starts enforcing a new schema.
 session counts, and enforcement knobs that Torii exposes over
 `/v1/connect/status`. It mirrors the telemetry gadgets mentioned in JS4 so
 SDK-hosted dashboards or runbooks can confirm Connect is enabled before opening
-sessions.
+sessions. Use `status.p2pRebroadcastsTotal` to confirm when frames are being
+rebroadcast over Iroha P2P; in `local_only` mode (or unknown-strategy fallback
+to `local_only`) this counter stays unchanged. Track
+`status.policy.relayEffectiveStrategy` with `status.policy.relayP2pAttached` to
+verify that forwarding is effective over node-to-node relay, and monitor
+`status.p2pRebroadcastSkippedTotal` for attempted broadcast relays that could
+not forward because no P2P handle was attached. If
+`status.policy.relayEnabled === false`, effective strategy remains `local_only`
+even when the configured strategy is `broadcast` and `relayP2pAttached` is
+`true`.
 
 ```ts
 const status = await client.getConnectStatus();
 if (status === null) {
   throw new Error("Connect is disabled on this Torii endpoint");
 }
-console.log("max wallet sessions", status.policy.wallet.maxSessions);
+console.log("max ws sessions", status.policy.wsMaxSessions);
+console.log("relay enabled", status.policy.relayEnabled);
+console.log("relay strategy (configured)", status.policy.relayStrategy);
+console.log("relay strategy (effective)", status.policy.relayEffectiveStrategy);
+console.log("p2p attached", status.policy.relayP2pAttached);
 for (const sample of status.perIpSessions) {
-  console.log(sample.ip, sample.sessionsActive, sample.sessionsRejectedTotal);
+  console.log(sample.ip, sample.sessions);
 }
+console.log("p2p rebroadcasts", status.p2pRebroadcastsTotal);
+console.log("p2p rebroadcasts skipped", status.p2pRebroadcastSkippedTotal);
 ```
 
 ## Bootstrap preview sessions

@@ -186,6 +186,109 @@ final class ConnectSessionTests: XCTestCase {
             }
         }
     }
+
+    func testSendCloseIsIdempotentUnderConcurrency() async throws {
+        try requireConnectCodec()
+        let stub = StubWebSocketTask()
+        let client = ConnectClient(url: URL(string: "wss://example.test")!,
+                                   webSocketFactory: StubWebSocketFactory(task: stub).factory)
+        await client.start()
+        let session = ConnectSession(sessionID: Data(repeating: 0xAB, count: 32), client: client)
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<8 {
+                group.addTask {
+                    try await session.sendClose()
+                }
+            }
+            try await group.waitForAll()
+        }
+
+        XCTAssertEqual(stub.sentData.count, 1, "only one close frame should be emitted")
+        let frameData = try XCTUnwrap(stub.sentData.first)
+        let decoded = try ConnectCodec.decode(frameData)
+        if case let .control(.close(close)) = decoded.kind {
+            XCTAssertEqual(close.code, 1000)
+            XCTAssertEqual(close.role, .app)
+        } else {
+            XCTFail("expected close control frame")
+        }
+    }
+
+    func testMissingKeysDoesNotConsumeFlowControlToken() async throws {
+        try requireConnectCrypto()
+
+        let walletKey = Data(repeating: 0x61, count: 32)
+        let appKey = Data(repeating: 0x62, count: 32)
+        let sessionID = Data(repeating: 0x73, count: 32)
+        guard let encrypted = makeEncryptedCloseFrame(key: walletKey,
+                                                      sessionID: sessionID,
+                                                      direction: .walletToApp,
+                                                      sequence: 21,
+                                                      reason: "missing-key") else {
+            throw XCTSkip("NoritoBridge encryption helpers unavailable")
+        }
+
+        let stub = StubWebSocketTask()
+        let client = ConnectClient(url: URL(string: "wss://example.test")!,
+                                   webSocketFactory: StubWebSocketFactory(task: stub).factory)
+        await client.start()
+        let session = ConnectSession(sessionID: sessionID,
+                                     client: client,
+                                     flowControl: ConnectFlowControlWindow(appToWallet: 1,
+                                                                           walletToApp: 1))
+
+        stub.emit(encrypted)
+        await XCTAssertThrowsErrorAsync(try await session.nextEnvelope()) { error in
+            guard case ConnectSessionError.missingDecryptionKeys = error else {
+                return XCTFail("expected missingDecryptionKeys error")
+            }
+        }
+
+        session.setDirectionKeys(ConnectDirectionKeys(appToWallet: appKey, walletToApp: walletKey))
+        stub.emit(encrypted)
+        let envelope = try await session.nextEnvelope()
+        XCTAssertEqual(envelope.sequence, 21)
+    }
+
+    func testDecryptFailureDoesNotConsumeFlowControlToken() async throws {
+        try requireConnectCrypto()
+
+        let correctWalletKey = Data(repeating: 0x71, count: 32)
+        let wrongWalletKey = Data(repeating: 0x72, count: 32)
+        let appKey = Data(repeating: 0x73, count: 32)
+        let sessionID = Data(repeating: 0x74, count: 32)
+        guard let encrypted = makeEncryptedCloseFrame(key: correctWalletKey,
+                                                      sessionID: sessionID,
+                                                      direction: .walletToApp,
+                                                      sequence: 34,
+                                                      reason: "retry-decrypt") else {
+            throw XCTSkip("NoritoBridge encryption helpers unavailable")
+        }
+
+        let stub = StubWebSocketTask()
+        let client = ConnectClient(url: URL(string: "wss://example.test")!,
+                                   webSocketFactory: StubWebSocketFactory(task: stub).factory)
+        await client.start()
+        let session = ConnectSession(sessionID: sessionID,
+                                     client: client,
+                                     directionKeys: ConnectDirectionKeys(appToWallet: appKey,
+                                                                         walletToApp: wrongWalletKey),
+                                     flowControl: ConnectFlowControlWindow(appToWallet: 1,
+                                                                           walletToApp: 1))
+
+        stub.emit(encrypted)
+        await XCTAssertThrowsErrorAsync(try await session.nextEnvelope()) { error in
+            guard error is ConnectEnvelopeError else {
+                return XCTFail("expected envelope error from decryption failure")
+            }
+        }
+
+        session.setDirectionKeys(ConnectDirectionKeys(appToWallet: appKey, walletToApp: correctWalletKey))
+        stub.emit(encrypted)
+        let envelope = try await session.nextEnvelope()
+        XCTAssertEqual(envelope.sequence, 34)
+    }
 }
 
 private func makeEncryptedCloseFrame(key: Data,

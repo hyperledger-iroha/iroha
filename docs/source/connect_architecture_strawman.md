@@ -79,6 +79,14 @@ still captures the mandate that led to the bridge integration:
 ## Transport Contract
 
 - Primary transport: WebSocket (`/v1/connect/ws?sid=<session_id>`).
+- Torii relay transport is in-node only: `CONNECT_RELAY_STRATEGY="broadcast"` uses Iroha peer-to-peer
+  node transport, while `"local_only"` disables cross-node forwarding. Compatibility aliases `"local-only"`
+  and `"local"` normalize to `"local_only"`. Unsupported values are coerced to `"local_only"`; there is
+  no centralized relay gateway mode.
+- Runtime status reflects both configured and effective relay behavior:
+  `/v1/connect/status.policy.relay_strategy` (configured),
+  `/v1/connect/status.policy.relay_effective_strategy` (effective), and
+  `/v1/connect/status.policy.relay_p2p_attached` (P2P relay availability).
 - Optional future: WebRTC (TBD) – out of scope for initial strawman.
 - Reconnect strategy: exponential back-off with full jitter (base 5 s, max 60 s); shared constants across Swift, Android, and JS so retries remain predictable.
 - Ping/pong cadence: 30 s heartbeat with tolerance for three missed pongs before reconnect; JS clamps minimum interval to 15 s to satisfy browser throttling rules.

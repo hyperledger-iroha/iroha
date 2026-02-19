@@ -2,18 +2,24 @@
 
 This stub keeps unit tests and documentation examples runnable on systems
 without the compiled `iroha_python._crypto` extension (or when the native codec
-needs to be bypassed). It intentionally favours determinism over security:
-payloads are simply pickled, and symmetric keys derive from hashed inputs.
-Never use this stub for production traffic.
+needs to be bypassed). It intentionally favours determinism over security and
+uses JSON with explicit bytes tagging for payload encoding. Never use this stub
+for production traffic.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import inspect
-import pickle
+import json
+import math
 import secrets
 from typing import Any, Mapping, Tuple
+
+_TAG_FIELD = "__iroha_connect_type__"
+_TAG_BYTES = "bytes"
+_TAG_BYTES_DATA = "base64url"
 
 
 class ConnectCodecStub:
@@ -136,11 +142,26 @@ def _blake2s(material: bytes, label: bytes) -> bytes:
 
 
 def _serialize(payload: Mapping[str, Any]) -> bytes:
-    return pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
+    normalized = _normalize_for_json(payload, path="$")
+    return json.dumps(
+        normalized,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
 
 
 def _deserialize(blob: bytes) -> Mapping[str, Any]:
-    return pickle.loads(blob)
+    try:
+        decoded = json.loads(bytes(blob).decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise ValueError("Connect stub: payload is not valid UTF-8 JSON") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError("Connect stub: payload is not valid JSON") from exc
+    restored = _restore_from_json(decoded, path="$")
+    if not isinstance(restored, Mapping):
+        raise ValueError("Connect stub: payload must decode to an object")
+    return restored
 
 
 def _mac(key: bytes, sid: bytes, direction: str, payload: bytes) -> bytes:
@@ -150,6 +171,81 @@ def _mac(key: bytes, sid: bytes, direction: str, payload: bytes) -> bytes:
     hasher.update(direction.encode("utf-8"))
     hasher.update(payload)
     return hasher.digest()
+
+
+def _normalize_for_json(value: Any, *, path: str) -> Any:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"Connect stub: non-finite float is not supported at {path}")
+        return value
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return {
+            _TAG_FIELD: _TAG_BYTES,
+            _TAG_BYTES_DATA: _encode_base64url(bytes(value)),
+        }
+    if isinstance(value, Mapping):
+        normalized: dict[str, Any] = {}
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                raise TypeError(
+                    f"Connect stub: mapping key at {path} must be a string, got {type(key).__name__}"
+                )
+            normalized[key] = _normalize_for_json(nested, path=f"{path}.{key}")
+        return normalized
+    if isinstance(value, (list, tuple)):
+        return [
+            _normalize_for_json(item, path=f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    raise TypeError(f"Connect stub: unsupported payload type at {path}: {type(value).__name__}")
+
+
+def _restore_from_json(value: Any, *, path: str) -> Any:
+    if isinstance(value, list):
+        return [
+            _restore_from_json(item, path=f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, Mapping):
+        tag = value.get(_TAG_FIELD)
+        if tag is None:
+            restored: dict[str, Any] = {}
+            for key, nested in value.items():
+                if not isinstance(key, str):
+                    raise ValueError("Connect stub: decoded mapping key must be a string")
+                restored[key] = _restore_from_json(nested, path=f"{path}.{key}")
+            return restored
+        if tag != _TAG_BYTES:
+            raise ValueError(f"Connect stub: unknown tagged payload type {tag!r}")
+        if set(value.keys()) != {_TAG_FIELD, _TAG_BYTES_DATA}:
+            raise ValueError("Connect stub: malformed tagged payload entry")
+        data = value.get(_TAG_BYTES_DATA)
+        if not isinstance(data, str):
+            raise ValueError("Connect stub: tagged bytes payload must contain base64url text")
+        return _decode_base64url(data)
+    return value
+
+
+def _encode_base64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _decode_base64url(data: str) -> bytes:
+    if not data:
+        return b""
+    if not all(ch.isalnum() or ch in "-_" for ch in data):
+        raise ValueError("Connect stub: invalid base64url payload")
+    pad_len = (-len(data)) % 4
+    padded = data + ("=" * pad_len)
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
+    except Exception as exc:  # pragma: no cover - defensive
+        raise ValueError("Connect stub: invalid base64url payload") from exc
+    if _encode_base64url(decoded) != data:
+        raise ValueError("Connect stub: invalid base64url payload")
+    return decoded
 
 
 def _called_from_session_decrypt() -> bool:

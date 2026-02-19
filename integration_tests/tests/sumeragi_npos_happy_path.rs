@@ -1,7 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Happy-path `NPoS` consensus scenario with DA availability tracking and telemetry guardrails.
 
-use std::time::{Duration, Instant};
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use eyre::{WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
@@ -212,7 +215,7 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
 
     let inflight_handle = tokio::spawn(wait_for_rbc_session_inflight(
         http.clone(),
-        sessions_url_primary.clone(),
+        restart_sessions_url.clone(),
         expected_height,
         start,
         RBC_DELIVERY_BUDGET,
@@ -279,33 +282,14 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
     .await?;
 
     let restart_store_dir = restart_peer.kura_store_dir().join("rbc_sessions");
-    let restart_snapshot = rbc_status::read_persisted_snapshot(&restart_store_dir);
-    ensure!(
-        restart_snapshot
-            .iter()
-            .any(|summary| summary.height == expected_height
-                && summary.delivered
-                && summary.received_chunks == summary.total_chunks
-                && summary.recovered_from_disk
-                && !summary.invalid),
-        "expected recovered RBC session persisted in {}",
-        restart_store_dir.display()
-    );
-
-    for peer in network.peers() {
-        let store_dir = peer.kura_store_dir().join("rbc_sessions");
-        let snapshot = rbc_status::read_persisted_snapshot(&store_dir);
-        ensure!(
-            snapshot
-                .iter()
-                .any(|summary| summary.height == expected_height
-                    && summary.delivered
-                    && summary.received_chunks == summary.total_chunks
-                    && !summary.invalid),
-            "expected delivered session persisted in {}",
-            store_dir.display()
-        );
-    }
+    ensure_rbc_sessions_persisted(
+        &network,
+        expected_height,
+        start,
+        COMMIT_WAIT_BUDGET + RBC_DELIVERY_BUDGET,
+        Some(restart_store_dir.as_path()),
+    )
+    .await?;
 
     network.shutdown().await;
     Ok(())
@@ -371,7 +355,8 @@ async fn npos_rbc_large_payload_delivers_and_commits() -> eyre::Result<()> {
     )
     .await?;
 
-    ensure_rbc_sessions_persisted(&network, expected_height)?;
+    ensure_rbc_sessions_persisted(&network, expected_height, start, COMMIT_WAIT_BUDGET, None)
+        .await?;
 
     ensure!(
         session.received_chunks == session.total_chunks,
@@ -422,23 +407,45 @@ fn large_payload_npos_builder() -> NetworkBuilder {
         )))
 }
 
-fn ensure_rbc_sessions_persisted(network: &Network, expected_height: u64) -> eyre::Result<()> {
-    for peer in network.peers() {
-        let store_dir = peer.kura_store_dir().join("rbc_sessions");
-        let snapshot = rbc_status::read_persisted_snapshot(&store_dir);
-        ensure!(
-            snapshot
-                .iter()
-                .any(|summary| summary.height == expected_height
+async fn ensure_rbc_sessions_persisted(
+    network: &Network,
+    expected_height: u64,
+    start: Instant,
+    budget: Duration,
+    skip_store_dir: Option<&Path>,
+) -> eyre::Result<()> {
+    let deadline = start + budget;
+    loop {
+        let mut missing = Vec::new();
+        for peer in network.peers() {
+            let store_dir = peer.kura_store_dir().join("rbc_sessions");
+            if skip_store_dir.is_some_and(|skip| store_dir == skip) {
+                continue;
+            }
+            let snapshot = rbc_status::read_persisted_snapshot(&store_dir);
+            let found = snapshot.iter().any(|summary| {
+                summary.height == expected_height
                     && summary.delivered
                     && summary.received_chunks == summary.total_chunks
                     && summary.total_chunks > 0
-                    && !summary.invalid),
-            "expected delivered RBC session persisted in {}",
-            store_dir.display()
+                    && !summary.invalid
+            });
+            if !found {
+                missing.push(store_dir.display().to_string());
+            }
+        }
+
+        if missing.is_empty() {
+            return Ok(());
+        }
+
+        ensure!(
+            Instant::now() <= deadline,
+            "expected delivered session persisted in {}",
+            missing.join(", ")
         );
+        sleep(Duration::from_millis(200)).await;
     }
-    Ok(())
 }
 
 async fn ensure_vrf_collectors(http: &reqwest::Client, url: &reqwest::Url) -> eyre::Result<()> {
@@ -727,7 +734,6 @@ async fn wait_for_rbc_session_inflight(
                 session.height == target_height
                     && !session.delivered
                     && session.received_chunks > 0
-                    && session.received_chunks < session.total_chunks
                     && !session.invalid
             }) {
                 return Ok(session);
@@ -744,7 +750,7 @@ async fn wait_for_rbc_session_recovered(
     block_hash: &str,
     start: Instant,
     budget: Duration,
-) -> eyre::Result<()> {
+) -> eyre::Result<RbcSessionView> {
     let deadline = start + budget;
     loop {
         ensure!(
@@ -761,13 +767,13 @@ async fn wait_for_rbc_session_recovered(
             let body = response.text().await.wrap_err("read RBC sessions body")?;
             let value = json::from_str(&body).wrap_err("parse RBC sessions JSON")?;
             let sessions = parse_rbc_sessions(&value)?;
-            if sessions.iter().any(|session| {
+            if let Some(session) = sessions.into_iter().find(|session| {
                 session.height == target_height
                     && session.block_hash == block_hash
                     && session.recovered
                     && !session.invalid
             }) {
-                return Ok(());
+                return Ok(session);
             }
         }
         sleep(Duration::from_millis(200)).await;

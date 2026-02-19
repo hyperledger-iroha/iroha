@@ -3895,13 +3895,14 @@ pub async fn handle_v1_sumeragi_collectors(
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let world = state.world_view();
+    let snap = sumeragi::status_snapshot();
     let peers = state.commit_topology_snapshot();
     let topology = iroha_core::sumeragi::network_topology::Topology::new(peers.clone());
     let n = peers.len();
     let min_votes = topology.min_votes_for_commit();
     let tail = topology.proxy_tail_index();
     let available = n.saturating_sub(tail);
-    let current_height = state.committed_height() as u64;
+    let current_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
     let mode = sumeragi::effective_consensus_mode_for_height_from_world(
         &world,
         current_height,
@@ -3945,7 +3946,6 @@ pub async fn handle_v1_sumeragi_collectors(
     if k == 0 && available > 0 {
         k = available;
     }
-    let snap = sumeragi::status_snapshot();
     let mut epoch_seed = snap.prf_epoch_seed.or(seed_from_mode);
     if epoch_seed.is_none() {
         epoch_seed = world
@@ -20537,6 +20537,518 @@ fn committed_block_height(event: &EventBox) -> Option<u64> {
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
+struct TelemetryLiveSnapshot {
+    peers_info: Vec<crate::telemetry::peers::PeerInfoDto>,
+    peers_status: Vec<crate::telemetry::peers::PeerStatusDto>,
+    network_status: crate::explorer::ExplorerNetworkMetricsDto,
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+struct TelemetryLiveState {
+    rx: tokio::sync::broadcast::Receiver<EventBox>,
+    ticker: tokio::time::Interval,
+    state: Arc<CoreState>,
+    kura: Arc<Kura>,
+    telemetry: MaybeTelemetry,
+    peer_telemetry: Arc<crate::telemetry::peers::PeerTelemetryService>,
+    pending: VecDeque<SseEvent>,
+    bootstrap_pending: bool,
+    prev_peers_info: BTreeMap<String, String>,
+    prev_peers_status: BTreeMap<String, String>,
+    prev_network: Option<String>,
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+/// GET `/v1/telemetry/live` — SSE stream with peer and network telemetry deltas.
+pub fn handle_v1_telemetry_live(
+    state: Arc<CoreState>,
+    kura: Arc<Kura>,
+    telemetry: MaybeTelemetry,
+    peer_telemetry: Arc<crate::telemetry::peers::PeerTelemetryService>,
+    events: EventsSender,
+) -> Result<Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>>, Error> {
+    if !telemetry.allows_metrics() {
+        return Err(Error::telemetry_profile_forbidden(
+            "v1/telemetry/live",
+            telemetry.profile(),
+        ));
+    }
+
+    let mut ticker = tokio::time::interval(Duration::from_secs(5));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    let stream = stream::unfold(
+        TelemetryLiveState {
+            rx: events.subscribe(),
+            ticker,
+            state,
+            kura,
+            telemetry,
+            peer_telemetry,
+            pending: VecDeque::new(),
+            bootstrap_pending: true,
+            prev_peers_info: BTreeMap::new(),
+            prev_peers_status: BTreeMap::new(),
+            prev_network: None,
+        },
+        |mut state| async move {
+            use tokio::sync::broadcast::error::RecvError;
+
+            loop {
+                if let Some(event) = state.pending.pop_front() {
+                    return Some((Ok(event), state));
+                }
+
+                if state.bootstrap_pending {
+                    match collect_telemetry_live_snapshot(
+                        state.state.clone(),
+                        state.kura.clone(),
+                        state.telemetry.clone(),
+                        state.peer_telemetry.clone(),
+                    )
+                    .await
+                    {
+                        Ok(snapshot) => {
+                            enqueue_telemetry_bootstrap(&mut state, snapshot);
+                            state.bootstrap_pending = false;
+                        }
+                        Err(error) => {
+                            iroha_logger::warn!(
+                                %error,
+                                "failed to build telemetry live bootstrap snapshot"
+                            );
+                            state
+                                .pending
+                                .push_back(SseEvent::default().comment("error"));
+                            state.bootstrap_pending = false;
+                        }
+                    }
+                    continue;
+                }
+
+                tokio::select! {
+                    _ = state.ticker.tick() => {
+                        match collect_telemetry_live_snapshot(
+                            state.state.clone(),
+                            state.kura.clone(),
+                            state.telemetry.clone(),
+                            state.peer_telemetry.clone(),
+                        ).await {
+                            Ok(snapshot) => enqueue_telemetry_deltas(&mut state, snapshot),
+                            Err(error) => {
+                                iroha_logger::warn!(
+                                    %error,
+                                    "failed to build telemetry live delta snapshot"
+                                );
+                                state.pending.push_back(SseEvent::default().comment("error"));
+                            }
+                        }
+                    }
+                    recv = state.rx.recv() => {
+                        match recv {
+                            Ok(event_box) => {
+                                if committed_block_height(&event_box).is_some() {
+                                    match explorer_network_metrics_snapshot(
+                                        state.state.clone(),
+                                        state.kura.clone(),
+                                        &state.telemetry,
+                                    ).await {
+                                        Ok(network) => enqueue_telemetry_network_delta(&mut state, network),
+                                        Err(error) => {
+                                            iroha_logger::warn!(
+                                                %error,
+                                                "failed to update telemetry live network delta"
+                                            );
+                                            state.pending.push_back(SseEvent::default().comment("error"));
+                                        }
+                                    }
+                                }
+                            }
+                            Err(RecvError::Lagged(_)) => {
+                                state.prev_peers_info.clear();
+                                state.prev_peers_status.clear();
+                                state.prev_network = None;
+                                state.bootstrap_pending = true;
+                                state.pending.push_back(SseEvent::default().comment("lagged"));
+                            }
+                            Err(RecvError::Closed) => return None,
+                        }
+                    }
+                }
+            }
+        },
+    );
+
+    Ok(Sse::new(stream))
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+async fn collect_telemetry_live_snapshot(
+    state: Arc<CoreState>,
+    kura: Arc<Kura>,
+    telemetry: MaybeTelemetry,
+    peer_telemetry: Arc<crate::telemetry::peers::PeerTelemetryService>,
+) -> Result<TelemetryLiveSnapshot, Error> {
+    let peer_snapshot = peer_telemetry.snapshot().await;
+    let network_status = explorer_network_metrics_snapshot(state, kura, &telemetry).await?;
+    Ok(TelemetryLiveSnapshot {
+        peers_info: peer_snapshot.peers_info,
+        peers_status: peer_snapshot.peers_status,
+        network_status,
+    })
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+fn enqueue_telemetry_bootstrap(state: &mut TelemetryLiveState, snapshot: TelemetryLiveSnapshot) {
+    let mut peers_info = BTreeMap::new();
+    for info in &snapshot.peers_info {
+        let payload = json_value(info);
+        peers_info.insert(info.url.clone(), telemetry_live_json(&payload));
+    }
+
+    let mut peers_status = BTreeMap::new();
+    for status in &snapshot.peers_status {
+        let payload = json_value(status);
+        peers_status.insert(status.url.clone(), telemetry_live_json(&payload));
+    }
+
+    let network_payload = json_value(&snapshot.network_status);
+    state.prev_peers_info = peers_info;
+    state.prev_peers_status = peers_status;
+    state.prev_network = Some(telemetry_live_json(&network_payload));
+
+    let payload = json_object(vec![
+        json_entry("kind", "first"),
+        json_entry("peers_info", snapshot.peers_info),
+        json_entry("peers_status", snapshot.peers_status),
+        json_entry("network_status", snapshot.network_status),
+    ]);
+    state
+        .pending
+        .push_back(SseEvent::default().data(telemetry_live_json(&payload)));
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+fn enqueue_telemetry_deltas(state: &mut TelemetryLiveState, snapshot: TelemetryLiveSnapshot) {
+    let mut next_info = BTreeMap::new();
+    for info in snapshot.peers_info {
+        let raw_payload = json_value(&info);
+        let raw_json = telemetry_live_json(&raw_payload);
+        if state.prev_peers_info.get(&info.url) != Some(&raw_json) {
+            let tagged = telemetry_live_tagged_payload("peer_info", raw_payload);
+            state
+                .pending
+                .push_back(SseEvent::default().data(telemetry_live_json(&tagged)));
+        }
+        next_info.insert(info.url.clone(), raw_json);
+    }
+    state.prev_peers_info = next_info;
+
+    let mut next_status = BTreeMap::new();
+    for status in snapshot.peers_status {
+        let raw_payload = json_value(&status);
+        let raw_json = telemetry_live_json(&raw_payload);
+        if state.prev_peers_status.get(&status.url) != Some(&raw_json) {
+            let tagged = telemetry_live_tagged_payload("peer_status", raw_payload);
+            state
+                .pending
+                .push_back(SseEvent::default().data(telemetry_live_json(&tagged)));
+        }
+        next_status.insert(status.url.clone(), raw_json);
+    }
+    state.prev_peers_status = next_status;
+
+    enqueue_telemetry_network_delta(state, snapshot.network_status);
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+fn enqueue_telemetry_network_delta(
+    state: &mut TelemetryLiveState,
+    network: crate::explorer::ExplorerNetworkMetricsDto,
+) {
+    let raw_payload = json_value(&network);
+    let raw_json = telemetry_live_json(&raw_payload);
+    if state.prev_network.as_ref() != Some(&raw_json) {
+        state.prev_network = Some(raw_json);
+        let tagged = telemetry_live_tagged_payload("network_status", raw_payload);
+        state
+            .pending
+            .push_back(SseEvent::default().data(telemetry_live_json(&tagged)));
+    }
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+fn telemetry_live_tagged_payload(kind: &str, payload: Value) -> Value {
+    match payload {
+        Value::Object(mut object) => {
+            object.insert("kind".to_owned(), Value::String(kind.to_owned()));
+            Value::Object(object)
+        }
+        _ => json_object(vec![json_entry("kind", kind)]),
+    }
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+fn telemetry_live_json(value: &Value) -> String {
+    norito::json::to_json(value).unwrap_or_else(|_| "{}".to_owned())
+}
+
+#[cfg(feature = "app_api")]
+/// GET `/v1/gov/stream` — SSE stream of governance refresh hints.
+pub fn handle_v1_gov_stream(
+    events: EventsSender,
+) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
+    let stream = stream::unfold(
+        (events.subscribe(), VecDeque::<Value>::new()),
+        |(mut rx, mut pending)| async move {
+            use tokio::sync::broadcast::error::RecvError;
+            loop {
+                if let Some(payload) = pending.pop_front() {
+                    let body = norito::json::to_json(&payload).unwrap_or_else(|_| "{}".to_owned());
+                    return Some((Ok(SseEvent::default().data(body)), (rx, pending)));
+                }
+                match rx.recv().await {
+                    Ok(event_box) => {
+                        let updates = governance_stream_payloads(&event_box);
+                        if updates.is_empty() {
+                            return Some((
+                                Ok(SseEvent::default().comment("ignored")),
+                                (rx, pending),
+                            ));
+                        }
+                        pending.extend(updates);
+                    }
+                    Err(RecvError::Lagged(_)) => {
+                        return Some((Ok(SseEvent::default().comment("lagged")), (rx, pending)));
+                    }
+                    Err(RecvError::Closed) => return None,
+                }
+            }
+        },
+    );
+    Sse::new(stream)
+}
+
+#[cfg(feature = "app_api")]
+fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
+    use iroha_data_model::events::data::{DataEvent, governance::GovernanceEvent};
+
+    let EventBox::Data(shared) = event_box else {
+        return Vec::new();
+    };
+    let DataEvent::Governance(event) = shared.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut updates = Vec::new();
+    let mut council_updated = false;
+    let mut unlocks_updated = false;
+    let mut proposal_id: Option<String> = None;
+    let mut referendum_id: Option<String> = None;
+
+    match event {
+        GovernanceEvent::ProposalSubmitted(payload) => {
+            let id = hex::encode(payload.id);
+            proposal_id = Some(id.clone());
+            referendum_id = Some(id);
+        }
+        GovernanceEvent::ProposalApproved(payload) => {
+            let id = hex::encode(payload.id);
+            proposal_id = Some(id.clone());
+            referendum_id = Some(id);
+            unlocks_updated = true;
+        }
+        GovernanceEvent::ProposalRejected(payload) => {
+            let id = hex::encode(payload.id);
+            proposal_id = Some(id.clone());
+            referendum_id = Some(id);
+            unlocks_updated = true;
+        }
+        GovernanceEvent::ProposalEnacted(payload) => {
+            let id = hex::encode(payload.id);
+            proposal_id = Some(id.clone());
+            referendum_id = Some(id);
+        }
+        GovernanceEvent::ParliamentApprovalRecorded(payload) => {
+            let id = hex::encode(payload.proposal_id);
+            proposal_id = Some(id.clone());
+            referendum_id = Some(id);
+        }
+        GovernanceEvent::CouncilPersisted(_) | GovernanceEvent::ParliamentSelected(_) => {
+            council_updated = true;
+        }
+        GovernanceEvent::ReferendumOpened(payload) => {
+            referendum_id = Some(payload.id.clone());
+            unlocks_updated = true;
+        }
+        GovernanceEvent::ReferendumClosed(payload) => {
+            referendum_id = Some(payload.id.clone());
+            unlocks_updated = true;
+        }
+        GovernanceEvent::BallotAccepted(payload) => {
+            referendum_id = Some(payload.referendum_id.clone());
+            unlocks_updated = true;
+        }
+        GovernanceEvent::BallotRejected(payload) => {
+            referendum_id = Some(payload.referendum_id.clone());
+            unlocks_updated = true;
+        }
+        GovernanceEvent::LockCreated(payload) => {
+            referendum_id = Some(payload.referendum_id.clone());
+            unlocks_updated = true;
+        }
+        GovernanceEvent::LockExtended(payload) => {
+            referendum_id = Some(payload.referendum_id.clone());
+            unlocks_updated = true;
+        }
+        GovernanceEvent::LockUnlocked(payload) => {
+            referendum_id = Some(payload.referendum_id.clone());
+            unlocks_updated = true;
+        }
+        GovernanceEvent::LockSlashed(payload) => {
+            referendum_id = Some(payload.referendum_id.clone());
+            unlocks_updated = true;
+        }
+        GovernanceEvent::LockRestituted(payload) => {
+            referendum_id = Some(payload.referendum_id.clone());
+            unlocks_updated = true;
+        }
+        GovernanceEvent::CitizenRegistered(_)
+        | GovernanceEvent::CitizenRevoked(_)
+        | GovernanceEvent::CitizenServiceRecorded(_) => {}
+    }
+
+    if council_updated {
+        updates.push(governance_stream_payload("CouncilUpdated", None));
+    }
+    if unlocks_updated {
+        updates.push(governance_stream_payload("UnlockStatsUpdated", None));
+    }
+    if let Some(id) = referendum_id {
+        updates.push(governance_stream_payload(
+            "ReferendumUpdated",
+            Some(id.clone()),
+        ));
+        updates.push(governance_stream_payload("LocksUpdated", Some(id.clone())));
+        updates.push(governance_stream_payload("TallyUpdated", Some(id)));
+    }
+    if let Some(id) = proposal_id {
+        updates.push(governance_stream_payload("ProposalUpdated", Some(id)));
+    }
+
+    updates
+}
+
+#[cfg(feature = "app_api")]
+fn governance_stream_payload(kind: &str, id: Option<String>) -> Value {
+    let mut entries = vec![json_entry("kind", kind)];
+    if let Some(id) = id {
+        entries.push(json_entry("id", id));
+    }
+    json_object(entries)
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod governance_stream_tests {
+    use super::*;
+    use iroha_data_model::{
+        account::AccountId,
+        events::data::governance::{
+            GovernanceCouncilPersisted, GovernanceEvent, GovernanceLockCreated,
+            GovernanceProposalSubmitted,
+        },
+        isi::governance::CouncilDerivationKind,
+    };
+
+    fn sample_account() -> AccountId {
+        let keypair = KeyPair::random();
+        AccountId::new(
+            "wonderland".parse().expect("domain id"),
+            keypair.public_key().clone(),
+        )
+    }
+
+    fn find_kind<'a>(payloads: &'a [Value], kind: &str) -> Option<&'a Value> {
+        payloads.iter().find(|payload| {
+            payload
+                .get("kind")
+                .and_then(Value::as_str)
+                .is_some_and(|candidate| candidate == kind)
+        })
+    }
+
+    #[test]
+    fn proposal_submitted_emits_proposal_and_referendum_updates() {
+        let proposal_id = [0xAB; 32];
+        let event = GovernanceEvent::ProposalSubmitted(GovernanceProposalSubmitted {
+            id: proposal_id,
+            proposer: sample_account(),
+            namespace: "apps".to_owned(),
+            contract_id: "my.contract".to_owned(),
+        });
+        let payloads = governance_stream_payloads(&EventBox::Data(SharedDataEvent::from(
+            iroha_data_model::events::data::DataEvent::Governance(event),
+        )));
+
+        let proposal = find_kind(&payloads, "ProposalUpdated").expect("proposal update");
+        let referendum = find_kind(&payloads, "ReferendumUpdated").expect("referendum update");
+        let expected = hex::encode(proposal_id);
+        assert_eq!(
+            proposal.get("id").and_then(Value::as_str),
+            Some(expected.as_str())
+        );
+        assert_eq!(
+            referendum.get("id").and_then(Value::as_str),
+            Some(expected.as_str())
+        );
+    }
+
+    #[test]
+    fn lock_created_emits_unlocks_locks_and_tally_updates() {
+        let referendum_id = "ref-42".to_owned();
+        let event = GovernanceEvent::LockCreated(GovernanceLockCreated {
+            referendum_id: referendum_id.clone(),
+            owner: sample_account(),
+            amount: 100,
+            expiry_height: 88,
+        });
+        let payloads = governance_stream_payloads(&EventBox::Data(SharedDataEvent::from(
+            iroha_data_model::events::data::DataEvent::Governance(event),
+        )));
+
+        assert!(find_kind(&payloads, "UnlockStatsUpdated").is_some());
+        assert_eq!(
+            find_kind(&payloads, "LocksUpdated")
+                .and_then(|value| value.get("id"))
+                .and_then(Value::as_str),
+            Some(referendum_id.as_str())
+        );
+        assert_eq!(
+            find_kind(&payloads, "TallyUpdated")
+                .and_then(|value| value.get("id"))
+                .and_then(Value::as_str),
+            Some(referendum_id.as_str())
+        );
+    }
+
+    #[test]
+    fn council_persisted_emits_council_update() {
+        let event = GovernanceEvent::CouncilPersisted(GovernanceCouncilPersisted {
+            epoch: 7,
+            members_count: 5,
+            alternates_count: 2,
+            verified: 5,
+            candidates_count: 9,
+            derived_by: CouncilDerivationKind::Fallback,
+        });
+        let payloads = governance_stream_payloads(&EventBox::Data(SharedDataEvent::from(
+            iroha_data_model::events::data::DataEvent::Governance(event),
+        )));
+        assert!(find_kind(&payloads, "CouncilUpdated").is_some());
+    }
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
 /// GET `/v1/kaigi/relays` — summary snapshot of registered relays and health indicators.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_kaigi_relays(
@@ -30809,6 +31321,16 @@ pub async fn handle_v1_explorer_metrics(
             telemetry.profile(),
         ));
     }
+    let dto = explorer_network_metrics_snapshot(state, kura, &telemetry).await?;
+    Ok(JsonBody(dto).into_response())
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+async fn explorer_network_metrics_snapshot(
+    state: Arc<CoreState>,
+    kura: Arc<Kura>,
+    telemetry: &MaybeTelemetry,
+) -> Result<crate::explorer::ExplorerNetworkMetricsDto, Error> {
     let metrics = telemetry.metrics().await;
     let world = state.world_view();
     let peers = world.peers().len() as u64;
@@ -30830,7 +31352,7 @@ pub async fn handle_v1_explorer_metrics(
     let block_created_at = latest_block_created_at(kura.as_ref(), finalized_block);
     let avg_block_time = average_block_time_ms(kura.as_ref(), finalized_block, 20)
         .map(|ms| crate::explorer::ExplorerDurationDto { ms });
-    let dto = crate::explorer::ExplorerNetworkMetricsDto {
+    Ok(crate::explorer::ExplorerNetworkMetricsDto {
         peers,
         domains,
         accounts,
@@ -30842,8 +31364,7 @@ pub async fn handle_v1_explorer_metrics(
         finalized_block,
         avg_commit_time,
         avg_block_time,
-    };
-    Ok(JsonBody(dto).into_response())
+    })
 }
 
 fn latest_block_created_at(kura: &Kura, height: u64) -> Option<String> {

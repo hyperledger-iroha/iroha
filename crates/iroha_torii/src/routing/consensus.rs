@@ -771,6 +771,7 @@ pub async fn handle_v1_sumeragi_collectors(
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let world = state.world_view();
+    let snap = sumeragi::status_snapshot();
     let peers = state.commit_topology_snapshot();
     let chain_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
     let topology = iroha_core::sumeragi::network_topology::Topology::new(peers.clone());
@@ -821,7 +822,6 @@ pub async fn handle_v1_sumeragi_collectors(
     if k == 0 && available > 0 {
         k = available;
     }
-    let snap = sumeragi::status_snapshot();
     let mut epoch_seed = snap.prf_epoch_seed.or(seed_from_mode);
     if epoch_seed.is_none() {
         epoch_seed = world
