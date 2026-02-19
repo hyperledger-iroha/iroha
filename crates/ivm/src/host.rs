@@ -590,20 +590,6 @@ impl DefaultHost {
             return Err(VMError::PermissionDenied);
         }
 
-        let amount = intent
-            .op
-            .amount
-            .parse::<u128>()
-            .map_err(|_| VMError::NoritoInvalid)?;
-        if amount > handle.budget.remaining {
-            return Err(VMError::PermissionDenied);
-        }
-        if let Some(per_use) = handle.budget.per_use
-            && amount > per_use
-        {
-            return Err(VMError::PermissionDenied);
-        }
-
         let proof = match vm.register(12) {
             0 => None,
             ptr => {
@@ -617,12 +603,23 @@ impl DefaultHost {
                 )
             }
         };
+        let resolved_amount = axt::resolve_handle_amount(&intent, proof.as_ref())
+            .map_err(axt::HandleAmountResolutionError::to_vm_error)?;
+        if resolved_amount.amount > handle.budget.remaining {
+            return Err(VMError::PermissionDenied);
+        }
+        if let Some(per_use) = handle.budget.per_use
+            && resolved_amount.amount > per_use
+        {
+            return Err(VMError::PermissionDenied);
+        }
 
         let usage = axt::HandleUsage {
             handle,
             intent,
             proof,
-            amount,
+            amount: resolved_amount.amount,
+            amount_commitment: resolved_amount.amount_commitment,
         };
         self.axt_policy.allow_handle(&usage)?;
         state.record_handle(usage)?;

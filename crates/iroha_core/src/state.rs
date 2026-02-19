@@ -15,7 +15,7 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, eyre};
-use iroha_config::parameters::actual::LaneConfig;
+use iroha_config::parameters::actual::{ConsensusMode, LaneConfig};
 #[cfg(feature = "sm")]
 use iroha_crypto::sm::Sm2PublicKey;
 #[cfg(feature = "sm-ffi-openssl")]
@@ -14809,15 +14809,22 @@ impl State {
         if public_keys.is_empty() {
             return Err(LaneRelayError::AggregateSignatureInvalid);
         }
-        let (mode_tag, _, _, _) = crate::sumeragi::status::mode_tags();
-        let derived_mode_tag = if mode_tag.is_empty() {
-            if self.world.view().sumeragi_npos_parameters().is_some() {
-                crate::sumeragi::consensus::NPOS_TAG
-            } else {
-                crate::sumeragi::consensus::PERMISSIONED_TAG
-            }
+        let (status_mode_tag, _, _, _) = crate::sumeragi::status::mode_tags();
+        let fallback_mode = if world.sumeragi_npos_parameters().is_some() {
+            ConsensusMode::Npos
+        } else if status_mode_tag == crate::sumeragi::consensus::NPOS_TAG {
+            ConsensusMode::Npos
         } else {
-            mode_tag.as_str()
+            ConsensusMode::Permissioned
+        };
+        let derived_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
+            &world,
+            qc.height,
+            fallback_mode,
+        );
+        let derived_mode_tag = match derived_mode {
+            ConsensusMode::Permissioned => crate::sumeragi::consensus::PERMISSIONED_TAG,
+            ConsensusMode::Npos => crate::sumeragi::consensus::NPOS_TAG,
         };
         let mode_tag = if qc.mode_tag.is_empty() {
             derived_mode_tag
@@ -17679,13 +17686,40 @@ impl<'state> StateBlock<'state> {
         self.prev_commit_topology
             .mutate_vec(|vec| *vec = prev_topology);
         let checkpoint_topology = topology;
-        let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
-        let (mode_tag, _, _, _) = crate::sumeragi::status::mode_tags();
-        let npos_mode_active = if mode_tag.is_empty() {
-            self.world.sumeragi_npos_parameters().is_some()
+        let checkpoint_block_height = block.as_ref().header().height().get();
+        let checkpoint_block_hash = block.as_ref().hash();
+        let commit_cert_for_block = if checkpoint_topology.is_empty() {
+            None
         } else {
-            mode_tag == crate::sumeragi::consensus::NPOS_TAG
+            crate::sumeragi::status::commit_qc_history()
+                .into_iter()
+                .find(|cert| {
+                    cert.height == checkpoint_block_height
+                        && cert.subject_block_hash == checkpoint_block_hash
+                        && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
+                })
         };
+        let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
+        let (status_mode_tag, _, _, _) = crate::sumeragi::status::mode_tags();
+        // Treat NPoS roster snapshots as authoritative during block-apply reconciliation.
+        // Status tags can be stale around mode transitions, so we also consult the effective
+        // mode derived from on-chain scheduling and per-block QC metadata.
+        let status_fallback_mode = if status_mode_tag == crate::sumeragi::consensus::NPOS_TAG {
+            ConsensusMode::Npos
+        } else {
+            ConsensusMode::Permissioned
+        };
+        let derived_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
+            &self.world,
+            checkpoint_block_height,
+            status_fallback_mode,
+        );
+        let npos_mode_active = matches!(derived_mode, ConsensusMode::Npos)
+            || status_mode_tag == crate::sumeragi::consensus::NPOS_TAG
+            || self.world.sumeragi_npos_parameters().is_some()
+            || commit_cert_for_block.as_ref().is_some_and(|commit_cert| {
+                commit_cert.mode_tag == crate::sumeragi::consensus::NPOS_TAG
+            });
         let roster_source = if checkpoint_topology.is_empty() {
             if world_peers.is_empty() {
                 Vec::new()
@@ -17749,23 +17783,14 @@ impl<'state> StateBlock<'state> {
         self.commit_topology.mutate_vec(|vec| *vec = next_topology);
 
         if !checkpoint_topology.is_empty() {
-            let block_height = block.as_ref().header().height().get();
-            let block_hash = block.as_ref().hash();
             let stake_snapshot =
                 CommitStakeSnapshot::from_roster(self.world(), &checkpoint_topology);
-            if let Some(commit_cert) = crate::sumeragi::status::commit_qc_history()
-                .into_iter()
-                .find(|cert| {
-                    cert.height == block_height
-                        && cert.subject_block_hash == block_hash
-                        && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
-                })
-            {
+            if let Some(commit_cert) = commit_cert_for_block {
                 if commit_cert.validator_set == checkpoint_topology {
                     let checkpoint = ValidatorSetCheckpoint::new(
-                        block_height,
+                        checkpoint_block_height,
                         commit_cert.view,
-                        block_hash,
+                        checkpoint_block_hash,
                         commit_cert.parent_state_root,
                         commit_cert.post_state_root,
                         commit_cert.validator_set.clone(),
@@ -17793,8 +17818,8 @@ impl<'state> StateBlock<'state> {
                     }
                 } else {
                     warn!(
-                        height = block_height,
-                        block = %block_hash,
+                        height = checkpoint_block_height,
+                        block = %checkpoint_block_hash,
                         expected = checkpoint_topology.len(),
                         actual = commit_cert.validator_set.len(),
                         "skipping commit roster record: validator set mismatch"
@@ -17802,8 +17827,8 @@ impl<'state> StateBlock<'state> {
                 }
             } else {
                 warn!(
-                    height = block_height,
-                    block = %block_hash,
+                    height = checkpoint_block_height,
+                    block = %checkpoint_block_hash,
                     "missing commit certificate; skipping commit roster record"
                 );
             }
@@ -28818,6 +28843,7 @@ mod tests {
             },
             proof: None,
             amount: 10,
+            amount_commitment: None,
         };
         let ivm_descriptor = ivm::axt::AxtDescriptor {
             dsids: descriptor.dsids.clone(),
@@ -29055,6 +29081,7 @@ mod tests {
             },
             proof: None,
             amount: 5,
+            amount_commitment: None,
         };
         let ivm_descriptor = ivm::axt::AxtDescriptor {
             dsids: descriptor.dsids.clone(),
@@ -29627,6 +29654,7 @@ mod tests {
                 },
                 proof: None,
                 amount: 5,
+                amount_commitment: None,
             }],
             commit_height: Some(1),
         };
@@ -29719,6 +29747,7 @@ mod tests {
                 },
                 proof: None,
                 amount: 5,
+                amount_commitment: None,
             }],
             commit_height: Some(1),
         };
@@ -29780,6 +29809,7 @@ mod tests {
                 },
                 proof: None,
                 amount: 4,
+                amount_commitment: None,
             }],
             binding,
             lane,
@@ -29990,6 +30020,7 @@ mod tests {
             },
             proof: None,
             amount: 5,
+            amount_commitment: None,
         };
         let envelope = AxtEnvelopeRecord {
             binding,
@@ -32305,6 +32336,13 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
+        {
+            let mut params = state.world.parameters.block();
+            params.set_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ));
+            params.commit();
+        }
 
         let keypairs = configure_commit_topology(&state, 4);
         let base_topology: Vec<_> = keypairs
@@ -32324,6 +32362,73 @@ mod tests {
         let signed_block: SignedBlock = block.into();
         let mut state_block = state.block(signed_block.header());
 
+        {
+            let mut peers = state_block.world.peers_mut_for_testing().transaction();
+            peers.clear();
+            peers.extend(base_topology.clone());
+            peers.push(new_peer);
+            peers.apply();
+        }
+
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let prev_hash = committed.as_ref().hash();
+        let _ = state_block.apply_without_execution(&committed, base_topology.clone());
+        state_block.commit().expect("commit state block");
+
+        let mut expected_topology = Topology::new(base_topology.clone());
+        expected_topology.block_committed(base_topology.clone(), prev_hash);
+        let expected = expected_topology.as_ref().to_vec();
+
+        let view = state.view();
+        let actual: Vec<_> = view.commit_topology().iter().cloned().collect();
+        assert_eq!(actual, expected);
+        let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
+        assert_eq!(prev, base_topology);
+
+        crate::sumeragi::status::set_mode_tags("", None, None);
+    }
+
+    #[test]
+    fn apply_without_execution_keeps_npos_commit_topology_with_stale_mode_tag() {
+        use iroha_data_model::parameter::system::{Parameter, SumeragiNposParameters};
+
+        let _mode_guard = crate::sumeragi::status::mode_tags_test_guard();
+        // Simulate stale status metadata (permissioned tag) while NPoS parameters are present.
+        crate::sumeragi::status::set_mode_tags(
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            None,
+            None,
+        );
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        {
+            let mut params = state.world.parameters.block();
+            params.set_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ));
+            params.commit();
+        }
+
+        let keypairs = configure_commit_topology(&state, 4);
+        let base_topology: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let new_peer = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {});
+        let signed_block: SignedBlock = block.into();
+        let mut state_block = state.block(signed_block.header());
         {
             let mut peers = state_block.world.peers_mut_for_testing().transaction();
             peers.clear();
