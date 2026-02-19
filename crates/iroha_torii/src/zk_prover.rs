@@ -12,7 +12,7 @@
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fs,
     io::Read as _,
     io::{Error as IoError, ErrorKind as IoErrorKind},
@@ -129,6 +129,27 @@ pub struct ProverReport {
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub proofs: Vec<ProofReportEntry>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    PartialEq,
+    Eq,
+)]
+struct ProverReportSummary {
+    id: String,
+    ok: bool,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    content_type: String,
+    processed_ms: u64,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    zk1_tags: Option<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -281,7 +302,9 @@ fn now_ms() -> u64 {
 
 const ATTACHMENT_ID_HEX_LEN: usize = 64;
 const TENANT_KEY_HEX_LEN: usize = 64;
-const REPORT_SCAN_MAX_FILES: usize = 20_000;
+const REPORT_FILE_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+static REPORT_INDEX_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 struct AttachmentLocation {
@@ -337,6 +360,151 @@ fn attachment_bin_path(tenant_key: Option<&str>, id: &str) -> PathBuf {
 
 fn report_path_from_sanitized(id: &str) -> PathBuf {
     reports_dir().join(format!("{}.json", id))
+}
+
+fn report_index_path() -> PathBuf {
+    prover_dir().join("reports_index.json")
+}
+
+fn report_summary_lock() -> &'static Mutex<()> {
+    REPORT_INDEX_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn report_summary_from_report(report: &ProverReport) -> ProverReportSummary {
+    ProverReportSummary {
+        id: report.id.clone(),
+        ok: report.ok,
+        error: report.error.clone(),
+        content_type: report.content_type.clone(),
+        processed_ms: report.processed_ms,
+        zk1_tags: report.zk1_tags.clone(),
+    }
+}
+
+fn normalize_report_summaries(raw: Vec<ProverReportSummary>) -> Vec<ProverReportSummary> {
+    let mut by_id: BTreeMap<String, ProverReportSummary> = BTreeMap::new();
+    for mut summary in raw {
+        let Some(clean) = sanitize_report_id(&summary.id) else {
+            continue;
+        };
+        summary.id = clean.clone();
+        by_id.insert(clean, summary);
+    }
+    by_id.into_values().collect()
+}
+
+fn persist_report_summaries_locked(summaries: &[ProverReportSummary]) -> std::io::Result<()> {
+    ensure_dirs();
+    let path = report_index_path();
+    let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
+    let body = norito::json::to_json_pretty(summaries).unwrap_or_else(|_| "[]".into());
+    use std::io::Write as _;
+    tmp.write_all(body.as_bytes())?;
+    tmp.flush()?;
+    tmp.persist(&path).map(|_| ()).map_err(|e| e.error)
+}
+
+fn read_report_summaries_locked() -> Option<Vec<ProverReportSummary>> {
+    let mut f = fs::File::open(report_index_path()).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let s = std::str::from_utf8(&buf).ok()?;
+    let parsed = norito::json::from_json::<Vec<ProverReportSummary>>(s).ok()?;
+    Some(normalize_report_summaries(parsed))
+}
+
+fn rebuild_report_summaries_locked() -> Vec<ProverReportSummary> {
+    let mut summaries = Vec::new();
+    for id in list_report_ids() {
+        if let Some(report) = load_report(&id) {
+            summaries.push(report_summary_from_report(&report));
+        }
+    }
+    let _ = persist_report_summaries_locked(&summaries);
+    summaries
+}
+
+fn load_report_summaries() -> Vec<ProverReportSummary> {
+    let _guard = report_summary_lock()
+        .lock()
+        .expect("report summary lock poisoned");
+    let mut summaries = read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
+    let before = summaries.len();
+    summaries.retain(|summary| report_path_from_sanitized(&summary.id).exists());
+    if summaries.len() != before {
+        let _ = persist_report_summaries_locked(&summaries);
+    }
+    summaries
+}
+
+fn upsert_report_summary(report: &ProverReport) {
+    let _guard = report_summary_lock()
+        .lock()
+        .expect("report summary lock poisoned");
+    let mut summaries = read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
+    let summary = report_summary_from_report(report);
+    if let Some(existing) = summaries.iter_mut().find(|entry| entry.id == summary.id) {
+        *existing = summary;
+    } else {
+        summaries.push(summary);
+    }
+    let _ = persist_report_summaries_locked(&summaries);
+}
+
+fn remove_report_summary(id: &str) {
+    let Some(clean) = sanitize_report_id(id) else {
+        return;
+    };
+    let _guard = report_summary_lock()
+        .lock()
+        .expect("report summary lock poisoned");
+    let mut summaries = read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
+    let before = summaries.len();
+    summaries.retain(|entry| entry.id != clean);
+    if summaries.len() != before {
+        let _ = persist_report_summaries_locked(&summaries);
+    }
+}
+
+fn filter_report_summary(
+    summary: &ProverReportSummary,
+    q: &ProverListQuery,
+    requested_id: Option<&str>,
+    ok_req: bool,
+    failed_req: bool,
+) -> bool {
+    if let Some(req_id) = requested_id {
+        if summary.id != req_id {
+            return false;
+        }
+    }
+    if let Some(ct) = q.content_type.as_deref() {
+        if !summary.content_type.contains(ct) {
+            return false;
+        }
+    }
+    if let Some(tag) = q.has_tag.as_deref() {
+        let has_tag = summary
+            .zk1_tags
+            .as_ref()
+            .map(|tags| tags.iter().any(|existing| existing == tag))
+            .unwrap_or(false);
+        if !has_tag {
+            return false;
+        }
+    }
+    if !q.since_ms.map_or(true, |th| summary.processed_ms >= th) {
+        return false;
+    }
+    if !q.before_ms.map_or(true, |th| summary.processed_ms <= th) {
+        return false;
+    }
+    match (ok_req, failed_req) {
+        (true, false) => summary.ok,
+        (false, true) => !summary.ok,
+        _ => true,
+    }
 }
 
 fn list_attachment_locations() -> Vec<AttachmentLocation> {
@@ -450,14 +618,37 @@ fn save_report(rep: &ProverReport) -> std::io::Result<()> {
     use std::io::Write as _;
     tmp.write_all(s.as_bytes())?;
     tmp.flush()?;
-    tmp.persist(&path).map(|_| ()).map_err(|e| e.error)
+    tmp.persist(&path).map(|_| ()).map_err(|e| e.error)?;
+    upsert_report_summary(rep);
+    Ok(())
 }
 
 fn load_report(id: &str) -> Option<ProverReport> {
     let clean = sanitize_report_id(id)?;
-    let mut f = fs::File::open(report_path_from_sanitized(&clean)).ok()?;
+    let path = report_path_from_sanitized(&clean);
+    let file_len = fs::metadata(&path).ok()?.len();
+    if file_len > REPORT_FILE_MAX_BYTES {
+        iroha_logger::warn!(
+            %clean,
+            file_len,
+            max = REPORT_FILE_MAX_BYTES,
+            "Skipping oversized prover report file"
+        );
+        return None;
+    }
+    let mut f = fs::File::open(path).ok()?;
+    let mut reader = f.take(REPORT_FILE_MAX_BYTES.saturating_add(1));
     let mut buf = Vec::new();
-    f.read_to_end(&mut buf).ok()?;
+    reader.read_to_end(&mut buf).ok()?;
+    if (buf.len() as u64) > REPORT_FILE_MAX_BYTES {
+        iroha_logger::warn!(
+            %clean,
+            read_len = buf.len(),
+            max = REPORT_FILE_MAX_BYTES,
+            "Skipping oversized prover report payload"
+        );
+        return None;
+    }
     let s = std::str::from_utf8(&buf).ok()?;
     let mut report = norito::json::from_json::<ProverReport>(s).ok()?;
     // Normalize persisted ids defensively so lookups remain canonical.
@@ -484,6 +675,7 @@ fn list_report_ids() -> Vec<String> {
 fn delete_report_files(id: &str) {
     if let Some(clean) = sanitize_report_id(id) {
         let _ = fs::remove_file(report_path_from_sanitized(&clean));
+        remove_report_summary(&clean);
     }
 }
 
@@ -504,23 +696,24 @@ fn record_prover_metrics(report: &ProverReport) {
 pub fn gc_reports_once() -> usize {
     ensure_dirs();
     let ttl = Duration::from_secs(cfg_reports_ttl_secs());
-    let now = SystemTime::now();
+    let now = now_ms();
+    let ttl_ms = ttl.as_millis() as u64;
     let mut deleted = 0usize;
-    if let Ok(rd) = fs::read_dir(reports_dir()) {
-        for e in rd.flatten() {
-            if let Some(name) = e.file_name().to_str() {
-                if let Some(id) = name.strip_suffix(".json") {
-                    if let Some(rep) = load_report(id) {
-                        let rep_time = UNIX_EPOCH + Duration::from_millis(rep.processed_ms);
-                        if now.duration_since(rep_time).unwrap_or_default() > ttl {
-                            delete_report_files(id);
-                            deleted += 1;
-                        }
-                    }
-                }
-            }
+    let _guard = report_summary_lock()
+        .lock()
+        .expect("report summary lock poisoned");
+    let mut summaries = read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
+    let mut retained = Vec::with_capacity(summaries.len());
+    for summary in summaries.drain(..) {
+        let age_ms = now.saturating_sub(summary.processed_ms);
+        if age_ms > ttl_ms {
+            let _ = fs::remove_file(report_path_from_sanitized(&summary.id));
+            deleted += 1;
+        } else {
+            retained.push(summary);
         }
     }
+    let _ = persist_report_summaries_locked(&retained);
     if deleted > 0 {
         let telemetry = telemetry_handle();
         telemetry.with_metrics(|tel| tel.inc_torii_zk_prover_gc(deleted as u64));
@@ -1289,60 +1482,11 @@ pub async fn handle_list_reports(
         None
     };
 
-    let mut scanned = 0usize;
-    let mut filtered: Vec<ProverReport> = Vec::new();
-    let ids = requested_id
-        .clone()
-        .map_or_else(list_report_ids, |id| vec![id]);
-    for id in ids {
-        scanned = scanned.saturating_add(1);
-        if scanned > REPORT_SCAN_MAX_FILES {
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                format!(
-                    "too many prover reports to scan (>{REPORT_SCAN_MAX_FILES}); narrow filters"
-                ),
-            )
-                .into_response();
-        }
-        let Some(report) = load_report(&id) else {
-            continue;
-        };
-        let matches = match (
-            &requested_id,
-            &q.content_type,
-            &q.has_tag,
-            q.ok_only,
-            q.failed_only,
-        ) {
-            (Some(req), _, _, _, _) if &report.id != req => false,
-            (_, Some(ct), _, _, _) if !report.content_type.contains(ct) => false,
-            (_, _, Some(tag), _, _) => report
-                .zk1_tags
-                .as_ref()
-                .map(|v| v.iter().any(|t| t == tag))
-                .unwrap_or(false),
-            _ => true,
-        };
-        if !matches {
-            continue;
-        }
-        filtered.push(report);
-    }
-
-    filtered = filtered
+    let mut filtered: Vec<ProverReportSummary> = load_report_summaries()
         .into_iter()
-        .filter(|r| q.since_ms.map_or(true, |th| r.processed_ms >= th))
-        .filter(|r| q.before_ms.map_or(true, |th| r.processed_ms <= th))
-        .filter(|r| match (ok_req, failed_req) {
-            (true, false) => r.ok,
-            (false, true) => !r.ok,
-            // both false or both true: treat as no filter
-            _ => true,
-        })
+        .filter(|summary| filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req))
         .collect();
-    // Sort by processed time ascending
-    filtered.sort_by_key(|r| r.processed_ms);
+    filtered.sort_by_key(|summary| summary.processed_ms);
     // latest=true overrides order/offset/limit: pick the last (max processed_ms)
     if q.latest.unwrap_or(false) {
         if let Some(last) = filtered.pop() {
@@ -1373,19 +1517,20 @@ pub async fn handle_list_reports(
     }
     // If ids_only requested, project to ids only
     let s = if q.ids_only.unwrap_or(false) {
-        let ids: Vec<String> = filtered.into_iter().map(|r| r.id).collect();
+        let ids: Vec<String> = filtered.iter().map(|summary| summary.id.clone()).collect();
         norito::json::to_json_pretty(&ids).unwrap_or_else(|_| "[]".into())
     } else if q.messages_only.unwrap_or(false) {
         // Project to message summaries for failed reports only
         let msgs: Vec<norito::json::Value> = filtered
             .into_iter()
-            .filter(|r| !r.ok)
-            .map(|r| {
+            .filter(|summary| !summary.ok)
+            .map(|summary| {
                 let mut m = norito::json::Map::new();
-                m.insert("id".into(), norito::json::Value::from(r.id));
+                m.insert("id".into(), norito::json::Value::from(summary.id));
                 m.insert(
                     "error".into(),
-                    r.error
+                    summary
+                        .error
                         .map(norito::json::Value::from)
                         .unwrap_or(norito::json::Value::Null),
                 );
@@ -1394,7 +1539,11 @@ pub async fn handle_list_reports(
             .collect();
         norito::json::to_json_pretty(&msgs).unwrap_or_else(|_| "[]".into())
     } else {
-        norito::json::to_json_pretty(&filtered).unwrap_or_else(|_| "[]".into())
+        let reports: Vec<ProverReport> = filtered
+            .into_iter()
+            .filter_map(|summary| load_report(&summary.id))
+            .collect();
+        norito::json::to_json_pretty(&reports).unwrap_or_else(|_| "[]".into())
     };
     axum::response::Response::builder()
         .header(axum::http::header::CONTENT_TYPE, "application/json")
@@ -1422,59 +1571,10 @@ pub async fn handle_count_reports(
         None
     };
 
-    let ids = requested_id
-        .clone()
-        .map_or_else(list_report_ids, |id| vec![id]);
-    let mut scanned = 0usize;
-    let mut count = 0u64;
-    for id in ids {
-        scanned = scanned.saturating_add(1);
-        if scanned > REPORT_SCAN_MAX_FILES {
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                format!(
-                    "too many prover reports to scan (>{REPORT_SCAN_MAX_FILES}); narrow filters"
-                ),
-            )
-                .into_response();
-        }
-        let Some(report) = load_report(&id) else {
-            continue;
-        };
-        let matches = match (
-            &requested_id,
-            &q.content_type,
-            &q.has_tag,
-            q.ok_only,
-            q.failed_only,
-        ) {
-            (Some(req), _, _, _, _) if &report.id != req => false,
-            (_, Some(ct), _, _, _) if !report.content_type.contains(ct) => false,
-            (_, _, Some(tag), _, _) => report
-                .zk1_tags
-                .as_ref()
-                .map(|v| v.iter().any(|t| t == tag))
-                .unwrap_or(false),
-            _ => true,
-        };
-        if !matches {
-            continue;
-        }
-        if !q.since_ms.map_or(true, |th| report.processed_ms >= th) {
-            continue;
-        }
-        if !q.before_ms.map_or(true, |th| report.processed_ms <= th) {
-            continue;
-        }
-        let status_matches = match (ok_req, failed_req) {
-            (true, false) => report.ok,
-            (false, true) => !report.ok,
-            _ => true,
-        };
-        if status_matches {
-            count = count.saturating_add(1);
-        }
-    }
+    let count = load_report_summaries()
+        .into_iter()
+        .filter(|summary| filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req))
+        .count() as u64;
     let body = norito::json::to_json_pretty(&crate::json_object(vec![("count", count)]))
         .unwrap_or_else(|_| "{}".into());
     axum::response::Response::builder()
@@ -1502,60 +1602,11 @@ pub async fn handle_delete_reports(
     } else {
         None
     };
-    let ids = requested_id
-        .clone()
-        .map_or_else(list_report_ids, |id| vec![id]);
-
-    let mut scanned = 0usize;
-    let mut matches: Vec<String> = Vec::new();
-    for id in ids {
-        scanned = scanned.saturating_add(1);
-        if scanned > REPORT_SCAN_MAX_FILES {
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                format!(
-                    "too many prover reports to scan (>{REPORT_SCAN_MAX_FILES}); narrow filters"
-                ),
-            )
-                .into_response();
-        }
-        let Some(report) = load_report(&id) else {
-            continue;
-        };
-        let filter_matches = match (
-            &requested_id,
-            &q.content_type,
-            &q.has_tag,
-            q.ok_only,
-            q.failed_only,
-        ) {
-            (Some(req), _, _, _, _) if &report.id != req => false,
-            (_, Some(ct), _, _, _) if !report.content_type.contains(ct) => false,
-            (_, _, Some(tag), _, _) => report
-                .zk1_tags
-                .as_ref()
-                .map(|v| v.iter().any(|t| t == tag))
-                .unwrap_or(false),
-            _ => true,
-        };
-        if !filter_matches {
-            continue;
-        }
-        if !q.since_ms.map_or(true, |th| report.processed_ms >= th) {
-            continue;
-        }
-        if !q.before_ms.map_or(true, |th| report.processed_ms <= th) {
-            continue;
-        }
-        let status_matches = match (ok_req, failed_req) {
-            (true, false) => report.ok,
-            (false, true) => !report.ok,
-            _ => true,
-        };
-        if status_matches {
-            matches.push(report.id);
-        }
-    }
+    let matches: Vec<String> = load_report_summaries()
+        .into_iter()
+        .filter(|summary| filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req))
+        .map(|summary| summary.id)
+        .collect();
 
     let mut deleted_ids = Vec::new();
     for id in matches {
@@ -1678,6 +1729,54 @@ mod tests {
             super::handle_delete_report(axum::extract::Path("../bad".to_string())).await,
         );
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn report_index_tracks_save_and_delete() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        let id = "f00df00d".repeat(8);
+        let report = ProverReport {
+            id: id.clone(),
+            ok: true,
+            error: None,
+            content_type: "application/x-norito".to_string(),
+            size: 128,
+            created_ms: now_ms(),
+            processed_ms: now_ms(),
+            latency_ms: 0,
+            zk1_tags: Some(vec!["PROF".to_string()]),
+            backend: Some("halo2/ipa".to_string()),
+            vk_ref: None,
+            proof_hash: None,
+            circuit_id: None,
+            proofs: Vec::new(),
+        };
+        save_report(&report).expect("save report");
+        let summaries = load_report_summaries();
+        assert!(
+            summaries.iter().any(|summary| summary.id == id),
+            "saved report should appear in index"
+        );
+
+        delete_report_files(&id);
+        let summaries = load_report_summaries();
+        assert!(
+            summaries.iter().all(|summary| summary.id != id),
+            "deleted report should be removed from index"
+        );
+    }
+
+    #[test]
+    fn load_report_rejects_oversized_report_file() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        ensure_dirs();
+        let id = "ab".repeat(32);
+        let path = report_path_from_sanitized(&id);
+        std::fs::write(&path, vec![b'x'; (REPORT_FILE_MAX_BYTES as usize) + 1])
+            .expect("write oversized report");
+        assert!(load_report(&id).is_none(), "oversized report must be rejected");
     }
 
     #[test]
