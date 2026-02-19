@@ -239,6 +239,14 @@ pub enum PermissionToken {
     Unshield(AssetDefinitionId),
     /// Permission to read balances of the given account
     ReadAccountAssets(AccountId),
+    /// Permission to create, delete, grant, and revoke roles.
+    ManageRoles,
+    /// Permission to grant and revoke direct permissions.
+    ManagePermissions,
+    /// Permission to create, mutate, and remove triggers.
+    ManageTriggers,
+    /// Permission to register and unregister peers.
+    ManagePeers,
 }
 
 /// Minimal account representation tracking signatories, quorum, and metadata.
@@ -2620,6 +2628,18 @@ fn parse_permission_name(s: &str) -> Result<PermissionToken, VMError> {
         let id: AssetDefinitionId = rest.parse().map_err(|_| VMError::NoritoInvalid)?;
         return Ok(PermissionToken::TransferAsset(id));
     }
+    if s == "manage_roles" {
+        return Ok(PermissionToken::ManageRoles);
+    }
+    if s == "manage_permissions" {
+        return Ok(PermissionToken::ManagePermissions);
+    }
+    if s == "manage_triggers" {
+        return Ok(PermissionToken::ManageTriggers);
+    }
+    if s == "manage_peers" {
+        return Ok(PermissionToken::ManagePeers);
+    }
     Err(VMError::NoritoInvalid)
 }
 
@@ -2748,6 +2768,10 @@ fn parse_permission_value(value: &njson::Value) -> Result<PermissionToken, VMErr
             let id: AssetDefinitionId = parse_target(map)?;
             Ok(PermissionToken::TransferAsset(id))
         }
+        "manage_roles" => Ok(PermissionToken::ManageRoles),
+        "manage_permissions" => Ok(PermissionToken::ManagePermissions),
+        "manage_triggers" => Ok(PermissionToken::ManageTriggers),
+        "manage_peers" => Ok(PermissionToken::ManagePeers),
         _ => Err(VMError::NoritoInvalid),
     }
 }
@@ -3733,6 +3757,9 @@ impl IVMHost for WsvHost {
                     crate::memory::Memory::INPUT_START + crate::memory::Memory::INPUT_SIZE;
                 if src >= input_lo && src < input_hi {
                     let tlv = vm.memory.validate_tlv(src)?;
+                    if tlv.payload.len() > self.zk_cfg.max_envelope_bytes {
+                        return Err(VMError::PermissionDenied);
+                    }
                     let policy = vm.syscall_policy();
                     if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
                         return Err(VMError::AbiTypeNotAllowed {
@@ -3752,6 +3779,9 @@ impl IVMHost for WsvHost {
                     .checked_add(len)
                     .and_then(|v| v.checked_add(32))
                     .ok_or(VMError::NoritoInvalid)?;
+                if total > self.zk_cfg.max_envelope_bytes {
+                    return Err(VMError::PermissionDenied);
+                }
                 let bytes_vec = vm
                     .memory
                     .load_region(src, total as u64)
@@ -3980,6 +4010,9 @@ impl IVMHost for WsvHost {
                         }
                     }
                     PointerType::Json => {
+                        if tlv.payload.len() > self.zk_cfg.max_envelope_bytes {
+                            return Err(VMError::PermissionDenied);
+                        }
                         // Envelope handlers are routed through the registry above so adding new
                         // developers' envelopes only requires registering aliases and a decode
                         // function. Long-term, unify this with the production CoreHost once the
@@ -4272,6 +4305,12 @@ impl IVMHost for WsvHost {
                                         return Err(VMError::NoritoInvalid);
                                     }
                                     if alias_matches(&["wsv.create_role"]) {
+                                        if !self.wsv.has_permission(
+                                            &self.caller,
+                                            &PermissionToken::ManageRoles,
+                                        ) {
+                                            return Err(VMError::PermissionDenied);
+                                        }
                                         let role_s = payload
                                             .get("role_id")
                                             .or_else(|| payload.get("role"))
@@ -4318,6 +4357,12 @@ impl IVMHost for WsvHost {
                                         }
                                     }
                                     if alias_matches(&["wsv.delete_role"]) {
+                                        if !self.wsv.has_permission(
+                                            &self.caller,
+                                            &PermissionToken::ManageRoles,
+                                        ) {
+                                            return Err(VMError::PermissionDenied);
+                                        }
                                         let role_s = payload
                                             .get("role_id")
                                             .or_else(|| payload.get("role"))
@@ -4331,6 +4376,12 @@ impl IVMHost for WsvHost {
                                         }
                                     }
                                     if alias_matches(&["wsv.grant_role"]) {
+                                        if !self.wsv.has_permission(
+                                            &self.caller,
+                                            &PermissionToken::ManageRoles,
+                                        ) {
+                                            return Err(VMError::PermissionDenied);
+                                        }
                                         let role_s = payload
                                             .get("role_id")
                                             .or_else(|| payload.get("role"))
@@ -4350,6 +4401,12 @@ impl IVMHost for WsvHost {
                                         }
                                     }
                                     if alias_matches(&["wsv.revoke_role"]) {
+                                        if !self.wsv.has_permission(
+                                            &self.caller,
+                                            &PermissionToken::ManageRoles,
+                                        ) {
+                                            return Err(VMError::PermissionDenied);
+                                        }
                                         let role_s = payload
                                             .get("role_id")
                                             .or_else(|| payload.get("role"))
@@ -4369,6 +4426,12 @@ impl IVMHost for WsvHost {
                                         }
                                     }
                                     if alias_matches(&["wsv.grant_permission"]) {
+                                        if !self.wsv.has_permission(
+                                            &self.caller,
+                                            &PermissionToken::ManagePermissions,
+                                        ) {
+                                            return Err(VMError::PermissionDenied);
+                                        }
                                         let acc_s = payload
                                             .get("account_id")
                                             .and_then(|v| v.as_str())
@@ -4390,6 +4453,12 @@ impl IVMHost for WsvHost {
                                         return Ok(0);
                                     }
                                     if alias_matches(&["wsv.revoke_permission"]) {
+                                        if !self.wsv.has_permission(
+                                            &self.caller,
+                                            &PermissionToken::ManagePermissions,
+                                        ) {
+                                            return Err(VMError::PermissionDenied);
+                                        }
                                         let acc_s = payload
                                             .get("account_id")
                                             .and_then(|v| v.as_str())
@@ -4411,6 +4480,12 @@ impl IVMHost for WsvHost {
                                         return Ok(0);
                                     }
                                     if alias_matches(&["wsv.create_trigger"]) {
+                                        if !self.wsv.has_permission(
+                                            &self.caller,
+                                            &PermissionToken::ManageTriggers,
+                                        ) {
+                                            return Err(VMError::PermissionDenied);
+                                        }
                                         let name = payload
                                             .get("name")
                                             .and_then(|v| v.as_str())
@@ -4419,6 +4494,12 @@ impl IVMHost for WsvHost {
                                         return Ok(0);
                                     }
                                     if alias_matches(&["wsv.remove_trigger"]) {
+                                        if !self.wsv.has_permission(
+                                            &self.caller,
+                                            &PermissionToken::ManageTriggers,
+                                        ) {
+                                            return Err(VMError::PermissionDenied);
+                                        }
                                         let name = payload
                                             .get("name")
                                             .and_then(|v| v.as_str())
@@ -4430,6 +4511,12 @@ impl IVMHost for WsvHost {
                                         }
                                     }
                                     if alias_matches(&["wsv.set_trigger_enabled"]) {
+                                        if !self.wsv.has_permission(
+                                            &self.caller,
+                                            &PermissionToken::ManageTriggers,
+                                        ) {
+                                            return Err(VMError::PermissionDenied);
+                                        }
                                         let name = payload
                                             .get("name")
                                             .and_then(|v| v.as_str())
@@ -4446,6 +4533,12 @@ impl IVMHost for WsvHost {
                                         }
                                     }
                                     if alias_matches(&["wsv.register_peer"]) {
+                                        if !self.wsv.has_permission(
+                                            &self.caller,
+                                            &PermissionToken::ManagePeers,
+                                        ) {
+                                            return Err(VMError::PermissionDenied);
+                                        }
                                         let peer_value = payload
                                             .get("peer")
                                             .cloned()
@@ -4456,6 +4549,12 @@ impl IVMHost for WsvHost {
                                         return Ok(0);
                                     }
                                     if alias_matches(&["wsv.unregister_peer"]) {
+                                        if !self.wsv.has_permission(
+                                            &self.caller,
+                                            &PermissionToken::ManagePeers,
+                                        ) {
+                                            return Err(VMError::PermissionDenied);
+                                        }
                                         let peer_value = payload
                                             .get("peer")
                                             .cloned()
@@ -5326,6 +5425,16 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(tok, PermissionToken::SetAccountDetail(id) if id == bob));
     }
+
+    #[test]
+    fn parse_manage_permissions_variants_ok() {
+        let direct = parse_permission_json("\"manage_permissions\"").expect("parse direct");
+        assert!(matches!(direct, PermissionToken::ManagePermissions));
+
+        let wrapped =
+            parse_permission_json("{\"type\":\"manage_roles\"}").expect("parse wrapped object");
+        assert!(matches!(wrapped, PermissionToken::ManageRoles));
+    }
 }
 
 #[cfg(test)]
@@ -5968,6 +6077,80 @@ mod tests_null_decode {
             call_syscall(&mut vm, number).expect("syscall should accept null");
             assert_eq!(vm.register(10), 0);
         }
+    }
+
+    #[test]
+    fn input_publish_tlv_rejects_oversized_envelope() {
+        let caller: AccountId =
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+                .parse()
+                .unwrap();
+        let host = WsvHost::new(
+            MockWorldStateView::new(),
+            caller,
+            HashMap::new(),
+            HashMap::new(),
+        )
+        .with_zk_halo2_config(crate::host::ZkHalo2Config {
+            max_envelope_bytes: 64,
+            ..Default::default()
+        });
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+
+        let payload = vec![b'x'; 128];
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Json, &payload))
+            .expect("alloc oversized json tlv");
+        vm.set_register(10, ptr);
+        let err = call_syscall(&mut vm, syscalls::SYSCALL_INPUT_PUBLISH_TLV)
+            .expect_err("oversized tlv should be rejected");
+        assert!(matches!(err, VMError::PermissionDenied));
+    }
+
+    #[test]
+    fn execute_instruction_rejects_oversized_json_envelope() {
+        let caller: AccountId =
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+                .parse()
+                .unwrap();
+        let host = WsvHost::new(
+            MockWorldStateView::new(),
+            caller,
+            HashMap::new(),
+            HashMap::new(),
+        )
+        .with_zk_halo2_config(crate::host::ZkHalo2Config {
+            max_envelope_bytes: 96,
+            ..Default::default()
+        });
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+
+        let oversized_env = norito::json::object([
+            (
+                "type",
+                norito::json::to_value("wsv.create_role").expect("serialize type"),
+            ),
+            (
+                "payload",
+                norito::json::object([(
+                    "name",
+                    norito::json::to_value(&"a".repeat(256)).expect("serialize oversized name"),
+                )])
+                .expect("serialize payload"),
+            ),
+        ])
+        .expect("serialize envelope");
+        let envelope_bytes =
+            norito::json::to_vec(&oversized_env).expect("serialize envelope bytes");
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Json, &envelope_bytes))
+            .expect("alloc oversized envelope");
+        vm.set_register(10, ptr);
+        let err = call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION)
+            .expect_err("oversized json envelope should be rejected");
+        assert!(matches!(err, VMError::PermissionDenied));
     }
 
     #[test]

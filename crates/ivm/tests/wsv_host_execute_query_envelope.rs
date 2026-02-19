@@ -5,7 +5,7 @@ use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, Memory, PointerType,
     instruction::wide,
-    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, WsvHost},
+    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 mod common;
@@ -124,6 +124,7 @@ fn query_list_triggers_returns_all() {
             .unwrap();
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
+    wsv.grant_permission(&alice, PermissionToken::ManageTriggers);
     let host = WsvHost::new(wsv, alice.clone(), Default::default(), Default::default());
 
     let mut vm = IVM::new(u64::MAX);

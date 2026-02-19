@@ -17616,13 +17616,28 @@ impl<'state> StateBlock<'state> {
                 let mut store = self.da_commitments.write();
                 store.insert_bundle(height, bundle.clone());
             }
-            self.state_ref
+            match self
+                .state_ref
                 .advance_da_shard_cursors_from_bundle(height, &bundle.commitments)
-                .expect("DA shard cursor advancement must succeed for committed blocks");
-            self.state_ref.schedule_da_shard_cursor_journal_persist();
-            self.state_ref
+            {
+                Ok(()) => self.state_ref.schedule_da_shard_cursor_journal_persist(),
+                Err(err) => {
+                    self.record_da_shard_cursor_bundle_error(&err);
+                    warn!(
+                        ?err,
+                        height, "failed to advance DA shard cursor index during block apply"
+                    );
+                }
+            }
+            if let Err(err) = self
+                .state_ref
                 .advance_da_receipt_cursors_from_bundle(height, &bundle.commitments)
-                .expect("DA receipt cursor advancement must succeed for committed blocks");
+            {
+                warn!(
+                    ?err,
+                    height, "failed to advance DA receipt cursor index during block apply"
+                );
+            }
             if let Err(err) = self
                 .state_ref
                 .record_confidential_compute_from_bundle(height, &bundle.commitments)
