@@ -102,12 +102,16 @@ fn build_envelope_fixture(
         manifest_root: manifest_root_one,
         da_commitment: Some([0x11; 32]),
         proof: vec![0xAA, 0xBB, 0xCC, 0xDD],
+        committed_amount: None,
+        amount_commitment: None,
     })?;
     let proof_seven_payload = to_bytes(&AxtProofEnvelope {
         dsid: dsid_seven,
         manifest_root: manifest_root_seven,
         da_commitment: None,
         proof: vec![0xFE, 0xED, 0xFA, 0xCE],
+        committed_amount: None,
+        amount_commitment: None,
     })?;
 
     let proof_one = ProofBlob {
