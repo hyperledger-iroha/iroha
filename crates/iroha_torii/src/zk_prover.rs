@@ -398,8 +398,7 @@ fn persist_report_summaries_locked(summaries: &[ProverReportSummary]) -> std::io
     let path = report_index_path();
     let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
-    let owned: Vec<ProverReportSummary> = summaries.to_vec();
-    let body = norito::json::to_json_pretty(&owned).unwrap_or_else(|_| "[]".into());
+    let body = norito::json::to_json_pretty(&summaries.to_vec()).unwrap_or_else(|_| "[]".into());
     use std::io::Write as _;
     tmp.write_all(body.as_bytes())?;
     tmp.flush()?;

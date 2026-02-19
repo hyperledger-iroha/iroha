@@ -567,6 +567,36 @@ against duplicate `(certificate_id, counter)` claims.
 4. `SubmitOfflineToOnlineTransfer` rejects settlements for allowances whose `verdict_id` appears
    in `offline_verdict_revocations`.
 
+### 5.4 `ReclaimExpiredOfflineAllowance`
+
+`ReclaimExpiredOfflineAllowance { certificate_id }` is the canonical post-expiry recovery path.
+
+1. Caller submits the allowance `certificate_id`.
+2. Ledger validates:
+   - allowance exists,
+   - caller matches the certificate controller,
+   - certificate or policy deadline has expired at the current block timestamp.
+3. On success (single atomic state transition), ledger:
+   - transfers `remaining_amount` from the offline escrow asset back to the controller asset,
+   - removes the allowance record from `offline_allowances`,
+   - emits `OfflineTransferEvent::AllowanceReclaimed`.
+4. Reclaim is idempotent-safe: after a successful reclaim, repeating the instruction fails with
+   `allowance_not_found`.
+5. Reclaim before expiry fails with `allowance_not_expired`.
+
+### 5.5 Escrow Authority Policy
+
+Offline escrow accounts are reserved for `RegisterOfflineAllowance`,
+`SubmitOfflineToOnlineTransfer`, and `ReclaimExpiredOfflineAllowance`.
+
+- Generic transparent asset transfers from an offline escrow source account are rejected.
+- This applies to both configured escrow bindings (`settlement.offline.escrow_accounts`) and
+  metadata-derived deterministic escrow IDs (`offline.enabled`).
+- Deterministic escrow ID derivation is treated as public identity only; security does not rely on
+  escrow-account obscurity.
+- The policy prevents domain-owner or broad transfer permissions from bypassing offline settlement
+  controls through generic transfer instructions.
+
 ## 6. Issuer Workflow (OA1)
 
 1. **Select asset & policy.** Choose the controller-owned asset (the allowance asset account must
@@ -934,6 +964,13 @@ Clients can use these fields to drive countdown badges and UX prompts without re
 deadline precedence (refresh → policy → certificate). The 24-hour warning window mirrors
 `iroha_cli offline allowance list --summary` so dashboards, SDKs, and scripts surface consistent
 notices.
+
+Wallets should present allowance balances using explicit lifecycle buckets:
+
+- `on_chain_available`: controller's normal spendable balance.
+- `offline_spendable`: active (non-expired) allowance remainder.
+- `offline_expired_locked`: expired allowance remainder pending reclaim.
+- `offline_reclaimed`: amount returned by `ReclaimExpiredOfflineAllowance` events.
 
 Example GET query filtering allowances by controller:
 
