@@ -18,7 +18,7 @@ use iroha::data_model::{
         KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
         kaigi_relay_feedback_key, kaigi_relay_metadata_key,
     },
-    offline::OfflineWalletCertificate,
+    offline::{OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineWalletCertificate},
     prelude::*,
     repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
 };
@@ -290,7 +290,18 @@ fn with_offline_allowance_genesis(
     let scale = certificate.allowance.amount.scale();
     let asset_definition =
         AssetDefinition::new(asset_definition_id, NumericSpec::fractional(scale));
-    builder.with_genesis_instruction(Register::asset_definition(asset_definition))
+    builder = builder.with_genesis_instruction(Register::asset_definition(asset_definition));
+    builder = builder.with_genesis_instruction(SetKeyValue::asset_definition(
+        certificate.allowance.asset.definition().clone(),
+        OFFLINE_ASSET_ENABLED_METADATA_KEY
+            .parse()
+            .expect("offline.enabled metadata key should parse"),
+        Json::new(true),
+    ));
+    builder.with_genesis_instruction(Mint::asset_numeric(
+        certificate.allowance.amount.clone(),
+        certificate.allowance.asset.clone(),
+    ))
 }
 
 fn parse_offline_certificate_fixture(

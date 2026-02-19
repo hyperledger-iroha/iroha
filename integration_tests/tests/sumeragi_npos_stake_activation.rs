@@ -11,13 +11,23 @@ use eyre::{Context as _, ensure};
 use integration_tests::sandbox;
 use iroha::data_model::{
     Level,
-    isi::{Log, Mint, Register, staking::RegisterPublicLaneValidator},
+    account::Account,
+    asset::AssetDefinition,
+    domain::Domain,
+    isi::{
+        Log, Mint, Register,
+        staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+    },
     metadata::Metadata,
     name::Name,
     prelude::*,
 };
 use iroha_primitives::json::Json;
-use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use iroha_primitives::numeric::NumericSpec;
+use iroha_test_network::{
+    NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
+};
+use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
 use norito::json::{self, Value};
 use tokio::time::sleep;
 
@@ -26,9 +36,12 @@ const FINALITY_MARGIN: u64 = 2;
 const MIN_SELF_BOND: u64 = 1_000;
 const ELIGIBLE_STAKE: u64 = 2_000;
 const INELIGIBLE_STAKE: u64 = 100;
+const STAKE_ASSET_ID: &str = "xor#nexus";
+const STAKE_DOMAIN_ID: &str = "nexus";
 const WAIT_HEIGHT: u64 = 16;
 const COLLECTOR_RETRY: Duration = Duration::from_secs(60);
 const COLLECTOR_POLL: Duration = Duration::from_millis(100);
+const GENESIS_BOOTSTRAP_STAKE: u64 = 1;
 
 fn register_validator_instructions(
     asset_def: &AssetDefinitionId,
@@ -67,6 +80,7 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
+                .write(["nexus", "enabled"], true)
                 .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
                 .write(
                     ["sumeragi", "npos", "epoch_length_blocks"],
@@ -90,16 +104,26 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
                     ["sumeragi", "npos", "election", "finality_margin_blocks"],
                     i64::try_from(FINALITY_MARGIN).unwrap(),
                 )
-                // Use existing genesis asset/accounts for staking to avoid extra setup.
-                .write(["nexus", "staking", "stake_asset_id"], "rose#wonderland")
+                .write(["nexus", "staking", "stake_asset_id"], STAKE_ASSET_ID)
                 .write(
                     ["nexus", "staking", "stake_escrow_account_id"],
-                    "alice@wonderland",
+                    genesis_gas_account(),
                 )
                 .write(
                     ["nexus", "staking", "slash_sink_account_id"],
-                    "alice@wonderland",
+                    genesis_gas_account(),
                 );
+        })
+        // The test controls staking setup; keep only a minimal genesis validator for startup.
+        .without_npos_genesis_bootstrap()
+        .with_genesis_block(|topology, topology_entries| {
+            let post_topology = minimal_npos_bootstrap_post_topology(topology.as_ref());
+            genesis_factory_with_post_topology(
+                Vec::new(),
+                post_topology,
+                topology,
+                topology_entries,
+            )
         });
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -113,8 +137,8 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
 
     let client = network.client();
     let peers = network.peers();
-    let domain: DomainId = "wonderland".parse().expect("domain id");
-    let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("asset def");
+    let domain: DomainId = STAKE_DOMAIN_ID.parse().expect("domain id");
+    let asset_def: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("asset def");
 
     let eligible_peer = &peers[0];
     let ineligible_peer = &peers[1];
@@ -259,6 +283,7 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
+                .write(["nexus", "enabled"], true)
                 .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
                 .write(
                     ["sumeragi", "npos", "epoch_length_blocks"],
@@ -286,15 +311,26 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
                     ["sumeragi", "npos", "election", "finality_margin_blocks"],
                     i64::try_from(FINALITY_MARGIN).unwrap(),
                 )
-                .write(["nexus", "staking", "stake_asset_id"], "rose#wonderland")
+                .write(["nexus", "staking", "stake_asset_id"], STAKE_ASSET_ID)
                 .write(
                     ["nexus", "staking", "stake_escrow_account_id"],
-                    "alice@wonderland",
+                    genesis_gas_account(),
                 )
                 .write(
                     ["nexus", "staking", "slash_sink_account_id"],
-                    "alice@wonderland",
+                    genesis_gas_account(),
                 );
+        })
+        // The test controls staking setup; keep only a minimal genesis validator for startup.
+        .without_npos_genesis_bootstrap()
+        .with_genesis_block(|topology, topology_entries| {
+            let post_topology = minimal_npos_bootstrap_post_topology(topology.as_ref());
+            genesis_factory_with_post_topology(
+                Vec::new(),
+                post_topology,
+                topology,
+                topology_entries,
+            )
         });
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -308,8 +344,8 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
 
     let client = network.client();
     let peers = network.peers();
-    let domain: DomainId = "wonderland".parse().expect("domain id");
-    let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("asset def");
+    let domain: DomainId = STAKE_DOMAIN_ID.parse().expect("domain id");
+    let asset_def: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("asset def");
 
     let peer_a = &peers[0];
     let peer_b = &peers[1];
@@ -363,4 +399,50 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
 
     network.shutdown().await;
     Ok(())
+}
+
+fn minimal_npos_bootstrap_post_topology(topology: &[PeerId]) -> Vec<Vec<InstructionBox>> {
+    let stake_asset_id: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("asset def");
+    let stake_domain: DomainId = STAKE_DOMAIN_ID.parse().expect("domain id");
+    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain id");
+    let gas_account = AccountId::new(
+        ivm_domain.clone(),
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+    );
+    let bootstrap_peer = topology
+        .last()
+        .expect("topology should include at least one peer");
+    let validator = AccountId::new(stake_domain.clone(), bootstrap_peer.public_key().clone());
+    let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
+        .with_metadata(Metadata::default());
+
+    let bootstrap_tx = vec![
+        Register::domain(Domain::new(stake_domain)).into(),
+        Register::domain(Domain::new(ivm_domain)).into(),
+        Register::account(Account::new(gas_account)).into(),
+        Register::asset_definition(definition).into(),
+        Register::account(Account::new(validator.clone())).into(),
+        Mint::asset_numeric(
+            GENESIS_BOOTSTRAP_STAKE,
+            AssetId::new(stake_asset_id, validator.clone()),
+        )
+        .into(),
+    ];
+    let validator_tx = vec![
+        RegisterPublicLaneValidator {
+            lane_id: LaneId::SINGLE,
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Numeric::from(GENESIS_BOOTSTRAP_STAKE),
+            metadata: Metadata::default(),
+        }
+        .into(),
+        ActivatePublicLaneValidator::new(LaneId::SINGLE, validator).into(),
+    ];
+
+    vec![bootstrap_tx, validator_tx]
+}
+
+fn genesis_gas_account() -> String {
+    format!("{}@ivm", SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key())
 }

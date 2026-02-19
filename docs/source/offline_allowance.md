@@ -149,7 +149,8 @@ entire allowance by registering an `OfflineVerdictRevocation`:
 `RegisterOfflineVerdictRevocation` stores these records in `offline_verdict_revocations` keyed by
 `verdict_id`. Torii exposes them via `/v1/offline/revocations` (JSON list + query envelope), and
 `iroha_cli offline revocation list` prints the same data so POS devices or merchant tooling can sync
-a deny list even when they only have intermittent connectivity.
+a deny list even when they only have intermittent connectivity. Settlement rejects bundles that
+reference allowances whose `verdict_id` has been revoked.
 
 ## 3. Platform Proofs & Counters
 
@@ -563,6 +564,8 @@ against duplicate `(certificate_id, counter)` claims.
 3. Ledger writes the revocation entry (`issuer`, `revoked_at_ms`, `reason`, `note`, `metadata`)
    into `offline_verdict_revocations`. Subsequent CLI/HTTP queries will surface it so POS clients
    can refuse cached verdicts immediately.
+4. `SubmitOfflineToOnlineTransfer` rejects settlements for allowances whose `verdict_id` appears
+   in `offline_verdict_revocations`.
 
 ## 6. Issuer Workflow (OA1)
 
