@@ -2,121 +2,313 @@
 //! Localnet cross-dataspace atomic swap regression test.
 
 use std::{
+    collections::BTreeSet,
+    num::NonZeroU32,
     thread,
     time::{Duration, Instant},
 };
 
-use eyre::{Result, eyre};
+use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
     data_model::{
         Level,
+        account::{Account, AccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::consensus::SumeragiStatusWire,
+        da::commitment::DaProofPolicyBundle,
+        domain::{Domain, DomainId},
         isi::{
             Grant, InstructionBox, Log, Mint, Register,
             settlement::{
                 DvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementLeg,
                 SettlementPlan,
             },
+            staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
-        nexus::DataSpaceId,
+        metadata::Metadata,
+        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility},
+        peer::PeerId,
         prelude::{FindAssets, Numeric, QueryBuilderExt},
     },
 };
+use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
+use iroha_core::da::proof_policy_bundle;
 use iroha_executor_data_model::permission::{
     asset::CanTransferAssetWithDefinition, asset_definition::CanRegisterAssetDefinition,
 };
-use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
-use toml::{Table, Value};
+use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
+use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+use norito::json::Value as JsonValue;
+use toml::{Table, Value as TomlValue};
 
+const NEXUS_ALIAS: &str = "nexus";
 const DS1_ALIAS: &str = "ds1";
 const DS2_ALIAS: &str = "ds2";
+const NEXUS_ID_U64: u64 = 0;
 const DS1_ID_U64: u64 = 1;
 const DS2_ID_U64: u64 = 2;
+const NEXUS_LANE_INDEX: u32 = 0;
+const DS1_LANE_INDEX: u32 = 1;
+const DS2_LANE_INDEX: u32 = 2;
+const TOTAL_PEERS: usize = 12;
+const VALIDATORS_PER_LANE: usize = 4;
+const VALIDATOR_STAKE: u64 = 2_000;
+const STAKE_ASSET_ID: &str = "xor#nexus";
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 fn localnet_builder() -> NetworkBuilder {
+    let gas_account_str = format!("{}@ivm", SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key());
     NetworkBuilder::new()
-        .with_peers(4)
-        .with_config_layer(|layer| {
+        .with_peers(TOTAL_PEERS)
+        .without_npos_genesis_bootstrap()
+        .with_genesis_block(|topology, topology_entries| {
+            let post_topology =
+                npos_multilane_genesis_post_topology_transactions(topology.as_ref());
+            let mut genesis = genesis_factory_with_post_topology(
+                Vec::new(),
+                post_topology,
+                topology,
+                topology_entries,
+            );
+            genesis
+                .0
+                .set_da_proof_policies(Some(multilane_da_proof_policy_bundle()));
+            genesis
+        })
+        .with_config_layer(move |layer| {
+            let mut lane_nexus = Table::new();
+            lane_nexus.insert("index".into(), TomlValue::Integer(0));
+            lane_nexus.insert("alias".into(), TomlValue::String("lane-nexus".to_owned()));
+            lane_nexus.insert(
+                "dataspace".into(),
+                TomlValue::String(NEXUS_ALIAS.to_owned()),
+            );
+            lane_nexus.insert("visibility".into(), TomlValue::String("public".to_owned()));
+            lane_nexus.insert("metadata".into(), TomlValue::Table(Table::new()));
+
             let mut lane_ds1 = Table::new();
-            lane_ds1.insert("index".into(), Value::Integer(0));
-            lane_ds1.insert("alias".into(), Value::String("lane-ds1".to_owned()));
-            lane_ds1.insert("dataspace".into(), Value::String(DS1_ALIAS.to_owned()));
-            lane_ds1.insert("visibility".into(), Value::String("restricted".to_owned()));
-            lane_ds1.insert("metadata".into(), Value::Table(Table::new()));
+            lane_ds1.insert("index".into(), TomlValue::Integer(1));
+            lane_ds1.insert("alias".into(), TomlValue::String("lane-ds1".to_owned()));
+            lane_ds1.insert("dataspace".into(), TomlValue::String(DS1_ALIAS.to_owned()));
+            lane_ds1.insert(
+                "visibility".into(),
+                TomlValue::String("restricted".to_owned()),
+            );
+            lane_ds1.insert("metadata".into(), TomlValue::Table(Table::new()));
 
             let mut lane_ds2 = Table::new();
-            lane_ds2.insert("index".into(), Value::Integer(1));
-            lane_ds2.insert("alias".into(), Value::String("lane-ds2".to_owned()));
-            lane_ds2.insert("dataspace".into(), Value::String(DS2_ALIAS.to_owned()));
-            lane_ds2.insert("visibility".into(), Value::String("restricted".to_owned()));
-            lane_ds2.insert("metadata".into(), Value::Table(Table::new()));
+            lane_ds2.insert("index".into(), TomlValue::Integer(2));
+            lane_ds2.insert("alias".into(), TomlValue::String("lane-ds2".to_owned()));
+            lane_ds2.insert("dataspace".into(), TomlValue::String(DS2_ALIAS.to_owned()));
+            lane_ds2.insert(
+                "visibility".into(),
+                TomlValue::String("restricted".to_owned()),
+            );
+            lane_ds2.insert("metadata".into(), TomlValue::Table(Table::new()));
+
+            let mut ds_nexus = Table::new();
+            ds_nexus.insert("alias".into(), TomlValue::String(NEXUS_ALIAS.to_owned()));
+            ds_nexus.insert("id".into(), TomlValue::Integer(NEXUS_ID_U64 as i64));
+            ds_nexus.insert(
+                "description".into(),
+                TomlValue::String("main nexus dataspace".to_owned()),
+            );
+            ds_nexus.insert("fault_tolerance".into(), TomlValue::Integer(1));
 
             let mut ds1 = Table::new();
-            ds1.insert("alias".into(), Value::String(DS1_ALIAS.to_owned()));
-            ds1.insert("id".into(), Value::Integer(DS1_ID_U64 as i64));
+            ds1.insert("alias".into(), TomlValue::String(DS1_ALIAS.to_owned()));
+            ds1.insert("id".into(), TomlValue::Integer(DS1_ID_U64 as i64));
             ds1.insert(
                 "description".into(),
-                Value::String("private dataspace one".to_owned()),
+                TomlValue::String("private dataspace one".to_owned()),
             );
-            ds1.insert("fault_tolerance".into(), Value::Integer(1));
+            ds1.insert("fault_tolerance".into(), TomlValue::Integer(1));
 
             let mut ds2 = Table::new();
-            ds2.insert("alias".into(), Value::String(DS2_ALIAS.to_owned()));
-            ds2.insert("id".into(), Value::Integer(DS2_ID_U64 as i64));
+            ds2.insert("alias".into(), TomlValue::String(DS2_ALIAS.to_owned()));
+            ds2.insert("id".into(), TomlValue::Integer(DS2_ID_U64 as i64));
             ds2.insert(
                 "description".into(),
-                Value::String("private dataspace two".to_owned()),
+                TomlValue::String("private dataspace two".to_owned()),
             );
-            ds2.insert("fault_tolerance".into(), Value::Integer(1));
+            ds2.insert("fault_tolerance".into(), TomlValue::Integer(1));
 
             let mut matcher_alice = Table::new();
-            matcher_alice.insert("account".into(), Value::String(ALICE_ID.to_string()));
+            matcher_alice.insert("account".into(), TomlValue::String(ALICE_ID.to_string()));
             let mut rule_alice = Table::new();
-            rule_alice.insert("lane".into(), Value::Integer(0));
-            rule_alice.insert("dataspace".into(), Value::String(DS1_ALIAS.to_owned()));
-            rule_alice.insert("matcher".into(), Value::Table(matcher_alice));
+            rule_alice.insert("lane".into(), TomlValue::Integer(1));
+            rule_alice.insert("dataspace".into(), TomlValue::String(DS1_ALIAS.to_owned()));
+            rule_alice.insert("matcher".into(), TomlValue::Table(matcher_alice));
 
             let mut matcher_bob = Table::new();
-            matcher_bob.insert("account".into(), Value::String(BOB_ID.to_string()));
+            matcher_bob.insert("account".into(), TomlValue::String(BOB_ID.to_string()));
             let mut rule_bob = Table::new();
-            rule_bob.insert("lane".into(), Value::Integer(1));
-            rule_bob.insert("dataspace".into(), Value::String(DS2_ALIAS.to_owned()));
-            rule_bob.insert("matcher".into(), Value::Table(matcher_bob));
+            rule_bob.insert("lane".into(), TomlValue::Integer(2));
+            rule_bob.insert("dataspace".into(), TomlValue::String(DS2_ALIAS.to_owned()));
+            rule_bob.insert("matcher".into(), TomlValue::Table(matcher_bob));
 
             let mut policy = Table::new();
-            policy.insert("default_lane".into(), Value::Integer(0));
+            policy.insert("default_lane".into(), TomlValue::Integer(0));
             policy.insert(
                 "default_dataspace".into(),
-                Value::String(DS1_ALIAS.to_owned()),
+                TomlValue::String(NEXUS_ALIAS.to_owned()),
             );
             policy.insert(
                 "rules".into(),
-                Value::Array(vec![Value::Table(rule_alice), Value::Table(rule_bob)]),
+                TomlValue::Array(vec![
+                    TomlValue::Table(rule_alice),
+                    TomlValue::Table(rule_bob),
+                ]),
             );
 
             layer
                 .write(["nexus", "enabled"], true)
-                .write(["nexus", "lane_count"], 2_i64)
+                .write(["nexus", "lane_count"], 3_i64)
                 .write(
                     ["nexus", "lane_catalog"],
-                    Value::Array(vec![Value::Table(lane_ds1), Value::Table(lane_ds2)]),
+                    TomlValue::Array(vec![
+                        TomlValue::Table(lane_nexus),
+                        TomlValue::Table(lane_ds1),
+                        TomlValue::Table(lane_ds2),
+                    ]),
                 )
                 .write(
                     ["nexus", "dataspace_catalog"],
-                    Value::Array(vec![Value::Table(ds1), Value::Table(ds2)]),
+                    TomlValue::Array(vec![
+                        TomlValue::Table(ds_nexus),
+                        TomlValue::Table(ds1),
+                        TomlValue::Table(ds2),
+                    ]),
                 )
-                .write(["nexus", "routing_policy"], Value::Table(policy))
+                .write(["nexus", "routing_policy"], TomlValue::Table(policy))
                 .write(
                     ["nexus", "staking", "restricted_validator_mode"],
                     "stake_elected",
+                )
+                .write(
+                    ["nexus", "staking", "public_validator_mode"],
+                    "stake_elected",
+                )
+                .write(["nexus", "staking", "stake_asset_id"], STAKE_ASSET_ID)
+                .write(
+                    ["nexus", "staking", "stake_escrow_account_id"],
+                    gas_account_str.clone(),
+                )
+                .write(
+                    ["nexus", "staking", "slash_sink_account_id"],
+                    gas_account_str.clone(),
+                )
+                .write(
+                    ["nexus", "staking", "max_validators"],
+                    VALIDATORS_PER_LANE as i64,
+                )
+                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
+                .write(
+                    ["sumeragi", "npos", "election", "max_validators"],
+                    VALIDATORS_PER_LANE as i64,
+                )
+                .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64)
+                .write(
+                    ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
+                    100_i64,
+                )
+                .write(
+                    ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
+                    40_i64,
                 );
         })
+}
+
+fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
+    let lane_count = NonZeroU32::new(3).expect("lane count");
+    let lanes = vec![
+        ModelLaneConfig {
+            id: LaneId::new(NEXUS_LANE_INDEX),
+            dataspace_id: DataSpaceId::new(NEXUS_ID_U64),
+            alias: "lane-nexus".to_owned(),
+            visibility: LaneVisibility::Public,
+            ..ModelLaneConfig::default()
+        },
+        ModelLaneConfig {
+            id: LaneId::new(DS1_LANE_INDEX),
+            dataspace_id: DataSpaceId::new(DS1_ID_U64),
+            alias: "lane-ds1".to_owned(),
+            visibility: LaneVisibility::Restricted,
+            ..ModelLaneConfig::default()
+        },
+        ModelLaneConfig {
+            id: LaneId::new(DS2_LANE_INDEX),
+            dataspace_id: DataSpaceId::new(DS2_ID_U64),
+            alias: "lane-ds2".to_owned(),
+            visibility: LaneVisibility::Restricted,
+            ..ModelLaneConfig::default()
+        },
+    ];
+    let catalog = LaneCatalog::new(lane_count, lanes).expect("lane catalog");
+    let lane_config = ActualLaneConfig::from_catalog(&catalog);
+    proof_policy_bundle(&lane_config)
+}
+
+fn npos_multilane_genesis_post_topology_transactions(
+    topology: &[PeerId],
+) -> Vec<Vec<InstructionBox>> {
+    assert_eq!(
+        topology.len(),
+        TOTAL_PEERS,
+        "expected {TOTAL_PEERS} peers in genesis topology, got {}",
+        topology.len()
+    );
+    let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
+    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
+    let stake_asset_id: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("stake asset definition");
+    let gas_account_id = AccountId::new(
+        ivm_domain.clone(),
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+    );
+
+    let mut bootstrap_tx = vec![
+        Register::domain(Domain::new(nexus_domain.clone())).into(),
+        Register::domain(Domain::new(ivm_domain)).into(),
+        Register::account(Account::new(gas_account_id)).into(),
+        Register::asset_definition(AssetDefinition::numeric(stake_asset_id.clone())).into(),
+    ];
+
+    let mut validator_tx = Vec::with_capacity(TOTAL_PEERS * 2);
+    for (index, peer) in topology.iter().enumerate() {
+        let lane_index = if index < VALIDATORS_PER_LANE {
+            NEXUS_LANE_INDEX
+        } else if index < VALIDATORS_PER_LANE * 2 {
+            DS1_LANE_INDEX
+        } else {
+            DS2_LANE_INDEX
+        };
+        let lane_id = LaneId::new(lane_index);
+        let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
+        bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
+        bootstrap_tx.push(
+            Mint::asset_numeric(
+                VALIDATOR_STAKE,
+                AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+            )
+            .into(),
+        );
+        validator_tx.push(
+            RegisterPublicLaneValidator::new(
+                lane_id,
+                validator_id.clone(),
+                validator_id.clone(),
+                Numeric::from(VALIDATOR_STAKE),
+                Metadata::default(),
+            )
+            .into(),
+        );
+        validator_tx.push(ActivatePublicLaneValidator::new(lane_id, validator_id).into());
+    }
+
+    vec![bootstrap_tx, validator_tx]
 }
 
 fn wait_for_height(
@@ -161,7 +353,8 @@ fn has_dataspace_commitment(status: &SumeragiStatusWire, dataspace_id: u64) -> b
 }
 
 fn wait_for_dataspace_commitment(
-    client: &Client,
+    observer: &Client,
+    tick_submitter: &Client,
     min_height: u64,
     dataspace_id: u64,
     context: &str,
@@ -169,8 +362,9 @@ fn wait_for_dataspace_commitment(
     let started = Instant::now();
     let mut last_height = 0;
     let mut last_commitments = String::new();
+    let mut tick = 0_u64;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let status = client
+        let status = observer
             .get_sumeragi_status_wire()
             .map_err(|err| eyre!(err))?;
         last_height = status.commit_qc.height;
@@ -179,6 +373,8 @@ fn wait_for_dataspace_commitment(
         {
             return Ok(status);
         }
+        tick = tick.saturating_add(1);
+        let _ = tick_submitter.submit(Log::new(Level::INFO, format!("{context} tick {tick}")));
         thread::sleep(STATUS_POLL_INTERVAL);
     }
     Err(eyre!(
@@ -213,6 +409,82 @@ fn wait_for_expected_balances(
     ))
 }
 
+fn lane_validator_snapshot(
+    snapshot: &JsonValue,
+    context: &str,
+) -> Result<(usize, BTreeSet<String>)> {
+    let root = snapshot
+        .as_object()
+        .ok_or_else(|| eyre!("{context}: lane validator response is not an object"))?;
+    let total = root
+        .get("total")
+        .and_then(JsonValue::as_u64)
+        .ok_or_else(|| eyre!("{context}: lane validator response is missing total"))?;
+    let items = root
+        .get("items")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| eyre!("{context}: lane validator response is missing items"))?;
+
+    let mut active = BTreeSet::new();
+    for item in items {
+        let entry = item
+            .as_object()
+            .ok_or_else(|| eyre!("{context}: validator entry is not an object"))?;
+        let validator = entry
+            .get("validator")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| eyre!("{context}: validator entry missing validator literal"))?;
+        let status_type = entry
+            .get("status")
+            .and_then(JsonValue::as_object)
+            .and_then(|status| status.get("type"))
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| eyre!("{context}: validator entry missing status.type"))?;
+        if status_type == "Active" {
+            active.insert(validator.to_owned());
+        }
+    }
+
+    Ok((usize::try_from(total).unwrap_or(usize::MAX), active))
+}
+
+fn wait_for_active_lane_validators(
+    client: &Client,
+    lane_id: LaneId,
+    expected_active: &BTreeSet<String>,
+    context: &str,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut last_total = 0usize;
+    let mut last_active = BTreeSet::new();
+    let mut tick = 0_u64;
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        let snapshot = client
+            .get_public_lane_validators(lane_id, None)
+            .map_err(|err| eyre!(err))?;
+        let (total, active) = lane_validator_snapshot(&snapshot, context)?;
+        last_total = total;
+        last_active = active.clone();
+        if total == expected_active.len() && active == *expected_active {
+            return Ok(());
+        }
+        tick = tick.saturating_add(1);
+        let _ = client.submit(Log::new(
+            Level::INFO,
+            format!("{context} activation tick {tick}"),
+        ));
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+
+    Err(eyre!(
+        "{context}: timed out waiting for active validators on lane {lane_id}; expected total {} active {:?}, observed total {} active {:?}",
+        expected_active.len(),
+        expected_active,
+        last_total,
+        last_active
+    ))
+}
+
 #[test]
 fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     let context = stringify!(cross_dataspace_atomic_swap_is_all_or_nothing);
@@ -227,6 +499,81 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         .peer()
         .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
 
+    let peers = network.peers();
+    ensure!(
+        peers.len() == TOTAL_PEERS,
+        "expected {TOTAL_PEERS} peers for cross-dataspace topology, got {}",
+        peers.len()
+    );
+    let validator_domain: DomainId = "nexus".parse().expect("validator domain");
+    let nexus_lane_validators: Vec<AccountId> = peers
+        .iter()
+        .take(VALIDATORS_PER_LANE)
+        .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
+        .collect();
+    let ds1_lane_validators: Vec<AccountId> = peers
+        .iter()
+        .skip(VALIDATORS_PER_LANE)
+        .take(VALIDATORS_PER_LANE)
+        .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
+        .collect();
+    let ds2_lane_validators: Vec<AccountId> = peers
+        .iter()
+        .skip(VALIDATORS_PER_LANE * 2)
+        .take(VALIDATORS_PER_LANE)
+        .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
+        .collect();
+    let mut all_validators = Vec::with_capacity(TOTAL_PEERS);
+    all_validators.extend(nexus_lane_validators.iter().cloned());
+    all_validators.extend(ds1_lane_validators.iter().cloned());
+    all_validators.extend(ds2_lane_validators.iter().cloned());
+    let unique_validators: BTreeSet<_> = all_validators.into_iter().collect();
+    ensure!(
+        unique_validators.len() == TOTAL_PEERS,
+        "validator groups must be disjoint and total {}",
+        TOTAL_PEERS
+    );
+    let expected_nexus_validators: BTreeSet<_> = nexus_lane_validators
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    let expected_ds1_validators: BTreeSet<_> = ds1_lane_validators
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    let expected_ds2_validators: BTreeSet<_> = ds2_lane_validators
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    wait_for_active_lane_validators(
+        &alice,
+        LaneId::new(NEXUS_LANE_INDEX),
+        &expected_nexus_validators,
+        "nexus lane validator activation",
+    )?;
+    wait_for_active_lane_validators(
+        &alice,
+        LaneId::new(DS1_LANE_INDEX),
+        &expected_ds1_validators,
+        "ds1 lane validator activation",
+    )?;
+    wait_for_active_lane_validators(
+        &alice,
+        LaneId::new(DS2_LANE_INDEX),
+        &expected_ds2_validators,
+        "ds2 lane validator activation",
+    )?;
+    let lane_sync_height = alice
+        .get_sumeragi_status_wire()
+        .map_err(|err| eyre!(err))?
+        .commit_qc
+        .height;
+    let _lane_sync_on_bob = wait_for_height(
+        &bob,
+        lane_sync_height,
+        "lane validator activation propagation",
+    )?;
+
     let initial_height = alice
         .get_sumeragi_status_wire()
         .map_err(|err| eyre!(err))?
@@ -234,13 +581,19 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         .height;
 
     alice.submit_blocking(Log::new(Level::INFO, "route probe ds1".to_string()))?;
-    let ds1_status =
-        wait_for_dataspace_commitment(&alice, initial_height + 1, DS1_ID_U64, "ds1 route probe")?;
+    let ds1_status = wait_for_dataspace_commitment(
+        &alice,
+        &alice,
+        initial_height + 1,
+        DS1_ID_U64,
+        "ds1 route probe",
+    )?;
     let _ds1_status_bob = wait_for_height(&bob, ds1_status.commit_qc.height, "ds1 probe on bob")?;
 
     bob.submit_blocking(Log::new(Level::INFO, "route probe ds2".to_string()))?;
     let _ds2_status = wait_for_dataspace_commitment(
         &alice,
+        &bob,
         ds1_status.commit_qc.height + 1,
         DS2_ID_U64,
         "ds2 route probe",
