@@ -13,6 +13,258 @@ use super::message::FetchPendingBlockPriority;
 use super::*;
 
 impl Actor {
+    fn block_sync_qc_is_missing_context_error(err: &QcValidationError) -> bool {
+        matches!(
+            err,
+            QcValidationError::MissingVotes { .. } | QcValidationError::StakeSnapshotUnavailable
+        )
+    }
+
+    fn block_sync_qc_final_drop(&mut self, reason: &'static str) {
+        super::status::inc_blocksync_qc_final_drop(reason);
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.inc_blocksync_qc_final_drop(reason);
+        }
+    }
+
+    fn quarantine_block_sync_qc_candidate(
+        &mut self,
+        qc: crate::sumeragi::consensus::Qc,
+        reason: &'static str,
+        target: QuarantinedQcTarget,
+    ) {
+        let key = Self::qc_tally_key(&qc);
+        let now = Instant::now();
+        if let Some(existing) = self.quarantined_block_sync_qcs.get_mut(&key) {
+            existing.qc = qc;
+            existing.reason = reason;
+            existing.last_attempt = now;
+            return;
+        }
+        if self.quarantined_block_sync_qcs.len() >= QUARANTINED_BLOCK_SYNC_QC_CAP {
+            let oldest = self
+                .quarantined_block_sync_qcs
+                .iter()
+                .min_by_key(|(key, entry)| (entry.first_seen, **key))
+                .map(|(key, _)| *key);
+            if let Some(oldest) = oldest {
+                self.quarantined_block_sync_qcs.remove(&oldest);
+                self.block_sync_qc_final_drop("capacity");
+            }
+        }
+        self.quarantined_block_sync_qcs.insert(
+            key,
+            QuarantinedQcCandidate {
+                qc,
+                first_seen: now,
+                last_attempt: now,
+                attempts: 0,
+                escalated_fetch: false,
+                reason,
+                target,
+            },
+        );
+        super::status::inc_blocksync_qc_quarantine();
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.inc_blocksync_qc_quarantine();
+        }
+    }
+
+    fn force_block_sync_fetch_for_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        reason: &'static str,
+    ) {
+        let mut roster = qc.validator_set.clone();
+        if roster.is_empty() {
+            let (consensus_mode, _, _) = self.consensus_context_for_height(qc.height);
+            roster = self.roster_for_vote_with_mode(
+                qc.subject_block_hash,
+                qc.height,
+                qc.view,
+                consensus_mode,
+            );
+        }
+        if roster.is_empty() {
+            return;
+        }
+        let topology = super::network_topology::Topology::new(roster);
+        let signer_set =
+            super::qc_signer_indices(qc, topology.as_ref().len(), topology.as_ref().len())
+                .map(|parsed| parsed.voting.into_iter().collect::<BTreeSet<_>>())
+                .unwrap_or_default();
+        let targets = Self::build_fetch_targets(&signer_set, &topology);
+        if targets.is_empty() {
+            return;
+        }
+        self.request_missing_block(
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            super::MissingBlockPriority::Consensus,
+            &targets,
+        );
+        debug!(
+            height = qc.height,
+            view = qc.view,
+            block = %qc.subject_block_hash,
+            targets = targets.len(),
+            reason,
+            "forcing block-sync fetch for quarantined QC"
+        );
+    }
+
+    pub(super) fn try_replay_quarantined_block_sync_qcs(
+        &mut self,
+        now: Instant,
+        tick_deadline: Option<Instant>,
+    ) -> bool {
+        if self.quarantined_block_sync_qcs.is_empty() {
+            return false;
+        }
+
+        enum ReplayAction {
+            Replay {
+                key: QcVoteKey,
+                qc: crate::sumeragi::consensus::Qc,
+                reason: &'static str,
+                target: QuarantinedQcTarget,
+            },
+            Escalate {
+                key: QcVoteKey,
+                qc: crate::sumeragi::consensus::Qc,
+                reason: &'static str,
+                target: QuarantinedQcTarget,
+            },
+            Expire {
+                key: QcVoteKey,
+                qc: crate::sumeragi::consensus::Qc,
+                reason: &'static str,
+                target: QuarantinedQcTarget,
+            },
+        }
+
+        let mut actions = Vec::new();
+        let keys: Vec<_> = self
+            .quarantined_block_sync_qcs
+            .keys()
+            .cloned()
+            .take(QUARANTINED_BLOCK_SYNC_QC_PER_TICK)
+            .collect();
+        for key in keys {
+            if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
+                break;
+            }
+            let Some(entry) = self.quarantined_block_sync_qcs.get(&key) else {
+                continue;
+            };
+            if self.block_known_locally(entry.qc.subject_block_hash) {
+                actions.push(ReplayAction::Replay {
+                    key,
+                    qc: entry.qc.clone(),
+                    reason: entry.reason,
+                    target: entry.target,
+                });
+                continue;
+            }
+            let age = now.saturating_duration_since(entry.first_seen);
+            if age < self.config.recovery.deferred_qc_ttl {
+                continue;
+            }
+            if entry.escalated_fetch || entry.attempts >= QUARANTINED_BLOCK_SYNC_QC_MAX_ATTEMPTS {
+                actions.push(ReplayAction::Expire {
+                    key,
+                    qc: entry.qc.clone(),
+                    reason: entry.reason,
+                    target: entry.target,
+                });
+            } else {
+                actions.push(ReplayAction::Escalate {
+                    key,
+                    qc: entry.qc.clone(),
+                    reason: entry.reason,
+                    target: entry.target,
+                });
+            }
+        }
+
+        if actions.is_empty() {
+            return false;
+        }
+
+        let mut progress = false;
+        for action in actions {
+            match action {
+                ReplayAction::Replay {
+                    key,
+                    qc,
+                    reason,
+                    target,
+                } => {
+                    self.quarantined_block_sync_qcs.remove(&key);
+                    match self.handle_qc(qc.clone()) {
+                        Ok(()) => {
+                            super::status::inc_blocksync_qc_revalidated();
+                            #[cfg(feature = "telemetry")]
+                            if let Some(telemetry) = self.telemetry_handle() {
+                                telemetry.inc_blocksync_qc_revalidated();
+                            }
+                            progress = true;
+                        }
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                reason,
+                                ?target,
+                                "failed to replay quarantined block-sync QC"
+                            );
+                            self.block_sync_qc_final_drop("replay_error");
+                            progress = true;
+                        }
+                    }
+                }
+                ReplayAction::Escalate {
+                    key,
+                    qc,
+                    reason,
+                    target,
+                } => {
+                    if let Some(entry) = self.quarantined_block_sync_qcs.get_mut(&key) {
+                        entry.escalated_fetch = true;
+                        entry.attempts = entry.attempts.saturating_add(1);
+                        entry.first_seen = now;
+                        entry.last_attempt = now;
+                    }
+                    self.force_block_sync_fetch_for_qc(&qc, reason);
+                    debug!(?target, reason, "escalated quarantined block-sync QC fetch");
+                    progress = true;
+                }
+                ReplayAction::Expire {
+                    key,
+                    qc,
+                    reason,
+                    target,
+                } => {
+                    self.quarantined_block_sync_qcs.remove(&key);
+                    self.force_block_sync_fetch_for_qc(&qc, reason);
+                    self.block_sync_qc_final_drop("expired");
+                    warn!(?target, reason, "quarantined block-sync QC expired");
+                    let current_view = self.phase_tracker.current_view(qc.height).unwrap_or(0);
+                    self.trigger_view_change_with_cause(
+                        qc.height,
+                        current_view,
+                        super::ViewChangeCause::MissingQc,
+                    );
+                    progress = true;
+                }
+            }
+        }
+
+        progress
+    }
+
     pub(super) fn enqueue_fetch_pending_block_response(&mut self, peer: PeerId, msg: BlockMessage) {
         let mut msg = BlockMessageWire::new(msg);
         if !self.prepare_background_block_message(&mut msg) {
@@ -349,6 +601,11 @@ impl Actor {
             locked_view = lock.view,
             locked_hash = %lock.subject_block_hash,
             "deferring block sync QC while locked payload remains unavailable"
+        );
+        self.quarantine_block_sync_qc_candidate(
+            qc.clone(),
+            "locked_payload_missing",
+            QuarantinedQcTarget::LockedPayload,
         );
         self.record_consensus_message_handling(
             super::status::ConsensusMessageKind::Qc,
@@ -1569,17 +1826,38 @@ impl Actor {
                     if had_incoming_qc {
                         super::status::inc_block_sync_qc_replaced();
                     }
-                    warn!(
-                        ?err,
-                        reason = qc_validation_reason(&err),
-                        hash = ?block_hash,
-                        height = block_height,
-                        view = block_view,
-                        block_signers = block_signer_count,
-                        candidate_qc_signers,
-                        had_incoming_qc,
-                        "dropping block sync QC after validation failure"
-                    );
+                    let reason = qc_validation_reason(&err);
+                    if Self::block_sync_qc_is_missing_context_error(&err) {
+                        self.quarantine_block_sync_qc_candidate(
+                            qc.clone(),
+                            reason,
+                            QuarantinedQcTarget::BlockSync,
+                        );
+                        warn!(
+                            ?err,
+                            reason,
+                            hash = ?block_hash,
+                            height = block_height,
+                            view = block_view,
+                            block_signers = block_signer_count,
+                            candidate_qc_signers,
+                            had_incoming_qc,
+                            "quarantining block sync QC while dependencies are unresolved"
+                        );
+                    } else {
+                        self.block_sync_qc_final_drop(reason);
+                        warn!(
+                            ?err,
+                            reason,
+                            hash = ?block_hash,
+                            height = block_height,
+                            view = block_view,
+                            block_signers = block_signer_count,
+                            candidate_qc_signers,
+                            had_incoming_qc,
+                            "dropping block sync QC after validation failure"
+                        );
+                    }
                     None
                 }
             }
@@ -1732,6 +2010,8 @@ impl Actor {
         let incoming_qc_usable = incoming_qc_validated && !hard_locked_conflict;
         if incoming_qc_usable {
             if let Some(qc) = incoming_qc.as_ref() {
+                self.quarantined_block_sync_qcs
+                    .remove(&Self::qc_tally_key(qc));
                 self.qc_cache.insert(
                     (
                         qc.phase,
@@ -2528,6 +2808,8 @@ impl Actor {
                         self.prune_precommit_votes_conflicting_with_lock(qc_ref);
                     }
                 }
+                self.quarantined_block_sync_qcs
+                    .remove(&Self::qc_tally_key(&qc));
                 super::status::record_commit_qc(qc.clone());
                 self.qc_cache.insert(
                     (
@@ -2548,16 +2830,36 @@ impl Actor {
             }
             Err(err) => {
                 record_qc_validation_error(self.telemetry_handle(), &err);
-                warn!(
-                    ?err,
-                    reason = qc_validation_reason(&err),
-                    incoming_hash = %block_hash,
-                    height = block_height,
-                    view = block_view,
-                    qc_signers,
-                    block_signers = block_signers.len(),
-                    "dropping cached block sync QC after validation failure"
-                );
+                let reason = qc_validation_reason(&err);
+                if Self::block_sync_qc_is_missing_context_error(&err) {
+                    self.quarantine_block_sync_qc_candidate(
+                        qc.clone(),
+                        reason,
+                        QuarantinedQcTarget::BlockSync,
+                    );
+                    warn!(
+                        ?err,
+                        reason,
+                        incoming_hash = %block_hash,
+                        height = block_height,
+                        view = block_view,
+                        qc_signers,
+                        block_signers = block_signers.len(),
+                        "quarantining cached block sync QC after transient validation failure"
+                    );
+                } else {
+                    self.block_sync_qc_final_drop(reason);
+                    warn!(
+                        ?err,
+                        reason,
+                        incoming_hash = %block_hash,
+                        height = block_height,
+                        view = block_view,
+                        qc_signers,
+                        block_signers = block_signers.len(),
+                        "dropping cached block sync QC after validation failure"
+                    );
+                }
             }
         }
     }
@@ -3124,6 +3426,16 @@ impl Actor {
         let tally = match tally {
             Ok(tally) => tally,
             Err(err) => {
+                let reason = qc_validation_reason(&err);
+                if Self::block_sync_qc_is_missing_context_error(&err) {
+                    self.quarantine_block_sync_qc_candidate(
+                        qc.clone(),
+                        reason,
+                        QuarantinedQcTarget::BlockSync,
+                    );
+                } else {
+                    self.block_sync_qc_final_drop(reason);
+                }
                 warn!(
                     ?err,
                     height = block_height,
@@ -3210,6 +3522,8 @@ impl Actor {
                 "recorded commit roster from block sync QC"
             );
         }
+        self.quarantined_block_sync_qcs
+            .remove(&Self::qc_tally_key(&qc));
         super::status::record_commit_qc(qc.clone());
         self.qc_cache.insert(
             (

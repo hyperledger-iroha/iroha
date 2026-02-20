@@ -5693,6 +5693,24 @@ pub struct SumeragiRecovery {
         default = "defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS"
     )]
     pub missing_block_signer_fallback_attempts: u32,
+    /// Backlog-aware multiplier applied to quorum-reschedule grace windows.
+    #[config(
+        env = "SUMERAGI_VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR",
+        default = "defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR"
+    )]
+    pub view_change_backlog_extension_factor: f64,
+    /// Maximum additional quorum-reschedule grace window under backlog (milliseconds).
+    #[config(
+        env = "SUMERAGI_VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS",
+        default = "defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS"
+    )]
+    pub view_change_backlog_extension_cap_ms: u64,
+    /// TTL for deferred QC missing-payload recovery before escalation (milliseconds).
+    #[config(
+        env = "SUMERAGI_DEFERRED_QC_TTL_MS",
+        default = "defaults::sumeragi::DEFERRED_QC_TTL_MS"
+    )]
+    pub deferred_qc_ttl_ms: u64,
 }
 
 /// User-level configuration container for `SumeragiGating`.
@@ -6589,6 +6607,34 @@ impl Sumeragi {
             } else {
                 true
             };
+        let backlog_extension_factor_ok =
+            if !recovery.view_change_backlog_extension_factor.is_finite()
+                || recovery.view_change_backlog_extension_factor < 1.0
+            {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.recovery.view_change_backlog_extension_factor must be finite and >= 1.0",
+            ));
+                false
+            } else {
+                true
+            };
+        let backlog_extension_cap_ok = if recovery.view_change_backlog_extension_cap_ms == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.recovery.view_change_backlog_extension_cap_ms must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
+        let deferred_qc_ttl_ok = if recovery.deferred_qc_ttl_ms == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.recovery.deferred_qc_ttl_ms must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
         let membership_mismatch_threshold_ok = if gating.membership_mismatch_alert_threshold == 0 {
             emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
                 "sumeragi.gating.membership_mismatch_alert_threshold must be greater than zero",
@@ -6681,6 +6727,9 @@ impl Sumeragi {
             && commit_inflight_ok
             && commit_work_queue_ok
             && commit_result_queue_ok
+            && backlog_extension_factor_ok
+            && backlog_extension_cap_ok
+            && deferred_qc_ttl_ok
             && membership_mismatch_threshold_ok
             && rbc_chunk_max_ok
             && pending_caps_ok
@@ -6817,6 +6866,11 @@ impl Sumeragi {
             recovery: actual::SumeragiRecovery {
                 missing_block_signer_fallback_attempts: recovery
                     .missing_block_signer_fallback_attempts,
+                view_change_backlog_extension_factor: recovery.view_change_backlog_extension_factor,
+                view_change_backlog_extension_cap: std::time::Duration::from_millis(
+                    recovery.view_change_backlog_extension_cap_ms,
+                ),
+                deferred_qc_ttl: std::time::Duration::from_millis(recovery.deferred_qc_ttl_ms),
             },
             gating: actual::SumeragiGating {
                 future_height_window: gating.future_height_window,
@@ -8075,6 +8129,14 @@ pub struct Network {
     /// Timeout applied to an individual outbound dial attempt (milliseconds, clamped to >= 100ms).
     #[config(default = "defaults::network::DIAL_TIMEOUT.into()")]
     pub dial_timeout_ms: DurationMs,
+    /// Maximum age for deferred outbound frames while the peer session is missing (milliseconds).
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS))"
+    )]
+    pub deferred_send_ttl_ms: DurationMs,
+    /// Maximum deferred outbound frames retained per peer while session is missing.
+    #[config(default = "defaults::network::DEFERRED_SEND_MAX_PER_PEER")]
+    pub deferred_send_max_per_peer: usize,
     /// Enable QUIC transport (feature-gated).
     #[config(env = "P2P_QUIC", default)]
     pub quic_enabled: bool,
@@ -8381,6 +8443,8 @@ impl Network {
             idle_timeout_ms: idle_timeout,
             connect_startup_delay_ms: connect_startup_delay,
             dial_timeout_ms: dial_timeout,
+            deferred_send_ttl_ms,
+            deferred_send_max_per_peer,
             dns_refresh_interval_ms: dns_refresh_interval,
             dns_refresh_ttl_ms: dns_refresh_ttl,
             quic_enabled,
@@ -8596,6 +8660,8 @@ impl Network {
                 idle_timeout,
                 connect_startup_delay: connect_startup_delay.get(),
                 dial_timeout,
+                deferred_send_ttl: deferred_send_ttl_ms.get().max(min_interval),
+                deferred_send_max_per_peer: deferred_send_max_per_peer.max(1),
                 peer_gossip_period,
                 peer_gossip_max_period,
                 trust_gossip,

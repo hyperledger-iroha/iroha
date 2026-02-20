@@ -5388,6 +5388,88 @@ impl Telemetry {
             .observe(dwell.as_millis() as f64);
     }
 
+    /// Record that a block-sync QC was quarantined due to missing context.
+    pub fn inc_blocksync_qc_quarantine(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics.blocksync_qc_quarantine_total.inc();
+    }
+
+    /// Record that a quarantined block-sync QC was revalidated.
+    pub fn inc_blocksync_qc_revalidated(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics.blocksync_qc_revalidated_total.inc();
+    }
+
+    /// Record a permanent block-sync QC drop grouped by reason.
+    pub fn inc_blocksync_qc_final_drop(&self, reason: &'static str) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics
+            .blocksync_qc_final_drop_total
+            .with_label_values(&[reason])
+            .inc();
+    }
+
+    /// Record that a QC was deferred due to missing payload.
+    pub fn inc_qc_deferred_missing_payload(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics.qc_deferred_missing_payload_total.inc();
+    }
+
+    /// Record that a deferred QC was resolved.
+    pub fn inc_qc_deferred_resolved(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics.qc_deferred_resolved_total.inc();
+    }
+
+    /// Record that a deferred QC expired.
+    pub fn inc_qc_deferred_expired(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics.qc_deferred_expired_total.inc();
+    }
+
+    /// Record a consensus defer caused by an empty commit topology.
+    pub fn inc_consensus_empty_commit_topology_defer(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics
+            .consensus_empty_commit_topology_defer_total
+            .inc();
+    }
+
+    /// Record an empty-topology recovery escalation to forced view change.
+    pub fn inc_consensus_empty_commit_topology_escalation(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics
+            .consensus_empty_commit_topology_escalation_total
+            .inc();
+    }
+
+    /// Record a transition in the bounded consensus recovery state machine.
+    pub fn inc_consensus_recovery_state_transition(&self, state: &'static str) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics
+            .consensus_recovery_state_transitions_total
+            .with_label_values(&[state])
+            .inc();
+    }
+
     #[inline]
     fn da_gate_reason_label(reason: GateReason) -> (&'static str, u64) {
         match reason {
@@ -8537,6 +8619,18 @@ impl Actor {
         self.metrics
             .p2p_backoff_scheduled_total
             .set(iroha_p2p::network::backoff_scheduled_count());
+        self.metrics
+            .p2p_deferred_send_enqueued_total
+            .set(iroha_p2p::network::deferred_send_enqueued_count());
+        self.metrics
+            .p2p_deferred_send_dropped_total
+            .set(iroha_p2p::network::deferred_send_dropped_count());
+        self.metrics
+            .p2p_session_reconnect_total
+            .set(iroha_p2p::network::session_reconnect_total());
+        self.metrics
+            .p2p_connect_retry_seconds
+            .set(iroha_p2p::network::connect_retry_seconds_total());
         self.metrics
             .p2p_accept_throttled_total
             .set(iroha_p2p::network::accept_throttled_count());

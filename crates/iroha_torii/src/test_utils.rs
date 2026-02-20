@@ -351,6 +351,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             idle_timeout: core::time::Duration::from_secs(5),
             connect_startup_delay: defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: defaults::network::DIAL_TIMEOUT,
+            deferred_send_ttl: core::time::Duration::from_millis(
+                defaults::network::DEFERRED_SEND_TTL_MS,
+            ),
+            deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
             trust_gossip: defaults::network::TRUST_GOSSIP,
@@ -724,6 +728,12 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             recovery: A::SumeragiRecovery {
                 missing_block_signer_fallback_attempts:
                     defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+                view_change_backlog_extension_factor:
+                    defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR,
+                view_change_backlog_extension_cap: Duration::from_millis(
+                    defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS,
+                ),
+                deferred_qc_ttl: Duration::from_millis(defaults::sumeragi::DEFERRED_QC_TTL_MS),
             },
             gating: A::SumeragiGating {
                 future_height_window: defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,

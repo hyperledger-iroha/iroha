@@ -1211,6 +1211,10 @@ pub struct Network {
     pub connect_startup_delay: Duration,
     /// Timeout applied to an individual outbound dial attempt (TCP/TLS/QUIC/WS).
     pub dial_timeout: Duration,
+    /// Maximum age for deferred outbound frames queued while the peer session is missing.
+    pub deferred_send_ttl: Duration,
+    /// Maximum deferred outbound frames retained per peer while session is missing.
+    pub deferred_send_max_per_peer: usize,
     /// Interval between peer gossip batches.
     pub peer_gossip_period: Duration,
     /// Maximum interval between peer gossip batches (idle backoff ceiling).
@@ -3811,6 +3815,12 @@ pub struct SumeragiPersistence {
 pub struct SumeragiRecovery {
     /// Missing-block fetch attempts before falling back to the full commit topology.
     pub missing_block_signer_fallback_attempts: u32,
+    /// Backlog-aware multiplier applied to quorum-reschedule grace windows.
+    pub view_change_backlog_extension_factor: f64,
+    /// Maximum additional quorum-reschedule grace window applied under backlog.
+    pub view_change_backlog_extension_cap: Duration,
+    /// TTL for deferred QC missing-payload recovery before escalation.
+    pub deferred_qc_ttl: Duration,
 }
 
 /// Ingress gating and penalty configuration.

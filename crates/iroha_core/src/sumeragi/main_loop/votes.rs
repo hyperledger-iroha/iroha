@@ -883,6 +883,10 @@ impl Actor {
             .retain(|_, entry| should_keep(entry.height, entry.view));
         self.deferred_qcs
             .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
+        self.deferred_missing_payload_qcs
+            .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
+        self.quarantined_block_sync_qcs
+            .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
         self.deferred_votes.retain(|_, votes| {
             votes.retain(|(_, height, view, _, _), _| should_keep(*height, *view));
             !votes.is_empty()
