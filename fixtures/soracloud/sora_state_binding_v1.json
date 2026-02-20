@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "binding_name": "session_store",
+  "scope": {
+    "scope": "ServiceState",
+    "value": null
+  },
+  "mutability": {
+    "mutability": "ReadWrite",
+    "value": null
+  },
+  "encryption": {
+    "encryption": "ClientCiphertext",
+    "value": null
+  },
+  "key_prefix": "/state/session",
+  "max_item_bytes": 4096,
+  "max_total_bytes": 262144
+}

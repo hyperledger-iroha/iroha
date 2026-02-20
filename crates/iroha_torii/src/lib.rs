@@ -7076,6 +7076,225 @@ async fn handler_metrics(
 }
 
 #[cfg(feature = "telemetry")]
+async fn handler_soracloud_status(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    accept: Option<utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/soracloud/status",
+        app.api_token_enforced(),
+    );
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+
+    if !app.telemetry.allows_metrics() {
+        return Ok(telemetry_unavailable_response(
+            "/v1/soracloud/status",
+            &app.telemetry,
+        ));
+    }
+
+    let format =
+        match crate::utils::negotiate_response_format(accept.as_ref().map(|value| &value.0)) {
+            Ok(format) => format,
+            Err(response) => return Ok(response),
+        };
+
+    let metrics = app.telemetry.metrics().await;
+    let governance_manifest_rejected: u64 = [
+        "missing_manifest",
+        "non_validator_authority",
+        "quorum_rejected",
+        "protected_namespace_rejected",
+        "runtime_hook_rejected",
+        "uaid_not_bound",
+    ]
+    .into_iter()
+    .map(|reason| {
+        metrics
+            .governance_manifest_admission_total
+            .with_label_values(&[reason])
+            .get()
+    })
+    .sum();
+
+    let sorafs_provider_rejected: u64 = [
+        "decode",
+        "stale",
+        "policy_violation",
+        "unsupported_signature",
+        "signature",
+        "unknown_capabilities",
+        "admission_missing",
+        "digest_error",
+        "body_mismatch",
+        "body_digest_mismatch",
+        "advert_key_mismatch",
+        "retention_expired",
+    ]
+    .into_iter()
+    .map(|reason| {
+        metrics
+            .torii_sorafs_admission_total
+            .with_label_values(&["rejected", reason])
+            .get()
+    })
+    .sum();
+    let failed_admission_total =
+        governance_manifest_rejected.saturating_add(sorafs_provider_rejected);
+
+    let backpressure = app.queue.current_backpressure();
+    let queue_active = u64::try_from(app.queue.active_len()).unwrap_or(u64::MAX);
+    let queue_queued = u64::try_from(backpressure.queued()).unwrap_or(u64::MAX);
+    let queue_capacity = u64::try_from(backpressure.capacity().get()).unwrap_or(u64::MAX);
+    let high_load_threshold = u64::try_from(app.high_load_tx_threshold).unwrap_or(u64::MAX);
+    let high_load = backpressure.is_saturated() || queue_active >= high_load_threshold;
+
+    let nexus = app.state.nexus_snapshot();
+    let routing = json_object(vec![
+        json_entry("nexus_enabled", nexus.enabled),
+        json_entry(
+            "lane_count",
+            u64::try_from(nexus.lane_catalog.lanes().len()).unwrap_or(u64::MAX),
+        ),
+        json_entry(
+            "dataspace_count",
+            u64::try_from(nexus.dataspace_catalog.entries().len()).unwrap_or(u64::MAX),
+        ),
+        json_entry(
+            "routing_rules",
+            u64::try_from(nexus.routing_policy.rules.len()).unwrap_or(u64::MAX),
+        ),
+        json_entry(
+            "default_lane_id",
+            nexus.routing_policy.default_lane.as_u32(),
+        ),
+        json_entry(
+            "default_dataspace_id",
+            nexus.routing_policy.default_dataspace.as_u64(),
+        ),
+    ]);
+
+    #[cfg(feature = "app_api")]
+    let (service_health, storage_pressure) = {
+        if app.sorafs_node.is_enabled() {
+            let schedulers = app.sorafs_node.schedulers();
+            let telemetry = schedulers.telemetry_snapshot();
+            let utilisation = schedulers.utilisation_snapshot();
+            let degraded = utilisation.fetch_utilisation_bps >= 9_000
+                || utilisation.pin_queue_utilisation_bps >= 9_000
+                || utilisation.por_utilisation_bps >= 9_000
+                || telemetry.por_samples_failed > 0;
+            let status = if degraded { "degraded" } else { "healthy" };
+            (
+                json_object(vec![
+                    json_entry("mode", "sorafs_runtime"),
+                    json_entry("status", status),
+                    json_entry(
+                        "message",
+                        "runtime host integration pending; exposing SoraFS health as baseline",
+                    ),
+                ]),
+                json_object(vec![
+                    json_entry("enabled", true),
+                    json_entry("bytes_used", telemetry.bytes_used),
+                    json_entry("bytes_capacity", telemetry.bytes_capacity),
+                    json_entry(
+                        "pin_queue_depth",
+                        u64::try_from(telemetry.pin_queue_depth).unwrap_or(u64::MAX),
+                    ),
+                    json_entry(
+                        "fetch_inflight",
+                        u64::try_from(telemetry.fetch_inflight).unwrap_or(u64::MAX),
+                    ),
+                    json_entry(
+                        "por_inflight",
+                        u64::try_from(telemetry.por_inflight).unwrap_or(u64::MAX),
+                    ),
+                    json_entry("por_samples_failed_total", telemetry.por_samples_failed),
+                    json_entry("fetch_utilisation_bps", utilisation.fetch_utilisation_bps),
+                    json_entry(
+                        "pin_queue_utilisation_bps",
+                        utilisation.pin_queue_utilisation_bps,
+                    ),
+                    json_entry("por_utilisation_bps", utilisation.por_utilisation_bps),
+                ]),
+            )
+        } else {
+            (
+                json_object(vec![
+                    json_entry("mode", "local_only"),
+                    json_entry("status", "not_configured"),
+                    json_entry(
+                        "message",
+                        "SoraFS node runtime is disabled; no hosted service health is available",
+                    ),
+                ]),
+                json_object(vec![json_entry("enabled", false)]),
+            )
+        }
+    };
+
+    #[cfg(not(feature = "app_api"))]
+    let (service_health, storage_pressure) = (
+        json_object(vec![
+            json_entry("mode", "app_api_disabled"),
+            json_entry("status", "unavailable"),
+            json_entry(
+                "message",
+                "binary compiled without app_api; Soracloud runtime health unavailable",
+            ),
+        ]),
+        json_object(vec![json_entry("enabled", false)]),
+    );
+
+    let resource_pressure = json_object(vec![
+        json_entry("queue_active", queue_active),
+        json_entry("queue_queued", queue_queued),
+        json_entry("queue_capacity", queue_capacity),
+        json_entry("queue_saturated", backpressure.is_saturated()),
+        json_entry("high_load_threshold", high_load_threshold),
+        json_entry("high_load", high_load),
+        json_entry("storage", storage_pressure),
+    ]);
+    let failed_admissions = json_object(vec![
+        json_entry("total", failed_admission_total),
+        json_entry("governance_manifest_rejected", governance_manifest_rejected),
+        json_entry("sorafs_provider_rejected", sorafs_provider_rejected),
+    ]);
+    let payload = json_object(vec![
+        json_entry("schema_version", 1_u16),
+        json_entry("service_health", service_health),
+        json_entry("routing", routing),
+        json_entry("resource_pressure", resource_pressure),
+        json_entry("failed_admissions", failed_admissions),
+    ]);
+
+    Ok(crate::utils::respond_value_with_format(payload, format))
+}
+
+#[cfg(feature = "telemetry")]
 async fn handler_post_soranet_privacy_event(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
@@ -13351,6 +13570,7 @@ impl Torii {
                     &format!("{}/{{*tail}}", uri::STATUS),
                     get(handler_status_tail),
                 )
+                .route("/v1/soracloud/status", get(handler_soracloud_status))
                 .route(uri::METRICS, get(handler_metrics));
 
             router.merge(operator_router).merge(public_router)
@@ -13380,6 +13600,10 @@ impl Torii {
                 .route(
                     "/v1/assets/{definition_id}/holders/query",
                     post(handler_asset_holders_query),
+                )
+                .route(
+                    "/v1/soracloud/status",
+                    get(routing::telemetry_not_implemented),
                 )
                 .route(uri::METRICS, get(routing::telemetry_not_implemented))
         });
@@ -19337,6 +19561,57 @@ pub(crate) mod tests_runtime_handlers {
         .await
         .expect("token accepted");
         assert_eq!(ok.status(), axum::http::StatusCode::OK);
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
+    async fn soracloud_status_handler_returns_snapshot_sections() {
+        let app = mk_app_state_for_tests();
+        let response = super::handler_soracloud_status(State(app), HeaderMap::new(), None)
+            .await
+            .expect("soracloud status should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode JSON response");
+
+        assert_eq!(
+            payload
+                .get("schema_version")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        assert!(
+            payload
+                .get("service_health")
+                .and_then(norito::json::Value::as_object)
+                .is_some(),
+            "service_health section should be present"
+        );
+        assert!(
+            payload
+                .get("routing")
+                .and_then(norito::json::Value::as_object)
+                .is_some(),
+            "routing section should be present"
+        );
+        assert!(
+            payload
+                .get("resource_pressure")
+                .and_then(norito::json::Value::as_object)
+                .is_some(),
+            "resource_pressure section should be present"
+        );
+        assert!(
+            payload
+                .get("failed_admissions")
+                .and_then(norito::json::Value::as_object)
+                .is_some(),
+            "failed_admissions section should be present"
+        );
     }
 
     #[tokio::test]

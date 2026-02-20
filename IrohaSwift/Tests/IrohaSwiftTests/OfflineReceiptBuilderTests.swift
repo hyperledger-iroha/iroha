@@ -42,36 +42,61 @@ final class OfflineReceiptBuilderTests: XCTestCase {
     }
 
     func testAggregateAmountRejectsFractionalAmounts() throws {
+        // aggregateAmount now derives scale from the first receipt's amount (not the certificate).
+        // Scale mismatch between receipt and certificate is caught by validateReceipt(certificate:).
+        // This test verifies that aggregateAmount rejects receipts with inconsistent scales.
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x02, count: 32))
         let certificate = try makeCertificate(signingKey: signingKey)
         let issuedAtMs = validIssuedAtMs(for: certificate)
-        let txId = IrohaHash.hash(Data("tx-frac".utf8))
-        let proof = try makeProof(txId: txId,
-                                  receiver: certificate.controller,
-                                  assetId: certificate.allowance.assetId,
-                                  amount: "1.0",
-                                  invoiceId: "inv-frac",
-                                  issuedAtMs: issuedAtMs,
-                                  senderCertificateId: try certificate.certificateId())
-        let receipt = OfflineSpendReceipt(
-            txId: txId,
+
+        let txId1 = IrohaHash.hash(Data("tx-frac1".utf8))
+        let proof1 = try makeProof(txId: txId1,
+                                   receiver: certificate.controller,
+                                   assetId: certificate.allowance.assetId,
+                                   amount: "1.00",
+                                   invoiceId: "inv-frac1",
+                                   issuedAtMs: issuedAtMs,
+                                   senderCertificateId: try certificate.certificateId())
+        let receipt1 = OfflineSpendReceipt(
+            txId: txId1,
             from: certificate.controller,
             to: certificate.controller,
             assetId: certificate.allowance.assetId,
-            amount: "1.0",
+            amount: "1.00",
             issuedAtMs: issuedAtMs,
-            invoiceId: "inv-frac",
-            platformProof: proof,
+            invoiceId: "inv-frac1",
+            platformProof: proof1,
             platformSnapshot: nil,
-            senderCertificate: certificate,
+            senderCertificateId: try certificate.certificateId(),
+            senderSignature: Data(repeating: 0xAB, count: 64)
+        )
+        let txId2 = IrohaHash.hash(Data("tx-frac2".utf8))
+        let proof2 = try makeProof(txId: txId2,
+                                   receiver: certificate.controller,
+                                   assetId: certificate.allowance.assetId,
+                                   amount: "2.0",
+                                   invoiceId: "inv-frac2",
+                                   issuedAtMs: issuedAtMs,
+                                   senderCertificateId: try certificate.certificateId())
+        let receipt2 = OfflineSpendReceipt(
+            txId: txId2,
+            from: certificate.controller,
+            to: certificate.controller,
+            assetId: certificate.allowance.assetId,
+            amount: "2.0",
+            issuedAtMs: issuedAtMs,
+            invoiceId: "inv-frac2",
+            platformProof: proof2,
+            platformSnapshot: nil,
+            senderCertificateId: try certificate.certificateId(),
             senderSignature: Data(repeating: 0xAB, count: 64)
         )
 
         XCTAssertThrowsError(
-            try OfflineReceiptBuilder.aggregateAmount(receipts: [receipt])
+            try OfflineReceiptBuilder.aggregateAmount(receipts: [receipt1, receipt2])
         ) { error in
             XCTAssertEqual(error as? OfflineReceiptBuilderError,
-                           .amountScaleMismatch(value: "1.0", expected: 2, actual: 1))
+                           .amountScaleMismatch(value: "2.0", expected: 2, actual: 1))
         }
     }
 
@@ -341,11 +366,11 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             invoiceId: receipt.invoiceId,
             platformProof: receipt.platformProof,
             platformSnapshot: receipt.platformSnapshot,
-            senderCertificate: receipt.senderCertificate,
+            senderCertificateId: receipt.senderCertificateId,
             senderSignature: Data(repeating: 0x00, count: receipt.senderSignature.count)
         )
 
-        XCTAssertThrowsError(try OfflineReceiptBuilder.validateReceipt(tampered, chainId: chainId)) { error in
+        XCTAssertThrowsError(try OfflineReceiptBuilder.validateReceipt(tampered, chainId: chainId, certificate: certificate)) { error in
             XCTAssertEqual(error as? OfflineReceiptBuilderError, .invalidSenderSignature)
         }
     }
@@ -447,7 +472,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                 receiver: certificate.controller,
                 depositAccount: certificate.controller,
                 receipts: [receipt],
-                balanceProof: balanceProof
+                balanceProof: balanceProof,
+                senderCertificate: certificate
             )
         ) { error in
             XCTAssertEqual(error as? OfflineReceiptBuilderError, .missingBalanceProof)
@@ -476,7 +502,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                 receiver: certificate.controller,
                 depositAccount: certificate.controller,
                 receipts: [receipt],
-                balanceProof: balanceProof
+                balanceProof: balanceProof,
+                senderCertificate: certificate
             )
         ) { error in
             XCTAssertEqual(error as? OfflineReceiptBuilderError, .unsupportedBalanceProofVersion(2))
@@ -510,7 +537,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                                     receiver: certificate.controller,
                                                     depositAccount: certificate.controller,
                                                     receipts: [receiptA, receiptB],
-                                                    balanceProof: balanceProof)
+                                                    balanceProof: balanceProof,
+                                                    senderCertificate: certificate)
         ) { error in
             XCTAssertEqual(error as? OfflineReceiptBuilderError,
                            .claimedDeltaMismatch(expected: "3.00", actual: "4.00"))
@@ -543,7 +571,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                                     receiver: certificate.controller,
                                                     depositAccount: certificate.controller,
                                                     receipts: [receiptA, receiptB],
-                                                    balanceProof: balanceProof)
+                                                    balanceProof: balanceProof,
+                                                    senderCertificate: certificate)
         ) { error in
             XCTAssertEqual(error as? OfflineReceiptBuilderError,
                            .duplicateInvoiceId("dup"))
@@ -574,7 +603,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             receiver: certificate.controller,
             depositAccount: certificate.controller,
             receipts: [receipt],
-            balanceProof: balanceProof
+            balanceProof: balanceProof,
+            senderCertificate: certificate
         )
 
         XCTAssertEqual(transfer.bundleId, expected)
@@ -609,7 +639,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             depositAccount: certificate.controller,
             receipts: [receiptHigh, receiptLow],
             balanceProof: balanceProof,
-            sortReceipts: true
+            sortReceipts: true,
+            senderCertificate: certificate
         )
 
         XCTAssertEqual(transfer.receipts.first?.txId, receiptLow.txId)
@@ -646,7 +677,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                 depositAccount: certificate.controller,
                 receipts: [receiptHigh, receiptLow],
                 balanceProof: balanceProof,
-                sortReceipts: false
+                sortReceipts: false,
+                senderCertificate: certificate
             )
         ) { error in
             XCTAssertEqual(error as? OfflineReceiptBuilderError, .receiptOrderInvalid)
@@ -693,7 +725,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                 receiver: certificate.controller,
                 depositAccount: certificate.controller,
                 receipts: [appleReceipt, markerReceipt],
-                balanceProof: balanceProof
+                balanceProof: balanceProof,
+                senderCertificate: certificate
             )
         ) { error in
             XCTAssertEqual(error as? OfflineReceiptBuilderError, .mixedCounterScopes)
@@ -723,7 +756,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             depositAccount: certificate.controller,
             receipts: [receipt],
             balanceProof: balanceProof,
-            aggregateProof: envelope
+            aggregateProof: envelope,
+            senderCertificate: certificate
         )
         XCTAssertEqual(transfer.aggregateProof?.receiptsRoot, root)
 
@@ -738,7 +772,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                 depositAccount: certificate.controller,
                 receipts: [receipt],
                 balanceProof: balanceProof,
-                aggregateProof: invalidEnvelope
+                aggregateProof: invalidEnvelope,
+                senderCertificate: certificate
             )
         ) { error in
             XCTAssertEqual(error as? OfflineReceiptBuilderError, .aggregateProofRootMismatch)
@@ -1068,7 +1103,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             invoiceId: invoiceId,
             platformProof: .appleAppAttest(proof),
             platformSnapshot: nil,
-            senderCertificate: certificate,
+            senderCertificateId: try certificate.certificateId(),
             senderSignature: Data(repeating: 0xCD, count: 64)
         )
     }
@@ -1193,7 +1228,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             invoiceId: receipt.invoiceId,
             platformProof: proof,
             platformSnapshot: nil,
-            senderCertificate: certificate,
+            senderCertificateId: try certificate.certificateId(),
             senderSignature: Data(repeating: 0, count: 64)
         )
     }

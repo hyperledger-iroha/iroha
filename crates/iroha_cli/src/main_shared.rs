@@ -20,6 +20,7 @@ mod list_support;
 mod nexus;
 mod offline;
 mod runtime;
+mod soracloud;
 mod staking;
 mod subscriptions;
 mod space_directory;
@@ -545,6 +546,9 @@ mod app {
         /// Compute lane simulation helpers
         #[command(subcommand)]
         Compute(crate::compute::Command),
+        /// Soracloud deployment/control-plane simulation helpers
+        #[command(subcommand)]
+        Soracloud(crate::soracloud::Command),
         /// Social incentive helpers (viral follow rewards and escrows)
         #[command(subcommand)]
         Social(crate::commands::social::Command),
@@ -592,6 +596,7 @@ mod app {
                 Endorsement(variant) => Run::run(variant, context),
                 Jurisdiction(variant) => Run::run(variant, context),
                 Compute(variant) => Run::run(variant, context),
+                Soracloud(variant) => Run::run(variant, context),
                 Social(variant) => Run::run(variant, context),
                 SpaceDirectory(variant) => Run::run(variant, context),
                 Kaigi(variant) => Run::run(variant, context),

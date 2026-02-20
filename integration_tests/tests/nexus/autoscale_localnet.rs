@@ -17,6 +17,8 @@ use iroha_test_network::{NetworkBuilder, NetworkPeer};
 const TOTAL_PEERS: usize = 4;
 const INITIAL_ACTIVE_LANES: usize = 1;
 const SCALED_ACTIVE_LANES: usize = 2;
+const INITIAL_ACTIVE_LANE_IDS: [u32; 1] = [0];
+const SCALED_ACTIVE_LANE_IDS: [u32; 2] = [0, 1];
 const LOAD_TX_COUNT: usize = 64;
 const LANE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const EXPANSION_PROBE_INTERVAL: Duration = Duration::from_millis(1000);
@@ -117,31 +119,44 @@ fn status_lane_snapshot(
         .collect()
 }
 
-fn all_peers_have_lane_count(snapshot: &[(usize, Vec<String>)], expected: usize) -> bool {
-    snapshot.iter().all(|(_, lanes)| lanes.len() == expected)
+fn all_peers_have_expected_lane_status(
+    snapshot: &[(usize, u64, u64, u64, Vec<u32>)],
+    expected_count: usize,
+    expected_lane_ids: &[u32],
+) -> bool {
+    let mut expected_ids = expected_lane_ids.to_vec();
+    expected_ids.sort_unstable();
+    snapshot.iter().all(|(_, _, _, _, lane_ids)| {
+        lane_ids.len() == expected_count && {
+            let mut actual_ids = lane_ids.clone();
+            actual_ids.sort_unstable();
+            actual_ids == expected_ids
+        }
+    })
 }
 
 fn wait_for_lane_count(
     network: &sandbox::SerializedNetwork,
     expected: usize,
+    expected_lane_ids: &[u32],
     timeout: Duration,
     context: &str,
 ) -> Result<()> {
     let started = Instant::now();
     let mut last_status_snapshot = Vec::new();
-    let mut last_snapshot = Vec::new();
+    let mut last_storage_snapshot = Vec::new();
     while started.elapsed() <= timeout {
-        let snapshot = lane_snapshot(network)?;
-        if all_peers_have_lane_count(&snapshot, expected) {
+        let status_snapshot = status_lane_snapshot(network)?;
+        if all_peers_have_expected_lane_status(&status_snapshot, expected, expected_lane_ids) {
             return Ok(());
         }
-        last_snapshot = snapshot;
-        last_status_snapshot = status_lane_snapshot(network).unwrap_or_default();
+        last_status_snapshot = status_snapshot;
+        last_storage_snapshot = lane_snapshot(network).unwrap_or_default();
         thread::sleep(LANE_POLL_INTERVAL);
     }
 
     Err(eyre!(
-        "{context}: timed out waiting for {expected} active lanes on all peers; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_snapshot:?}"
+        "{context}: timed out waiting for {expected} active lanes on all peers with lane ids {expected_lane_ids:?}; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}"
     ))
 }
 
@@ -164,6 +179,7 @@ fn wait_for_lane_count_with_heartbeat(
     network: &sandbox::SerializedNetwork,
     heartbeat_client: &Client,
     expected: usize,
+    expected_lane_ids: &[u32],
     timeout: Duration,
     context: &str,
     heartbeat_prefix: &str,
@@ -176,12 +192,12 @@ fn wait_for_lane_count_with_heartbeat(
     let mut last_heartbeat_error = None::<String>;
 
     while started.elapsed() <= timeout {
-        let storage_snapshot = lane_snapshot(network)?;
-        if all_peers_have_lane_count(&storage_snapshot, expected) {
+        let status_snapshot = status_lane_snapshot(network)?;
+        if all_peers_have_expected_lane_status(&status_snapshot, expected, expected_lane_ids) {
             return Ok(());
         }
-        last_storage_snapshot = storage_snapshot;
-        last_status_snapshot = status_lane_snapshot(network).unwrap_or_default();
+        last_status_snapshot = status_snapshot;
+        last_storage_snapshot = lane_snapshot(network).unwrap_or_default();
 
         if let Err(err) = heartbeat_client.submit(Log::new(
             Level::INFO,
@@ -194,7 +210,7 @@ fn wait_for_lane_count_with_heartbeat(
     }
 
     Err(eyre!(
-        "{context}: timed out waiting for {expected} active lanes with heartbeat; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last heartbeat error: {last_heartbeat_error:?}"
+        "{context}: timed out waiting for {expected} active lanes with lane ids {expected_lane_ids:?} and heartbeat; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last heartbeat error: {last_heartbeat_error:?}"
     ))
 }
 
@@ -216,6 +232,7 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
     wait_for_lane_count(
         &network,
         INITIAL_ACTIVE_LANES,
+        &INITIAL_ACTIVE_LANE_IDS,
         SCALE_OUT_WAIT_TIMEOUT,
         "baseline lane count",
     )?;
@@ -228,6 +245,7 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
         &network,
         &expansion_probe_client,
         SCALED_ACTIVE_LANES,
+        &SCALED_ACTIVE_LANE_IDS,
         SCALE_OUT_WAIT_TIMEOUT,
         "autoscale expansion",
         "autoscale-expand-probe",
@@ -239,6 +257,7 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
         &network,
         &heartbeat_client,
         INITIAL_ACTIVE_LANES,
+        &INITIAL_ACTIVE_LANE_IDS,
         SCALE_IN_WAIT_TIMEOUT,
         "autoscale contraction",
         "autoscale-heartbeat",

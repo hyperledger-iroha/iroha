@@ -79,14 +79,19 @@ final class OfflineBalanceProofBuilderTests: XCTestCase {
         }
 
         // Second: add 3 more (from 10: delta=3, result=13)
-        let second = try OfflineBalanceProofBuilder.advanceCommitment(
-            chainId: "sora",
-            claimedDelta: "3",
-            resultingValue: "13",
-            initialCommitmentHex: first.resultingCommitmentHex,
-            initialBlindingHex: blinding1,
-            resultingBlindingHex: blinding2
-        )
+        let second: OfflineBalanceProofBuilder.Artifacts
+        do {
+            second = try OfflineBalanceProofBuilder.advanceCommitment(
+                chainId: "sora",
+                claimedDelta: "3",
+                resultingValue: "13",
+                initialCommitmentHex: first.resultingCommitmentHex,
+                initialBlindingHex: blinding1,
+                resultingBlindingHex: blinding2
+            )
+        } catch OfflineBalanceProofError.bridgeUnavailable {
+            throw XCTSkip("Offline balance proof bridge unavailable on this platform")
+        }
 
         XCTAssertEqual(second.resultingCommitment.count, 32)
         XCTAssertNotEqual(second.resultingCommitmentHex, first.resultingCommitmentHex)
@@ -142,14 +147,19 @@ final class OfflineBalanceProofBuilderTests: XCTestCase {
         XCTAssertNotEqual(derivedBlinding, initialBlinding, "Derived blinding must differ from initial")
 
         // Step 3: use derived blinding in advanceCommitment (offline spend: delta=4, result=54)
-        let spend = try OfflineBalanceProofBuilder.advanceCommitment(
-            chainId: "sora",
-            claimedDelta: "4",
-            resultingValue: "54",
-            initialCommitmentHex: initial.resultingCommitmentHex,
-            initialBlindingHex: initialBlinding,
-            resultingBlindingHex: derivedBlinding
-        )
+        let spend: OfflineBalanceProofBuilder.Artifacts
+        do {
+            spend = try OfflineBalanceProofBuilder.advanceCommitment(
+                chainId: "sora",
+                claimedDelta: "4",
+                resultingValue: "54",
+                initialCommitmentHex: initial.resultingCommitmentHex,
+                initialBlindingHex: initialBlinding,
+                resultingBlindingHex: derivedBlinding
+            )
+        } catch OfflineBalanceProofError.bridgeUnavailable {
+            throw XCTSkip("Offline balance proof bridge unavailable on this platform")
+        }
         XCTAssertEqual(spend.resultingCommitment.count, 32)
         XCTAssertEqual(spend.proof.count, OfflineBalanceProofBuilder.proofLength)
         XCTAssertNotEqual(spend.resultingCommitmentHex, initial.resultingCommitmentHex)
@@ -182,36 +192,48 @@ final class OfflineBalanceProofBuilderTests: XCTestCase {
         }
 
         // Spend #1: delta=10, cumulative spent=10, resultingValue = limit + spent = 100+10 = 110
-        let blinding1 = try OfflineBalanceProofBuilder.deriveResultingBlinding(
-            initialBlindingHex: initialBlinding,
-            certificateIdHex: certificateId,
-            counter: 1
-        )
-        let spend1 = try OfflineBalanceProofBuilder.advanceCommitment(
-            chainId: "sora",
-            claimedDelta: "10",
-            resultingValue: "110",
-            initialCommitmentHex: topUp.resultingCommitmentHex,
-            initialBlindingHex: initialBlinding,
-            resultingBlindingHex: blinding1
-        )
+        let blinding1: String
+        let spend1: OfflineBalanceProofBuilder.Artifacts
+        do {
+            blinding1 = try OfflineBalanceProofBuilder.deriveResultingBlinding(
+                initialBlindingHex: initialBlinding,
+                certificateIdHex: certificateId,
+                counter: 1
+            )
+            spend1 = try OfflineBalanceProofBuilder.advanceCommitment(
+                chainId: "sora",
+                claimedDelta: "10",
+                resultingValue: "110",
+                initialCommitmentHex: topUp.resultingCommitmentHex,
+                initialBlindingHex: initialBlinding,
+                resultingBlindingHex: blinding1
+            )
+        } catch OfflineBalanceProofError.bridgeUnavailable {
+            throw XCTSkip("Offline balance proof bridge unavailable on this platform")
+        }
         XCTAssertEqual(spend1.proof.count, OfflineBalanceProofBuilder.proofLength)
 
         // Spend #2: delta=5, cumulative spent=15, resultingValue = 100+15 = 115
         // NOTE: initialBlinding for spend#2 is blinding1 (result of spend#1)
-        let blinding2 = try OfflineBalanceProofBuilder.deriveResultingBlinding(
-            initialBlindingHex: blinding1,
-            certificateIdHex: certificateId,
-            counter: 2
-        )
-        let spend2 = try OfflineBalanceProofBuilder.advanceCommitment(
-            chainId: "sora",
-            claimedDelta: "5",
-            resultingValue: "115",
-            initialCommitmentHex: spend1.resultingCommitmentHex,
-            initialBlindingHex: blinding1,
-            resultingBlindingHex: blinding2
-        )
+        let blinding2: String
+        let spend2: OfflineBalanceProofBuilder.Artifacts
+        do {
+            blinding2 = try OfflineBalanceProofBuilder.deriveResultingBlinding(
+                initialBlindingHex: blinding1,
+                certificateIdHex: certificateId,
+                counter: 2
+            )
+            spend2 = try OfflineBalanceProofBuilder.advanceCommitment(
+                chainId: "sora",
+                claimedDelta: "5",
+                resultingValue: "115",
+                initialCommitmentHex: spend1.resultingCommitmentHex,
+                initialBlindingHex: blinding1,
+                resultingBlindingHex: blinding2
+            )
+        } catch OfflineBalanceProofError.bridgeUnavailable {
+            throw XCTSkip("Offline balance proof bridge unavailable on this platform")
+        }
         XCTAssertEqual(spend2.proof.count, OfflineBalanceProofBuilder.proofLength)
         XCTAssertNotEqual(spend2.resultingCommitmentHex, spend1.resultingCommitmentHex)
 

@@ -6,8 +6,8 @@ import Foundation
 /// Raw frames are encoded/decoded via `ConnectCodec`, which requires the Norito bridge XCFramework.
 public protocol ConnectWebSocketTask: AnyObject {
     func resume()
-    func send(data: Data, completion: @escaping (Error?) -> Void)
-    func receive(completion: @escaping (Result<Data, Error>) -> Void)
+    func send(data: Data, completion: @Sendable @escaping (Error?) -> Void)
+    func receive(completion: @Sendable @escaping (Result<Data, Error>) -> Void)
     func cancel(closeCode: ConnectCloseCode, reason: Data?)
 }
 
@@ -61,11 +61,11 @@ final class URLSessionConnectWebSocketTask: ConnectWebSocketTask {
         task.resume()
     }
 
-    func send(data: Data, completion: @escaping (Error?) -> Void) {
+    func send(data: Data, completion: @Sendable @escaping (Error?) -> Void) {
         task.send(.data(data), completionHandler: completion)
     }
 
-    func receive(completion: @escaping (Result<Data, Error>) -> Void) {
+    func receive(completion: @Sendable @escaping (Result<Data, Error>) -> Void) {
         task.receive { result in
             switch result {
             case .success(.data(let data)):
