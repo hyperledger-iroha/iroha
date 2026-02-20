@@ -73,8 +73,7 @@ pub(super) fn spawn_qc_verify_workers(
         let result_tx = result_tx.clone();
         let wake_tx = wake_tx.clone();
         let name = format!("sumeragi-qc-verify-{idx}");
-        let join_handle = std::thread::Builder::new()
-            .name(name)
+        let join_handle = crate::sumeragi::sumeragi_thread_builder(name)
             .spawn(move || {
                 while let Ok(work) = work_rx.recv() {
                     let QcVerifyWork { id, key, inputs } = work;
