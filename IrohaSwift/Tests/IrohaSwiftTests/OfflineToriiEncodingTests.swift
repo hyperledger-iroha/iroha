@@ -28,7 +28,7 @@ final class OfflineToriiEncodingTests: XCTestCase {
             invoiceId: "inv-001",
             platformProof: proof,
             platformSnapshot: snapshot,
-            senderCertificate: certificate,
+            senderCertificateId: try certificate.certificateId(),
             senderSignature: signature
         )
 
@@ -257,7 +257,7 @@ final class OfflineToriiEncodingTests: XCTestCase {
             invoiceId: "inv-1",
             platformProof: proof,
             platformSnapshot: nil,
-            senderCertificate: certificate,
+            senderCertificateId: try certificate.certificateId(),
             senderSignature: Data(repeating: 0x01, count: 64)
         )
     }
