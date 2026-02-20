@@ -31,6 +31,7 @@ pub(super) struct CommitWork {
     pub(super) qc_signers: Option<BTreeSet<ValidatorIndex>>,
     pub(super) commit_qc: Option<crate::sumeragi::consensus::Qc>,
     pub(super) allow_quorum_bypass: bool,
+    pub(super) allow_signature_index_recovery: bool,
     pub(super) persist_required: bool,
     pub(super) events_sender: crate::EventsSender,
 }
@@ -242,6 +243,7 @@ pub(super) fn execute_commit_work(
         qc_signers: _qc_signers,
         commit_qc,
         allow_quorum_bypass: _allow_quorum_bypass,
+        allow_signature_index_recovery,
         persist_required,
         events_sender,
         ..
@@ -288,18 +290,149 @@ pub(super) fn execute_commit_work(
     );
     let qc_start = Instant::now();
     log_stage_start("validate_block");
-    let result = ValidBlock::validate_keep_voting_block_with_events(
-        block,
-        &topology,
-        chain_id,
-        genesis_account,
-        &time_source,
-        state,
-        &mut voting_block,
-        false,
-        |event| pipeline_events.push(event),
-    )
-    .unpack(|event| pipeline_events.push(event));
+    let validate_block = |candidate: SignedBlock,
+                          candidate_topology: &super::network_topology::Topology,
+                          voting_block: &mut Option<crate::sumeragi::VotingBlock>,
+                          pipeline_events: &mut Vec<PipelineEventBox>| {
+        ValidBlock::validate_keep_voting_block_with_events(
+            candidate,
+            candidate_topology,
+            chain_id,
+            genesis_account,
+            &time_source,
+            state,
+            voting_block,
+            false,
+            |event| pipeline_events.push(event),
+        )
+        .unpack(|event| pipeline_events.push(event))
+    };
+    let mut result = validate_block(block, &topology, &mut voting_block, &mut pipeline_events);
+    let original_failed_block = result
+        .as_ref()
+        .err()
+        .map(|(failed_block, _)| (**failed_block).clone());
+    if allow_signature_index_recovery {
+        let should_retry = |err: &BlockValidationError| {
+            matches!(
+                err,
+                BlockValidationError::SignatureVerification(
+                    crate::block::SignatureVerificationError::UnknownSignature
+                        | crate::block::SignatureVerificationError::UnknownSignatory
+                        | crate::block::SignatureVerificationError::LeaderMissing
+                )
+            )
+        };
+
+        match result {
+            Err((failed_block, err))
+                if matches!(
+                    *err,
+                    BlockValidationError::SignatureVerification(
+                        crate::block::SignatureVerificationError::UnknownSignature
+                            | crate::block::SignatureVerificationError::UnknownSignatory
+                    )
+                ) =>
+            {
+                let mut recovered = *failed_block;
+                match remap_block_signature_indices_to_topology(&mut recovered, &topology) {
+                    Ok(()) => {
+                        warn!(
+                            commit_id = id,
+                            height = block_height,
+                            view = block_view,
+                            block = %block_hash,
+                            "retrying commit validation after signature index recovery"
+                        );
+                        pipeline_events.clear();
+                        voting_block = None;
+                        result = validate_block(
+                            recovered,
+                            &topology,
+                            &mut voting_block,
+                            &mut pipeline_events,
+                        );
+                    }
+                    Err(remap_err) => {
+                        result = Err((Box::new(recovered), Box::new(remap_err)));
+                    }
+                }
+            }
+            Err((failed_block, err)) => {
+                result = Err((failed_block, err));
+            }
+            Ok(validated) => {
+                result = Ok(validated);
+            }
+        }
+
+        if let (Some(failed_block), Err((_, err))) = (original_failed_block, &result) {
+            if should_retry(err.as_ref()) {
+                let base_peers = topology.as_ref().to_vec();
+                if base_peers.len() > 1 {
+                    for offset in 1..base_peers.len() {
+                        let mut rotated = base_peers.clone();
+                        rotated.rotate_left(offset);
+                        let rotated_topology = super::network_topology::Topology::new(rotated);
+
+                        pipeline_events.clear();
+                        voting_block = None;
+                        let mut attempt = validate_block(
+                            failed_block.clone(),
+                            &rotated_topology,
+                            &mut voting_block,
+                            &mut pipeline_events,
+                        );
+                        let needs_remap = matches!(
+                            &attempt,
+                            Err((_, rotated_err))
+                                if matches!(
+                                    **rotated_err,
+                                    BlockValidationError::SignatureVerification(
+                                        crate::block::SignatureVerificationError::UnknownSignature
+                                            | crate::block::SignatureVerificationError::UnknownSignatory
+                                    )
+                                )
+                        );
+                        if needs_remap {
+                            let mut remapped = match &attempt {
+                                Err((failed_rotated, _)) => (**failed_rotated).clone(),
+                                Ok(_) => unreachable!("needs_remap derived from an error result"),
+                            };
+                            if remap_block_signature_indices_to_topology(
+                                &mut remapped,
+                                &rotated_topology,
+                            )
+                            .is_ok()
+                            {
+                                pipeline_events.clear();
+                                voting_block = None;
+                                attempt = validate_block(
+                                    remapped,
+                                    &rotated_topology,
+                                    &mut voting_block,
+                                    &mut pipeline_events,
+                                );
+                            }
+                        }
+
+                        if attempt.is_ok() {
+                            warn!(
+                                commit_id = id,
+                                height = block_height,
+                                view = block_view,
+                                block = %block_hash,
+                                offset,
+                                "retrying commit validation with rotated signature topology"
+                            );
+                            result = attempt;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
     log_stage_end("validate_block", qc_start);
     let result = result.and_then(|(valid_block, state_block)| {
         log_stage_start("commit_with_certificate");
@@ -412,6 +545,96 @@ fn has_commit_quorum_signers(
     min_votes_for_commit: usize,
 ) -> bool {
     qc_signers.is_some_and(|signers| signers.len() >= min_votes_for_commit)
+}
+
+fn remap_block_signature_indices_to_topology(
+    block: &mut SignedBlock,
+    topology: &super::network_topology::Topology,
+) -> Result<(), BlockValidationError> {
+    use crate::block::SignatureVerificationError;
+    use iroha_crypto::Algorithm;
+    use iroha_data_model::block::BlockSignature;
+
+    let block_hash = block.hash();
+    let mut remapped: BTreeSet<BlockSignature> = BTreeSet::new();
+
+    for signature in block.signatures() {
+        let is_eligible = |peer: &PeerId| {
+            peer.public_key().algorithm() == Algorithm::BlsNormal
+                && !matches!(
+                    topology.role(peer),
+                    super::network_topology::Role::Undefined
+                )
+        };
+
+        let mut resolved: Option<usize> = None;
+        let mut ambiguous = false;
+
+        if let Ok(raw_idx) = usize::try_from(signature.index()) {
+            if let Some(peer) = topology.as_ref().get(raw_idx) {
+                if is_eligible(peer)
+                    && signature
+                        .signature()
+                        .verify_hash(peer.public_key(), block_hash)
+                        .is_ok()
+                {
+                    resolved = Some(raw_idx);
+                }
+            }
+        }
+
+        if resolved.is_none() {
+            for (idx, peer) in topology.as_ref().iter().enumerate() {
+                if !is_eligible(peer) {
+                    continue;
+                }
+                if signature
+                    .signature()
+                    .verify_hash(peer.public_key(), block_hash)
+                    .is_err()
+                {
+                    continue;
+                }
+                if resolved.is_some() {
+                    ambiguous = true;
+                    break;
+                }
+                resolved = Some(idx);
+            }
+        }
+
+        let Some(mapped_idx) = resolved else {
+            return Err(BlockValidationError::SignatureVerification(
+                SignatureVerificationError::UnknownSignature,
+            ));
+        };
+        if ambiguous {
+            return Err(BlockValidationError::SignatureVerification(
+                SignatureVerificationError::UnknownSignature,
+            ));
+        }
+
+        let mapped = BlockSignature::new(mapped_idx as u64, signature.signature().clone());
+        if !remapped.insert(mapped) {
+            return Err(BlockValidationError::SignatureVerification(
+                SignatureVerificationError::DuplicateSignature { signer: mapped_idx },
+            ));
+        }
+    }
+
+    if remapped.is_empty() {
+        return Err(BlockValidationError::SignatureVerification(
+            SignatureVerificationError::NotEnoughSignatures {
+                votes_count: 0,
+                min_votes_for_commit: topology.min_votes_for_commit(),
+            },
+        ));
+    }
+
+    block.replace_signatures(remapped).map_err(|_| {
+        BlockValidationError::SignatureVerification(SignatureVerificationError::Other)
+    })?;
+    Ok(())
 }
 
 fn commit_qc_from_cache_or_history(
@@ -706,6 +929,12 @@ impl Actor {
                     self.subsystems.commit.work_tx = None;
                     if let Some(inflight) = self.subsystems.commit.inflight.take() {
                         let persist_required = !inflight.pending.kura_persisted;
+                        let local_outside_commit_topology = inflight
+                            .commit_topology
+                            .iter()
+                            .all(|peer| peer != self.common_config.peer.id());
+                        let allow_signature_index_recovery =
+                            local_outside_commit_topology && inflight.commit_qc.is_some();
                         let work = CommitWork {
                             id: inflight.id,
                             block: inflight.pending.block.clone(),
@@ -714,6 +943,7 @@ impl Actor {
                             qc_signers: inflight.qc_signers.clone(),
                             commit_qc: inflight.commit_qc.clone(),
                             allow_quorum_bypass: inflight.allow_quorum_bypass,
+                            allow_signature_index_recovery,
                             persist_required,
                             events_sender: self.events_sender.clone(),
                         };
@@ -2114,6 +2344,10 @@ impl Actor {
 
         let id = self.subsystems.commit.next_id();
         let persist_required = !pending.kura_persisted;
+        let local_outside_commit_topology = commit_topology
+            .iter()
+            .all(|peer| peer != self.common_config.peer.id());
+        let allow_signature_index_recovery = local_outside_commit_topology && commit_qc.is_some();
         let work = CommitWork {
             id,
             block: pending.block.clone(),
@@ -2122,6 +2356,7 @@ impl Actor {
             qc_signers: quorum_signers.clone(),
             commit_qc: commit_qc.clone(),
             allow_quorum_bypass,
+            allow_signature_index_recovery,
             persist_required,
             events_sender: self.events_sender.clone(),
         };
@@ -5961,6 +6196,7 @@ mod tests {
             qc_signers: None,
             commit_qc: None,
             allow_quorum_bypass: false,
+            allow_signature_index_recovery: false,
             persist_required: true,
             events_sender,
         };
@@ -6079,6 +6315,7 @@ mod tests {
             qc_signers: None,
             commit_qc: Some(qc),
             allow_quorum_bypass: false,
+            allow_signature_index_recovery: false,
             persist_required: true,
             events_sender,
         };
@@ -6171,6 +6408,7 @@ mod tests {
             qc_signers: None,
             commit_qc: None,
             allow_quorum_bypass: false,
+            allow_signature_index_recovery: false,
             persist_required: true,
             events_sender,
         };
@@ -6241,6 +6479,7 @@ mod tests {
             qc_signers: None,
             commit_qc: None,
             allow_quorum_bypass: false,
+            allow_signature_index_recovery: false,
             persist_required: false,
             events_sender,
         };
@@ -6318,6 +6557,7 @@ mod tests {
             qc_signers: None,
             commit_qc: None,
             allow_quorum_bypass: false,
+            allow_signature_index_recovery: false,
             persist_required: false,
             events_sender: events_sender.clone(),
         };
@@ -6336,6 +6576,7 @@ mod tests {
             qc_signers: None,
             commit_qc: None,
             allow_quorum_bypass: false,
+            allow_signature_index_recovery: false,
             persist_required: false,
             events_sender,
         };
@@ -6413,6 +6654,7 @@ mod tests {
             qc_signers: None,
             commit_qc: None,
             allow_quorum_bypass: false,
+            allow_signature_index_recovery: false,
             persist_required: false,
             events_sender,
         };

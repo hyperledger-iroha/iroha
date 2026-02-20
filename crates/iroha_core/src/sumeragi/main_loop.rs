@@ -7690,6 +7690,7 @@ impl Actor {
                         .remove(&key);
                     if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
                         session.ready_signatures.clear();
+                        session.ready_roster_hash = None;
                         session.sent_ready = false;
                         session.delivered = false;
                         session.deliver_sender = None;
@@ -7741,6 +7742,7 @@ impl Actor {
                             .remove(&key);
                         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
                             session.ready_signatures.clear();
+                            session.ready_roster_hash = None;
                             session.sent_ready = false;
                             session.delivered = false;
                             session.deliver_sender = None;
@@ -7800,6 +7802,7 @@ impl Actor {
                             if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key)
                             {
                                 session.ready_signatures.clear();
+                                session.ready_roster_hash = None;
                                 session.sent_ready = false;
                                 session.delivered = false;
                                 session.deliver_sender = None;
@@ -7853,6 +7856,7 @@ impl Actor {
                         .insert(key, source);
                     if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
                         session.ready_signatures.clear();
+                        session.ready_roster_hash = None;
                         session.sent_ready = false;
                         session.delivered = false;
                         session.deliver_sender = None;
@@ -12153,7 +12157,9 @@ impl Actor {
         if commit_topology.is_empty() {
             return None;
         }
-        let roster_hash = rbc::rbc_roster_hash(&commit_topology);
+        let roster_hash = session
+            .ready_roster_hash
+            .unwrap_or_else(|| rbc::rbc_roster_hash(&commit_topology));
         let topology = super::network_topology::Topology::new(commit_topology);
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
         let signature_topology = topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
@@ -12689,7 +12695,11 @@ impl Actor {
             }
 
             if let Some(ready) = self.build_rbc_ready(key, &session) {
-                let _ = session.record_ready(ready.sender, ready.signature.clone());
+                let _ = session.record_ready_with_roster_hash(
+                    ready.sender,
+                    ready.signature.clone(),
+                    ready.roster_hash,
+                );
                 session.sent_ready = true;
                 Ok(Some(ready))
             } else if self.is_observer() {
@@ -12797,7 +12807,7 @@ impl Actor {
     fn rbc_ready_bundle(
         key: super::rbc_store::SessionKey,
         session: &RbcSession,
-        roster_hash: Hash,
+        fallback_roster_hash: Hash,
     ) -> Option<Vec<RbcReady>> {
         let chunk_root = session
             .expected_chunk_root
@@ -12805,6 +12815,7 @@ impl Actor {
         if session.ready_signatures.is_empty() {
             return None;
         }
+        let roster_hash = session.ready_roster_hash.unwrap_or(fallback_roster_hash);
         let mut messages = Vec::with_capacity(session.ready_signatures.len());
         for entry in &session.ready_signatures {
             messages.push(RbcReady {
@@ -16538,6 +16549,7 @@ pub(crate) struct RbcSession {
     chunks: Vec<Option<RbcChunkEntry>>,
     received_chunks: u32,
     ready_signatures: Vec<ReadySignature>,
+    ready_roster_hash: Option<Hash>,
     sent_ready: bool,
     delivered: bool,
     deliver_sender: Option<u32>,
@@ -16582,6 +16594,7 @@ impl RbcSession {
             chunks: vec![None; capacity],
             received_chunks: 0,
             ready_signatures: Vec::new(),
+            ready_roster_hash: None,
             sent_ready: false,
             delivered: false,
             deliver_sender: None,
@@ -16871,6 +16884,7 @@ impl RbcSession {
             epoch,
             block_header,
             leader_signature,
+            session_roster,
             ..
         } = persisted.clone();
         let expected_chunk_root = expected_chunk_root.or(computed_chunk_root);
@@ -16973,6 +16987,8 @@ impl RbcSession {
         session.chunks = data;
         session.received_chunks = received_chunks;
         session.ready_signatures = ready_signatures;
+        session.ready_roster_hash =
+            (!session.ready_signatures.is_empty()).then(|| rbc::rbc_roster_hash(&session_roster));
         session.sent_ready = sent_ready;
         session.delivered = delivered;
         session.deliver_sender = deliver_sender;
@@ -17019,6 +17035,25 @@ impl RbcSession {
         self.ready_signatures
             .push(ReadySignature { sender, signature });
         true
+    }
+
+    pub(crate) fn record_ready_with_roster_hash(
+        &mut self,
+        sender: u32,
+        signature: Vec<u8>,
+        roster_hash: Hash,
+    ) -> bool {
+        match self.ready_roster_hash {
+            Some(expected) if expected != roster_hash => {
+                self.invalid = true;
+                return false;
+            }
+            Some(_) => {}
+            None => {
+                self.ready_roster_hash = Some(roster_hash);
+            }
+        }
+        self.record_ready(sender, signature)
     }
 
     pub(crate) fn record_deliver(&mut self, sender: u32, signature: Vec<u8>) -> bool {
