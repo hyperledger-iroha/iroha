@@ -13,6 +13,7 @@ use iroha_config_base::toml::WriteExt;
 use iroha_data_model::prelude::AccountId;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::sample_ivm_path;
+use norito::json::{self, Value};
 use reqwest::Url;
 
 fn program() -> PathBuf {
@@ -208,3 +209,68 @@ async fn reads_client_toml_by_default() -> eyre::Result<()> {
 }
 
 // Add more CLI tests here!
+
+#[tokio::test]
+async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_min_peers(4)
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full");
+        });
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(soracloud_status_uses_live_torii_control_plane),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let config = ProgramConfig::from(&network.client());
+    let dir = tempfile::tempdir()?;
+    tokio::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&config.toml())?.as_bytes(),
+    )
+    .await?;
+
+    let output = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("status")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        output.status.success(),
+        "CLI exited with status {} and stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let payload: Value =
+        json::from_slice(&output.stdout).expect("CLI should emit JSON soracloud status payload");
+    assert_eq!(
+        payload.get("source").and_then(Value::as_str),
+        Some("torii_control_plane")
+    );
+    let network_status = payload
+        .get("network_status")
+        .and_then(Value::as_object)
+        .expect("network_status object present");
+    assert_eq!(
+        network_status.get("schema_version").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert!(network_status.contains_key("service_health"));
+    assert!(network_status.contains_key("routing"));
+    assert!(network_status.contains_key("resource_pressure"));
+    assert!(network_status.contains_key("failed_admissions"));
+
+    Ok(())
+}
