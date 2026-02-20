@@ -2,7 +2,7 @@
 //! Runtime Nexus lane-registration benchmark with isolated timing metrics.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -12,7 +12,10 @@ use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
-    data_model::nexus::{DataSpaceId, LaneConfig, LaneId, LaneLifecyclePlan, LaneVisibility},
+    data_model::{
+        block::consensus::SumeragiStatusWire,
+        nexus::{DataSpaceId, LaneConfig, LaneId, LaneLifecyclePlan, LaneVisibility},
+    },
 };
 use iroha_test_network::NetworkBuilder;
 use norito::json::Value as JsonValue;
@@ -100,21 +103,143 @@ fn wait_for_lane_visibility(client: &Client, lane_id: LaneId, context: &str) -> 
     ))
 }
 
-fn duration_min_avg_max_secs(samples: &[Duration]) -> Option<(f64, f64, f64)> {
+fn wait_for_all_peers_lane_visibility(
+    network: &sandbox::SerializedNetwork,
+    lane_id: LaneId,
+    skip_peer_index: Option<usize>,
+    context: &str,
+) -> Result<()> {
+    let mut pending: BTreeSet<usize> = (0..network.peers().len()).collect();
+    if let Some(index) = skip_peer_index {
+        pending.remove(&index);
+    }
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    let started = Instant::now();
+    let mut last_errors: BTreeMap<usize, String> = BTreeMap::new();
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        let mut resolved = Vec::new();
+        for peer_index in pending.iter().copied() {
+            let client = network.peers()[peer_index].client();
+            match client.get_public_lane_validators(lane_id, None) {
+                Ok(_snapshot) => resolved.push(peer_index),
+                Err(err) => {
+                    last_errors.insert(peer_index, err.to_string());
+                }
+            }
+        }
+
+        for peer_index in resolved {
+            pending.remove(&peer_index);
+            last_errors.remove(&peer_index);
+        }
+        if pending.is_empty() {
+            return Ok(());
+        }
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+
+    Err(eyre!(
+        "{context}: timed out waiting for lane {lane_id} visibility on peers {pending:?}; last errors {last_errors:?}"
+    ))
+}
+
+fn wait_for_lane_visibility_with_status(
+    client: &Client,
+    lane_id: LaneId,
+    context: &str,
+) -> Result<SumeragiStatusWire> {
+    let started = Instant::now();
+    let mut last_height = 0_u64;
+    let mut last_error = String::new();
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        let status = client
+            .get_sumeragi_status_wire()
+            .map_err(|err| eyre!(err))?;
+        last_height = status.commit_qc.height;
+        match client.get_public_lane_validators(lane_id, None) {
+            Ok(_snapshot) => return Ok(status),
+            Err(err) => {
+                last_error = err.to_string();
+            }
+        }
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+    Err(eyre!(
+        "{context}: timed out waiting for lane {lane_id} visibility; last height {last_height}; last visibility error: {last_error}"
+    ))
+}
+
+fn leader_or_highest_height_peer_index(
+    network: &sandbox::SerializedNetwork,
+    status_client: &Client,
+) -> usize {
+    let peers = network.peers();
+    if peers.is_empty() {
+        return 0;
+    }
+
+    if let Ok(status) = status_client.get_sumeragi_status_wire() {
+        if let Ok(index) = usize::try_from(status.leader_index) {
+            if index < peers.len() {
+                let leader_height = peers[index]
+                    .client()
+                    .get_sumeragi_status_wire()
+                    .map(|status| status.commit_qc.height)
+                    .unwrap_or(0);
+                if leader_height.saturating_add(1) >= status.commit_qc.height {
+                    return index;
+                }
+            }
+        }
+    }
+
+    peers
+        .iter()
+        .enumerate()
+        .fold((0usize, 0u64), |best, (index, peer)| {
+            let observed_height = peer
+                .client()
+                .get_sumeragi_status_wire()
+                .map(|status| status.commit_qc.height)
+                .unwrap_or(0);
+            if observed_height >= best.1 {
+                (index, observed_height)
+            } else {
+                best
+            }
+        })
+        .0
+}
+
+fn duration_min_avg_max(samples: &[Duration]) -> Option<(Duration, Duration, Duration)> {
     let mut iter = samples.iter();
-    let first = iter.next()?;
-    let mut min = first.as_secs_f64();
+    let first = *iter.next()?;
+    let mut min = first;
     let mut max = min;
-    let mut total = min;
+    let mut total = min.as_secs_f64();
     let mut count = 1usize;
     for sample in iter {
+        min = min.min(*sample);
+        max = max.max(*sample);
         let secs = sample.as_secs_f64();
-        min = min.min(secs);
-        max = max.max(secs);
         total += secs;
         count += 1;
     }
-    Some((min, total / count as f64, max))
+    Some((min, Duration::from_secs_f64(total / count as f64), max))
+}
+
+fn format_duration(duration: Duration) -> String {
+    let secs = duration.as_secs_f64();
+    if secs >= 1.0 {
+        format!("{secs:.3}s")
+    } else if secs >= 0.001 {
+        format!("{:.3}ms", secs * 1_000.0)
+    } else {
+        format!("{:.3}us", secs * 1_000_000.0)
+    }
 }
 
 async fn post_lane_lifecycle_plan(
@@ -203,9 +328,11 @@ fn operator_signature_headers(
 #[derive(Debug)]
 struct RegistrationIterationMetrics {
     lane_id: u32,
-    submit_samples: Vec<Duration>,
-    apply_samples: Vec<Duration>,
-    visibility_latency: Duration,
+    submitter_peer_index: usize,
+    submitter_height_delta: u64,
+    submit_latency: Duration,
+    commit_apply_latency: Duration,
+    all_peer_visibility_latency: Duration,
     total_latency: Duration,
 }
 
@@ -231,50 +358,61 @@ fn run_registration_iteration(
         retire: Vec::new(),
     };
 
+    let status_probe_client = network.peer().client();
+    let submitter_peer_index = leader_or_highest_height_peer_index(network, &status_probe_client);
+    let submitter = network.peers()[submitter_peer_index].client();
+    let baseline_height = submitter
+        .get_sumeragi_status_wire()
+        .map_err(|err| eyre!(err))
+        .wrap_err("fetch submitter baseline height")?
+        .commit_qc
+        .height;
+
     let started = Instant::now();
-    let mut submit_samples = Vec::with_capacity(network.peers().len());
-    let mut apply_samples = Vec::with_capacity(network.peers().len());
+    let submit_started = Instant::now();
+    rt.block_on(post_lane_lifecycle_plan(http, &submitter, &plan))
+        .wrap_err_with(|| {
+            format!("submit lifecycle plan to peer {submitter_peer_index} as leader target")
+        })?;
+    let submit_latency = submit_started.elapsed();
 
-    for (peer_index, peer) in network.peers().iter().enumerate() {
-        let client = peer.client();
+    let apply_started = Instant::now();
+    let submitter_status = wait_for_lane_visibility_with_status(
+        &submitter,
+        lane_id,
+        "wait for submitter lane visibility and commit/apply",
+    )
+    .wrap_err_with(|| {
+        format!(
+            "wait for lane {} commit/apply on submitter peer {}",
+            lane_id.as_u32(),
+            submitter_peer_index
+        )
+    })?;
+    let commit_apply_latency = apply_started.elapsed();
+    let submitter_height_delta = submitter_status
+        .commit_qc
+        .height
+        .saturating_sub(baseline_height);
 
-        let submit_started = Instant::now();
-        rt.block_on(post_lane_lifecycle_plan(http, &client, &plan))
-            .wrap_err_with(|| format!("submit lifecycle plan to peer {peer_index}"))?;
-        submit_samples.push(submit_started.elapsed());
+    let visibility_started = Instant::now();
+    wait_for_all_peers_lane_visibility(
+        network,
+        lane_id,
+        Some(submitter_peer_index),
+        "wait for all-peer lane visibility",
+    )
+    .wrap_err_with(|| format!("wait for lane {} visibility on all peers", lane_id.as_u32()))?;
 
-        let apply_started = Instant::now();
-        let _lane_snapshot =
-            wait_for_lane_visibility(&client, lane_id, "wait for submitter lane visibility")
-                .wrap_err_with(|| {
-                    format!(
-                        "wait for lane {} visibility on submitter peer {}",
-                        lane_id.as_u32(),
-                        peer_index
-                    )
-                })?;
-        apply_samples.push(apply_started.elapsed());
-    }
-
-    for (peer_index, peer) in network.peers().iter().enumerate() {
-        let client = peer.client();
-        let _lane_snapshot =
-            wait_for_lane_visibility(&client, lane_id, "wait for all-peer lane visibility")
-                .wrap_err_with(|| {
-                    format!(
-                        "wait for lane {} visibility on peer {}",
-                        lane_id.as_u32(),
-                        peer_index
-                    )
-                })?;
-    }
-
+    let all_peer_visibility_latency = visibility_started.elapsed();
     let total_latency = started.elapsed();
     Ok(RegistrationIterationMetrics {
         lane_id: lane_raw,
-        submit_samples,
-        apply_samples,
-        visibility_latency: total_latency,
+        submitter_peer_index,
+        submitter_height_delta,
+        submit_latency,
+        commit_apply_latency,
+        all_peer_visibility_latency,
         total_latency,
     })
 }
@@ -302,11 +440,13 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
     let http = reqwest::Client::builder()
         .build()
         .wrap_err("build reqwest client for lifecycle benchmark")?;
+    eprintln!("[registration-perf] report-only metrics (no threshold gating)");
 
-    let mut submit_samples = Vec::new();
-    let mut apply_samples = Vec::new();
-    let mut visibility_samples = Vec::new();
-    let mut total_samples = Vec::new();
+    let mut submit_samples = Vec::with_capacity(BENCH_ITERATIONS);
+    let mut commit_apply_samples = Vec::with_capacity(BENCH_ITERATIONS);
+    let mut visibility_samples = Vec::with_capacity(BENCH_ITERATIONS);
+    let mut total_samples = Vec::with_capacity(BENCH_ITERATIONS);
+    let mut height_delta_samples = Vec::with_capacity(BENCH_ITERATIONS);
     let mut passes = 0usize;
     let mut failure: Option<eyre::Report> = None;
 
@@ -314,28 +454,23 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
         match run_registration_iteration(&rt, &http, &network, iteration) {
             Ok(metrics) => {
                 passes += 1;
-                submit_samples.extend(metrics.submit_samples.iter().copied());
-                apply_samples.extend(metrics.apply_samples.iter().copied());
-                visibility_samples.push(metrics.visibility_latency);
+                submit_samples.push(metrics.submit_latency);
+                commit_apply_samples.push(metrics.commit_apply_latency);
+                visibility_samples.push(metrics.all_peer_visibility_latency);
                 total_samples.push(metrics.total_latency);
+                height_delta_samples.push(metrics.submitter_height_delta);
 
-                let submit_stats = duration_min_avg_max_secs(&metrics.submit_samples)
-                    .expect("submit samples present");
-                let apply_stats = duration_min_avg_max_secs(&metrics.apply_samples)
-                    .expect("apply samples present");
                 eprintln!(
-                    "[registration-perf] iter={}/{} lane={} submit(min/avg/max)={:.3}/{:.3}/{:.3}s apply(min/avg/max)={:.3}/{:.3}/{:.3}s visibility={:.3}s total={:.3}s",
+                    "[registration-perf] iter={}/{} lane={} submitter_peer={} height_delta={} submit={} commit/apply={} all-peer-visibility={} total={}",
                     iteration + 1,
                     BENCH_ITERATIONS,
                     metrics.lane_id,
-                    submit_stats.0,
-                    submit_stats.1,
-                    submit_stats.2,
-                    apply_stats.0,
-                    apply_stats.1,
-                    apply_stats.2,
-                    metrics.visibility_latency.as_secs_f64(),
-                    metrics.total_latency.as_secs_f64(),
+                    metrics.submitter_peer_index,
+                    metrics.submitter_height_delta,
+                    format_duration(metrics.submit_latency),
+                    format_duration(metrics.commit_apply_latency),
+                    format_duration(metrics.all_peer_visibility_latency),
+                    format_duration(metrics.total_latency),
                 );
             }
             Err(err) => {
@@ -347,29 +482,51 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
     }
 
     let pass_rate = (passes as f64 / BENCH_ITERATIONS as f64) * 100.0;
-    if let Some((min, avg, max)) = duration_min_avg_max_secs(&submit_samples) {
+    if let Some((min, avg, max)) = duration_min_avg_max(&submit_samples) {
         eprintln!(
-            "[registration-perf] submit latency min/avg/max = {:.3}/{:.3}/{:.3}s",
-            min, avg, max
+            "[registration-perf] submit latency min/avg/max = {}/{}/{}",
+            format_duration(min),
+            format_duration(avg),
+            format_duration(max)
         );
     }
-    if let Some((min, avg, max)) = duration_min_avg_max_secs(&apply_samples) {
+    if let Some((min, avg, max)) = duration_min_avg_max(&commit_apply_samples) {
         eprintln!(
-            "[registration-perf] commit/apply latency min/avg/max = {:.3}/{:.3}/{:.3}s",
-            min, avg, max
+            "[registration-perf] commit/apply latency min/avg/max = {}/{}/{}",
+            format_duration(min),
+            format_duration(avg),
+            format_duration(max)
         );
     }
-    if let Some((min, avg, max)) = duration_min_avg_max_secs(&visibility_samples) {
+    if let Some((min, avg, max)) = duration_min_avg_max(&visibility_samples) {
         eprintln!(
-            "[registration-perf] all-peer visibility latency min/avg/max = {:.3}/{:.3}/{:.3}s",
-            min, avg, max
+            "[registration-perf] all-peer visibility latency min/avg/max = {}/{}/{}",
+            format_duration(min),
+            format_duration(avg),
+            format_duration(max)
         );
     }
-    if let Some((min, avg, max)) = duration_min_avg_max_secs(&total_samples) {
+    if let Some((min, avg, max)) = duration_min_avg_max(&total_samples) {
         eprintln!(
-            "[registration-perf] total workflow latency min/avg/max = {:.3}/{:.3}/{:.3}s",
-            min, avg, max
+            "[registration-perf] total workflow latency min/avg/max = {}/{}/{}",
+            format_duration(min),
+            format_duration(avg),
+            format_duration(max)
         );
+    }
+    if !height_delta_samples.is_empty() {
+        let min = *height_delta_samples.iter().min().unwrap_or(&0);
+        let max = *height_delta_samples.iter().max().unwrap_or(&0);
+        let avg =
+            height_delta_samples.iter().sum::<u64>() as f64 / height_delta_samples.len() as f64;
+        eprintln!(
+            "[registration-perf] submitter commit height delta min/avg/max = {min}/{avg:.2}/{max}"
+        );
+        if max == 0 {
+            eprintln!(
+                "[registration-perf] note: lifecycle visibility completed without observed commit-height advancement on submitter"
+            );
+        }
     }
     eprintln!(
         "[registration-perf] iterations={} pass_rate={:.1}%",
@@ -385,4 +542,30 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{duration_min_avg_max, format_duration};
+    use std::time::Duration;
+
+    #[test]
+    fn duration_min_avg_max_reports_expected_values() {
+        let samples = [
+            Duration::from_millis(10),
+            Duration::from_millis(30),
+            Duration::from_millis(20),
+        ];
+        let (min, avg, max) = duration_min_avg_max(&samples).expect("stats");
+        assert_eq!(min, Duration::from_millis(10));
+        assert_eq!(avg, Duration::from_millis(20));
+        assert_eq!(max, Duration::from_millis(30));
+    }
+
+    #[test]
+    fn format_duration_selects_unit_by_scale() {
+        assert_eq!(format_duration(Duration::from_secs(2)), "2.000s");
+        assert_eq!(format_duration(Duration::from_millis(10)), "10.000ms");
+        assert_eq!(format_duration(Duration::from_nanos(500)), "0.500us");
+    }
 }

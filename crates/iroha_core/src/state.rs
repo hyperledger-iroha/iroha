@@ -200,6 +200,8 @@ pub(crate) mod storage_transactions;
 
 const DEFAULT_GAS_LIMIT_PER_BLOCK: u64 = 1_680_000;
 const DEFAULT_TRIGGER_GAS_LIMIT: u64 = 50_000_000;
+const AUTOSCALE_META_MANAGED: &str = "autoscale.managed";
+const AUTOSCALE_META_CREATED_HEIGHT: &str = "autoscale.created_height";
 
 pub(crate) fn account_label_is_pii(label: &AccountLabel) -> bool {
     let raw = label.label.as_ref();
@@ -16972,6 +16974,36 @@ pub fn compute_confidential_feature_digest(
     )
 }
 
+#[derive(Debug, Clone, Copy)]
+struct AutoscaleSample {
+    latency_ms: u64,
+    utilization_permille: u64,
+}
+
+fn autoscale_ratio_permille(value: f64) -> u64 {
+    if !value.is_finite() || value.is_sign_negative() {
+        return 0;
+    }
+    let scaled = value * 1_000.0;
+    if scaled >= u64::MAX as f64 {
+        u64::MAX
+    } else {
+        scaled.round() as u64
+    }
+}
+
+fn p95_u64(values: &[u64]) -> Option<u64> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let len = sorted.len();
+    let rank = ((len * 95).saturating_add(99)) / 100;
+    let index = rank.saturating_sub(1).min(len.saturating_sub(1));
+    sorted.get(index).copied()
+}
+
 impl_state_ro! { StateBlock<'_>, StateTransaction<'_, '_>, StateView<'_>, StateQueryView<'_> }
 
 /// Separate trait for either [`State`] or [`StateBlock`].
@@ -17834,6 +17866,7 @@ impl<'state> StateBlock<'state> {
             }
         }
 
+        self.maybe_apply_nexus_autoscale(block);
         let pacing_event = self.apply_pacing_governor(block);
 
         self.world.external_event_buf.mutate_vec(|events| {
@@ -17849,6 +17882,267 @@ impl<'state> StateBlock<'state> {
             );
         });
         self.world.external_event_buf.take_vec()
+    }
+
+    fn maybe_apply_nexus_autoscale(&mut self, block: &CommittedBlock) {
+        let autoscale = self.nexus.autoscale;
+        if !self.nexus.enabled || !autoscale.enabled {
+            return;
+        }
+
+        let block_height = block.as_ref().header().height().get();
+        let cooldown_until = autoscale
+            .last_transition_height
+            .saturating_add(u64::from(autoscale.cooldown_blocks.get()));
+        if autoscale.last_transition_height != 0 && block_height <= cooldown_until {
+            return;
+        }
+
+        let active_lanes = match u64::try_from(self.nexus.lane_catalog.lanes().len()) {
+            Ok(value) if value > 0 => value,
+            _ => return,
+        };
+
+        let scale_out_samples = self.collect_autoscale_samples(
+            block,
+            usize::from(autoscale.scale_out_window_blocks.get()),
+            active_lanes,
+        );
+        let scale_in_samples = self.collect_autoscale_samples(
+            block,
+            usize::from(autoscale.scale_in_window_blocks.get()),
+            active_lanes,
+        );
+
+        let target_block_ms = autoscale.target_block_ms.get();
+        let latency_out_permille = autoscale_ratio_permille(autoscale.scale_out_latency_ratio);
+        let latency_in_permille = autoscale_ratio_permille(autoscale.scale_in_latency_ratio);
+        let utilization_out_permille =
+            autoscale_ratio_permille(autoscale.scale_out_utilization_ratio);
+        let utilization_in_permille =
+            autoscale_ratio_permille(autoscale.scale_in_utilization_ratio);
+
+        let out_latency_values: Vec<u64> = scale_out_samples
+            .iter()
+            .map(|sample| sample.latency_ms)
+            .collect();
+        let out_util_values: Vec<u64> = scale_out_samples
+            .iter()
+            .map(|sample| sample.utilization_permille)
+            .collect();
+        let in_latency_values: Vec<u64> = scale_in_samples
+            .iter()
+            .map(|sample| sample.latency_ms)
+            .collect();
+        let in_util_values: Vec<u64> = scale_in_samples
+            .iter()
+            .map(|sample| sample.utilization_permille)
+            .collect();
+
+        let out_latency_p95_ms = p95_u64(&out_latency_values);
+        let out_utilization_p95_permille = p95_u64(&out_util_values);
+        let in_latency_p95_ms = p95_u64(&in_latency_values);
+        let in_utilization_p95_permille = p95_u64(&in_util_values);
+
+        let out_latency_ratio_permille = out_latency_p95_ms
+            .map(|latency| latency.saturating_mul(1_000) / target_block_ms)
+            .unwrap_or(0);
+        let in_latency_ratio_permille = in_latency_p95_ms
+            .map(|latency| latency.saturating_mul(1_000) / target_block_ms)
+            .unwrap_or(0);
+
+        let can_scale_out = active_lanes < u64::from(autoscale.max_lanes.get());
+        let can_scale_in = active_lanes > u64::from(autoscale.min_lanes.get());
+
+        let scale_out_triggered = can_scale_out
+            && scale_out_samples.len() >= usize::from(autoscale.scale_out_window_blocks.get())
+            && out_latency_ratio_permille >= latency_out_permille
+            && out_utilization_p95_permille.unwrap_or_default() >= utilization_out_permille;
+
+        let scale_in_triggered = can_scale_in
+            && scale_in_samples.len() >= usize::from(autoscale.scale_in_window_blocks.get())
+            && in_latency_ratio_permille <= latency_in_permille
+            && in_utilization_p95_permille.unwrap_or(u64::MAX) <= utilization_in_permille;
+
+        if scale_out_triggered {
+            let Some(next_lane_id) = self.next_autoscale_lane_id(autoscale.max_lanes.get()) else {
+                return;
+            };
+            let mut lane = iroha_data_model::nexus::LaneConfig {
+                id: next_lane_id,
+                dataspace_id: DataSpaceId::GLOBAL,
+                alias: format!("elastic-lane-{}", next_lane_id.as_u32()),
+                description: Some("Consensus-managed elastic lane".to_owned()),
+                visibility: iroha_data_model::nexus::LaneVisibility::Public,
+                ..iroha_data_model::nexus::LaneConfig::default()
+            };
+            lane.metadata
+                .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+            lane.metadata.insert(
+                AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+                block_height.to_string(),
+            );
+            let plan = iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![lane],
+                retire: Vec::new(),
+            };
+            if self.state_ref.apply_lane_lifecycle(&plan).is_ok() {
+                self.record_autoscale_transition_height(block_height);
+                self.nexus = self.state_ref.nexus_snapshot();
+                info!(
+                    height = block_height,
+                    lane = next_lane_id.as_u32(),
+                    active_lanes,
+                    out_latency_ratio_permille,
+                    out_utilization_p95_permille = out_utilization_p95_permille.unwrap_or_default(),
+                    "applied deterministic lane autoscale scale-out transition"
+                );
+            } else {
+                warn!(
+                    height = block_height,
+                    lane = next_lane_id.as_u32(),
+                    "failed to apply deterministic lane autoscale scale-out transition"
+                );
+            }
+            return;
+        }
+
+        if scale_in_triggered {
+            let Some(retire_lane_id) = self.select_autoscale_lane_for_retire() else {
+                return;
+            };
+            let plan = iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: Vec::new(),
+                retire: vec![retire_lane_id],
+            };
+            if self.state_ref.apply_lane_lifecycle(&plan).is_ok() {
+                self.record_autoscale_transition_height(block_height);
+                self.nexus = self.state_ref.nexus_snapshot();
+                info!(
+                    height = block_height,
+                    lane = retire_lane_id.as_u32(),
+                    active_lanes,
+                    in_latency_ratio_permille,
+                    in_utilization_p95_permille = in_utilization_p95_permille.unwrap_or_default(),
+                    "applied deterministic lane autoscale scale-in transition"
+                );
+            } else {
+                warn!(
+                    height = block_height,
+                    lane = retire_lane_id.as_u32(),
+                    "failed to apply deterministic lane autoscale scale-in transition"
+                );
+            }
+        }
+    }
+
+    fn record_autoscale_transition_height(&self, block_height: u64) {
+        let mut nexus = self.state_ref.nexus.write();
+        nexus.autoscale.last_transition_height = block_height;
+        #[cfg(feature = "telemetry")]
+        self.telemetry.record_lane_lifecycle_outcome("autoscale");
+    }
+
+    fn next_autoscale_lane_id(&self, max_lanes: u32) -> Option<LaneId> {
+        let existing: BTreeSet<u32> = self
+            .nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| lane.id.as_u32())
+            .collect();
+        (0..max_lanes)
+            .find(|candidate| !existing.contains(candidate))
+            .map(LaneId::new)
+    }
+
+    fn select_autoscale_lane_for_retire(&self) -> Option<LaneId> {
+        self.nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .filter(|lane| {
+                lane.metadata
+                    .get(AUTOSCALE_META_MANAGED)
+                    .is_some_and(|value| value == "true")
+            })
+            .map(|lane| lane.id)
+            .max_by_key(|lane| lane.as_u32())
+    }
+
+    fn collect_autoscale_samples(
+        &self,
+        block: &CommittedBlock,
+        window_blocks: usize,
+        active_lanes: u64,
+    ) -> Vec<AutoscaleSample> {
+        if window_blocks == 0 {
+            return Vec::new();
+        }
+
+        let current_height = block.as_ref().header().height().get();
+        if current_height < 2 {
+            return Vec::new();
+        }
+        let per_lane_target_tps = u64::from(self.nexus.autoscale.per_lane_target_tps.get());
+        let utilization_denominator = active_lanes.saturating_mul(per_lane_target_tps).max(1);
+
+        let mut samples = Vec::with_capacity(window_blocks);
+        let start_height = current_height
+            .saturating_sub(u64::try_from(window_blocks.saturating_sub(1)).unwrap_or(u64::MAX))
+            .max(2);
+
+        for height in start_height..=current_height {
+            let prev_height = height.saturating_sub(1);
+
+            let prev_ts_ms = {
+                let Ok(prev_height_usize) = usize::try_from(prev_height) else {
+                    return Vec::new();
+                };
+                let Some(prev_nz) = NonZeroUsize::new(prev_height_usize) else {
+                    return Vec::new();
+                };
+                let Some(prev_block) = self.kura.get_block(prev_nz) else {
+                    return Vec::new();
+                };
+                u64::try_from(prev_block.header().creation_time().as_millis()).unwrap_or(0)
+            };
+
+            let (curr_ts_ms, tx_count) = if height == current_height {
+                let curr_block = block.as_ref();
+                (
+                    u64::try_from(curr_block.header().creation_time().as_millis()).unwrap_or(0),
+                    u64::try_from(curr_block.external_transactions().len()).unwrap_or(u64::MAX),
+                )
+            } else {
+                let Ok(height_usize) = usize::try_from(height) else {
+                    return Vec::new();
+                };
+                let Some(height_nz) = NonZeroUsize::new(height_usize) else {
+                    return Vec::new();
+                };
+                let Some(curr_block) = self.kura.get_block(height_nz) else {
+                    return Vec::new();
+                };
+                (
+                    u64::try_from(curr_block.header().creation_time().as_millis()).unwrap_or(0),
+                    u64::try_from(curr_block.external_transactions().len()).unwrap_or(u64::MAX),
+                )
+            };
+
+            let latency_ms = curr_ts_ms.saturating_sub(prev_ts_ms).max(1);
+            let tps_milli = tx_count
+                .saturating_mul(1_000_000)
+                .saturating_div(latency_ms);
+            let utilization_permille = tps_milli.saturating_div(utilization_denominator);
+
+            samples.push(AutoscaleSample {
+                latency_ms,
+                utilization_permille,
+            });
+        }
+
+        samples
     }
 
     fn apply_pacing_governor(&mut self, block: &CommittedBlock) -> Option<EventBox> {

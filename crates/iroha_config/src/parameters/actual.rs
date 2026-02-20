@@ -2244,6 +2244,8 @@ pub struct Nexus {
     pub compliance: LaneCompliance,
     /// Lane-fusion tuning.
     pub fusion: Fusion,
+    /// Deterministic lane autoscaling tuning.
+    pub autoscale: Autoscale,
     /// Proof/commit deadline configuration.
     pub commit: Commit,
     /// Data-availability sampling configuration.
@@ -2269,6 +2271,7 @@ impl Default for Nexus {
             governance: GovernanceCatalog::default(),
             compliance: LaneCompliance::default(),
             fusion: Fusion::default(),
+            autoscale: Autoscale::default(),
             commit: Commit::default(),
             da: Da::default(),
         }
@@ -2764,6 +2767,68 @@ impl Default for Fusion {
                 .expect("default observation slots > 0"),
             max_window_slots: NonZeroU16::new(defaults::nexus::fusion::MAX_WINDOW_SLOTS)
                 .expect("default max window slots > 0"),
+        }
+    }
+}
+
+/// Deterministic lane autoscaling parameters.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Autoscale {
+    /// Whether consensus-driven lane autoscaling is enabled.
+    pub enabled: bool,
+    /// Minimum active lane count.
+    pub min_lanes: NonZeroU32,
+    /// Maximum active lane count.
+    pub max_lanes: NonZeroU32,
+    /// Target block interval used by the autoscaler (milliseconds).
+    pub target_block_ms: NonZeroU64,
+    /// Scale-out latency ratio threshold versus target block interval.
+    pub scale_out_latency_ratio: f64,
+    /// Scale-in latency ratio threshold versus target block interval.
+    pub scale_in_latency_ratio: f64,
+    /// Scale-out utilization ratio threshold.
+    pub scale_out_utilization_ratio: f64,
+    /// Scale-in utilization ratio threshold.
+    pub scale_in_utilization_ratio: f64,
+    /// Number of recent blocks used for scale-out decisions.
+    pub scale_out_window_blocks: NonZeroU16,
+    /// Number of recent blocks used for scale-in decisions.
+    pub scale_in_window_blocks: NonZeroU16,
+    /// Cooldown period in blocks after each transition.
+    pub cooldown_blocks: NonZeroU16,
+    /// Per-lane throughput target used to compute utilization (tx/s).
+    pub per_lane_target_tps: NonZeroU32,
+    /// Last block height where a scale transition was applied.
+    pub last_transition_height: u64,
+}
+
+impl Default for Autoscale {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::nexus::autoscale::ENABLED,
+            min_lanes: NonZeroU32::new(defaults::nexus::autoscale::MIN_LANES)
+                .expect("default autoscale min_lanes > 0"),
+            max_lanes: NonZeroU32::new(defaults::nexus::autoscale::MAX_LANES)
+                .expect("default autoscale max_lanes > 0"),
+            target_block_ms: NonZeroU64::new(defaults::nexus::autoscale::TARGET_BLOCK_MS)
+                .expect("default autoscale target_block_ms > 0"),
+            scale_out_latency_ratio: defaults::nexus::autoscale::SCALE_OUT_LATENCY_RATIO,
+            scale_in_latency_ratio: defaults::nexus::autoscale::SCALE_IN_LATENCY_RATIO,
+            scale_out_utilization_ratio: defaults::nexus::autoscale::SCALE_OUT_UTILIZATION_RATIO,
+            scale_in_utilization_ratio: defaults::nexus::autoscale::SCALE_IN_UTILIZATION_RATIO,
+            scale_out_window_blocks: NonZeroU16::new(
+                defaults::nexus::autoscale::SCALE_OUT_WINDOW_BLOCKS,
+            )
+            .expect("default autoscale scale_out_window_blocks > 0"),
+            scale_in_window_blocks: NonZeroU16::new(
+                defaults::nexus::autoscale::SCALE_IN_WINDOW_BLOCKS,
+            )
+            .expect("default autoscale scale_in_window_blocks > 0"),
+            cooldown_blocks: NonZeroU16::new(defaults::nexus::autoscale::COOLDOWN_BLOCKS)
+                .expect("default autoscale cooldown_blocks > 0"),
+            per_lane_target_tps: NonZeroU32::new(defaults::nexus::autoscale::PER_LANE_TARGET_TPS)
+                .expect("default autoscale per_lane_target_tps > 0"),
+            last_transition_height: 0,
         }
     }
 }

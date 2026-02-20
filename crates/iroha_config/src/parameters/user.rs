@@ -10306,6 +10306,9 @@ pub struct Nexus {
     /// Nexus lane-fusion tuning.
     #[config(nested)]
     pub fusion: Fusion,
+    /// Deterministic lane autoscaling tuning.
+    #[config(nested)]
+    pub autoscale: Autoscale,
     /// Proof/commit deadline configuration.
     #[config(nested)]
     pub commit: Commit,
@@ -10332,6 +10335,7 @@ impl Default for Nexus {
             governance: GovernanceCatalogConfig::default(),
             compliance: LaneCompliance::default(),
             fusion: Fusion::default(),
+            autoscale: Autoscale::default(),
             commit: Commit::default(),
             da: Da::default(),
         }
@@ -10869,6 +10873,66 @@ impl Default for Fusion {
     }
 }
 
+/// User-level configuration container for deterministic lane autoscaling.
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+pub struct Autoscale {
+    /// Whether consensus-driven lane autoscaling is enabled.
+    #[config(default = "defaults::nexus::autoscale::ENABLED")]
+    pub enabled: bool,
+    /// Minimum active lane count.
+    #[config(default = "defaults::nexus::autoscale::MIN_LANES")]
+    pub min_lanes: u32,
+    /// Maximum active lane count.
+    #[config(default = "defaults::nexus::autoscale::MAX_LANES")]
+    pub max_lanes: u32,
+    /// Target block interval used by the autoscaler (milliseconds).
+    #[config(default = "defaults::nexus::autoscale::TARGET_BLOCK_MS")]
+    pub target_block_ms: u64,
+    /// Scale-out latency ratio threshold versus target block interval.
+    #[config(default = "defaults::nexus::autoscale::SCALE_OUT_LATENCY_RATIO")]
+    pub scale_out_latency_ratio: f64,
+    /// Scale-in latency ratio threshold versus target block interval.
+    #[config(default = "defaults::nexus::autoscale::SCALE_IN_LATENCY_RATIO")]
+    pub scale_in_latency_ratio: f64,
+    /// Scale-out utilization ratio threshold.
+    #[config(default = "defaults::nexus::autoscale::SCALE_OUT_UTILIZATION_RATIO")]
+    pub scale_out_utilization_ratio: f64,
+    /// Scale-in utilization ratio threshold.
+    #[config(default = "defaults::nexus::autoscale::SCALE_IN_UTILIZATION_RATIO")]
+    pub scale_in_utilization_ratio: f64,
+    /// Number of recent blocks used for scale-out decisions.
+    #[config(default = "defaults::nexus::autoscale::SCALE_OUT_WINDOW_BLOCKS")]
+    pub scale_out_window_blocks: u16,
+    /// Number of recent blocks used for scale-in decisions.
+    #[config(default = "defaults::nexus::autoscale::SCALE_IN_WINDOW_BLOCKS")]
+    pub scale_in_window_blocks: u16,
+    /// Cooldown period in blocks after each transition.
+    #[config(default = "defaults::nexus::autoscale::COOLDOWN_BLOCKS")]
+    pub cooldown_blocks: u16,
+    /// Per-lane throughput target used to compute utilization (tx/s).
+    #[config(default = "defaults::nexus::autoscale::PER_LANE_TARGET_TPS")]
+    pub per_lane_target_tps: u32,
+}
+
+impl Default for Autoscale {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::nexus::autoscale::ENABLED,
+            min_lanes: defaults::nexus::autoscale::MIN_LANES,
+            max_lanes: defaults::nexus::autoscale::MAX_LANES,
+            target_block_ms: defaults::nexus::autoscale::TARGET_BLOCK_MS,
+            scale_out_latency_ratio: defaults::nexus::autoscale::SCALE_OUT_LATENCY_RATIO,
+            scale_in_latency_ratio: defaults::nexus::autoscale::SCALE_IN_LATENCY_RATIO,
+            scale_out_utilization_ratio: defaults::nexus::autoscale::SCALE_OUT_UTILIZATION_RATIO,
+            scale_in_utilization_ratio: defaults::nexus::autoscale::SCALE_IN_UTILIZATION_RATIO,
+            scale_out_window_blocks: defaults::nexus::autoscale::SCALE_OUT_WINDOW_BLOCKS,
+            scale_in_window_blocks: defaults::nexus::autoscale::SCALE_IN_WINDOW_BLOCKS,
+            cooldown_blocks: defaults::nexus::autoscale::COOLDOWN_BLOCKS,
+            per_lane_target_tps: defaults::nexus::autoscale::PER_LANE_TARGET_TPS,
+        }
+    }
+}
+
 /// User-level configuration container for `Commit`.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct Commit {
@@ -11071,6 +11135,164 @@ impl Fusion {
             exit_teu,
             observation_slots: observation_slots.expect("validated"),
             max_window_slots: max_window_slots.expect("validated"),
+        })
+    }
+}
+
+impl Autoscale {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Autoscale> {
+        let Autoscale {
+            enabled,
+            min_lanes,
+            max_lanes,
+            target_block_ms,
+            scale_out_latency_ratio,
+            scale_in_latency_ratio,
+            scale_out_utilization_ratio,
+            scale_in_utilization_ratio,
+            scale_out_window_blocks,
+            scale_in_window_blocks,
+            cooldown_blocks,
+            per_lane_target_tps,
+        } = self;
+
+        let mut invalid = false;
+
+        let min_lanes = NonZeroU32::new(min_lanes).or_else(|| {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.autoscale.min_lanes must be > 0"),
+            );
+            None
+        });
+        let max_lanes = NonZeroU32::new(max_lanes).or_else(|| {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.autoscale.max_lanes must be > 0"),
+            );
+            None
+        });
+        let target_block_ms = NonZeroU64::new(target_block_ms).or_else(|| {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.autoscale.target_block_ms must be > 0"),
+            );
+            None
+        });
+        let scale_out_window_blocks = NonZeroU16::new(scale_out_window_blocks).or_else(|| {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.autoscale.scale_out_window_blocks must be > 0"),
+            );
+            None
+        });
+        let scale_in_window_blocks = NonZeroU16::new(scale_in_window_blocks).or_else(|| {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.autoscale.scale_in_window_blocks must be > 0"),
+            );
+            None
+        });
+        let cooldown_blocks = NonZeroU16::new(cooldown_blocks).or_else(|| {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.autoscale.cooldown_blocks must be > 0"),
+            );
+            None
+        });
+        let per_lane_target_tps = NonZeroU32::new(per_lane_target_tps).or_else(|| {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.autoscale.per_lane_target_tps must be > 0"),
+            );
+            None
+        });
+
+        let ratios_in_range = |value: f64| value.is_finite() && value > 0.0;
+        if !ratios_in_range(scale_out_latency_ratio) {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.autoscale.scale_out_latency_ratio must be finite and > 0"),
+            );
+        }
+        if !ratios_in_range(scale_in_latency_ratio) {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.autoscale.scale_in_latency_ratio must be finite and > 0"),
+            );
+        }
+        if !ratios_in_range(scale_out_utilization_ratio) {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.autoscale.scale_out_utilization_ratio must be finite and > 0"),
+            );
+        }
+        if !ratios_in_range(scale_in_utilization_ratio) {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.autoscale.scale_in_utilization_ratio must be finite and > 0"),
+            );
+        }
+
+        if let (Some(min), Some(max)) = (min_lanes, max_lanes) {
+            if min > max {
+                invalid = true;
+                emitter.emit(
+                    Report::new(ParseError::InvalidNexusConfig)
+                        .attach("nexus.autoscale.min_lanes must be <= max_lanes"),
+                );
+            }
+            if max.get() > defaults::nexus::autoscale::MAX_LANES {
+                invalid = true;
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "nexus.autoscale.max_lanes must be <= {}",
+                    defaults::nexus::autoscale::MAX_LANES
+                )));
+            }
+        }
+
+        if scale_in_latency_ratio >= scale_out_latency_ratio {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.autoscale.scale_in_latency_ratio must be < scale_out_latency_ratio",
+            ));
+        }
+        if scale_in_utilization_ratio >= scale_out_utilization_ratio {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.autoscale.scale_in_utilization_ratio must be < scale_out_utilization_ratio",
+            ));
+        }
+
+        if invalid {
+            return None;
+        }
+
+        Some(actual::Autoscale {
+            enabled,
+            min_lanes: min_lanes.expect("validated"),
+            max_lanes: max_lanes.expect("validated"),
+            target_block_ms: target_block_ms.expect("validated"),
+            scale_out_latency_ratio,
+            scale_in_latency_ratio,
+            scale_out_utilization_ratio,
+            scale_in_utilization_ratio,
+            scale_out_window_blocks: scale_out_window_blocks.expect("validated"),
+            scale_in_window_blocks: scale_in_window_blocks.expect("validated"),
+            cooldown_blocks: cooldown_blocks.expect("validated"),
+            per_lane_target_tps: per_lane_target_tps.expect("validated"),
+            last_transition_height: 0,
         })
     }
 }
@@ -11640,6 +11862,7 @@ impl Nexus {
             governance,
             compliance,
             fusion,
+            autoscale,
             commit,
             da,
             ..
@@ -11654,6 +11877,7 @@ impl Nexus {
         let governance = governance.parse(emitter)?;
         let compliance = compliance.parse();
         let fusion = fusion.parse(emitter)?;
+        let autoscale = autoscale.parse(emitter)?;
         let commit = commit.parse(emitter)?;
         let da = da.parse(emitter)?;
         let storage = storage.parse(emitter)?;
@@ -11710,6 +11934,7 @@ impl Nexus {
             governance,
             compliance,
             fusion,
+            autoscale,
             commit,
             da,
             axt: axt_cfg,
