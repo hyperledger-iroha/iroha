@@ -5869,14 +5869,13 @@ impl NetworkPeer {
         Ok(())
     }
 
-    /// Forcefully kills the running peer
+    /// Forcefully kills the running peer if it was started.
     ///
-    /// # Panics
-    /// If peer was not started.
-    pub async fn shutdown(&self) {
+    /// Returns `true` if a running peer was found and shutdown logic was executed.
+    pub async fn shutdown_if_started(&self) -> bool {
         let mut guard = self.run.lock().await;
         let Some(mut run) = (*guard).take() else {
-            panic!("peer is not running, nothing to shut down");
+            return false;
         };
         // Immediately drop the running flag so watchdog loops and status polls exit promptly.
         self.is_running.store(false, Ordering::Relaxed);
@@ -5928,6 +5927,18 @@ impl NetworkPeer {
                 warn!("timed out waiting for aborted peer tasks; continuing shutdown");
             }
         }
+        true
+    }
+
+    /// Forcefully kills the running peer
+    ///
+    /// # Panics
+    /// If peer was not started.
+    pub async fn shutdown(&self) {
+        assert!(
+            self.shutdown_if_started().await,
+            "peer is not running, nothing to shut down"
+        );
     }
 
     /// Like [`Self::start`], but also ensures that server starts (responds to `/status`).
@@ -8252,6 +8263,20 @@ mod tests {
             .await
             .expect("shutdown should notify fatal listeners")
             .expect("fatal signal should be delivered");
+    }
+
+    #[tokio::test]
+    async fn shutdown_if_started_returns_false_when_peer_is_not_running() {
+        if skip_network_tests("shutdown_if_started_returns_false_when_peer_is_not_running") {
+            return;
+        }
+
+        let env = Environment::new();
+        let peer = NetworkPeer::builder().build(&env);
+        assert!(
+            !peer.shutdown_if_started().await,
+            "shutdown_if_started should be a no-op when the peer never started"
+        );
     }
 
     impl Drop for EnvVarGuard {

@@ -370,6 +370,7 @@ async fn network_latency_spike<P: FaultPeer>(
             ?err,
             "failed to restart peer with latency overrides; attempting recovery"
         );
+        peer.shutdown().await;
         let _ = peer.restart_with_layers(config_layers, &[], genesis).await;
         return Err(err);
     }
@@ -408,7 +409,9 @@ async fn network_partition<P: FaultPeer>(
     );
 
     peer.shutdown().await;
-    let overrides = Table::new().write(["trusted_peers"], Vec::<String>::new());
+    let overrides = Table::new()
+        .write(["trusted_peers"], Vec::<String>::new())
+        .write(["trusted_peers_pop"], Table::new());
     let result = peer
         .restart_with_layers(config_layers, std::slice::from_ref(&overrides), genesis)
         .await;
@@ -419,6 +422,7 @@ async fn network_partition<P: FaultPeer>(
             ?err,
             "failed to restart peer with partition overrides; attempting recovery"
         );
+        peer.shutdown().await;
         let _ = peer.restart_with_layers(config_layers, &[], genesis).await;
         return Err(err);
     }
@@ -616,7 +620,7 @@ impl FaultPeer for NetworkPeer {
 
     fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
-            NetworkPeer::shutdown(self).await;
+            let _ = NetworkPeer::shutdown_if_started(self).await;
         })
     }
 
@@ -645,7 +649,10 @@ impl FaultPeer for NetworkPeer {
 mod tests {
     use std::{
         collections::HashSet,
-        sync::{Arc, Mutex as StdMutex, atomic::AtomicBool},
+        sync::{
+            Arc, Mutex as StdMutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
     };
 
     use iroha_primitives::unique_vec::UniqueVec;
@@ -680,6 +687,7 @@ mod tests {
         dir: PathBuf,
         events: Arc<AsyncMutex<Vec<MockEvent>>>,
         client: MockClient,
+        restart_failures_remaining: Arc<AtomicUsize>,
     }
 
     #[derive(Debug, Clone)]
@@ -699,7 +707,14 @@ mod tests {
                 dir,
                 events: Arc::new(AsyncMutex::new(Vec::new())),
                 client: MockClient::default(),
+                restart_failures_remaining: Arc::new(AtomicUsize::new(0)),
             }
+        }
+
+        fn with_restart_failures(self, failures: usize) -> Self {
+            self.restart_failures_remaining
+                .store(failures, Ordering::Relaxed);
+            self
         }
 
         async fn events(&self) -> Vec<MockEvent> {
@@ -737,10 +752,19 @@ mod tests {
         ) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
             let events = Arc::clone(&self.events);
             let layers = extra_layers.to_vec();
+            let restart_failures_remaining = Arc::clone(&self.restart_failures_remaining);
             Box::pin(async move {
                 events.lock().await.push(MockEvent::Restart {
                     extra_layers: layers,
                 });
+                let should_fail = restart_failures_remaining
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+                        (remaining > 0).then(|| remaining - 1)
+                    })
+                    .is_ok();
+                if should_fail {
+                    return Err(eyre!("planned restart failure"));
+                }
                 Ok(())
             })
         }
@@ -948,6 +972,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn network_latency_recovery_shuts_down_before_restarting_without_overrides() {
+        let peer = MockPeer::new("latency-recovery").with_restart_failures(1);
+        let config_layers = Arc::new(Vec::new());
+        let genesis = dummy_genesis();
+        let mut rng = StdRng::seed_from_u64(17);
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let config = FaultConfig {
+            interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            network_latency: Some(NetworkLatencyConfig {
+                duration: Duration::from_millis(5)..=Duration::from_millis(5),
+                gossip_delay: Duration::from_millis(10)..=Duration::from_millis(10),
+            }),
+            network_partition: None,
+            cpu_stress: None,
+            disk_saturation: None,
+        };
+        let ctx = FaultApplyCtx {
+            peer: &peer,
+            config: &config,
+            config_layers: &config_layers,
+            genesis: &genesis,
+            base_domain: &domain,
+            rng: &mut rng,
+            deadline: Instant::now() + Duration::from_secs(1),
+        };
+
+        let _ = FaultScenario::NetworkLatencySpike
+            .apply(ctx)
+            .await
+            .expect_err("fault should report initial override restart failure");
+
+        let events = peer.events().await;
+        assert_eq!(events.len(), 4);
+        assert!(matches!(events[0], MockEvent::Shutdown));
+        assert!(matches!(events[1], MockEvent::Restart { .. }));
+        assert!(matches!(events[2], MockEvent::Shutdown));
+        match &events[3] {
+            MockEvent::Restart { extra_layers } => assert!(
+                extra_layers.is_empty(),
+                "recovery restart must remove temporary latency overrides"
+            ),
+            other => panic!("unexpected final recovery event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn disk_saturation_creates_and_removes_file() {
         let peer = MockPeer::new("disk");
         let config_layers = Arc::new(Vec::new());
@@ -1048,6 +1118,14 @@ mod tests {
                     trusted.is_empty(),
                     "partition should clear trusted peers temporarily"
                 );
+                let trusted_pop = extra_layers[0]
+                    .get("trusted_peers_pop")
+                    .and_then(toml::Value::as_table)
+                    .expect("trusted_peers_pop table");
+                assert!(
+                    trusted_pop.is_empty(),
+                    "partition should clear trusted_peers_pop to keep config valid"
+                );
             }
             other => panic!("unexpected restart payload: {other:?}"),
         }
@@ -1058,6 +1136,51 @@ mod tests {
                 "rejoin restart should not carry partition overrides"
             ),
             other => panic!("unexpected final event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn network_partition_recovery_shuts_down_before_restarting_without_overrides() {
+        let peer = MockPeer::new("partition-recovery").with_restart_failures(1);
+        let config_layers = Arc::new(Vec::new());
+        let genesis = dummy_genesis();
+        let mut rng = StdRng::seed_from_u64(51);
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let config = FaultConfig {
+            interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            network_latency: None,
+            network_partition: Some(NetworkPartitionConfig {
+                duration: Duration::from_millis(5)..=Duration::from_millis(5),
+            }),
+            cpu_stress: None,
+            disk_saturation: None,
+        };
+        let ctx = FaultApplyCtx {
+            peer: &peer,
+            config: &config,
+            config_layers: &config_layers,
+            genesis: &genesis,
+            base_domain: &domain,
+            rng: &mut rng,
+            deadline: Instant::now() + Duration::from_secs(1),
+        };
+
+        let _ = FaultScenario::NetworkPartition
+            .apply(ctx)
+            .await
+            .expect_err("fault should report initial override restart failure");
+
+        let events = peer.events().await;
+        assert_eq!(events.len(), 4);
+        assert!(matches!(events[0], MockEvent::Shutdown));
+        assert!(matches!(events[1], MockEvent::Restart { .. }));
+        assert!(matches!(events[2], MockEvent::Shutdown));
+        match &events[3] {
+            MockEvent::Restart { extra_layers } => assert!(
+                extra_layers.is_empty(),
+                "recovery restart must remove temporary partition overrides"
+            ),
+            other => panic!("unexpected final recovery event: {other:?}"),
         }
     }
 }
