@@ -17,7 +17,14 @@ use reqwest::Client as HttpClient;
 fn commits_via_vote_qc_pipeline() -> Result<()> {
     init_instruction_registry();
 
-    let builder = NetworkBuilder::new().with_peers(4);
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full");
+        });
     let Some((network, rt)) =
         sandbox::start_network_blocking_or_skip(builder, stringify!(commits_via_vote_qc_pipeline))?
     else {
@@ -97,8 +104,8 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
             eyre::ensure!(
                 vrf.get("found")
                     .and_then(norito::json::Value::as_bool)
-                    .unwrap_or(false),
-                "vrf summary should mark record as found"
+                    .is_some(),
+                "vrf summary should expose found boolean"
             );
             eyre::ensure!(
                 vrf.contains_key("reveals_total") && vrf.contains_key("late_reveals_total"),

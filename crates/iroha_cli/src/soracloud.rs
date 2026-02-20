@@ -16,12 +16,13 @@ use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
     Encode,
     name::Name,
+    smart_contract::manifest::ManifestProvenance,
     soracloud::{
         SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SoraContainerManifestV1, SoraDeploymentBundleV1,
         SoraServiceManifestV1,
     },
 };
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, KeyPair, Signature};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use reqwest::{
     blocking::Client as BlockingHttpClient,
@@ -54,10 +55,19 @@ impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Command::Init(args) => context.print_data(&args.run()?),
-            Command::Deploy(args) => context.print_data(&args.run(MutationMode::Deploy)?),
+            Command::Deploy(args) => {
+                let output = args.run(MutationMode::Deploy, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
             Command::Status(args) => context.print_data(&args.run()?),
-            Command::Upgrade(args) => context.print_data(&args.run(MutationMode::Upgrade)?),
-            Command::Rollback(args) => context.print_data(&args.run()?),
+            Command::Upgrade(args) => {
+                let output = args.run(MutationMode::Upgrade, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::Rollback(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
         }
     }
 }
@@ -149,10 +159,19 @@ pub struct DeployArgs {
     /// Registry state JSON path.
     #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
     registry: PathBuf,
+    /// Optional Torii base URL to execute deploy against live control-plane APIs.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for Torii mutation requests.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl DeployArgs {
-    fn run(self, mode: MutationMode) -> Result<MutationOutput> {
+    fn run(self, mode: MutationMode, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let container: SoraContainerManifestV1 = load_json(&self.container)?;
         let service: SoraServiceManifestV1 = load_json(&self.service)?;
         let bundle = SoraDeploymentBundleV1 {
@@ -162,10 +181,26 @@ impl DeployArgs {
         };
         bundle.validate_for_admission()?;
 
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let endpoint_path = match mode {
+                MutationMode::Deploy => "v1/soracloud/deploy",
+                MutationMode::Upgrade => "v1/soracloud/upgrade",
+            };
+            let request = signed_bundle_request(bundle, key_pair)?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                endpoint_path,
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output = apply_mutation(&mut registry, mode, &bundle)?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud deploy output")
     }
 }
 
@@ -181,10 +216,19 @@ pub struct UpgradeArgs {
     /// Registry state JSON path.
     #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
     registry: PathBuf,
+    /// Optional Torii base URL to execute upgrade against live control-plane APIs.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for Torii mutation requests.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl UpgradeArgs {
-    fn run(self, mode: MutationMode) -> Result<MutationOutput> {
+    fn run(self, mode: MutationMode, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let container: SoraContainerManifestV1 = load_json(&self.container)?;
         let service: SoraServiceManifestV1 = load_json(&self.service)?;
         let bundle = SoraDeploymentBundleV1 {
@@ -194,10 +238,26 @@ impl UpgradeArgs {
         };
         bundle.validate_for_admission()?;
 
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let endpoint_path = match mode {
+                MutationMode::Deploy => "v1/soracloud/deploy",
+                MutationMode::Upgrade => "v1/soracloud/upgrade",
+            };
+            let request = signed_bundle_request(bundle, key_pair)?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                endpoint_path,
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output = apply_mutation(&mut registry, mode, &bundle)?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud upgrade output")
     }
 }
 
@@ -267,15 +327,40 @@ pub struct RollbackArgs {
     /// Optional target version. When omitted, rolls back to the previous version.
     #[arg(long, value_name = "VERSION")]
     target_version: Option<String>,
+    /// Optional Torii base URL to execute rollback against live control-plane APIs.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for Torii mutation requests.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl RollbackArgs {
-    fn run(self) -> Result<MutationOutput> {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let request = signed_rollback_request(
+                &self.service_name,
+                self.target_version.as_deref(),
+                key_pair,
+            )?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                "v1/soracloud/rollback",
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output =
             apply_rollback(&mut registry, &self.service_name, self.target_version.as_deref())?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud rollback output")
     }
 }
 
@@ -446,6 +531,32 @@ impl StatusOutput {
             network_status: Some(network_status),
         }
     }
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedBundleRequest {
+    bundle: SoraDeploymentBundleV1,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct RollbackPayload {
+    service_name: String,
+    #[norito(default)]
+    target_version: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedRollbackRequest {
+    payload: RollbackPayload,
+    provenance: ManifestProvenance,
 }
 
 fn apply_mutation(
@@ -629,6 +740,98 @@ fn load_registry(path: &Path) -> Result<RegistryState> {
     let state: RegistryState = load_json(path)?;
     ensure_registry_schema(&state)?;
     Ok(state)
+}
+
+fn signed_bundle_request(bundle: SoraDeploymentBundleV1, key_pair: &KeyPair) -> Result<SignedBundleRequest> {
+    let payload =
+        norito::to_bytes(&bundle).wrap_err("failed to encode deployment bundle for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &payload);
+    Ok(SignedBundleRequest {
+        bundle,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_rollback_request(
+    service_name: &str,
+    target_version: Option<&str>,
+    key_pair: &KeyPair,
+) -> Result<SignedRollbackRequest> {
+    if service_name.trim().is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    let payload = RollbackPayload {
+        service_name: service_name.to_string(),
+        target_version: target_version.map(ToOwned::to_owned),
+    };
+    let encoded =
+        norito::to_bytes(&payload).wrap_err("failed to encode rollback payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedRollbackRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn post_torii_soracloud_mutation<T>(
+    torii_url: &str,
+    endpoint_path: &str,
+    request_payload: &T,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)>
+where
+    T: JsonSerialize + ?Sized,
+{
+    let endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join(endpoint_path)
+        .wrap_err_with(|| format!("failed to derive /{endpoint_path} URL from --torii-url"))?;
+    let body = json::to_vec(request_payload)
+        .wrap_err("failed to encode soracloud mutation request payload")?;
+
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for soracloud mutation")?;
+
+    let mut request = client
+        .post(endpoint.clone())
+        .header(header::ACCEPT, HeaderValue::from_static("application/json"))
+        .header(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        )
+        .body(body);
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to call `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii mutation response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /{endpoint_path} returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+    let payload: norito::json::Value =
+        json::from_slice(&body).wrap_err("failed to decode Torii mutation JSON payload")?;
+    Ok((endpoint.to_string(), payload))
 }
 
 fn fetch_torii_soracloud_status(
@@ -855,6 +1058,40 @@ mod tests {
     fn fetch_torii_status_rejects_invalid_url() {
         let err = fetch_torii_soracloud_status("not-a-url", None, None, 5)
             .expect_err("invalid URL must fail");
+        assert!(err.to_string().contains("invalid --torii-url"));
+    }
+
+    #[test]
+    fn signed_bundle_request_uses_verifiable_signature() {
+        let container = fixture_container();
+        let mut service = fixture_service();
+        service.container.manifest_hash = Hash::new(Encode::encode(&container));
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+        let key_pair = KeyPair::random();
+        let request = signed_bundle_request(bundle, &key_pair).expect("signed request");
+        let payload = norito::to_bytes(&request.bundle).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn post_torii_mutation_rejects_invalid_url() {
+        let payload = norito::json!({ "noop": true });
+        let err = post_torii_soracloud_mutation(
+            "not-a-url",
+            "v1/soracloud/deploy",
+            &payload,
+            None,
+            5,
+        )
+        .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
     }
 }

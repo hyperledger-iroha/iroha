@@ -317,6 +317,8 @@ pub(crate) mod routing;
 mod runtime;
 #[cfg(feature = "app_api")]
 mod sns;
+#[cfg(feature = "app_api")]
+mod soracloud;
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 mod telemetry;
 #[cfg(feature = "app_api")]
@@ -849,6 +851,8 @@ struct AppState {
     uaid_onboarding: Option<AccountOnboardingSigner>,
     #[cfg(feature = "app_api")]
     sns_registry: Arc<sns::Registry>,
+    #[cfg(feature = "app_api")]
+    soracloud_registry: Arc<soracloud::Registry>,
 }
 
 pub(crate) type SharedAppState = std::sync::Arc<AppState>;
@@ -7283,6 +7287,21 @@ async fn handler_soracloud_status(
         json_entry("governance_manifest_rejected", governance_manifest_rejected),
         json_entry("sorafs_provider_rejected", sorafs_provider_rejected),
     ]);
+
+    #[cfg(feature = "app_api")]
+    let control_plane = app.soracloud_registry.snapshot(None, 10).await;
+
+    #[cfg(feature = "app_api")]
+    let payload = json_object(vec![
+        json_entry("schema_version", 1_u16),
+        json_entry("service_health", service_health),
+        json_entry("routing", routing),
+        json_entry("resource_pressure", resource_pressure),
+        json_entry("failed_admissions", failed_admissions),
+        json_entry("control_plane", json_value(&control_plane)),
+    ]);
+
+    #[cfg(not(feature = "app_api"))]
     let payload = json_object(vec![
         json_entry("schema_version", 1_u16),
         json_entry("service_health", service_health),
@@ -14503,6 +14522,13 @@ impl Torii {
                 .route("/v1/sns/policies/{suffix_id}", get(sns::handle_get_policy))
                 .route("/v1/sns/governance/cases", post(sns::handle_post_case))
                 .route("/v1/sns/governance/cases", get(sns::handle_get_cases))
+                .route("/v1/soracloud/deploy", post(soracloud::handle_deploy))
+                .route("/v1/soracloud/upgrade", post(soracloud::handle_upgrade))
+                .route("/v1/soracloud/rollback", post(soracloud::handle_rollback))
+                .route(
+                    "/v1/soracloud/registry",
+                    get(soracloud::handle_registry_status),
+                )
                 // Asset Definitions listing
                 .route(
                     "/v1/assets/definitions",
@@ -15809,6 +15835,8 @@ impl Torii {
             uaid_onboarding: self.uaid_onboarding.clone(),
             #[cfg(feature = "app_api")]
             sns_registry: Arc::new(sns::Registry::bootstrap_default()),
+            #[cfg(feature = "app_api")]
+            soracloud_registry: Arc::new(soracloud::Registry::default()),
         });
 
         #[cfg(feature = "app_api")]
@@ -15848,6 +15876,7 @@ impl Torii {
             &app_state.offline_issuer,
             &app_state.uaid_onboarding,
             &app_state.sns_registry,
+            &app_state.soracloud_registry,
         );
 
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -17785,6 +17814,8 @@ pub(crate) mod tests_runtime_handlers {
             uaid_onboarding: None,
             #[cfg(feature = "app_api")]
             sns_registry: Arc::new(sns::Registry::bootstrap_default()),
+            #[cfg(feature = "app_api")]
+            soracloud_registry: Arc::new(soracloud::Registry::default()),
             rbc_sampling_enabled: false,
             rbc_sampling_store_dir: None,
             rbc_sampling_max_samples: 0,
@@ -19611,6 +19642,14 @@ pub(crate) mod tests_runtime_handlers {
                 .and_then(norito::json::Value::as_object)
                 .is_some(),
             "failed_admissions section should be present"
+        );
+        #[cfg(feature = "app_api")]
+        assert!(
+            payload
+                .get("control_plane")
+                .and_then(norito::json::Value::as_object)
+                .is_some(),
+            "control_plane section should be present"
         );
     }
 
