@@ -19,11 +19,14 @@
         {
           "Register": {
             "Account": {
-              "id": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "id": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
               "label": null,
               "metadata": {
                 "key": "value"
               },
+              "opaque_ids": [
+                
+              ],
               "uaid": null
             }
           }
@@ -40,7 +43,9 @@
               },
               "id": "rose#wonderland",
               "logo": null,
-              "metadata": {},
+              "metadata": {
+                
+              },
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
@@ -53,16 +58,23 @@
             "Domain": {
               "id": "garden_of_live_flowers",
               "logo": null,
-              "metadata": {}
+              "metadata": {
+                
+              }
             }
           }
         },
         {
           "Register": {
             "Account": {
-              "id": "34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD",
+              "id": "34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD@garden_of_live_flowers",
               "label": null,
-              "metadata": {},
+              "metadata": {
+                
+              },
+              "opaque_ids": [
+                
+              ],
               "uaid": null
             }
           }
@@ -79,7 +91,9 @@
               },
               "id": "cabbage#garden_of_live_flowers",
               "logo": null,
-              "metadata": {},
+              "metadata": {
+                
+              },
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
@@ -88,11 +102,15 @@
           }
         }
       ],
-      "ivm_triggers": [],
+      "ivm_triggers": [
+        
+      ],
       "parameters": {
         "sumeragi": {
           "block_time_ms": 100,
           "commit_time_ms": 100,
+          "min_finality_ms": 100,
+          "pacing_factor_bps": 10000,
           "max_clock_drift_ms": 1000,
           "collectors_k": 3,
           "collectors_redundant_send_r": 3,
@@ -108,18 +126,17 @@
             "pkcs11",
             "yubihsm",
             "softkey"
-          ],
-          "min_finality_ms": 100
+          ]
         },
         "block": {
           "max_transactions": 512
         },
         "transaction": {
           "max_signatures": 16,
-          "max_instructions": 4096,
+          "max_instructions": 50000,
           "ivm_bytecode_size": 4194304,
-          "max_tx_bytes": 1048576,
-          "max_decompressed_bytes": 1048576,
+          "max_tx_bytes": 10485760,
+          "max_decompressed_bytes": 10485760,
           "max_metadata_depth": 8,
           "require_height_ttl": false,
           "require_sequence": false
@@ -143,37 +160,35 @@
             "id": "sumeragi_npos_parameters",
             "payload": {
               "activation_lag_blocks": 1,
-              "slashing_delay_blocks": 259200,
-              "block_time_ms": 100,
               "epoch_length_blocks": 3600,
               "epoch_seed": "8BBF8F12EC79F8D85D18E2CE7A84B66C53E9CD4D4EBA357CD33CF28F0D65720B",
               "evidence_horizon_blocks": 7200,
+              "finality_margin_blocks": 8,
               "k_aggregators": 3,
               "max_entity_correlation_pct": 25,
               "max_nominator_concentration_pct": 25,
+              "max_validators": 128,
+              "min_nomination_bond": 1,
               "min_self_bond": 1000,
               "redundant_send_r": 3,
               "seat_band_pct": 5,
-              "timeout_aggregator_ms": 120,
-              "timeout_commit_ms": 150,
-              "timeout_da_ms": 300,
-              "timeout_precommit_ms": 250,
-              "timeout_prevote_ms": 300,
-              "timeout_propose_ms": 300,
+              "slashing_delay_blocks": 259200,
               "vrf_commit_window_blocks": 100,
               "vrf_reveal_window_blocks": 40
             }
           }
         }
       },
-      "topology": []
+      "topology": [
+        
+      ]
     },
     {
       "instructions": [
         {
           "Mint": {
             "Asset": {
-              "destination": "rose##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "destination": "rose##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
               "object": "13"
             }
           }
@@ -181,7 +196,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "cabbage#garden_of_live_flowers#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "destination": "cabbage#garden_of_live_flowers#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
               "object": "44"
             }
           }
@@ -189,16 +204,16 @@
         {
           "Transfer": {
             "AssetDefinition": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
               "object": "rose#wonderland",
-              "source": "34mSYmtx2t7jKZDQcTrSU7yorGh8DzUQpaWYkEjzgM6WNLmvfHuJrGtRUm88TNpdgvfdTSdsG"
+              "source": "34mSYmtx2t7jKZDQcTrSU7yorGiKwqgAXgN4uZ68R7hDuq5WEinPUdY17nCNpTyMLhAvqFG4V@genesis"
             }
           }
         },
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
               "object": {
                 "name": "CanSetParameters"
               }
@@ -208,7 +223,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
               "object": {
                 "name": "CanRegisterDomain"
               }
@@ -218,7 +233,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
               "object": {
                 "name": "CanRegisterAssetDefinition"
               }
@@ -228,7 +243,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
               "object": {
                 "name": "CanRegisterAccount"
               }
@@ -236,7 +251,9 @@
           }
         }
       ],
-      "ivm_triggers": [],
+      "ivm_triggers": [
+        
+      ],
       "topology": [
         {
           "peer": "ea0130A71AAB00BE72C1BDF6B6A7F5D107E9D224DE900C3DDF6C84C1F17B0BB31E59A1403C9028320058E08D6659E0E7F92F0F",
@@ -253,6 +270,18 @@
         {
           "peer": "ea0130B42F548672230B0A7F38AC30686F9F5B24799507B7A4A904F7E08C98C3385A4095906FC6D1BF8D67CC181084D68DAE73",
           "pop_hex": "a9ed4797dfda4ce53a4e7ad945196969b300fd984d553a5da7c230a7796bdef99c86e90cc11db3703f49948f11238d360130b7b9642dafb3cf9c644a3828ed74a5b0eb1e229879d87651e5e04852b18a1de0b8119058291aca5a48534523fc21"
+        },
+        {
+          "peer": "ea01308524AA484E6E6F06DD88E20D74A2493C3586B036F5394EB0B53C7C172653BFBE6EF08BF6468D5F1335547B6878138C20",
+          "pop_hex": "a0fba64c24895c6d5634abdf56d13c8f720bcb5b98f3245db3c1a6306226a8b7815df2e3c2545de9b77b48713a48f7fd18fcd2373b30d74b1dc89833b27f305101671319213f9177fe3e2d64906951737e2869560ace7f0deeb707b7154daee0"
+        },
+        {
+          "peer": "ea0130A844144B7FC75B277AD83C3608B17613EE8336A1EE5F39406627B7C183416CE19F064FCDC26F85F7F21380077CB5BDDD",
+          "pop_hex": "870ef4af8ac87b313e1322029f62039d95897c400f719ca8db58aa5b63e85179cead1d7ddb0b0533a972c6fc0307798505aafff4dd50262c41107b5b5c183eaf1dc6ae50e9236acc9ab2d1062d145bbf222eb3c9e53fae3bd20272d8b31b0414"
+        },
+        {
+          "peer": "ea01308E10E640916ADFAC87A8B22FE4EF7383AAC610D09DC07322029A0913CA919176887FF1B418DEF885113E3CCC4C9CAC53",
+          "pop_hex": "935f3cb1167a391410d16ba2a7558a0400b76b8433c6fc9cafa23f8c584c5167354ea180672cab3be55db8c86ec81e7d133a03bada91ccfa69c0cca4675398dea7299abc51f086b1760d37281d61fc01de20279cd0bd597a970e0549b035c00e"
         }
       ]
     }
@@ -262,7 +291,7 @@
   "wire_proto_versions": [
     1
   ],
-  "consensus_fingerprint": "0xf2de99dad6e75c18ba3fd3cee91cb2fa17b484c0f089ada2883072298b73a710",
+  "consensus_fingerprint": "0x653bb383f0d53faa4fd9e9995d75f44dd91928ff3f6efc346fa8bbe8eb139ae8",
   "crypto": {
     "sm_openssl_preview": false,
     "sm_intrinsics": "auto",

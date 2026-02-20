@@ -47002,6 +47002,54 @@ async fn pacemaker_updates_highest_qc_status_from_new_view() {
         [0; Hash::LENGTH],
     )));
 
+harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_clamps_live_height_to_local_commit_horizon() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    actor.subsystems.propose.forced_view_after_timeout = None;
+
+    let committed_height = actor.state.view().height() as u64;
+    let mut ahead_qc = sample_qc_ref(committed_height.saturating_add(1), 0);
+    ahead_qc.phase = Phase::Commit;
+    actor.highest_qc = Some(ahead_qc);
+
+    let desired_height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    assert_eq!(
+        desired_height,
+        committed_height.saturating_add(2),
+        "test setup should place pacemaker one height beyond the local commit horizon"
+    );
+
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(desired_height);
+    assert!(
+        actor
+            .roster_for_live_vote_with_mode(desired_height, consensus_mode)
+            .is_empty(),
+        "live roster should be unavailable beyond the local commit horizon"
+    );
+
+    let expected_height = committed_height.saturating_add(1);
+    assert!(
+        actor.phase_tracker.current_view(expected_height).is_none(),
+        "round should not be initialized before pacemaker runs"
+    );
+
+    let now = Instant::now();
+    let _ = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        actor.phase_tracker.current_view(expected_height).is_some(),
+        "pacemaker should initialize the next local height when highest QC is ahead"
+    );
+
     harness.shutdown.send();
 }
 
