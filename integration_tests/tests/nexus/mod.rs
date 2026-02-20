@@ -9,3 +9,4 @@ mod global_commit;
 mod lane_registry;
 mod multilane_pipeline;
 mod multilane_router;
+mod runtime_dataspace_registration_perf;
