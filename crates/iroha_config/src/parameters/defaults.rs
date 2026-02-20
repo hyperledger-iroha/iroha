@@ -1908,6 +1908,34 @@ pub mod nexus {
         pub const MAX_WINDOW_SLOTS: u16 = 16;
     }
 
+    /// Deterministic lane autoscaling defaults.
+    pub mod autoscale {
+        /// Whether consensus-driven lane autoscaling is enabled.
+        pub const ENABLED: bool = false;
+        /// Minimum active lane count.
+        pub const MIN_LANES: u32 = 1;
+        /// Maximum active lane count.
+        pub const MAX_LANES: u32 = 8;
+        /// Target block interval used by the autoscaler (milliseconds).
+        pub const TARGET_BLOCK_MS: u64 = 1_000;
+        /// Scale-out latency ratio threshold versus target block interval.
+        pub const SCALE_OUT_LATENCY_RATIO: f64 = 1.20;
+        /// Scale-in latency ratio threshold versus target block interval.
+        pub const SCALE_IN_LATENCY_RATIO: f64 = 0.80;
+        /// Scale-out utilization ratio threshold.
+        pub const SCALE_OUT_UTILIZATION_RATIO: f64 = 0.85;
+        /// Scale-in utilization ratio threshold.
+        pub const SCALE_IN_UTILIZATION_RATIO: f64 = 0.40;
+        /// Number of recent blocks used for scale-out decisions.
+        pub const SCALE_OUT_WINDOW_BLOCKS: u16 = 32;
+        /// Number of recent blocks used for scale-in decisions.
+        pub const SCALE_IN_WINDOW_BLOCKS: u16 = 96;
+        /// Cooldown period in blocks after every transition.
+        pub const COOLDOWN_BLOCKS: u16 = 64;
+        /// Per-lane target throughput used to compute utilization (tx/s).
+        pub const PER_LANE_TARGET_TPS: u32 = 50;
+    }
+
     /// Commit & proof deadline defaults (Δ window).
     pub mod commit {
         /// Slot-bound deadline for proofs/DA bundles to arrive before a transaction aborts.

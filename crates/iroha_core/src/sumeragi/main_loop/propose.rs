@@ -1970,7 +1970,16 @@ impl Actor {
         let da_enabled = self.runtime_da_enabled();
         let committed_qc = self.latest_committed_qc();
         let precommit_qc = precommit_qc_for_view_change(self.highest_qc, committed_qc);
-        let tracked_height = active_round_height(self.highest_qc, committed_qc, committed_height);
+        let desired_height = active_round_height(self.highest_qc, committed_qc, committed_height);
+        let tracked_height = desired_height.min(committed_height.saturating_add(1));
+        if tracked_height != desired_height {
+            debug!(
+                desired_height,
+                tracked_height,
+                committed_height,
+                "clamping pacemaker active round height to local commit horizon"
+            );
+        }
         let (consensus_mode, _, _) = self.consensus_context_for_height(tracked_height);
         let topology_peers = self.roster_for_live_vote_with_mode(tracked_height, consensus_mode);
         let active_topology_peers = topology_peers.clone();

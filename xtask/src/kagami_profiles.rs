@@ -484,7 +484,7 @@ const PROFILES: &[ProfileSpec] = &[
         slug: "iroha3-testus",
         profile_flag: "iroha3-testus",
         chain_id: "iroha3-testus",
-        min_peers: 4,
+        min_peers: 7,
         requires_seed: true,
         collectors_k: 3,
         collectors_r: 2,
