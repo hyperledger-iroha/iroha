@@ -79,7 +79,7 @@ final class OfflineAuditLoggerTests: XCTestCase {
             invoiceId: "inv-audit",
             platformProof: proof,
             platformSnapshot: nil,
-            senderCertificate: certificate,
+            senderCertificateId: try certificate.certificateId(),
             senderSignature: Data(repeating: 0x01, count: 64)
         )
 

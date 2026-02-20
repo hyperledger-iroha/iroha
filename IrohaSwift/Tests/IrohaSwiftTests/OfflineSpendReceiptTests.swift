@@ -25,7 +25,7 @@ final class OfflineSpendReceiptTests: XCTestCase {
             invoiceId: "inv-001",
             platformProof: proof,
             platformSnapshot: nil,
-            senderCertificate: certificate,
+            senderCertificateId: try certificate.certificateId(),
             senderSignature: Data(repeating: 0, count: 64)
         )
         let withSignature = OfflineSpendReceipt(
@@ -38,7 +38,7 @@ final class OfflineSpendReceiptTests: XCTestCase {
             invoiceId: "inv-001",
             platformProof: proof,
             platformSnapshot: nil,
-            senderCertificate: certificate,
+            senderCertificateId: try certificate.certificateId(),
             senderSignature: Data(repeating: 1, count: 64)
         )
         let snapshot = OfflinePlatformTokenSnapshot(policy: "play_integrity",
@@ -53,7 +53,7 @@ final class OfflineSpendReceiptTests: XCTestCase {
             invoiceId: "inv-001",
             platformProof: proof,
             platformSnapshot: snapshot,
-            senderCertificate: certificate,
+            senderCertificateId: try certificate.certificateId(),
             senderSignature: Data(repeating: 0, count: 64)
         )
 
@@ -131,7 +131,7 @@ final class OfflineSpendReceiptTests: XCTestCase {
             invoiceId: "inv-raw",
             platformProof: proof,
             platformSnapshot: nil,
-            senderCertificate: certificateRaw,
+            senderCertificateId: try certificateRaw.certificateId(),
             senderSignature: Data(repeating: 0x00, count: 64)
         )
         let receiptCanonical = OfflineSpendReceipt(
@@ -144,7 +144,7 @@ final class OfflineSpendReceiptTests: XCTestCase {
             invoiceId: "inv-raw",
             platformProof: proof,
             platformSnapshot: nil,
-            senderCertificate: certificateCanonical,
+            senderCertificateId: try certificateCanonical.certificateId(),
             senderSignature: Data(repeating: 0x00, count: 64)
         )
 

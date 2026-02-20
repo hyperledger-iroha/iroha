@@ -241,6 +241,7 @@ public enum OfflineReceiptBuilder {
         let issuedAt = issuedAtMs ?? timestampMs ?? UInt64(Date().timeIntervalSince1970 * 1000.0)
         try validateAccountId(receiverAccountId, field: "receiver")
         try validateSpendKey(signingKey: signingKey, certificate: senderCertificate)
+        let certificateId = try senderCertificate.certificateId()
         let receipt = OfflineSpendReceipt(
             txId: finalTxId,
             from: senderCertificate.controller,
@@ -251,11 +252,11 @@ public enum OfflineReceiptBuilder {
             invoiceId: invoiceId,
             platformProof: platformProof,
             platformSnapshot: platformSnapshot,
-            senderCertificate: senderCertificate,
+            senderCertificateId: certificateId,
             senderSignature: Data()
         )
         let signed = try receipt.signed(with: signingKey)
-        try validateReceipt(signed, chainId: chainId)
+        try validateReceipt(signed, chainId: chainId, certificate: senderCertificate)
         if let recorder {
             try recorder.appendPending(receipt: signed, timestampMs: timestampMs ?? issuedAt)
         }
@@ -268,7 +269,7 @@ public enum OfflineReceiptBuilder {
         guard !receipts.isEmpty else {
             throw OfflineReceiptBuilderError.emptyReceipts
         }
-        let expectedScale = try expectedScale(for: receipts[0].senderCertificate)
+        let expectedScale = try expectedScale(from: receipts[0].amount)
         var total = OfflineDecimal.zero(scale: expectedScale)
         for receipt in receipts {
             let value = try parseAmount(receipt.amount, expectedScale: expectedScale)
@@ -457,7 +458,53 @@ public enum OfflineReceiptBuilder {
     }
 
     /// Builds an offline transfer bundle and validates receipt invariants.
+    /// Pass `senderCertificate` on the **sender** side where the full
+    /// certificate is available; ``validateTransfer`` uses it for signature
+    /// verification, snapshot metadata, and scale/policy checks.
     public static func buildTransfer(
+        bundleId: Data? = nil,
+        bundleIdSeed: Data? = nil,
+        chainId: String,
+        receiver: String,
+        depositAccount: String,
+        receipts: [OfflineSpendReceipt],
+        balanceProof: OfflineBalanceProof,
+        aggregateProof: OfflineAggregateProofEnvelope? = nil,
+        attachments: OfflineProofAttachmentList? = nil,
+        platformSnapshot: OfflinePlatformTokenSnapshot? = nil,
+        sortReceipts: Bool = true,
+        senderCertificate: OfflineWalletCertificate
+    ) throws -> OfflineToOnlineTransfer {
+        let finalBundleId: Data
+        if let bundleId {
+            finalBundleId = bundleId
+        } else if let seed = bundleIdSeed {
+            finalBundleId = generateBundleId(seed: seed)
+        } else {
+            finalBundleId = generateBundleId()
+        }
+        let orderedReceipts = sortReceipts ? receipts.sorted(by: receiptSort) : receipts
+        let transfer = OfflineToOnlineTransfer(
+            bundleId: finalBundleId,
+            receiver: receiver,
+            depositAccount: depositAccount,
+            receipts: orderedReceipts,
+            balanceProof: balanceProof,
+            aggregateProof: aggregateProof,
+            attachments: attachments,
+            platformSnapshot: platformSnapshot
+        )
+        try validateTransfer(transfer, chainId: chainId, certificate: senderCertificate)
+        return transfer
+    }
+
+    /// Builds an offline transfer bundle using receiver-side validation.
+    ///
+    /// Identical to ``buildTransfer`` but calls ``validateTransferReceiver``
+    /// instead of ``validateTransfer``. Use this when the receipts were
+    /// received via QR and contain only `senderCertificateId` (not the
+    /// full certificate).
+    public static func buildTransferReceiver(
         bundleId: Data? = nil,
         bundleIdSeed: Data? = nil,
         chainId: String,
@@ -489,12 +536,12 @@ public enum OfflineReceiptBuilder {
             attachments: attachments,
             platformSnapshot: platformSnapshot
         )
-        try validateTransfer(transfer, chainId: chainId)
+        try validateTransferReceiver(transfer, chainId: chainId)
         return transfer
     }
 
-    /// Validates a receipt for offline submission.
-    public static func validateReceipt(_ receipt: OfflineSpendReceipt, chainId: String) throws {
+    /// Validates a receipt for offline submission (sender-side, full certificate available).
+    public static func validateReceipt(_ receipt: OfflineSpendReceipt, chainId: String, certificate: OfflineWalletCertificate) throws {
         try validateTxId(receipt.txId)
         if receipt.invoiceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw OfflineReceiptBuilderError.emptyInvoiceId
@@ -506,44 +553,44 @@ public enum OfflineReceiptBuilder {
         } catch {
             throw OfflineReceiptBuilderError.invalidAssetId(receipt.assetId)
         }
-        let expectedScale = try expectedScale(for: receipt.senderCertificate)
+        let expectedScale = try expectedScale(for: certificate)
         let amount = try parseAmount(receipt.amount, expectedScale: expectedScale)
         guard !amount.isNegative, !amount.isZero else {
             throw OfflineReceiptBuilderError.nonPositiveAmount(receipt.amount)
         }
-        try validateReceiptTimestamp(receipt)
-        if receipt.from != receipt.senderCertificate.controller {
+        try validateReceiptTimestamp(receipt, certificate: certificate)
+        if receipt.from != certificate.controller {
             throw OfflineReceiptBuilderError.receiptSenderMismatch
         }
-        if receipt.assetId != receipt.senderCertificate.allowance.assetId {
+        if receipt.assetId != certificate.allowance.assetId {
             throw OfflineReceiptBuilderError.receiptAssetMismatch
         }
-        let policyMax = try parseAmount(receipt.senderCertificate.policy.maxTxValue,
+        let policyMax = try parseAmount(certificate.policy.maxTxValue,
                                         expectedScale: expectedScale)
         if amount.compare(to: policyMax) == .orderedDescending {
             throw OfflineReceiptBuilderError.amountExceedsPolicy(amount: receipt.amount,
-                                                                max: receipt.senderCertificate.policy.maxTxValue)
+                                                                max: certificate.policy.maxTxValue)
         }
         guard !receipt.senderSignature.isEmpty else {
             throw OfflineReceiptBuilderError.missingSenderSignature
         }
-        try verifyReceiptSignature(receipt)
-        try validateSnapshot(receipt.platformSnapshot, metadata: receipt.senderCertificate.metadata)
+        try verifyReceiptSignature(receipt, spendPublicKey: certificate.spendPublicKey)
+        try validateSnapshot(receipt.platformSnapshot, metadata: certificate.metadata)
         try validatePlatformProof(receipt, chainId: chainId)
     }
 
-    private static func validateReceiptTimestamp(_ receipt: OfflineSpendReceipt) throws {
+    private static func validateReceiptTimestamp(_ receipt: OfflineSpendReceipt, certificate: OfflineWalletCertificate) throws {
         let issuedAtMs = receipt.issuedAtMs
         if issuedAtMs == 0 {
             throw OfflineReceiptBuilderError.invalidReceiptTimestamp("issued_at_ms must be > 0")
         }
-        if issuedAtMs < receipt.senderCertificate.issuedAtMs {
+        if issuedAtMs < certificate.issuedAtMs {
             throw OfflineReceiptBuilderError.invalidReceiptTimestamp(
                 "issued_at_ms predates certificate issuance"
             )
         }
-        let expiryBound = min(receipt.senderCertificate.expiresAtMs,
-                              receipt.senderCertificate.policy.expiresAtMs)
+        let expiryBound = min(certificate.expiresAtMs,
+                              certificate.policy.expiresAtMs)
         if issuedAtMs > expiryBound {
             throw OfflineReceiptBuilderError.invalidReceiptTimestamp(
                 "issued_at_ms exceeds certificate/policy expiry"
@@ -551,8 +598,8 @@ public enum OfflineReceiptBuilder {
         }
     }
 
-    /// Validates a transfer bundle before submission.
-    public static func validateTransfer(_ transfer: OfflineToOnlineTransfer, chainId: String) throws {
+    /// Validates a transfer bundle before submission (sender-side, full certificate available).
+    public static func validateTransfer(_ transfer: OfflineToOnlineTransfer, chainId: String, certificate: OfflineWalletCertificate) throws {
         try validateBundleId(transfer.bundleId)
         try validateAccountId(transfer.receiver, field: "receiver")
         try validateAccountId(transfer.depositAccount, field: "depositAccount")
@@ -563,12 +610,12 @@ public enum OfflineReceiptBuilder {
             throw OfflineReceiptBuilderError.receiptOrderInvalid
         }
         let first = transfer.receipts[0]
-        try validateSnapshot(transfer.platformSnapshot, metadata: first.senderCertificate.metadata)
+        try validateSnapshot(transfer.platformSnapshot, metadata: certificate.metadata)
         let expectedScope = try counterScope(for: first)
-        let expectedCertificateId = try first.senderCertificate.certificateId()
-        let expectedAssetId = first.senderCertificate.allowance.assetId
-        let expectedScale = try expectedScale(for: first.senderCertificate)
-        let policyMax = try parseAmount(first.senderCertificate.policy.maxTxValue,
+        let expectedCertificateId = try certificate.certificateId()
+        let expectedAssetId = certificate.allowance.assetId
+        let expectedScale = try expectedScale(for: certificate)
+        let policyMax = try parseAmount(certificate.policy.maxTxValue,
                                         expectedScale: expectedScale)
         let expectedSum = try aggregateAmount(receipts: transfer.receipts)
         let claimed = try parseAmount(transfer.balanceProof.claimedDelta,
@@ -603,21 +650,20 @@ public enum OfflineReceiptBuilder {
 
         var invoiceIds = Set<String>()
         for receipt in transfer.receipts {
-            try validateReceipt(receipt, chainId: chainId)
+            try validateReceipt(receipt, chainId: chainId, certificate: certificate)
             if !invoiceIds.insert(receipt.invoiceId).inserted {
                 throw OfflineReceiptBuilderError.duplicateInvoiceId(receipt.invoiceId)
             }
             if receipt.to != transfer.receiver {
                 throw OfflineReceiptBuilderError.receiptReceiverMismatch
             }
-            if receipt.from != first.senderCertificate.controller {
+            if receipt.from != certificate.controller {
                 throw OfflineReceiptBuilderError.receiptSenderMismatch
             }
             if receipt.assetId != expectedAssetId {
                 throw OfflineReceiptBuilderError.receiptAssetMismatch
             }
-            let certId = try receipt.senderCertificate.certificateId()
-            if certId != expectedCertificateId {
+            if receipt.senderCertificateId != expectedCertificateId {
                 throw OfflineReceiptBuilderError.receiptCertificateMismatch
             }
             let amount = try parseAmount(receipt.amount, expectedScale: expectedScale)
@@ -626,7 +672,133 @@ public enum OfflineReceiptBuilder {
             }
             if amount.compare(to: policyMax) == .orderedDescending {
                 throw OfflineReceiptBuilderError.amountExceedsPolicy(amount: receipt.amount,
-                                                                    max: first.senderCertificate.policy.maxTxValue)
+                                                                    max: certificate.policy.maxTxValue)
+            }
+            let scope = try counterScope(for: receipt)
+            if scope != expectedScope {
+                throw OfflineReceiptBuilderError.mixedCounterScopes
+            }
+        }
+        try validateAggregateProof(transfer)
+    }
+
+    // MARK: - Receiver-side validation (sender_certificate_id only)
+
+    /// Validates a receipt on the receiver side where only the 32-byte
+    /// `senderCertificateId` hash is available (not the full certificate).
+    ///
+    /// Runs every check from ``validateReceipt`` **except**:
+    /// - `verifyReceiptSignature` — requires the real `spendPublicKey`
+    /// - `validateSnapshot` — requires certificate `metadata` dict
+    ///
+    /// The Iroha server performs full validation (including signature
+    /// verification) at settlement, resolving the certificate from the
+    /// ledger by `sender_certificate_id`.
+    public static func validateReceiptReceiver(_ receipt: OfflineSpendReceipt, chainId: String) throws {
+        try validateTxId(receipt.txId)
+        if receipt.invoiceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw OfflineReceiptBuilderError.emptyInvoiceId
+        }
+        try validateAccountId(receipt.from, field: "sender")
+        try validateAccountId(receipt.to, field: "receiver")
+        do {
+            _ = try OfflineNorito.encodeAssetId(receipt.assetId)
+        } catch {
+            throw OfflineReceiptBuilderError.invalidAssetId(receipt.assetId)
+        }
+        let amount = try parseAmount(receipt.amount)
+        guard !amount.isNegative, !amount.isZero else {
+            throw OfflineReceiptBuilderError.nonPositiveAmount(receipt.amount)
+        }
+        // Timestamp: only check > 0 (no cert issuance/expiry info on receiver side)
+        if receipt.issuedAtMs == 0 {
+            throw OfflineReceiptBuilderError.invalidReceiptTimestamp("issued_at_ms must be > 0")
+        }
+        guard !receipt.senderSignature.isEmpty else {
+            throw OfflineReceiptBuilderError.missingSenderSignature
+        }
+        // verifyReceiptSignature — skipped: receiver only has certificate ID
+        // hash, not the real spendPublicKey. Server verifies at settlement.
+        // validateSnapshot — skipped: no certificate metadata on receiver side.
+        try validatePlatformProof(receipt, chainId: chainId)
+    }
+
+    /// Validates a transfer bundle on the receiver side where only the 32-byte
+    /// `senderCertificateId` hash is available (not the full certificate).
+    ///
+    /// Runs every check from ``validateTransfer`` **except**:
+    /// - Signature verification (delegated to server)
+    /// - Snapshot metadata checks (stub has no metadata)
+    /// - Cross-receipt ``certificateId()`` consistency — replaced with direct
+    ///   comparison of ``senderCertificateId`` (the real 32-byte wire hash)
+    public static func validateTransferReceiver(_ transfer: OfflineToOnlineTransfer, chainId: String) throws {
+        try validateBundleId(transfer.bundleId)
+        try validateAccountId(transfer.receiver, field: "receiver")
+        try validateAccountId(transfer.depositAccount, field: "depositAccount")
+        guard !transfer.receipts.isEmpty else {
+            throw OfflineReceiptBuilderError.emptyReceipts
+        }
+        guard receiptsAreCanonical(transfer.receipts) else {
+            throw OfflineReceiptBuilderError.receiptOrderInvalid
+        }
+        let first = transfer.receipts[0]
+        // Transfer-level validateSnapshot skipped — no certificate metadata on receiver side.
+        let expectedScope = try counterScope(for: first)
+        let expectedCertificateId = first.senderCertificateId
+        let expectedAssetId = first.assetId
+        let expectedScale = try expectedScale(from: first.amount)
+        let expectedSum = try aggregateAmount(receipts: transfer.receipts)
+        let claimed = try parseAmount(transfer.balanceProof.claimedDelta,
+                                      expectedScale: expectedScale)
+
+        try validateCommitmentLength(transfer.balanceProof.initialCommitment.commitment)
+        try validateResultingCommitmentLength(transfer.balanceProof.resultingCommitment)
+        guard let proof = transfer.balanceProof.zkProof, !proof.isEmpty else {
+            throw OfflineReceiptBuilderError.missingBalanceProof
+        }
+        if proof.count != OfflineBalanceProofBuilder.proofLength {
+            throw OfflineReceiptBuilderError.invalidBalanceProofLength(
+                expected: OfflineBalanceProofBuilder.proofLength,
+                actual: proof.count
+            )
+        }
+        if proof.first != 1 {
+            throw OfflineReceiptBuilderError.unsupportedBalanceProofVersion(proof.first ?? 0)
+        }
+        if transfer.balanceProof.initialCommitment.assetId != expectedAssetId {
+            throw OfflineReceiptBuilderError.balanceProofAssetMismatch
+        }
+        _ = try parseAmount(transfer.balanceProof.initialCommitment.amount,
+                            expectedScale: expectedScale)
+        guard !claimed.isNegative, !claimed.isZero else {
+            throw OfflineReceiptBuilderError.nonPositiveAmount(transfer.balanceProof.claimedDelta)
+        }
+        if !claimed.equals(expected: expectedSum) {
+            throw OfflineReceiptBuilderError.claimedDeltaMismatch(expected: expectedSum,
+                                                                 actual: transfer.balanceProof.claimedDelta)
+        }
+
+        var invoiceIds = Set<String>()
+        for receipt in transfer.receipts {
+            try validateReceiptReceiver(receipt, chainId: chainId)
+            if !invoiceIds.insert(receipt.invoiceId).inserted {
+                throw OfflineReceiptBuilderError.duplicateInvoiceId(receipt.invoiceId)
+            }
+            if receipt.to != transfer.receiver {
+                throw OfflineReceiptBuilderError.receiptReceiverMismatch
+            }
+            if receipt.from != first.from {
+                throw OfflineReceiptBuilderError.receiptSenderMismatch
+            }
+            if receipt.assetId != expectedAssetId {
+                throw OfflineReceiptBuilderError.receiptAssetMismatch
+            }
+            if receipt.senderCertificateId != expectedCertificateId {
+                throw OfflineReceiptBuilderError.receiptCertificateMismatch
+            }
+            let amount = try parseAmount(receipt.amount, expectedScale: expectedScale)
+            guard !amount.isNegative, !amount.isZero else {
+                throw OfflineReceiptBuilderError.nonPositiveAmount(receipt.amount)
             }
             let scope = try counterScope(for: receipt)
             if scope != expectedScope {
@@ -845,8 +1017,8 @@ public enum OfflineReceiptBuilder {
         return out
     }
 
-    private static func verifyReceiptSignature(_ receipt: OfflineSpendReceipt) throws {
-        let spendKey = try parseSpendPublicKey(receipt.senderCertificate.spendPublicKey)
+    private static func verifyReceiptSignature(_ receipt: OfflineSpendReceipt, spendPublicKey: String) throws {
+        let spendKey = try parseSpendPublicKey(spendPublicKey)
         let payload = try receipt.signingBytes()
         let signature = receipt.senderSignature
         switch spendKey.algorithm {
@@ -1052,6 +1224,13 @@ public enum OfflineReceiptBuilder {
         _ = try parseAmount(certificate.policy.maxBalance, expectedScale: expected)
         _ = try parseAmount(certificate.policy.maxTxValue, expectedScale: expected)
         return expected
+    }
+
+    /// Derives the expected decimal scale directly from an amount string.
+    /// Used on the receiver side where the full certificate is unavailable.
+    private static func expectedScale(from amount: String) throws -> Int {
+        let parsed = try parseAmount(amount)
+        return parsed.scale
     }
 
     private static func parseAmount(_ value: String, expectedScale: Int? = nil) throws -> OfflineDecimal {
