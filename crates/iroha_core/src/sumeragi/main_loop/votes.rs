@@ -2266,6 +2266,9 @@ impl Actor {
         if height > committed_height.saturating_add(1) {
             return Vec::new();
         }
+        if let Some(pending) = self.pending_activation_roster_for_height(height, consensus_mode) {
+            return pending;
+        }
         let world = self.state.world_view();
         let commit_topology = self.state.commit_topology_snapshot();
         self.active_topology_with_genesis_fallback_from_world(
@@ -2348,6 +2351,12 @@ impl Actor {
                 committed_height,
                 consensus_mode,
             );
+            if height == committed_height.saturating_add(1)
+                && let Some(pending) =
+                    self.pending_activation_roster_for_height(height, consensus_mode)
+            {
+                active = pending;
+            }
             if !active.is_empty() {
                 if let Some(selection) = roster_selection() {
                     if !selection.roster.is_empty() {
@@ -2382,6 +2391,27 @@ impl Actor {
             return Vec::new();
         }
         canonicalize(active)
+    }
+
+    fn pending_activation_roster_for_height(
+        &self,
+        height: u64,
+        consensus_mode: ConsensusMode,
+    ) -> Option<Vec<PeerId>> {
+        let (activate_at, roster) = self.pending_roster_activation.as_ref()?;
+        if height < *activate_at {
+            return None;
+        }
+        let filtered = {
+            let world = self.state.world_view();
+            super::roster::filter_roster_with_live_consensus_keys_at_height_world(
+                &world,
+                roster.clone(),
+                height,
+            )
+        };
+        let canonical = super::roster::canonicalize_roster_for_mode(filtered, consensus_mode);
+        (!canonical.is_empty()).then_some(canonical)
     }
 
     pub(super) fn roster_for_new_view_with_mode(
