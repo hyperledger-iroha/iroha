@@ -6232,6 +6232,51 @@ async fn block_sync_update_accepts_signature_mismatch_with_commit_qc() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn validation_accepts_signature_mismatch_for_non_validator_with_commit_qc() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let block_height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1)
+        .max(1);
+    let block_view = 0_u64;
+    let local_peer = actor.common_config.peer.id().clone();
+    let mut commit_roster = actor.effective_commit_topology();
+    commit_roster.retain(|peer| peer != &local_peer);
+    assert!(
+        !commit_roster.is_empty(),
+        "test requires a non-empty commit roster after excluding local peer"
+    );
+    assert!(
+        !commit_roster.iter().any(|peer| peer == &local_peer),
+        "test requires local peer to be absent from commit roster"
+    );
+    let block = sample_block(block_height, block_view, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+
+    let mut pending = PendingBlock::new(block, payload_hash, block_height, block_view);
+    pending.commit_qc_seen = true;
+    let err = crate::block::BlockValidationError::SignatureVerification(
+        crate::block::SignatureVerificationError::UnknownSignature,
+    );
+    let outcome = actor.should_accept_observer_signature_mismatch_with_commit_qc(
+        block_hash,
+        &pending,
+        &commit_roster,
+        &err,
+    );
+    assert!(
+        outcome,
+        "signature mismatch should be tolerated for non-validator peers once commit QC evidence exists"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_defers_while_pending_processing() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -12228,6 +12273,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
         qc_signers: None,
         commit_qc: None,
         allow_quorum_bypass: false,
+        allow_signature_index_recovery: false,
         persist_required: true,
         events_sender: actor.events_sender.clone(),
     };
@@ -12384,6 +12430,7 @@ async fn commit_outcome_seeds_genesis_commit_roster_after_commit() {
         qc_signers: None,
         commit_qc: None,
         allow_quorum_bypass: false,
+        allow_signature_index_recovery: false,
         persist_required: true,
         events_sender: actor.events_sender.clone(),
     };
@@ -13918,6 +13965,38 @@ async fn rbc_ready_rebroadcast_skips_on_roster_hash_mismatch() {
     assert!(
         harness.background_rx.try_iter().next().is_none(),
         "expected READY rebroadcast to be skipped on roster hash mismatch"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_ready_bundle_uses_recorded_ready_roster_hash() {
+    let mut harness = test_actor_harness(4).await;
+    let key = session_key();
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0).expect("session");
+
+    let roster = harness.actor.effective_commit_topology();
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+    let recorded_hash = roster_hash(&roster);
+    assert!(session.record_ready_with_roster_hash(0, vec![0xAA], recorded_hash));
+
+    let fallback_hash = Hash::new(b"fallback-rbc-ready-roster-hash");
+    assert_ne!(
+        recorded_hash, fallback_hash,
+        "fallback hash should differ from recorded hash"
+    );
+
+    let readies = Actor::rbc_ready_bundle(key, &session, fallback_hash).expect("readies");
+    assert_eq!(readies.len(), 1);
+    assert_eq!(
+        readies[0].roster_hash, recorded_hash,
+        "rebroadcast should keep the roster hash used when signatures were recorded"
     );
 
     harness.shutdown.send();
@@ -16440,6 +16519,160 @@ async fn npos_qc_uses_active_validator_roster_for_stake_quorum() {
             .qc_cache
             .contains_key(&(Phase::Commit, block_hash, height, view, epoch)),
         "QC should aggregate using active validator roster for stake quorum"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn npos_qc_uses_pending_activation_roster_for_stake_quorum() {
+    let phase = Phase::Prepare;
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = u64::try_from(actor.state.committed_height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0;
+    let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    assert!(
+        matches!(consensus_mode, ConsensusMode::Npos),
+        "test expects NPoS consensus"
+    );
+    let commit_topology = actor.effective_commit_topology();
+    assert!(commit_topology.len() >= 4, "test requires 4 trusted peers");
+    let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let pending_roster = super::roster::canonicalize_roster_for_mode(
+        vec![commit_topology[0].clone(), commit_topology[1].clone()],
+        consensus_mode,
+    );
+    actor.pending_roster_activation = Some((height, pending_roster.clone()));
+
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let block_signer_peer = pending_roster
+        .first()
+        .expect("pending activation roster must have a signer");
+    let block_signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == block_signer_peer.public_key())
+        .expect("block signer keypair exists in harness");
+    let block_signer_idx = signature_topology
+        .position(block_signer_kp.public_key())
+        .expect("block signer index in signature topology");
+    let block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        height,
+        view,
+        Some(parent_hash),
+        block_signer_kp,
+        u64::try_from(block_signer_idx).expect("signer index fits u64"),
+    );
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+    assert_eq!(
+        actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode),
+        pending_roster,
+        "commit vote roster should switch to pending activation at next height",
+    );
+
+    let pending_set: BTreeSet<_> = pending_roster.iter().cloned().collect();
+    let mut signer_indices = Vec::new();
+    for (idx, peer) in signature_topology.as_ref().iter().enumerate() {
+        if pending_set.contains(peer) {
+            signer_indices.push(u32::try_from(idx).expect("signer index fits u32"));
+        }
+    }
+    assert_eq!(
+        signer_indices.len(),
+        2,
+        "pending activation validators should map into signature topology"
+    );
+
+    let chain = actor.common_config.chain.clone();
+    for signer in signer_indices {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer,
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_view_with_seed(
+            &mut vote,
+            &chain,
+            &topology,
+            &harness.key_pairs,
+            mode_tag,
+            prf_seed,
+        );
+        actor
+            .vote_log
+            .insert((phase, height, view, epoch, signer), vote);
+    }
+
+    let signers =
+        actor.qc_signers_for_votes(phase, block_hash, height, view, epoch, &signature_topology);
+    let signer_peers = super::signer_peers_for_topology(&signers, &signature_topology)
+        .expect("vote signers should map to peers");
+    let pending_set: BTreeSet<_> = pending_roster.iter().cloned().collect();
+    assert_eq!(
+        signer_peers, pending_set,
+        "cached votes should come from pending activation validators"
+    );
+    assert!(
+        super::stake_snapshot::stake_quorum_reached_for_world(
+            &actor.state.world_view(),
+            &pending_roster,
+            &signer_peers,
+        )
+        .expect("stake quorum check should evaluate"),
+        "pending activation validators should satisfy NPoS stake quorum"
+    );
+
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let observed_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let observed_roster = super::roster::canonicalize_roster_for_mode(
+        actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode),
+        consensus_mode,
+    );
+    let observed_signer_peers = super::signer_peers_for_topology(&signers, &observed_topology)
+        .expect("vote signers should map during post-vote check");
+    assert!(
+        super::stake_snapshot::stake_quorum_reached_for_world(
+            &actor.state.world_view(),
+            &observed_roster,
+            &observed_signer_peers,
+        )
+        .expect("observed stake quorum should evaluate"),
+        "stake quorum should hold for the roster used during QC aggregation",
+    );
+
+    actor.locked_qc = None;
+    actor.try_form_qc_from_votes(phase, block_hash, height, view, epoch, &topology);
+
+    let key = (phase, block_hash, height, view, epoch);
+    let qc = actor.qc_cache.get(&key).expect(
+        "QC should aggregate when signers satisfy stake quorum over pending activation roster",
+    );
+    assert_eq!(
+        qc.validator_set, pending_roster,
+        "aggregated QC must encode the pending activation roster used for voting"
     );
 
     harness.shutdown.send();
@@ -45490,6 +45723,50 @@ async fn live_vote_roster_prefers_active_topology() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn live_vote_roster_uses_pending_activation_for_next_height() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let next_height = committed_height.saturating_add(1);
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(next_height);
+
+    let current = actor.effective_commit_topology();
+    assert!(
+        current.len() > 1,
+        "test requires at least two validators in the current topology"
+    );
+    let mut pending = current.clone();
+    pending.pop();
+    assert!(
+        !pending.is_empty(),
+        "pending activation roster should remain non-empty"
+    );
+    actor.pending_roster_activation = Some((next_height, pending.clone()));
+
+    let live = actor.roster_for_live_vote_with_mode(next_height, consensus_mode);
+    let expected = super::roster::canonicalize_roster_for_mode(pending.clone(), consensus_mode);
+    assert_eq!(
+        live, expected,
+        "live vote roster should switch to pending activation at the activation height"
+    );
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA8; Hash::LENGTH]));
+    let vote_roster = actor.roster_for_vote_with_mode(block_hash, next_height, 0, consensus_mode);
+    assert_eq!(
+        vote_roster, expected,
+        "vote roster should also use pending activation for the next committed height"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_qc_roll_forward_prefers_active_roster_when_keys_disabled() {
     use crate::sumeragi::status;
     use iroha_data_model::consensus::ConsensusKeyStatus;
@@ -61088,6 +61365,100 @@ async fn block_sync_update_uses_nonextending_commit_qc_hint_for_lock_realign() {
     assert_eq!(locked.subject_block_hash, block_hash);
 
     super::status::set_locked_qc(0, 0, None);
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_does_not_advance_qc_for_unvalidated_payload() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(u64::MAX);
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let topology_peers = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(topology_peers);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let signer_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("signature topology has a signer");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair");
+    let signer_idx = signature_topology
+        .position(signer_peer.public_key())
+        .expect("signer index");
+    let mismatched_idx = (signer_idx + 1) % signature_topology.as_ref().len();
+    assert_ne!(
+        signer_idx, mismatched_idx,
+        "test requires at least two validators"
+    );
+
+    let block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        height,
+        view,
+        Some(genesis_hash),
+        signer_kp,
+        u64::try_from(mismatched_idx).expect("signer index fits u64"),
+    );
+    let block_hash = block.hash();
+
+    let required = signature_topology.min_votes_for_commit().max(1);
+    let signers: BTreeSet<ValidatorIndex> = signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .take(required)
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_qc = Some(qc);
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+    drain_known_block_qc_work(actor);
+
+    assert!(
+        !actor.block_known_for_lock(block_hash),
+        "mismatched payload signature must remain unvalidated"
+    );
+    assert_ne!(
+        actor
+            .highest_qc
+            .map(|qc| (qc.height, qc.subject_block_hash)),
+        Some((height, block_hash)),
+        "unvalidated block sync payload must not promote incoming QC to highest"
+    );
+    assert_ne!(
+        actor.locked_qc.map(|qc| (qc.height, qc.subject_block_hash)),
+        Some((height, block_hash)),
+        "unvalidated block sync payload must not promote incoming QC to lock"
+    );
+
     harness.shutdown.send();
 }
 

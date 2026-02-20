@@ -2146,12 +2146,25 @@ impl Actor {
                             },
                         );
                         self.note_validated_qc_tally(&qc, tally.clone());
-                        let block_known_for_commit = self.block_known_for_lock(block_hash);
-                        let block_known_for_lock = block_known_after_creation;
+                        let block_known_for_commit =
+                            self.pending
+                                .pending_blocks
+                                .get(&block_hash)
+                                .is_some_and(|pending| {
+                                    !pending.aborted
+                                        && pending.validation_status == ValidationStatus::Valid
+                                })
+                                || self.subsystems.commit.inflight.as_ref().is_some_and(
+                                    |inflight| {
+                                        inflight.block_hash == block_hash
+                                            && !inflight.pending.aborted
+                                    },
+                                )
+                                || self.kura.get_block_height_by_hash(block_hash).is_some();
                         let process_start = Instant::now();
                         let process_ok = self.process_precommit_qc(
                             &qc,
-                            block_known_for_lock,
+                            block_known_for_commit,
                             allow_nonextending_qc,
                         );
                         qc_apply_process_ms =
@@ -3139,9 +3152,23 @@ impl Actor {
             },
         );
         self.note_validated_qc_tally(&qc, tally.clone());
-        let block_known_for_commit = self.block_known_for_lock(block_hash)
-            || self.kura.get_block_height_by_hash(block_hash).is_some();
-        let process_ok = self.process_precommit_qc(&qc, true, true);
+        let block_known_for_commit =
+            self.pending
+                .pending_blocks
+                .get(&block_hash)
+                .is_some_and(|pending| {
+                    !pending.aborted && pending.validation_status == ValidationStatus::Valid
+                })
+                || self
+                    .subsystems
+                    .commit
+                    .inflight
+                    .as_ref()
+                    .is_some_and(|inflight| {
+                        inflight.block_hash == block_hash && !inflight.pending.aborted
+                    })
+                || self.kura.get_block_height_by_hash(block_hash).is_some();
+        let process_ok = self.process_precommit_qc(&qc, block_known_for_commit, true);
         if !process_ok {
             if self.block_sync_qc_is_stale_against_lock(&qc) {
                 debug!(

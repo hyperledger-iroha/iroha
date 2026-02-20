@@ -462,6 +462,25 @@ impl Actor {
                         );
                     }
                 }
+                if self.should_accept_observer_signature_mismatch_with_commit_qc(
+                    hash,
+                    &pending,
+                    commit_topology,
+                    &err,
+                ) {
+                    warn!(
+                        ?err,
+                        height = pending.height,
+                        view = pending.view,
+                        block = %hash,
+                        commit_qc_seen = pending.commit_qc_seen,
+                        has_cached_qc = self.pending_block_has_qc(hash, pending.height, pending.view),
+                        "accepting pending block for commit-only progression despite signature mismatch: local peer outside commit roster"
+                    );
+                    pending.validation_status = ValidationStatus::Valid;
+                    self.pending.pending_blocks.insert(hash, pending);
+                    return ValidationGateOutcome::Valid;
+                }
                 self.finalize_validation_failure(hash, pending, &err)
             }
         }
@@ -585,6 +604,28 @@ impl Actor {
                                     );
                                 }
                             }
+                            if self.should_accept_observer_signature_mismatch_with_commit_qc(
+                                hash,
+                                &pending,
+                                &commit_topology,
+                                &err,
+                            ) {
+                                warn!(
+                                    ?err,
+                                    height = pending.height,
+                                    view = pending.view,
+                                    block = %hash,
+                                    commit_qc_seen = pending.commit_qc_seen,
+                                    has_cached_qc = self
+                                        .pending_block_has_qc(hash, pending.height, pending.view),
+                                    "accepting pending block for commit-only progression despite signature mismatch: local peer outside commit roster"
+                                );
+                                pending.validation_status = ValidationStatus::Valid;
+                                self.pending.pending_blocks.insert(hash, pending);
+                                self.request_commit_pipeline();
+                                progress = true;
+                                continue;
+                            }
                             let _ = self.finalize_validation_failure(hash, pending, &err);
                             self.request_commit_pipeline();
                         }
@@ -633,6 +674,38 @@ impl Actor {
             }
             ValidationStatus::Pending => Ok(pending),
         }
+    }
+
+    pub(super) fn should_accept_observer_signature_mismatch_with_commit_qc(
+        &self,
+        hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+        commit_topology: &[PeerId],
+        err: &BlockValidationError,
+    ) -> bool {
+        let local_in_commit_topology = commit_topology
+            .iter()
+            .any(|peer| peer == self.common_config.peer.id());
+        if local_in_commit_topology {
+            return false;
+        }
+        let signature_mismatch = matches!(
+            err,
+            BlockValidationError::SignatureVerification(
+                crate::block::SignatureVerificationError::UnknownSignature
+                    | crate::block::SignatureVerificationError::UnknownSignatory
+                    | crate::block::SignatureVerificationError::MissingPop
+            )
+        );
+        if !signature_mismatch {
+            return false;
+        }
+        let has_commit_qc =
+            pending.commit_qc_seen || self.pending_block_has_qc(hash, pending.height, pending.view);
+        if !has_commit_qc {
+            return false;
+        }
+        true
     }
 
     fn finalize_validation_failure(

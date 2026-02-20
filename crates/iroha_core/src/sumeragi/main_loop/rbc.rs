@@ -3976,7 +3976,11 @@ impl Actor {
                 }
             }
             let was_valid = !session.is_invalid();
-            let recorded_ready = session.record_ready(ready.sender, ready.signature.clone());
+            let recorded_ready = session.record_ready_with_roster_hash(
+                ready.sender,
+                ready.signature.clone(),
+                ready.roster_hash,
+            );
             ready_count_after = session.ready_signatures.len();
             ready_senders_after = session
                 .ready_signatures
@@ -4792,7 +4796,7 @@ impl Actor {
                 }
             }
             for (sender, signature) in ready_to_record {
-                session.record_ready(sender, signature);
+                session.record_ready_with_roster_hash(sender, signature, deliver.roster_hash);
             }
             Self::evaluate_rbc_deliver_outcome(
                 deliver_quorum,
