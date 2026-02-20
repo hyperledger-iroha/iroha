@@ -16,7 +16,7 @@ use iroha::data_model::{
     isi::{Log, SetParameter},
     parameter::{
         Parameter,
-        system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+        system::{SumeragiNposParameters, SumeragiParameter},
     },
     prelude::TransactionBuilder,
 };
@@ -128,12 +128,6 @@ async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> R
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos_params.into_custom_parameter(),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::NextMode(SumeragiConsensusMode::Npos),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::ModeActivationHeight(1),
         )));
 
     let Some(network) = sandbox::start_network_async_or_skip(
