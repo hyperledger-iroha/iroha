@@ -1583,6 +1583,51 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - [x] Mirror sakura-storm playback skin parameters into Swift/Android/JS offline QR helpers so preview appearance stays consistent across SDKs (`IrohaSwift/Sources/IrohaSwift/OfflineQrStream.swift`, `java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineQrStream.java`, `javascript/iroha_js/src/offlineQrStream.js`, `javascript/iroha_js/src/index.js`).
 - [x] Publish a short operator runbook with recommended `ecc`/dimension/fps combinations for noisy camera environments (`docs/source/offline_qr_operator_runbook.md`, linked from `docs/source/petal_stream.md`).
 
+35. **SORACLOUD-PLATFORM-MVP — IVM + custom container cloud runtime baseline** (Platform/Runtime, Line: Iroha 3, Owner: Core + Networking WG, Priority: High, Status: 🈺 In Progress, target TBD)
+ - [x] Define and freeze `SoraContainerManifestV1`, `SoraServiceManifestV1`, and `SoraStateBindingV1` Norito schemas (versioned, deterministic, with docs + fixtures). (`crates/iroha_data_model/src/soracloud.rs`, `crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs`, `fixtures/soracloud/*.json`, `docs/source/soracloud/manifest_schemas.md`)
+ - [x] Add deterministic deployment-bundle admission validation (`SoraDeploymentBundleV1`) to bind container hash/schema, enforce mutable-state capability policy, and require public-route health probes (`crates/iroha_data_model/src/soracloud.rs`, `fixtures/soracloud/sora_deployment_bundle_v1.json`).
+ - [ ] Implement Sora Container Runtime (SCR) host integration (no Docker): process sandbox, capability policy, deterministic admission, resource limits, lifecycle hooks.
+ - [ ] Implement service registry + routing control-plane (deploy/status/upgrade/rollback) with signed manifests and audit events.
+ - [ ] Implement deterministic state-binding guardrails so SCR services can only mutate canonical state through IVM-governed bindings.
+ - [x] Add `iroha app soracloud` CLI baseline (`init`, `deploy`, `status`, `upgrade`, `rollback`) with machine-readable output and deterministic local registry/audit simulation (`crates/iroha_cli/src/soracloud.rs`, wired in `crates/iroha_cli/src/main_shared.rs`, with unit coverage).
+ - [x] Extend `iroha app soracloud` with network-backed integration tests against live control-plane endpoints (`integration_tests/tests/iroha_cli.rs`: `soracloud_status_uses_live_torii_control_plane`; validates live Torii-backed JSON snapshot fields through CLI `--torii-url` mode).
+ - [x] Add telemetry and `/v1/soracloud/*` status surfaces (service health, routing, resource pressure, failed admissions) via `GET /v1/soracloud/status` in Torii with telemetry-profile gating, token/rate-limit enforcement, and machine-readable JSON/Norito negotiation (`crates/iroha_torii/src/lib.rs` + `crates/iroha_cli/src/soracloud.rs` network mode).
+
+36. **SORACLOUD-WEB-FOUNDATION — Static + dynamic web frameworks** (DevEx/Web, Line: Iroha 3, Owner: SDK + SoraFS WG, Priority: High, Status: 🈺 In Progress, target TBD)
+ - [ ] Ship `sora init site` template (Vue3/Vite static SPA) with SoraFS publish + SoraDNS binding workflow.
+ - [ ] Ship `sora init webapp` template (Vue3 SPA + API service on SCR) with auth/session + chain identity integration.
+ - [ ] Implement zero-downtime rollout primitives (canary %, health gates, rollback handles) for site + API bundles.
+ - [ ] Add framework docs/runbooks for Vue3 SPA + API deployment and production operations.
+ - [ ] Add end-to-end integration tests: build Vue3 app, deploy static site, deploy API, bind route, assert upgrade/rollback correctness.
+
+37. **SORACLOUD-AI-APARTMENTS — Persistent agent runtime with wallet/key control** (AI/Runtime, Line: Iroha 3, Owner: AI Platform WG, Priority: High, Status: 🈺 In Progress, target TBD)
+ - [ ] Define `AgentApartmentManifestV1` (tool caps, policy caps, spend limits, state quota, network egress policy, upgrade policy).
+ - [ ] Implement long-lived agent apartment scheduler on SCR with restart semantics, persistent memory/state bindings, and lease model.
+ - [ ] Implement wallet/key policy engine (scoped capabilities, transaction guardrails, spend approvals, revocation).
+ - [ ] Implement multi-agent messaging + mailbox queues with deterministic policy checks and audit traces.
+ - [ ] Add safety controls for autonomous software build/run loops (artifact allowlists, provenance checks, execution budget ceilings).
+ - [ ] Add integration tests for autonomous agent lifecycle, wallet operations under policy, and recovery after node churn.
+
+38. **SORACLOUD-FHE-PRIVATE-DATA — FHE-first private state and compute** (Privacy/Crypto, Line: Iroha 3, Owner: Crypto + Core WG, Priority: High, Status: 🈺 In Progress, target TBD)
+ - [ ] Define FHE parameter governance model (`fhe_param_set`, versioning, activation/deprecation/withdraw) and deterministic execution policy.
+ - [ ] Implement ciphertext-native state model (public metadata + encrypted payloads + commitments) and `SecretEnvelopeV1`.
+ - [ ] Implement `FheJobSpecV1` admission/execution path and deterministic validator-side ciphertext operations where applicable.
+ - [ ] Implement decryption authority model (client-held keys and/or threshold decryption service) with strict policy gating and auditability.
+ - [ ] Add privacy-preserving query interfaces (ciphertext queries, proof-carrying results, disclosure-minimized metadata).
+ - [ ] Add conformance suite: plaintext non-disclosure guarantees, deterministic FHE execution parity, and policy enforcement regressions.
+
+39. **SORACLOUD-HEALTH-DATA-PACK — Regulated private workload framework** (Vertical/Compliance, Line: Iroha 3, Owner: Compliance + SDK WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
+ - [ ] Ship `sora init health-app` framework with private schema presets, consent policy templates, and retention/deletion workflows.
+ - [ ] Implement access consent + break-glass policy primitives with immutable audit trails and jurisdiction tags.
+ - [ ] Add compliance telemetry/report pack (access logs, consent evidence, data-flow attestations, policy diff history).
+ - [ ] Add privacy/security test matrix for health workloads (least-privilege, unauthorized-access rejection, evidence completeness).
+
+40. **SORACLOUD-MODEL-TRAINING — Distributed training + weight lifecycle** (AI/ML Infra, Line: Iroha 3, Owner: AI Platform + Storage WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
+ - [ ] Implement distributed training job orchestration on SCR (worker groups, checkpointing, retry semantics, cost metering).
+ - [ ] Implement model/weight registry (version lineage, signatures, promotion gates, rollback).
+ - [ ] Implement secure artifact pipeline (dataset refs, training config hash, reproducibility metadata, provenance attestations).
+ - [ ] Add integration benchmarks for training throughput, checkpoint recovery, and deterministic promotion policy enforcement.
+
 ## TODO Inventory (Repo Scan 2026-01-30)
 
 This appendix tracks open TODO markers discovered in the repository. Items are grouped by area. Reference-only TODO mentions are called out separately so they do not get mistaken for active work items.
