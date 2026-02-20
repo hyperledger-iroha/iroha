@@ -35,11 +35,14 @@ use iroha::{
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
+use iroha_crypto::PrivateKey;
 use iroha_executor_data_model::permission::{
     asset::CanTransferAssetWithDefinition, asset_definition::CanRegisterAssetDefinition,
 };
 use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
-use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+use iroha_test_samples::{
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+};
 use norito::json::Value as JsonValue;
 use toml::{Table, Value as TomlValue};
 
@@ -58,6 +61,7 @@ const VALIDATOR_STAKE: u64 = 2_000;
 const STAKE_ASSET_ID: &str = "xor#nexus";
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const SOAK_ITERATIONS: usize = 10;
 
 fn localnet_builder() -> NetworkBuilder {
     let gas_account_str = format!("{}@ivm", SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key());
@@ -485,13 +489,156 @@ fn wait_for_active_lane_validators(
     ))
 }
 
+fn leader_or_highest_height_peer_index(
+    network: &sandbox::SerializedNetwork,
+    status_client: &Client,
+) -> usize {
+    let peers = network.peers();
+    if peers.is_empty() {
+        return 0;
+    }
+
+    if let Ok(status) = status_client.get_sumeragi_status_wire() {
+        if let Ok(index) = usize::try_from(status.leader_index) {
+            if index < peers.len() {
+                return index;
+            }
+        }
+    }
+
+    peers
+        .iter()
+        .enumerate()
+        .fold((0usize, 0u64), |best, (index, peer)| {
+            let observed_height = peer
+                .client()
+                .get_sumeragi_status_wire()
+                .map(|status| status.commit_qc.height)
+                .unwrap_or(0);
+            if observed_height >= best.1 {
+                (index, observed_height)
+            } else {
+                best
+            }
+        })
+        .0
+}
+
+fn leader_targeted_client_for_account(
+    network: &sandbox::SerializedNetwork,
+    status_client: &Client,
+    account_id: &AccountId,
+    private_key: &PrivateKey,
+) -> Client {
+    let index = leader_or_highest_height_peer_index(network, status_client);
+    network.peers()[index].client_for(account_id, private_key.clone())
+}
+
+fn duration_min_avg_max_secs(samples: &[Duration]) -> Option<(f64, f64, f64)> {
+    let mut iter = samples.iter();
+    let first = iter.next()?;
+    let mut min = first.as_secs_f64();
+    let mut max = min;
+    let mut total = min;
+    let mut count = 1usize;
+    for sample in iter {
+        let secs = sample.as_secs_f64();
+        min = min.min(secs);
+        max = max.max(secs);
+        total += secs;
+        count += 1;
+    }
+    Some((min, total / count as f64, max))
+}
+
+struct PhaseTimings {
+    test_name: &'static str,
+    started: Instant,
+    phases: Vec<(String, Duration)>,
+    summary_emitted: bool,
+}
+
+impl PhaseTimings {
+    fn new(test_name: &'static str) -> Self {
+        Self {
+            test_name,
+            started: Instant::now(),
+            phases: Vec::new(),
+            summary_emitted: false,
+        }
+    }
+
+    fn phase<'a>(&'a mut self, label: impl Into<String>) -> PhaseGuard<'a> {
+        PhaseGuard {
+            timings: self,
+            label: label.into(),
+            started: Instant::now(),
+        }
+    }
+
+    fn emit_summary(&mut self) {
+        if self.summary_emitted || self.phases.is_empty() {
+            return;
+        }
+        self.summary_emitted = true;
+        let total = self.started.elapsed();
+        let total_secs = total.as_secs_f64();
+        eprintln!("[phase-timer] summary for {}:", self.test_name);
+        for (index, (phase, duration)) in self.phases.iter().enumerate() {
+            let secs = duration.as_secs_f64();
+            let pct = if total_secs > 0.0 {
+                100.0 * secs / total_secs
+            } else {
+                0.0
+            };
+            eprintln!(
+                "[phase-timer] {:02}. {:<50} {:>8.3}s ({:>5.1}%)",
+                index + 1,
+                phase,
+                secs,
+                pct
+            );
+        }
+        eprintln!("[phase-timer] total{:>57.3}s", total.as_secs_f64());
+    }
+}
+
+impl Drop for PhaseTimings {
+    fn drop(&mut self) {
+        self.emit_summary();
+    }
+}
+
+struct PhaseGuard<'a> {
+    timings: &'a mut PhaseTimings,
+    label: String,
+    started: Instant,
+}
+
+impl Drop for PhaseGuard<'_> {
+    fn drop(&mut self) {
+        let elapsed = self.started.elapsed();
+        eprintln!(
+            "[phase-timer] {}: {:.3}s",
+            self.label,
+            elapsed.as_secs_f64()
+        );
+        self.timings.phases.push((self.label.clone(), elapsed));
+    }
+}
+
 #[test]
 fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     let context = stringify!(cross_dataspace_atomic_swap_is_all_or_nothing);
-    let Some((network, _rt)) =
-        sandbox::start_network_blocking_or_skip(localnet_builder(), context)?
-    else {
-        return Ok(());
+    let mut phase_timings = PhaseTimings::new(context);
+    let (network, _rt) = {
+        let _phase = phase_timings.phase("start 12-peer localnet");
+        let Some((network, rt)) =
+            sandbox::start_network_blocking_or_skip(localnet_builder(), context)?
+        else {
+            return Ok(());
+        };
+        (network, rt)
     };
 
     let alice = network.client();
@@ -499,80 +646,92 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         .peer()
         .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
 
-    let peers = network.peers();
-    ensure!(
-        peers.len() == TOTAL_PEERS,
-        "expected {TOTAL_PEERS} peers for cross-dataspace topology, got {}",
-        peers.len()
-    );
-    let validator_domain: DomainId = "nexus".parse().expect("validator domain");
-    let nexus_lane_validators: Vec<AccountId> = peers
-        .iter()
-        .take(VALIDATORS_PER_LANE)
-        .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
-        .collect();
-    let ds1_lane_validators: Vec<AccountId> = peers
-        .iter()
-        .skip(VALIDATORS_PER_LANE)
-        .take(VALIDATORS_PER_LANE)
-        .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
-        .collect();
-    let ds2_lane_validators: Vec<AccountId> = peers
-        .iter()
-        .skip(VALIDATORS_PER_LANE * 2)
-        .take(VALIDATORS_PER_LANE)
-        .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
-        .collect();
-    let mut all_validators = Vec::with_capacity(TOTAL_PEERS);
-    all_validators.extend(nexus_lane_validators.iter().cloned());
-    all_validators.extend(ds1_lane_validators.iter().cloned());
-    all_validators.extend(ds2_lane_validators.iter().cloned());
-    let unique_validators: BTreeSet<_> = all_validators.into_iter().collect();
-    ensure!(
-        unique_validators.len() == TOTAL_PEERS,
-        "validator groups must be disjoint and total {}",
-        TOTAL_PEERS
-    );
-    let expected_nexus_validators: BTreeSet<_> = nexus_lane_validators
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    let expected_ds1_validators: BTreeSet<_> = ds1_lane_validators
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    let expected_ds2_validators: BTreeSet<_> = ds2_lane_validators
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    wait_for_active_lane_validators(
-        &alice,
-        LaneId::new(NEXUS_LANE_INDEX),
-        &expected_nexus_validators,
-        "nexus lane validator activation",
-    )?;
-    wait_for_active_lane_validators(
-        &alice,
-        LaneId::new(DS1_LANE_INDEX),
-        &expected_ds1_validators,
-        "ds1 lane validator activation",
-    )?;
-    wait_for_active_lane_validators(
-        &alice,
-        LaneId::new(DS2_LANE_INDEX),
-        &expected_ds2_validators,
-        "ds2 lane validator activation",
-    )?;
-    let lane_sync_height = alice
-        .get_sumeragi_status_wire()
-        .map_err(|err| eyre!(err))?
-        .commit_qc
-        .height;
-    let _lane_sync_on_bob = wait_for_height(
-        &bob,
-        lane_sync_height,
-        "lane validator activation propagation",
-    )?;
+    let (expected_nexus_validators, expected_ds1_validators, expected_ds2_validators) = {
+        let _phase = phase_timings.phase("derive 4+4+4 lane validator sets");
+        let peers = network.peers();
+        ensure!(
+            peers.len() == TOTAL_PEERS,
+            "expected {TOTAL_PEERS} peers for cross-dataspace topology, got {}",
+            peers.len()
+        );
+        let validator_domain: DomainId = "nexus".parse().expect("validator domain");
+        let nexus_lane_validators: Vec<AccountId> = peers
+            .iter()
+            .take(VALIDATORS_PER_LANE)
+            .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
+            .collect();
+        let ds1_lane_validators: Vec<AccountId> = peers
+            .iter()
+            .skip(VALIDATORS_PER_LANE)
+            .take(VALIDATORS_PER_LANE)
+            .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
+            .collect();
+        let ds2_lane_validators: Vec<AccountId> = peers
+            .iter()
+            .skip(VALIDATORS_PER_LANE * 2)
+            .take(VALIDATORS_PER_LANE)
+            .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
+            .collect();
+        let mut all_validators = Vec::with_capacity(TOTAL_PEERS);
+        all_validators.extend(nexus_lane_validators.iter().cloned());
+        all_validators.extend(ds1_lane_validators.iter().cloned());
+        all_validators.extend(ds2_lane_validators.iter().cloned());
+        let unique_validators: BTreeSet<_> = all_validators.into_iter().collect();
+        ensure!(
+            unique_validators.len() == TOTAL_PEERS,
+            "validator groups must be disjoint and total {}",
+            TOTAL_PEERS
+        );
+        let expected_nexus_validators: BTreeSet<_> = nexus_lane_validators
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let expected_ds1_validators: BTreeSet<_> = ds1_lane_validators
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let expected_ds2_validators: BTreeSet<_> = ds2_lane_validators
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        (
+            expected_nexus_validators,
+            expected_ds1_validators,
+            expected_ds2_validators,
+        )
+    };
+
+    {
+        let _phase = phase_timings.phase("wait for lane validators + cross-peer sync");
+        wait_for_active_lane_validators(
+            &alice,
+            LaneId::new(NEXUS_LANE_INDEX),
+            &expected_nexus_validators,
+            "nexus lane validator activation",
+        )?;
+        wait_for_active_lane_validators(
+            &alice,
+            LaneId::new(DS1_LANE_INDEX),
+            &expected_ds1_validators,
+            "ds1 lane validator activation",
+        )?;
+        wait_for_active_lane_validators(
+            &alice,
+            LaneId::new(DS2_LANE_INDEX),
+            &expected_ds2_validators,
+            "ds2 lane validator activation",
+        )?;
+        let lane_sync_height = alice
+            .get_sumeragi_status_wire()
+            .map_err(|err| eyre!(err))?
+            .commit_qc
+            .height;
+        let _lane_sync_on_bob = wait_for_height(
+            &bob,
+            lane_sync_height,
+            "lane validator activation propagation",
+        )?;
+    }
 
     let initial_height = alice
         .get_sumeragi_status_wire()
@@ -580,221 +739,467 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         .commit_qc
         .height;
 
-    alice.submit_blocking(Log::new(Level::INFO, "route probe ds1".to_string()))?;
-    let ds1_status = wait_for_dataspace_commitment(
-        &alice,
-        &alice,
-        initial_height + 1,
-        DS1_ID_U64,
-        "ds1 route probe",
-    )?;
-    let _ds1_status_bob = wait_for_height(&bob, ds1_status.commit_qc.height, "ds1 probe on bob")?;
+    let ds1_status = {
+        let submitter = leader_targeted_client_for_account(
+            &network,
+            &alice,
+            &ALICE_ID,
+            ALICE_KEYPAIR.private_key(),
+        );
+        {
+            let _phase = phase_timings.phase("route probe ds1: tx submit enqueue");
+            submitter.submit(Log::new(Level::INFO, "route probe ds1".to_string()))?;
+        }
+        let ds1_status = {
+            let _phase = phase_timings.phase("route probe ds1: barrier wait");
+            wait_for_dataspace_commitment(
+                &alice,
+                &submitter,
+                initial_height + 1,
+                DS1_ID_U64,
+                "ds1 route probe",
+            )?
+        };
+        {
+            let _phase = phase_timings.phase("route probe ds1: query/assert");
+            let _ds1_status_bob =
+                wait_for_height(&bob, ds1_status.commit_qc.height, "ds1 probe on bob")?;
+        }
+        ds1_status
+    };
 
-    bob.submit_blocking(Log::new(Level::INFO, "route probe ds2".to_string()))?;
-    let _ds2_status = wait_for_dataspace_commitment(
-        &alice,
-        &bob,
-        ds1_status.commit_qc.height + 1,
-        DS2_ID_U64,
-        "ds2 route probe",
-    )?;
+    {
+        let submitter =
+            leader_targeted_client_for_account(&network, &bob, &BOB_ID, BOB_KEYPAIR.private_key());
+        {
+            let _phase = phase_timings.phase("route probe ds2: tx submit enqueue");
+            submitter.submit(Log::new(Level::INFO, "route probe ds2".to_string()))?;
+        }
+        let ds2_status = {
+            let _phase = phase_timings.phase("route probe ds2: barrier wait");
+            wait_for_dataspace_commitment(
+                &alice,
+                &submitter,
+                ds1_status.commit_qc.height + 1,
+                DS2_ID_U64,
+                "ds2 route probe",
+            )?
+        };
+        {
+            let _phase = phase_timings.phase("route probe ds2: query/assert");
+            let _ds2_status_bob =
+                wait_for_height(&bob, ds2_status.commit_qc.height, "ds2 probe on bob")?;
+        }
+    }
 
     let ds1_asset_def: AssetDefinitionId = "ds1coin#wonderland".parse().expect("asset definition");
     let ds2_asset_def: AssetDefinitionId = "ds2coin#wonderland".parse().expect("asset definition");
-    let wonderland_domain = "wonderland".parse().expect("domain id");
-
-    alice.submit_blocking(Grant::account_permission(
-        CanRegisterAssetDefinition {
-            domain: wonderland_domain,
-        },
-        BOB_ID.clone(),
-    ))?;
-
-    alice.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
-        ds1_asset_def.clone(),
-    )))?;
-    bob.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
-        ds2_asset_def.clone(),
-    )))?;
-
+    let wonderland_domain: DomainId = "wonderland".parse().expect("domain id");
     let alice_ds1_asset = AssetId::new(ds1_asset_def.clone(), ALICE_ID.clone());
     let bob_ds1_asset = AssetId::new(ds1_asset_def.clone(), BOB_ID.clone());
     let alice_ds2_asset = AssetId::new(ds2_asset_def.clone(), ALICE_ID.clone());
     let bob_ds2_asset = AssetId::new(ds2_asset_def.clone(), BOB_ID.clone());
 
-    alice.submit_blocking(Grant::account_permission(
-        CanTransferAssetWithDefinition {
-            asset_definition: ds1_asset_def.clone(),
-        },
-        BOB_ID.clone(),
-    ))?;
+    let grants_start_height = alice
+        .get_sumeragi_status_wire()
+        .map_err(|err| eyre!(err))?
+        .commit_qc
+        .height;
+    {
+        let submitter = leader_targeted_client_for_account(
+            &network,
+            &alice,
+            &ALICE_ID,
+            ALICE_KEYPAIR.private_key(),
+        );
+        let _phase = phase_timings.phase("setup grants: tx submit enqueue");
+        submitter.submit_all(vec![
+            InstructionBox::from(Grant::account_permission(
+                CanRegisterAssetDefinition {
+                    domain: wonderland_domain.clone(),
+                },
+                BOB_ID.clone(),
+            )),
+            InstructionBox::from(Grant::account_permission(
+                CanTransferAssetWithDefinition {
+                    asset_definition: ds1_asset_def.clone(),
+                },
+                BOB_ID.clone(),
+            )),
+        ])?;
+    }
+    {
+        let _phase = phase_timings.phase("setup grants: barrier wait");
+        let _grants_synced_alice = wait_for_height(
+            &alice,
+            grants_start_height + 1,
+            "grant setup confirmation on alice",
+        )?;
+        let _grants_synced_bob = wait_for_height(
+            &bob,
+            grants_start_height + 1,
+            "grant setup confirmation on bob",
+        )?;
+    }
+    {
+        let _phase = phase_timings.phase("setup grants: query/assert");
+        let _status = alice.get_sumeragi_status_wire().map_err(|err| eyre!(err))?;
+    }
 
-    alice.submit_blocking(Mint::asset_numeric(100_u32, alice_ds1_asset.clone()))?;
-    bob.submit_blocking(Mint::asset_numeric(200_u32, bob_ds2_asset.clone()))?;
+    let register_seed_start_height = alice
+        .get_sumeragi_status_wire()
+        .map_err(|err| eyre!(err))?
+        .commit_qc
+        .height;
+    {
+        let alice_submitter = leader_targeted_client_for_account(
+            &network,
+            &alice,
+            &ALICE_ID,
+            ALICE_KEYPAIR.private_key(),
+        );
+        let bob_submitter =
+            leader_targeted_client_for_account(&network, &bob, &BOB_ID, BOB_KEYPAIR.private_key());
+        let _phase = phase_timings.phase("setup register+mint: tx submit enqueue");
+        alice_submitter.submit_all(vec![
+            InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+                ds1_asset_def.clone(),
+            ))),
+            InstructionBox::from(Mint::asset_numeric(100_u32, alice_ds1_asset.clone())),
+        ])?;
+        bob_submitter.submit_all(vec![
+            InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+                ds2_asset_def.clone(),
+            ))),
+            InstructionBox::from(Mint::asset_numeric(200_u32, bob_ds2_asset.clone())),
+        ])?;
+    }
+    {
+        let _phase = phase_timings.phase("setup register+mint: barrier wait");
+        let _setup_synced_alice = wait_for_height(
+            &alice,
+            register_seed_start_height + 1,
+            "register+mint setup confirmation on alice",
+        )?;
+        let _setup_synced_bob = wait_for_height(
+            &bob,
+            register_seed_start_height + 1,
+            "register+mint setup confirmation on bob",
+        )?;
+    }
+    {
+        let _phase = phase_timings.phase("setup register+mint: query/assert");
+        wait_for_expected_balances(
+            &alice,
+            &[
+                (&alice_ds1_asset, Numeric::from(100_u32)),
+                (&bob_ds1_asset, Numeric::from(0_u32)),
+                (&alice_ds2_asset, Numeric::from(0_u32)),
+                (&bob_ds2_asset, Numeric::from(200_u32)),
+            ],
+            "seed balances after pipelined setup",
+        )?;
+    }
 
-    let successful_swap = DvpIsi::new(
-        "ds1ds2swapok".parse().expect("settlement id"),
-        SettlementLeg::new(
-            ds1_asset_def.clone(),
-            Numeric::from(30_u32),
-            ALICE_ID.clone(),
-            BOB_ID.clone(),
-        ),
-        SettlementLeg::new(
-            ds2_asset_def.clone(),
-            Numeric::from(45_u32),
-            BOB_ID.clone(),
-            ALICE_ID.clone(),
-        ),
-        SettlementPlan::new(
-            SettlementExecutionOrder::DeliveryThenPayment,
-            SettlementAtomicity::AllOrNothing,
-        ),
-    );
-    alice.submit_blocking(InstructionBox::from(successful_swap))?;
-    let synced_after_success = alice.get_sumeragi_status_wire().map_err(|err| eyre!(err))?;
-    let _synced_after_success_bob = wait_for_height(
-        &bob,
-        synced_after_success.commit_qc.height,
-        "successful swap propagation to bob",
-    )?;
-    wait_for_expected_balances(
-        &alice,
-        &[
-            (&alice_ds1_asset, Numeric::from(70_u32)),
-            (&bob_ds1_asset, Numeric::from(30_u32)),
-            (&alice_ds2_asset, Numeric::from(45_u32)),
-            (&bob_ds2_asset, Numeric::from(155_u32)),
-        ],
-        "successful swap balances",
-    )?;
+    {
+        let _phase = phase_timings.phase("execute successful ds1<->ds2 atomic swap");
+        let successful_swap = DvpIsi::new(
+            "ds1ds2swapok".parse().expect("settlement id"),
+            SettlementLeg::new(
+                ds1_asset_def.clone(),
+                Numeric::from(30_u32),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            SettlementLeg::new(
+                ds2_asset_def.clone(),
+                Numeric::from(45_u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            SettlementPlan::new(
+                SettlementExecutionOrder::DeliveryThenPayment,
+                SettlementAtomicity::AllOrNothing,
+            ),
+        );
+        let submitter = leader_targeted_client_for_account(
+            &network,
+            &alice,
+            &ALICE_ID,
+            ALICE_KEYPAIR.private_key(),
+        );
+        submitter.submit_blocking(InstructionBox::from(successful_swap))?;
+        let synced_after_success = alice.get_sumeragi_status_wire().map_err(|err| eyre!(err))?;
+        let _synced_after_success_bob = wait_for_height(
+            &bob,
+            synced_after_success.commit_qc.height,
+            "successful swap propagation to bob",
+        )?;
+        wait_for_expected_balances(
+            &alice,
+            &[
+                (&alice_ds1_asset, Numeric::from(70_u32)),
+                (&bob_ds1_asset, Numeric::from(30_u32)),
+                (&alice_ds2_asset, Numeric::from(45_u32)),
+                (&bob_ds2_asset, Numeric::from(155_u32)),
+            ],
+            "successful swap balances",
+        )?;
 
-    assert_eq!(
-        asset_balance(&alice, &alice_ds1_asset)?,
-        Numeric::from(70_u32)
-    );
-    assert_eq!(
-        asset_balance(&alice, &bob_ds1_asset)?,
-        Numeric::from(30_u32)
-    );
-    assert_eq!(
-        asset_balance(&alice, &alice_ds2_asset)?,
-        Numeric::from(45_u32)
-    );
-    assert_eq!(
-        asset_balance(&alice, &bob_ds2_asset)?,
-        Numeric::from(155_u32)
-    );
+        assert_eq!(
+            asset_balance(&alice, &alice_ds1_asset)?,
+            Numeric::from(70_u32)
+        );
+        assert_eq!(
+            asset_balance(&alice, &bob_ds1_asset)?,
+            Numeric::from(30_u32)
+        );
+        assert_eq!(
+            asset_balance(&alice, &alice_ds2_asset)?,
+            Numeric::from(45_u32)
+        );
+        assert_eq!(
+            asset_balance(&alice, &bob_ds2_asset)?,
+            Numeric::from(155_u32)
+        );
+    }
 
-    let reverse_successful_swap = DvpIsi::new(
-        "ds2ds1swapok".parse().expect("settlement id"),
-        SettlementLeg::new(
-            ds2_asset_def.clone(),
-            Numeric::from(20_u32),
-            BOB_ID.clone(),
-            ALICE_ID.clone(),
-        ),
-        SettlementLeg::new(
-            ds1_asset_def.clone(),
-            Numeric::from(10_u32),
-            ALICE_ID.clone(),
-            BOB_ID.clone(),
-        ),
-        SettlementPlan::new(
-            SettlementExecutionOrder::DeliveryThenPayment,
-            SettlementAtomicity::AllOrNothing,
-        ),
-    );
-    bob.submit_blocking(InstructionBox::from(reverse_successful_swap))?;
-    let synced_after_reverse = bob.get_sumeragi_status_wire().map_err(|err| eyre!(err))?;
-    let _synced_after_reverse_bob = wait_for_height(
-        &alice,
-        synced_after_reverse.commit_qc.height,
-        "reverse swap propagation to alice",
-    )?;
-    wait_for_expected_balances(
-        &alice,
-        &[
-            (&alice_ds1_asset, Numeric::from(60_u32)),
-            (&bob_ds1_asset, Numeric::from(40_u32)),
-            (&alice_ds2_asset, Numeric::from(65_u32)),
-            (&bob_ds2_asset, Numeric::from(135_u32)),
-        ],
-        "reverse swap balances",
-    )?;
+    {
+        let _phase = phase_timings.phase("execute reverse ds2<->ds1 atomic swap");
+        let reverse_successful_swap = DvpIsi::new(
+            "ds2ds1swapok".parse().expect("settlement id"),
+            SettlementLeg::new(
+                ds2_asset_def.clone(),
+                Numeric::from(20_u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            SettlementLeg::new(
+                ds1_asset_def.clone(),
+                Numeric::from(10_u32),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            SettlementPlan::new(
+                SettlementExecutionOrder::DeliveryThenPayment,
+                SettlementAtomicity::AllOrNothing,
+            ),
+        );
+        let submitter =
+            leader_targeted_client_for_account(&network, &bob, &BOB_ID, BOB_KEYPAIR.private_key());
+        submitter.submit_blocking(InstructionBox::from(reverse_successful_swap))?;
+        let synced_after_reverse = bob.get_sumeragi_status_wire().map_err(|err| eyre!(err))?;
+        let _synced_after_reverse_bob = wait_for_height(
+            &alice,
+            synced_after_reverse.commit_qc.height,
+            "reverse swap propagation to alice",
+        )?;
+        wait_for_expected_balances(
+            &alice,
+            &[
+                (&alice_ds1_asset, Numeric::from(60_u32)),
+                (&bob_ds1_asset, Numeric::from(40_u32)),
+                (&alice_ds2_asset, Numeric::from(65_u32)),
+                (&bob_ds2_asset, Numeric::from(135_u32)),
+            ],
+            "reverse swap balances",
+        )?;
 
-    assert_eq!(
-        asset_balance(&alice, &alice_ds1_asset)?,
-        Numeric::from(60_u32)
-    );
-    assert_eq!(
-        asset_balance(&alice, &bob_ds1_asset)?,
-        Numeric::from(40_u32)
-    );
-    assert_eq!(
-        asset_balance(&alice, &alice_ds2_asset)?,
-        Numeric::from(65_u32)
-    );
-    assert_eq!(
-        asset_balance(&alice, &bob_ds2_asset)?,
-        Numeric::from(135_u32)
-    );
+        assert_eq!(
+            asset_balance(&alice, &alice_ds1_asset)?,
+            Numeric::from(60_u32)
+        );
+        assert_eq!(
+            asset_balance(&alice, &bob_ds1_asset)?,
+            Numeric::from(40_u32)
+        );
+        assert_eq!(
+            asset_balance(&alice, &alice_ds2_asset)?,
+            Numeric::from(65_u32)
+        );
+        assert_eq!(
+            asset_balance(&alice, &bob_ds2_asset)?,
+            Numeric::from(135_u32)
+        );
+    }
 
-    let failing_swap = DvpIsi::new(
-        "ds1ds2swapfail".parse().expect("settlement id"),
-        SettlementLeg::new(
-            ds1_asset_def,
-            Numeric::from(10_u32),
-            ALICE_ID.clone(),
-            BOB_ID.clone(),
-        ),
-        SettlementLeg::new(
-            ds2_asset_def,
-            Numeric::from(10_000_u32),
-            BOB_ID.clone(),
-            ALICE_ID.clone(),
-        ),
-        SettlementPlan::new(
-            SettlementExecutionOrder::DeliveryThenPayment,
-            SettlementAtomicity::AllOrNothing,
-        ),
-    );
-    let failure = alice
-        .submit_blocking(InstructionBox::from(failing_swap))
-        .expect_err("underfunded counter-leg must reject all-or-nothing settlement");
-    let failure_text = failure.to_string();
-    assert!(
-        failure_text.contains("settlement leg requires 10000")
-            || failure_text.contains("requires 10000"),
-        "unexpected failure message: {failure_text}"
-    );
-    wait_for_expected_balances(
-        &alice,
-        &[
-            (&alice_ds1_asset, Numeric::from(60_u32)),
-            (&bob_ds1_asset, Numeric::from(40_u32)),
-            (&alice_ds2_asset, Numeric::from(65_u32)),
-            (&bob_ds2_asset, Numeric::from(135_u32)),
-        ],
-        "rollback balances after failing swap",
-    )?;
+    let soak_baseline = [
+        (&alice_ds1_asset, Numeric::from(60_u32)),
+        (&bob_ds1_asset, Numeric::from(40_u32)),
+        (&alice_ds2_asset, Numeric::from(65_u32)),
+        (&bob_ds2_asset, Numeric::from(135_u32)),
+    ];
+    let mut soak_passes = 0usize;
+    let mut soak_iteration_durations = Vec::with_capacity(SOAK_ITERATIONS);
+    let mut soak_failure: Option<eyre::Report> = None;
+    {
+        let _phase = phase_timings.phase("soak 10 iterations: paired swap throughput");
+        for iteration in 0..SOAK_ITERATIONS {
+            let iteration_started = Instant::now();
+            let run_result = (|| -> Result<()> {
+                let forward_swap = DvpIsi::new(
+                    format!("soakfwd{iteration}")
+                        .parse()
+                        .expect("settlement id"),
+                    SettlementLeg::new(
+                        ds1_asset_def.clone(),
+                        Numeric::from(5_u32),
+                        ALICE_ID.clone(),
+                        BOB_ID.clone(),
+                    ),
+                    SettlementLeg::new(
+                        ds2_asset_def.clone(),
+                        Numeric::from(5_u32),
+                        BOB_ID.clone(),
+                        ALICE_ID.clone(),
+                    ),
+                    SettlementPlan::new(
+                        SettlementExecutionOrder::DeliveryThenPayment,
+                        SettlementAtomicity::AllOrNothing,
+                    ),
+                );
+                let alice_submitter = leader_targeted_client_for_account(
+                    &network,
+                    &alice,
+                    &ALICE_ID,
+                    ALICE_KEYPAIR.private_key(),
+                );
+                alice_submitter.submit_blocking(InstructionBox::from(forward_swap))?;
+                let synced_after_forward =
+                    alice.get_sumeragi_status_wire().map_err(|err| eyre!(err))?;
+                let _synced_after_forward_bob = wait_for_height(
+                    &bob,
+                    synced_after_forward.commit_qc.height,
+                    "soak forward propagation to bob",
+                )?;
 
-    assert_eq!(
-        asset_balance(&alice, &alice_ds1_asset)?,
-        Numeric::from(60_u32)
-    );
-    assert_eq!(
-        asset_balance(&alice, &bob_ds1_asset)?,
-        Numeric::from(40_u32)
-    );
-    assert_eq!(
-        asset_balance(&alice, &alice_ds2_asset)?,
-        Numeric::from(65_u32)
-    );
-    assert_eq!(
-        asset_balance(&alice, &bob_ds2_asset)?,
-        Numeric::from(135_u32)
-    );
+                let reverse_swap = DvpIsi::new(
+                    format!("soakrev{iteration}")
+                        .parse()
+                        .expect("settlement id"),
+                    SettlementLeg::new(
+                        ds2_asset_def.clone(),
+                        Numeric::from(5_u32),
+                        ALICE_ID.clone(),
+                        BOB_ID.clone(),
+                    ),
+                    SettlementLeg::new(
+                        ds1_asset_def.clone(),
+                        Numeric::from(5_u32),
+                        BOB_ID.clone(),
+                        ALICE_ID.clone(),
+                    ),
+                    SettlementPlan::new(
+                        SettlementExecutionOrder::DeliveryThenPayment,
+                        SettlementAtomicity::AllOrNothing,
+                    ),
+                );
+                let alice_submitter = leader_targeted_client_for_account(
+                    &network,
+                    &alice,
+                    &ALICE_ID,
+                    ALICE_KEYPAIR.private_key(),
+                );
+                alice_submitter.submit_blocking(InstructionBox::from(reverse_swap))?;
+                let synced_after_reverse =
+                    bob.get_sumeragi_status_wire().map_err(|err| eyre!(err))?;
+                let _synced_after_reverse_alice = wait_for_height(
+                    &alice,
+                    synced_after_reverse.commit_qc.height,
+                    "soak reverse propagation to alice",
+                )?;
+                wait_for_expected_balances(
+                    &alice,
+                    &soak_baseline,
+                    "soak iteration net-zero balances",
+                )?;
+                Ok(())
+            })();
+
+            match run_result {
+                Ok(()) => {
+                    soak_passes += 1;
+                    soak_iteration_durations.push(iteration_started.elapsed());
+                }
+                Err(err) => {
+                    soak_failure = Some(eyre!("soak iteration {} failed: {err}", iteration + 1));
+                    break;
+                }
+            }
+        }
+    }
+    if let Some((min, avg, max)) = duration_min_avg_max_secs(&soak_iteration_durations) {
+        let pass_rate = (soak_passes as f64 / SOAK_ITERATIONS as f64) * 100.0;
+        eprintln!(
+            "[soak] iterations={} pass_rate={:.1}% min={:.3}s avg={:.3}s max={:.3}s",
+            SOAK_ITERATIONS, pass_rate, min, avg, max
+        );
+    }
+    if let Some(err) = soak_failure {
+        return Err(err);
+    }
+
+    {
+        let _phase = phase_timings.phase("execute failing swap + rollback verification");
+        let failing_swap = DvpIsi::new(
+            "ds1ds2swapfail".parse().expect("settlement id"),
+            SettlementLeg::new(
+                ds1_asset_def.clone(),
+                Numeric::from(10_u32),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            SettlementLeg::new(
+                ds2_asset_def.clone(),
+                Numeric::from(10_000_u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            SettlementPlan::new(
+                SettlementExecutionOrder::DeliveryThenPayment,
+                SettlementAtomicity::AllOrNothing,
+            ),
+        );
+        let submitter = leader_targeted_client_for_account(
+            &network,
+            &alice,
+            &ALICE_ID,
+            ALICE_KEYPAIR.private_key(),
+        );
+        let failure = submitter
+            .submit_blocking(InstructionBox::from(failing_swap))
+            .expect_err("underfunded counter-leg must reject all-or-nothing settlement");
+        let failure_text = failure.to_string();
+        assert!(
+            failure_text.contains("settlement leg requires 10000")
+                || failure_text.contains("requires 10000"),
+            "unexpected failure message: {failure_text}"
+        );
+        wait_for_expected_balances(
+            &alice,
+            &soak_baseline,
+            "rollback balances after failing swap",
+        )?;
+
+        assert_eq!(
+            asset_balance(&alice, &alice_ds1_asset)?,
+            Numeric::from(60_u32)
+        );
+        assert_eq!(
+            asset_balance(&alice, &bob_ds1_asset)?,
+            Numeric::from(40_u32)
+        );
+        assert_eq!(
+            asset_balance(&alice, &alice_ds2_asset)?,
+            Numeric::from(65_u32)
+        );
+        assert_eq!(
+            asset_balance(&alice, &bob_ds2_asset)?,
+            Numeric::from(135_u32)
+        );
+    }
+
+    phase_timings.emit_summary();
 
     Ok(())
 }
