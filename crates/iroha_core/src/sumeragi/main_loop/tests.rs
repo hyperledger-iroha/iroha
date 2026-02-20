@@ -1323,6 +1323,14 @@ fn test_sumeragi_config() -> SumeragiConfig {
         recovery: SumeragiRecovery {
             missing_block_signer_fallback_attempts:
                 iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+            view_change_backlog_extension_factor:
+                iroha_config::parameters::defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR,
+            view_change_backlog_extension_cap: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS,
+            ),
+            deferred_qc_ttl: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::DEFERRED_QC_TTL_MS,
+            ),
         },
         gating: SumeragiGating {
             future_height_window:
@@ -2003,6 +2011,11 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         trust_penalty_unknown_peer:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+        deferred_send_ttl: Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         p2p_proxy: None,
@@ -17130,6 +17143,337 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn deferred_missing_payload_qc_expiry_is_bounded() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    status::reset_missing_block_fetch_counters_for_tests();
+    status::reset_view_change_cause_counters_for_tests();
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([37; Hash::LENGTH]));
+    let qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 2,
+        view: 0,
+        epoch: actor.epoch_for_height(2),
+        mode_tag: "permissioned".to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: Vec::new(),
+        aggregate: QcAggregate {
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+    let key = super::Actor::qc_tally_key(&qc);
+    let now = Instant::now();
+    actor.deferred_missing_payload_qcs.insert(
+        key,
+        super::DeferredQcEntry {
+            qc,
+            first_seen: now
+                .checked_sub(actor.config.recovery.deferred_qc_ttl + Duration::from_millis(1))
+                .expect("time subtraction should be valid"),
+            last_attempt: now,
+            attempts: super::DEFERRED_MISSING_PAYLOAD_QC_MAX_ATTEMPTS,
+            escalated_fetch: true,
+            reason: "test_expiry",
+        },
+    );
+
+    let progressed = actor.try_replay_deferred_missing_payload_qcs(now);
+    assert!(progressed, "deferred QC expiry should make progress");
+    assert!(
+        actor.deferred_missing_payload_qcs.is_empty(),
+        "expired deferred QCs should be removed"
+    );
+
+    let snapshot = status::snapshot();
+    assert_eq!(snapshot.qc_deferred_expired_total, 1);
+    assert_eq!(snapshot.view_change_causes.missing_payload_total, 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn quarantined_block_sync_qc_expiry_is_bounded() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    status::reset_block_sync_counters_for_tests();
+    status::reset_view_change_cause_counters_for_tests();
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([73; Hash::LENGTH]));
+    let qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 2,
+        view: 0,
+        epoch: actor.epoch_for_height(2),
+        mode_tag: "permissioned".to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: Vec::new(),
+        aggregate: QcAggregate {
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+    let key = super::Actor::qc_tally_key(&qc);
+    let now = Instant::now();
+    actor.quarantined_block_sync_qcs.insert(
+        key,
+        super::QuarantinedQcCandidate {
+            qc,
+            first_seen: now
+                .checked_sub(actor.config.recovery.deferred_qc_ttl + Duration::from_millis(1))
+                .expect("time subtraction should be valid"),
+            last_attempt: now,
+            attempts: super::QUARANTINED_BLOCK_SYNC_QC_MAX_ATTEMPTS,
+            escalated_fetch: true,
+            reason: "test_expiry",
+            target: super::QuarantinedQcTarget::BlockSync,
+        },
+    );
+
+    let progressed = actor.try_replay_quarantined_block_sync_qcs(now, None);
+    assert!(progressed, "quarantined QC expiry should make progress");
+    assert!(
+        actor.quarantined_block_sync_qcs.is_empty(),
+        "expired quarantined QCs should be removed"
+    );
+
+    let snapshot = status::snapshot();
+    assert_eq!(snapshot.blocksync_qc_final_drop_total, 1);
+    assert_eq!(
+        snapshot.blocksync_qc_final_drop_last_reason,
+        Some("expired")
+    );
+    assert_eq!(snapshot.view_change_causes.missing_qc_total, 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn deferred_roster_qc_expiry_is_bounded() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    status::reset_missing_block_fetch_counters_for_tests();
+    status::reset_view_change_cause_counters_for_tests();
+
+    let committed_height = u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX);
+    let qc_height = committed_height.saturating_add(3);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([91; Hash::LENGTH]));
+    let qc = Qc {
+        phase: Phase::NewView,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: qc_height,
+        view: 0,
+        epoch: actor.epoch_for_height(qc_height),
+        mode_tag: "permissioned".to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: Vec::new(),
+        aggregate: QcAggregate {
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+    let key = super::Actor::qc_tally_key(&qc);
+    let now = Instant::now();
+    actor.deferred_qcs.insert(key, qc);
+    actor.deferred_qc_roster_state.insert(
+        key,
+        super::DeferredRosterQcEntry {
+            first_seen: now
+                .checked_sub(actor.config.recovery.deferred_qc_ttl + Duration::from_millis(1))
+                .expect("time subtraction should be valid"),
+            last_attempt: now,
+            attempts: super::DEFERRED_MISSING_PAYLOAD_QC_MAX_ATTEMPTS,
+            escalated_fetch: true,
+            reason: "test_roster_expiry",
+        },
+    );
+
+    let progressed = actor.try_replay_deferred_qcs();
+    assert!(progressed, "deferred roster QC expiry should make progress");
+    assert!(
+        actor.deferred_qcs.is_empty(),
+        "expired deferred roster QCs should be removed"
+    );
+    assert!(
+        actor.deferred_qc_roster_state.is_empty(),
+        "deferred roster QC state should be cleaned up on expiry"
+    );
+
+    let snapshot = status::snapshot();
+    assert_eq!(snapshot.qc_deferred_expired_total, 1);
+    assert_eq!(snapshot.view_change_causes.missing_qc_total, 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn empty_commit_topology_recovery_escalates_after_bounded_retries() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    status::reset_missing_block_fetch_counters_for_tests();
+    status::reset_view_change_cause_counters_for_tests();
+
+    let height = u64::try_from(actor.state.committed_height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(3);
+    let view = 0;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([117; Hash::LENGTH]));
+    let now = Instant::now();
+
+    assert!(
+        actor.handle_empty_commit_topology_recovery(
+            height,
+            view,
+            Some(block_hash),
+            1,
+            now,
+            super::ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+            "test_empty_topology",
+        ),
+        "first retry should refresh topology"
+    );
+    assert!(
+        actor.handle_empty_commit_topology_recovery(
+            height,
+            view,
+            Some(block_hash),
+            1,
+            now + Duration::from_millis(1),
+            super::ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+            "test_empty_topology",
+        ),
+        "second retry should trigger targeted block-sync fetch"
+    );
+    assert!(
+        actor.handle_empty_commit_topology_recovery(
+            height,
+            view,
+            Some(block_hash),
+            1,
+            now + Duration::from_millis(2),
+            super::ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+            "test_empty_topology",
+        ),
+        "third retry should escalate via view change"
+    );
+
+    assert!(
+        actor.consensus_recovery.is_empty(),
+        "recovery entry should be cleared after escalation"
+    );
+    let snapshot = status::snapshot();
+    assert_eq!(snapshot.consensus_empty_commit_topology_defer_total, 3);
+    assert_eq!(snapshot.consensus_empty_commit_topology_escalation_total, 1);
+    assert_eq!(snapshot.view_change_causes.missing_qc_total, 1);
+    assert_eq!(
+        snapshot
+            .consensus_recovery_state_transitions
+            .get("refresh_topology"),
+        Some(&1)
+    );
+    assert_eq!(
+        snapshot
+            .consensus_recovery_state_transitions
+            .get("block_sync"),
+        Some(&1)
+    );
+    assert_eq!(
+        snapshot.consensus_recovery_state_transitions.get("wait"),
+        Some(&1)
+    );
+    assert_eq!(
+        snapshot
+            .consensus_recovery_state_transitions
+            .get("view_change"),
+        Some(&1)
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn empty_commit_topology_recovery_carries_state_across_view_changes() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    status::reset_missing_block_fetch_counters_for_tests();
+    status::reset_view_change_cause_counters_for_tests();
+
+    let height = u64::try_from(actor.state.committed_height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(3);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([118; Hash::LENGTH]));
+    let now = Instant::now();
+
+    assert!(
+        actor.handle_empty_commit_topology_recovery(
+            height,
+            0,
+            Some(block_hash),
+            1,
+            now,
+            super::ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+            "test_empty_topology_cross_view",
+        ),
+        "first retry should refresh topology"
+    );
+    assert!(
+        actor.handle_empty_commit_topology_recovery(
+            height,
+            1,
+            Some(block_hash),
+            1,
+            now + Duration::from_millis(1),
+            super::ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+            "test_empty_topology_cross_view",
+        ),
+        "second retry should keep progressing recovery across view changes"
+    );
+    assert!(
+        actor.handle_empty_commit_topology_recovery(
+            height,
+            2,
+            Some(block_hash),
+            1,
+            now + Duration::from_millis(2),
+            super::ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+            "test_empty_topology_cross_view",
+        ),
+        "third retry should still escalate when retries are exhausted across view churn"
+    );
+
+    assert!(
+        actor.consensus_recovery.is_empty(),
+        "recovery entries should be cleared after escalation"
+    );
+    let snapshot = status::snapshot();
+    assert_eq!(snapshot.consensus_empty_commit_topology_defer_total, 3);
+    assert_eq!(snapshot.consensus_empty_commit_topology_escalation_total, 1);
+    assert_eq!(snapshot.view_change_causes.missing_qc_total, 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_vote_drops_stale_height() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
@@ -27378,6 +27722,11 @@ async fn stale_pending_block_requeues_transactions() {
         trust_penalty_unknown_peer:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+        deferred_send_ttl: Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         p2p_proxy: None,
@@ -32113,7 +32462,7 @@ fn missing_block_view_change_rearms_after_view_update() {
     ));
     let stats = requests.get_mut(&hash).expect("entry exists");
     assert_eq!(stats.view, 1);
-    assert_eq!(stats.first_seen, update_time);
+    assert_eq!(stats.first_seen, dwell_start);
     assert_eq!(stats.view_change_triggered_view, None);
 
     stats.first_seen = update_time
@@ -32413,6 +32762,72 @@ async fn retry_missing_block_requests_defers_view_change_when_rbc_pending() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn retry_missing_block_requests_forces_view_change_on_attempt_cap_even_with_rbc_pending() {
+    let mut harness = test_actor_harness(4).await;
+    let _guard = super::status::view_change_proof_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+    let actor = &mut harness.actor;
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view, now);
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD1; Hash::LENGTH]));
+    if actor.block_payload_available_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD2; Hash::LENGTH]));
+    }
+
+    let key = Actor::session_key(&block_hash, height, view);
+    let session = RbcSession::test_new(
+        1,
+        Some(Hash::prehashed([0x31; 32])),
+        Some(Hash::prehashed([0x32; 32])),
+        actor.epoch_for_height(height),
+    );
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let retry_window = Duration::from_millis(10);
+    let dwell_start = now - actor.config.recovery.deferred_qc_ttl - Duration::from_millis(1);
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: Some(retry_window),
+            first_seen: dwell_start,
+            last_requested: dwell_start,
+            view_change_triggered_view: None,
+            attempts: super::MISSING_BLOCK_REQUEST_HARD_ATTEMPT_CAP,
+        },
+    );
+
+    assert!(
+        actor.retry_missing_block_requests(now, None),
+        "retry should force a view change once attempts exceed the deterministic cap"
+    );
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("request entry retained");
+    assert_eq!(
+        stats.view_change_triggered_view,
+        Some(view),
+        "attempt cap should force view change even when RBC backlog would defer the soft window"
+    );
+    let snapshot = super::status::snapshot().view_change_causes;
+    assert_eq!(snapshot.missing_payload_total, 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn retry_missing_block_requests_defers_view_change_when_rbc_backlog_near_height() {
     let mut harness = test_actor_harness(4).await;
     let _guard = super::status::view_change_proof_test_guard();
@@ -32673,6 +33088,72 @@ async fn retry_missing_block_requests_defers_view_change_when_queue_drops_seen()
     );
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_payload_total, 0);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retry_missing_block_requests_forces_view_change_after_backlog_extension_expires() {
+    super::status::reset_worker_loop_snapshot_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.recovery.view_change_backlog_extension_factor = 2.0;
+    consensus_cfg.recovery.view_change_backlog_extension_cap = Duration::from_millis(20);
+    consensus_cfg.recovery.deferred_qc_ttl = Duration::from_millis(40);
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let _guard = super::status::view_change_proof_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+    let actor = &mut harness.actor;
+    actor.queue_drop_backpressure.reset_to_current();
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view, now);
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xFA; Hash::LENGTH]));
+    if actor.block_payload_available_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xFB; Hash::LENGTH]));
+    }
+
+    let retry_window = Duration::from_millis(10);
+    let base_window = Duration::from_millis(40);
+    let dwell_start = now - Duration::from_millis(70);
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: Some(base_window),
+            first_seen: dwell_start,
+            last_requested: dwell_start,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+
+    super::status::record_worker_queue_drop(super::status::WorkerQueueKind::RbcChunks);
+
+    assert!(
+        actor.retry_missing_block_requests(now, None),
+        "retry should progress by forcing a view change once backlog extension is exhausted"
+    );
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("request entry retained");
+    assert_eq!(
+        stats.view_change_triggered_view,
+        Some(view),
+        "view change should trigger once backlog extension cap is exceeded"
+    );
+    let snapshot = super::status::snapshot().view_change_causes;
+    assert_eq!(snapshot.missing_payload_total, 1);
 
     harness.shutdown.send();
 }
@@ -56532,6 +57013,11 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         trust_penalty_unknown_peer:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+        deferred_send_ttl: Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         p2p_proxy: None,
@@ -58596,6 +59082,60 @@ async fn reschedule_defers_zero_vote_quorum_timeout_while_block_queue_backlogged
     assert!(
         pending_after.last_quorum_reschedule.is_some(),
         "pending should be quorum-rescheduled once block queue backlog clears"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reschedule_forces_after_backlog_extension_cap_reached() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.recovery.view_change_backlog_extension_factor = 2.0;
+    consensus_cfg.recovery.view_change_backlog_extension_cap = Duration::from_millis(100);
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let view_idx = block.header().view_change_index();
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let availability_timeout =
+        actor.availability_timeout(quorum_timeout, actor.runtime_da_enabled());
+    let zero_vote_backlog_grace =
+        super::saturating_mul_duration(actor.rebroadcast_cooldown(), 8).max(Duration::from_secs(2));
+    let base_deadline = quorum_timeout
+        .saturating_add(zero_vote_backlog_grace)
+        .max(availability_timeout);
+    let extended_deadline = actor.backlog_extended_view_change_timeout(base_deadline, true);
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.inserted_at = Instant::now() - extended_deadline - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Blocks);
+
+    assert!(
+        actor.reschedule_stale_pending_blocks(None),
+        "reschedule should proceed once bounded backlog extension window expires"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_some(),
+        "pending should be quorum-rescheduled after extension cap is exhausted"
     );
 
     harness.shutdown.send();

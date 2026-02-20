@@ -127,6 +127,11 @@ fn trust_config(
         idle_timeout,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -258,6 +263,11 @@ async fn network_create() {
         idle_timeout,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -690,6 +700,11 @@ async fn ws_fallback_connects_and_handshakes() {
             idle_timeout: idle,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -951,6 +966,11 @@ async fn ws_fallback_connects_and_handshakes() {
             idle_timeout: idle,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1198,6 +1218,11 @@ async fn two_networks() {
         idle_timeout,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -1328,6 +1353,11 @@ async fn two_networks() {
         idle_timeout,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -1548,6 +1578,11 @@ async fn update_peers_triggers_immediate_connect() {
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1677,6 +1712,11 @@ async fn update_peers_triggers_immediate_connect() {
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1851,6 +1891,11 @@ async fn happy_eyeballs_parallel_dials() {
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1981,6 +2026,11 @@ async fn happy_eyeballs_parallel_dials() {
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2152,6 +2202,11 @@ async fn low_topics_do_not_starve_each_other() {
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2282,6 +2337,11 @@ async fn low_topics_do_not_starve_each_other() {
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2510,6 +2570,11 @@ async fn relay_hub_routes_consensus_between_spokes() {
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2768,6 +2833,11 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
                 connect_startup_delay:
                     iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
                 dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
                 peer_gossip_period: PEER_GOSSIP_PERIOD,
                 peer_gossip_max_period: PEER_GOSSIP_PERIOD,
                 trust_decay_half_life:
@@ -3100,6 +3170,11 @@ async fn start_network(
         idle_timeout,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -3305,6 +3380,11 @@ async fn tls_inbound_listener_smoke() {
         idle_timeout,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -3442,6 +3522,11 @@ async fn tls_inbound_listener_smoke() {
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:

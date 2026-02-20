@@ -783,6 +783,14 @@ mod tests {
             recovery: SumeragiRecovery {
                 missing_block_signer_fallback_attempts:
                     iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+                view_change_backlog_extension_factor:
+                    iroha_config::parameters::defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR,
+                view_change_backlog_extension_cap: Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS,
+                ),
+                deferred_qc_ttl: Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::DEFERRED_QC_TTL_MS,
+                ),
             },
             gating: SumeragiGating {
                 future_height_window:

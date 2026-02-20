@@ -10,7 +10,7 @@ use std::{
     ops::Bound::{Excluded, Unbounded},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, LazyLock, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -2864,13 +2864,15 @@ fn touch_missing_block_request(
             if height_advanced {
                 stats.height = height;
             }
-            if view_advanced || height_advanced {
+            if height_advanced {
                 stats.first_seen = now;
                 stats.last_requested = now;
                 stats.attempts = 0;
-                if view_advanced {
-                    stats.view_change_triggered_view = None;
-                }
+            } else if view_advanced {
+                // Preserve dwell/attempt history across view churn so recovery cannot
+                // perpetually re-arm by advancing views on the same missing payload.
+                stats.last_requested = now;
+                stats.view_change_triggered_view = None;
             }
             if phase_rank(phase) > phase_rank(stats.phase) {
                 stats.phase = phase;
@@ -4560,6 +4562,43 @@ type QcVoteKey = (
 );
 
 const KNOWN_BLOCK_QC_WORK_PER_TICK: usize = 2;
+const QUARANTINED_BLOCK_SYNC_QC_PER_TICK: usize = 4;
+const QUARANTINED_BLOCK_SYNC_QC_CAP: usize = 256;
+const QUARANTINED_BLOCK_SYNC_QC_MAX_ATTEMPTS: u32 = 4;
+const DEFERRED_MISSING_PAYLOAD_QC_PER_TICK: usize = 4;
+const DEFERRED_MISSING_PAYLOAD_QC_CAP: usize = 256;
+const DEFERRED_MISSING_PAYLOAD_QC_MAX_ATTEMPTS: u32 = 4;
+const EMPTY_COMMIT_TOPOLOGY_RECOVERY_MAX_RETRIES: u32 = 3;
+const EMPTY_COMMIT_TOPOLOGY_RECOVERY_LOG_COOLDOWN: Duration = Duration::from_secs(5);
+const MISSING_BLOCK_REQUEST_HARD_ATTEMPT_CAP: u32 = 96;
+const ROSTER_SIDECAR_MISMATCH_LOG_COOLDOWN: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConsensusRecoveryState {
+    RefreshTopology,
+    BlockSync,
+    WaitingForDependencies,
+    ViewChangeEscalation,
+}
+
+impl ConsensusRecoveryState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::RefreshTopology => "refresh_topology",
+            Self::BlockSync => "block_sync",
+            Self::WaitingForDependencies => "wait",
+            Self::ViewChangeEscalation => "view_change",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ConsensusRecoveryEntry {
+    state: ConsensusRecoveryState,
+    first_seen: Instant,
+    last_attempt: Instant,
+    retries: u32,
+}
 
 #[derive(Debug)]
 struct KnownBlockQcWork {
@@ -4572,6 +4611,42 @@ struct KnownBlockQcWork {
     prf_seed: Option<[u8; 32]>,
     commit_qc_match: bool,
     aggregate_ok: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuarantinedQcTarget {
+    BlockSync,
+    LockedPayload,
+}
+
+#[derive(Debug, Clone)]
+struct QuarantinedQcCandidate {
+    qc: crate::sumeragi::consensus::Qc,
+    first_seen: Instant,
+    last_attempt: Instant,
+    attempts: u32,
+    escalated_fetch: bool,
+    reason: &'static str,
+    target: QuarantinedQcTarget,
+}
+
+#[derive(Debug, Clone)]
+struct DeferredQcEntry {
+    qc: crate::sumeragi::consensus::Qc,
+    first_seen: Instant,
+    last_attempt: Instant,
+    attempts: u32,
+    escalated_fetch: bool,
+    reason: &'static str,
+}
+
+#[derive(Debug, Clone)]
+struct DeferredRosterQcEntry {
+    first_seen: Instant,
+    last_attempt: Instant,
+    attempts: u32,
+    escalated_fetch: bool,
+    reason: &'static str,
 }
 
 struct QcBuildContext {
@@ -4722,7 +4797,11 @@ pub(super) struct Actor {
         HashOf<BlockHeader>,
         BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
     >,
+    consensus_recovery: BTreeMap<(u64, u64), ConsensusRecoveryEntry>,
     deferred_qcs: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
+    deferred_qc_roster_state: BTreeMap<QcVoteKey, DeferredRosterQcEntry>,
+    deferred_missing_payload_qcs: BTreeMap<QcVoteKey, DeferredQcEntry>,
+    quarantined_block_sync_qcs: BTreeMap<QcVoteKey, QuarantinedQcCandidate>,
     known_block_qc_work: BTreeMap<QcVoteKey, KnownBlockQcWork>,
     deferred_block_sync_updates: BTreeMap<DeferredBlockSyncKey, DeferredBlockSyncUpdate>,
     vote_roster_cache: BTreeMap<HashOf<BlockHeader>, VoteRosterCacheEntry>,
@@ -6415,19 +6494,21 @@ fn persisted_roster_for_block(
         );
     }
 
-    if let Some(meta) = kura.read_roster_metadata(block_height).and_then(|meta| {
-        if meta.block_hash == block_hash {
-            Some(meta)
-        } else {
-            warn!(
-                expected = %block_hash,
-                stored = %meta.block_hash,
-                height = block_height,
-                "ignoring roster sidecar with mismatched hash"
-            );
-            None
+    if let Some(meta) = kura.read_roster_metadata(block_height) {
+        if meta.block_hash != block_hash {
+            if let Some(suppressed_since_last) =
+                allow_roster_sidecar_mismatch_warning(block_height, block_hash, meta.block_hash)
+            {
+                warn!(
+                    expected = %block_hash,
+                    stored = %meta.block_hash,
+                    height = block_height,
+                    suppressed_since_last,
+                    "ignoring roster sidecar with mismatched hash"
+                );
+            }
+            return None;
         }
-    }) {
         let key_view = block_view
             .or_else(|| meta.commit_qc.as_ref().map(|qc| qc.view))
             .or_else(|| meta.validator_checkpoint.as_ref().map(|chk| chk.view))
@@ -9408,7 +9489,11 @@ impl Actor {
             vote_log: BTreeMap::new(),
             vote_validation_cache: BTreeMap::new(),
             deferred_votes: BTreeMap::new(),
+            consensus_recovery: BTreeMap::new(),
             deferred_qcs: BTreeMap::new(),
+            deferred_qc_roster_state: BTreeMap::new(),
+            deferred_missing_payload_qcs: BTreeMap::new(),
+            quarantined_block_sync_qcs: BTreeMap::new(),
             known_block_qc_work: BTreeMap::new(),
             deferred_block_sync_updates: BTreeMap::new(),
             vote_roster_cache: BTreeMap::new(),
@@ -10360,6 +10445,8 @@ impl Actor {
 
         if !self.deferred_votes.is_empty()
             || !self.deferred_qcs.is_empty()
+            || !self.deferred_missing_payload_qcs.is_empty()
+            || !self.quarantined_block_sync_qcs.is_empty()
             || !self.deferred_block_sync_updates.is_empty()
         {
             return Some(now);
@@ -10493,6 +10580,11 @@ impl Actor {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_qcs");
             self.try_replay_deferred_qcs()
         };
+        let deferred_missing_payload_progress = {
+            let _view_ctx =
+                StateViewContextGuard::new("sumeragi.tick.replay_deferred_missing_payload_qcs");
+            self.try_replay_deferred_missing_payload_qcs(now)
+        };
         let deferred_vote_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_votes");
             self.try_replay_deferred_votes()
@@ -10500,6 +10592,11 @@ impl Actor {
         let deferred_block_sync_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_block_sync");
             self.try_replay_deferred_block_sync_updates()
+        };
+        let quarantined_block_sync_qc_progress = {
+            let _view_ctx =
+                StateViewContextGuard::new("sumeragi.tick.replay_quarantined_block_sync_qcs");
+            self.try_replay_quarantined_block_sync_qcs(now, tick_deadline)
         };
         let known_block_qc_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.known_block_qc_work");
@@ -10535,8 +10632,10 @@ impl Actor {
             || refresh_progress
             || committed_progress
             || deferred_qc_progress
+            || deferred_missing_payload_progress
             || deferred_vote_progress
             || deferred_block_sync_progress
+            || quarantined_block_sync_qc_progress
             || known_block_qc_progress
             || missing_block_progress
             || reschedule_progress
@@ -14311,6 +14410,249 @@ impl Actor {
         )
     }
 
+    /// Compute a bounded timeout extension used to dampen view changes while backlog converges.
+    ///
+    /// The extension is only active when backlog signals are present and is bounded by
+    /// `recovery.view_change_backlog_extension_cap`.
+    fn backlog_extended_view_change_timeout(
+        &self,
+        base_timeout: Duration,
+        backlog_signals: bool,
+    ) -> Duration {
+        if !backlog_signals || base_timeout == Duration::ZERO {
+            return base_timeout;
+        }
+        let factor = self
+            .config
+            .recovery
+            .view_change_backlog_extension_factor
+            .max(1.0);
+        let cap = self.config.recovery.view_change_backlog_extension_cap;
+        if factor <= 1.0 || cap == Duration::ZERO {
+            return base_timeout;
+        }
+        let scaled = saturating_mul_duration_factor(base_timeout, factor);
+        let extra = scaled.saturating_sub(base_timeout).min(cap);
+        base_timeout.saturating_add(extra)
+    }
+
+    fn note_consensus_recovery_state_transition(&self, state: ConsensusRecoveryState) {
+        super::status::inc_consensus_recovery_state_transition(state.as_str());
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.inc_consensus_recovery_state_transition(state.as_str());
+        }
+    }
+
+    pub(super) fn clear_consensus_recovery_for_round(&mut self, height: u64, _view: u64) {
+        self.consensus_recovery
+            .retain(|(entry_height, _), _| *entry_height != height);
+    }
+
+    fn prune_stale_consensus_recovery(&mut self, now: Instant) {
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let retention = self
+            .commit_quorum_timeout()
+            .max(self.subsystems.propose.pacemaker.propose_interval)
+            .max(Duration::from_millis(1))
+            .saturating_mul(8);
+        self.consensus_recovery.retain(|(height, _), entry| {
+            *height >= committed_height.saturating_sub(1)
+                && now.saturating_duration_since(entry.last_attempt) <= retention
+        });
+    }
+
+    fn handle_empty_commit_topology_recovery(
+        &mut self,
+        height: u64,
+        view: u64,
+        block_hash: Option<HashOf<BlockHeader>>,
+        queue_len: usize,
+        now: Instant,
+        warning_kind: ProposalDeferWarningKind,
+        reason: &'static str,
+    ) -> bool {
+        super::status::inc_consensus_empty_commit_topology_defer();
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.inc_consensus_empty_commit_topology_defer();
+        }
+
+        self.prune_stale_consensus_recovery(now);
+
+        enum RecoveryAction {
+            RefreshTopology,
+            TriggerBlockSync,
+            EscalateViewChange,
+            Wait,
+        }
+
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        let consensus_queue_backlog = queue_depths.vote_rx > 0
+            || queue_depths.block_payload_rx > 0
+            || queue_depths.rbc_chunk_rx > 0
+            || queue_depths.block_rx > 0
+            || queue_depths.consensus_rx > 0;
+        let backlog_signals = self.has_unresolved_rbc_backlog() || consensus_queue_backlog;
+        let wait_window_base = self
+            .commit_quorum_timeout()
+            .max(self.subsystems.propose.pacemaker.propose_interval)
+            .max(Duration::from_millis(1));
+        let wait_window =
+            self.backlog_extended_view_change_timeout(wait_window_base, backlog_signals);
+
+        let mut created = false;
+        let mut transition: Option<ConsensusRecoveryState> = None;
+        let inherited = self
+            .consensus_recovery
+            .iter()
+            .filter(|((entry_height, entry_view), _)| *entry_height == height && *entry_view < view)
+            .max_by_key(|((_, entry_view), _)| *entry_view)
+            .map(|(_, entry)| *entry);
+        let (action, active_state, retries, age) = {
+            let entry = match self.consensus_recovery.entry((height, view)) {
+                Entry::Vacant(vacant) => {
+                    if let Some(previous) = inherited {
+                        vacant.insert(ConsensusRecoveryEntry {
+                            state: previous.state,
+                            first_seen: previous.first_seen,
+                            last_attempt: now,
+                            retries: previous.retries,
+                        })
+                    } else {
+                        created = true;
+                        vacant.insert(ConsensusRecoveryEntry {
+                            state: ConsensusRecoveryState::RefreshTopology,
+                            first_seen: now,
+                            last_attempt: now,
+                            retries: 0,
+                        })
+                    }
+                }
+                Entry::Occupied(occupied) => occupied.into_mut(),
+            };
+            entry.last_attempt = now;
+            entry.retries = entry.retries.saturating_add(1);
+            let retries = entry.retries;
+            let age = now.saturating_duration_since(entry.first_seen);
+            let current_state = entry.state;
+            let action = match current_state {
+                ConsensusRecoveryState::RefreshTopology => {
+                    transition = Some(ConsensusRecoveryState::BlockSync);
+                    RecoveryAction::RefreshTopology
+                }
+                ConsensusRecoveryState::BlockSync => {
+                    transition = Some(ConsensusRecoveryState::WaitingForDependencies);
+                    RecoveryAction::TriggerBlockSync
+                }
+                ConsensusRecoveryState::WaitingForDependencies => {
+                    if entry.retries >= EMPTY_COMMIT_TOPOLOGY_RECOVERY_MAX_RETRIES
+                        || age >= wait_window
+                    {
+                        transition = Some(ConsensusRecoveryState::ViewChangeEscalation);
+                        RecoveryAction::EscalateViewChange
+                    } else {
+                        RecoveryAction::Wait
+                    }
+                }
+                ConsensusRecoveryState::ViewChangeEscalation => RecoveryAction::EscalateViewChange,
+            };
+            if let Some(next) = transition {
+                entry.state = next;
+            }
+            (action, entry.state, retries, age)
+        };
+        if inherited.is_some() {
+            self.consensus_recovery
+                .retain(|(entry_height, entry_view), _| {
+                    *entry_height != height || *entry_view >= view
+                });
+        }
+        if created {
+            self.note_consensus_recovery_state_transition(ConsensusRecoveryState::RefreshTopology);
+        }
+        if let Some(next) = transition {
+            self.note_consensus_recovery_state_transition(next);
+        }
+
+        let throttle_hash = block_hash.unwrap_or_else(|| {
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]))
+        });
+        if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
+            warning_kind,
+            height,
+            view,
+            throttle_hash,
+            now,
+            EMPTY_COMMIT_TOPOLOGY_RECOVERY_LOG_COOLDOWN,
+        ) {
+            warn!(
+                height,
+                view,
+                queue_len,
+                retries,
+                age_ms = age.as_millis(),
+                wait_window_ms = wait_window.as_millis(),
+                recovery_state = active_state.as_str(),
+                reason,
+                suppressed_since_last,
+                "deferring consensus path: empty commit topology"
+            );
+        }
+
+        let next_deadline = now
+            .checked_add(
+                self.subsystems
+                    .propose
+                    .pacemaker
+                    .propose_interval
+                    .max(Duration::from_millis(1)),
+            )
+            .unwrap_or(now);
+        self.subsystems.propose.pacemaker.next_deadline = next_deadline;
+
+        match action {
+            RecoveryAction::RefreshTopology => {
+                let refreshed = self.effective_commit_topology();
+                let _ = self.refresh_commit_topology_state(&refreshed);
+                let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+                if !self
+                    .roster_for_live_vote_with_mode(height, consensus_mode)
+                    .is_empty()
+                {
+                    self.clear_consensus_recovery_for_round(height, view);
+                }
+                true
+            }
+            RecoveryAction::TriggerBlockSync => {
+                if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
+                    self.request_missing_block_for_highest_qc_force(
+                        highest,
+                        "empty_commit_topology_recovery",
+                    );
+                }
+                let commit_topology = self.effective_commit_topology();
+                self.request_missing_parents_for_gap(
+                    commit_topology.as_slice(),
+                    None,
+                    "empty_commit_topology_recovery",
+                );
+                true
+            }
+            RecoveryAction::EscalateViewChange => {
+                self.clear_consensus_recovery_for_round(height, view);
+                super::status::inc_consensus_empty_commit_topology_escalation();
+                #[cfg(feature = "telemetry")]
+                if let Some(telemetry) = self.telemetry_handle() {
+                    telemetry.inc_consensus_empty_commit_topology_escalation();
+                }
+                self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingQc);
+                true
+            }
+            RecoveryAction::Wait => false,
+        }
+    }
+
     fn backpressure_override_due(&self, now: Instant) -> bool {
         if self.queue.active_len() == 0 {
             return false;
@@ -14901,6 +15243,10 @@ impl Actor {
         }
         self.subsystems.propose.forced_view_after_timeout = Some((height, next_view));
         self.prune_stale_view_state(height, next_view);
+        self.consensus_recovery
+            .retain(|(entry_height, entry_view), _| {
+                *entry_height != height || *entry_view >= next_view
+            });
         // Drop earlier views for the active height so proposals_seen can't grow unbounded.
         self.subsystems
             .propose
@@ -15034,6 +15380,24 @@ fn missing_qc_timeout_hysteresis_remaining(
 fn saturating_mul_duration(duration: Duration, mul: u32) -> Duration {
     let millis = duration.as_millis();
     let scaled = millis.saturating_mul(u128::from(mul));
+    let capped = scaled.min(u128::from(u64::MAX));
+    Duration::from_millis(u64::try_from(capped).unwrap_or(u64::MAX))
+}
+
+fn saturating_mul_duration_factor(duration: Duration, factor: f64) -> Duration {
+    if duration == Duration::ZERO || !factor.is_finite() || factor <= 0.0 {
+        return Duration::ZERO;
+    }
+    // Keep scaling deterministic and bounded by using a fixed 1/1000 precision grid.
+    let factor_permille = (factor * 1_000.0).round();
+    if factor_permille <= 0.0 {
+        return Duration::ZERO;
+    }
+    let factor_permille = factor_permille.min(u64::MAX as f64) as u128;
+    let millis = duration.as_millis();
+    let scaled = millis
+        .saturating_mul(factor_permille)
+        .saturating_div(1_000_u128);
     let capped = scaled.min(u128::from(u64::MAX));
     Duration::from_millis(u64::try_from(capped).unwrap_or(u64::MAX))
 }
@@ -15735,6 +16099,8 @@ enum ProposalDeferWarningKind {
     ParentMissing,
     InsufficientOnlinePeers,
     ProceedingBelowQuorumAfterGrace,
+    EmptyCommitTopologyProposal,
+    EmptyCommitTopologyFinalize,
 }
 
 #[derive(Debug, Default)]
@@ -15752,7 +16118,12 @@ impl ProposalDeferWarningThrottle {
         now: Instant,
         cooldown: Duration,
     ) -> Option<u64> {
-        let key = (kind, height, view, highest_hash);
+        let normalized_view = match kind {
+            ProposalDeferWarningKind::EmptyCommitTopologyProposal
+            | ProposalDeferWarningKind::EmptyCommitTopologyFinalize => 0,
+            _ => view,
+        };
+        let key = (kind, height, normalized_view, highest_hash);
         if let Some((last_emit, suppressed)) = self.entries.get_mut(&key) {
             if cooldown > Duration::ZERO && now.saturating_duration_since(*last_emit) < cooldown {
                 *suppressed = suppressed.saturating_add(1);
@@ -15813,6 +16184,69 @@ impl MissingQcWarningThrottle {
         self.entries
             .retain(|_, (recorded, _)| now.saturating_duration_since(*recorded) <= expiry_window);
     }
+}
+
+#[derive(Debug, Default)]
+struct RosterSidecarMismatchWarningThrottle {
+    entries: BTreeMap<(u64, HashOf<BlockHeader>, HashOf<BlockHeader>), (Instant, u64)>,
+}
+
+impl RosterSidecarMismatchWarningThrottle {
+    fn allow(
+        &mut self,
+        height: u64,
+        expected: HashOf<BlockHeader>,
+        stored: HashOf<BlockHeader>,
+        now: Instant,
+        cooldown: Duration,
+    ) -> Option<u64> {
+        let key = (height, expected, stored);
+        if let Some((last_emit, suppressed)) = self.entries.get_mut(&key) {
+            if cooldown > Duration::ZERO && now.saturating_duration_since(*last_emit) < cooldown {
+                *suppressed = suppressed.saturating_add(1);
+                return None;
+            }
+            let suppressed_since_last = *suppressed;
+            *last_emit = now;
+            *suppressed = 0;
+            self.gc(now, cooldown);
+            return Some(suppressed_since_last);
+        }
+        self.entries.insert(key, (now, 0));
+        self.gc(now, cooldown);
+        Some(0)
+    }
+
+    fn gc(&mut self, now: Instant, cooldown: Duration) {
+        let expiry_window = if cooldown > Duration::ZERO {
+            cooldown.saturating_mul(8)
+        } else {
+            Duration::from_secs(1)
+        };
+        self.entries
+            .retain(|_, (recorded, _)| now.saturating_duration_since(*recorded) <= expiry_window);
+    }
+}
+
+static ROSTER_SIDECAR_MISMATCH_WARNING_THROTTLE: LazyLock<
+    Mutex<RosterSidecarMismatchWarningThrottle>,
+> = LazyLock::new(|| Mutex::new(RosterSidecarMismatchWarningThrottle::default()));
+
+fn allow_roster_sidecar_mismatch_warning(
+    height: u64,
+    expected: HashOf<BlockHeader>,
+    stored: HashOf<BlockHeader>,
+) -> Option<u64> {
+    ROSTER_SIDECAR_MISMATCH_WARNING_THROTTLE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .allow(
+            height,
+            expected,
+            stored,
+            Instant::now(),
+            ROSTER_SIDECAR_MISMATCH_LOG_COOLDOWN,
+        )
 }
 
 #[cfg(test)]
@@ -16076,6 +16510,49 @@ mod proposal_defer_warning_throttle_tests {
             Some(1)
         );
     }
+
+    #[test]
+    fn proposal_defer_warning_throttle_coalesces_empty_topology_across_views() {
+        let mut throttle = ProposalDeferWarningThrottle::default();
+        let now = Instant::now();
+        let cooldown = Duration::from_millis(40);
+        let hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([32; Hash::LENGTH]));
+
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+                12,
+                1,
+                hash,
+                now,
+                cooldown,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+                12,
+                2,
+                hash,
+                now + Duration::from_millis(10),
+                cooldown,
+            ),
+            None
+        );
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+                12,
+                3,
+                hash,
+                now + Duration::from_millis(60),
+                cooldown,
+            ),
+            Some(1)
+        );
+    }
 }
 
 #[cfg(test)]
@@ -16096,6 +16573,47 @@ mod missing_qc_warning_throttle_tests {
         );
         assert_eq!(
             throttle.allow(10, 0, now + Duration::from_millis(70), cooldown),
+            Some(1)
+        );
+    }
+}
+
+#[cfg(test)]
+mod roster_sidecar_mismatch_warning_throttle_tests {
+    use super::RosterSidecarMismatchWarningThrottle;
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn roster_sidecar_mismatch_warning_throttle_aggregates_suppressed_events() {
+        let mut throttle = RosterSidecarMismatchWarningThrottle::default();
+        let now = Instant::now();
+        let cooldown = Duration::from_millis(50);
+        let expected =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([41; Hash::LENGTH]));
+        let stored =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([42; Hash::LENGTH]));
+
+        assert_eq!(throttle.allow(8, expected, stored, now, cooldown), Some(0));
+        assert_eq!(
+            throttle.allow(
+                8,
+                expected,
+                stored,
+                now + Duration::from_millis(10),
+                cooldown
+            ),
+            None
+        );
+        assert_eq!(
+            throttle.allow(
+                8,
+                expected,
+                stored,
+                now + Duration::from_millis(80),
+                cooldown
+            ),
             Some(1)
         );
     }

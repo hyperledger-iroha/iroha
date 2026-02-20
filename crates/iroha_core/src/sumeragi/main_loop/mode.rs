@@ -186,7 +186,11 @@ impl Actor {
         self.vote_log.clear();
         self.vote_validation_cache.clear();
         self.deferred_votes.clear();
+        self.consensus_recovery.clear();
         self.deferred_qcs.clear();
+        self.deferred_qc_roster_state.clear();
+        self.deferred_missing_payload_qcs.clear();
+        self.quarantined_block_sync_qcs.clear();
         self.vote_roster_cache.clear();
         let now = Instant::now();
         let (effective_mode, pacemaker_block_time, pacemaker_timeouts) = {

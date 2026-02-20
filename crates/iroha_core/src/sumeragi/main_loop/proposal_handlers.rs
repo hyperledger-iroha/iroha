@@ -2087,6 +2087,7 @@ impl Actor {
                 }
             }
             let _ = self.try_replay_deferred_qcs();
+            let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
         }
         let qc_replay_ms = u64::try_from(qc_replay_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.request_commit_pipeline();

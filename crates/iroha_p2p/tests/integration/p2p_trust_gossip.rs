@@ -82,6 +82,11 @@ fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
         idle_timeout: Duration::from_secs(10),
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: TRUST_DECAY_HALF_LIFE,

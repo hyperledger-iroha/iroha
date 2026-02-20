@@ -746,6 +746,10 @@ pub mod network {
     pub const CONNECT_STARTUP_DELAY: Duration = Duration::from_millis(0);
     /// Timeout applied to an individual outbound dial attempt (TCP/TLS/QUIC/WS).
     pub const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
+    /// Maximum age for deferred outbound frames queued while peer session is missing.
+    pub const DEFERRED_SEND_TTL_MS: u64 = 1_500;
+    /// Maximum deferred outbound frames retained per peer while session is missing.
+    pub const DEFERRED_SEND_MAX_PER_PEER: usize = 256;
     /// Idle timeout before expiring accept throttle buckets.
     pub const ACCEPT_BUCKET_IDLE: Duration = Duration::from_mins(10);
     /// Maximum number of accept throttle buckets to retain.
@@ -2510,6 +2514,12 @@ pub mod sumeragi {
     /// Default number of missing-block fetch attempts before falling back to the full topology.
     /// A value of 0 disables signer preference.
     pub const MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: u32 = 1;
+    /// Backlog-aware multiplier applied to quorum-reschedule grace windows.
+    pub const VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR: f64 = 1.5;
+    /// Maximum additional quorum-reschedule grace window under backlog (milliseconds).
+    pub const VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS: u64 = 200;
+    /// TTL for deferred QC missing-payload recovery before escalation (milliseconds).
+    pub const DEFERRED_QC_TTL_MS: u64 = 2_000;
     /// Consecutive membership mismatches required before alerting.
     pub const MEMBERSHIP_MISMATCH_ALERT_THRESHOLD: u32 = 1;
     /// Whether to drop consensus messages from peers with repeated membership mismatches.

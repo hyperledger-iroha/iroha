@@ -636,6 +636,10 @@ mod tests {
                 idle_timeout: std::time::Duration::from_secs(5),
                 connect_startup_delay: defaults::network::CONNECT_STARTUP_DELAY,
                 dial_timeout: defaults::network::DIAL_TIMEOUT,
+                deferred_send_ttl: Duration::from_millis(
+                    defaults::network::DEFERRED_SEND_TTL_MS,
+                ),
+                deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
                 peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
                 peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
                 trust_decay_half_life: defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -1097,6 +1101,14 @@ mod tests {
                 recovery: iroha_config::parameters::actual::SumeragiRecovery {
                     missing_block_signer_fallback_attempts: iroha_config::parameters::defaults::sumeragi::
                         MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+                    view_change_backlog_extension_factor:
+                        iroha_config::parameters::defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR,
+                    view_change_backlog_extension_cap: std::time::Duration::from_millis(
+                        iroha_config::parameters::defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS,
+                    ),
+                    deferred_qc_ttl: std::time::Duration::from_millis(
+                        iroha_config::parameters::defaults::sumeragi::DEFERRED_QC_TTL_MS,
+                    ),
                 },
                 gating: iroha_config::parameters::actual::SumeragiGating {
                     future_height_window: iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,

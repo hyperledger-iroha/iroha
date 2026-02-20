@@ -2199,15 +2199,19 @@ impl Actor {
             "finalizing pending block with commit topology"
         );
         if commit_topology.is_empty() {
-            warn!(
-                height = pending_height,
-                view = pending_view,
-                block = %block_hash,
-                "deferring finalize: empty commit roster"
+            let _ = self.handle_empty_commit_topology_recovery(
+                pending_height,
+                pending_view,
+                Some(block_hash),
+                self.queue.queued_len(),
+                now,
+                ProposalDeferWarningKind::EmptyCommitTopologyFinalize,
+                "finalize_pending_block",
             );
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
+        self.clear_consensus_recovery_for_round(pending_height, pending_view);
         let canonical_topology = super::network_topology::Topology::new(commit_topology.clone());
         let mut topology = canonical_topology.clone();
         if let Err(err) = self.leader_index_for(&mut topology, pending_height, pending_view) {
@@ -5139,6 +5143,10 @@ impl Actor {
         self.deferred_votes.remove(&block_hash);
         self.deferred_qcs
             .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+        self.deferred_missing_payload_qcs
+            .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+        self.quarantined_block_sync_qcs
+            .retain(|(_, hash, _, _, _), _| *hash != block_hash);
         let payload_keys: Vec<_> = self
             .subsystems
             .da_rbc
@@ -5846,7 +5854,11 @@ impl Actor {
         self.vote_log.clear();
         self.vote_validation_cache.clear();
         self.deferred_votes.clear();
+        self.consensus_recovery.clear();
         self.deferred_qcs.clear();
+        self.deferred_qc_roster_state.clear();
+        self.deferred_missing_payload_qcs.clear();
+        self.quarantined_block_sync_qcs.clear();
         self.vote_roster_cache.clear();
         self.qc_cache.clear();
         self.qc_signer_tally.clear();
