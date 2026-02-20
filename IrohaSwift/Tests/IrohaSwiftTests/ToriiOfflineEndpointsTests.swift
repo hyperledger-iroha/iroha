@@ -508,4 +508,259 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         XCTAssertEqual(result.registration.certificateIdHex, "beadfeed")
         XCTAssertTrue(queue.isEmpty)
     }
+
+    func testGetSettlementStatusReturnsSettledWhenSettlementRecordExists() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let assetId = "rose#wonderland#\(accountId)"
+        let settlementPayload = """
+        {
+          "items": [{
+            "bundle_id_hex": "aa",
+            "controller_id": "\(accountId)",
+            "controller_display": "\(accountId)",
+            "receiver_id": "\(accountId)",
+            "receiver_display": "\(accountId)",
+            "deposit_account_id": "\(accountId)",
+            "deposit_account_display": "\(accountId)",
+            "asset_id": "\(assetId)",
+            "receipt_count": 1,
+            "total_amount": "10",
+            "claimed_delta": "10",
+            "status": "settled",
+            "recorded_at_ms": 123,
+            "recorded_at_height": 456,
+            "transfer": { "bundle_id": "aa" }
+          }],
+          "total": 1
+        }
+        """.data(using: .utf8)!
+        var queue = [settlementPayload]
+
+        OfflineStubURLProtocol.handler = { request in
+            guard request.httpMethod == "POST",
+                  request.url?.path == "/v1/offline/settlements/query",
+                  let payload = queue.first else {
+                throw URLError(.badServerResponse)
+            }
+            queue.removeFirst()
+            let body = try XCTUnwrap(self.requestBody(from: request))
+            let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let filter = try XCTUnwrap(envelope["filter"] as? [String: Any])
+            XCTAssertEqual(filter["op"] as? String, "eq")
+            let args = try XCTUnwrap(filter["args"] as? [Any])
+            XCTAssertEqual(args.count, 2)
+            XCTAssertEqual(args[0] as? String, "bundle_id_hex")
+            XCTAssertEqual(args[1] as? String, "aa")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, payload)
+        }
+
+        let client = makeClient()
+        let status = try await client.getSettlementStatus(bundleIdHex: "aa")
+        XCTAssertEqual(status, .settled)
+        XCTAssertTrue(queue.isEmpty)
+    }
+
+    func testGetSettlementStatusReturnsPendingAfterAcceptedSubmit() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let submitPayload = """
+        {"bundle_id_hex": "aa"}
+        """.data(using: .utf8)!
+        let emptyListPayload = """
+        {"items": [], "total": 0}
+        """.data(using: .utf8)!
+        var step = 0
+
+        OfflineStubURLProtocol.handler = { request in
+            step += 1
+            switch step {
+            case 1:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, submitPayload)
+            case 2:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements/query")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, emptyListPayload)
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+
+        let request = ToriiOfflineSettlementSubmitRequest(
+            authority: accountId,
+            privateKey: "ed0120deadbeef",
+            transfer: .object(["bundle_id": .string("aa")])
+        )
+        let client = makeClient()
+        _ = try await client.submitOfflineSettlement(request)
+        let status = try await client.getOfflineSettlementStatus(bundleIdHex: "aa")
+        XCTAssertEqual(status, .pending)
+        XCTAssertEqual(step, 2)
+    }
+
+    func testGetSettlementStatusReturnsRejectedFromSubmitRejectCode() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let emptyListPayload = """
+        {"items": [], "total": 0}
+        """.data(using: .utf8)!
+        let rejectCode = "offline_reason::commitment_mismatch"
+        var step = 0
+
+        OfflineStubURLProtocol.handler = { request in
+            step += 1
+            switch step {
+            case 1:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 422,
+                                               httpVersion: nil,
+                                               headerFields: ["x-iroha-reject-code": rejectCode])!
+                return (response, Data())
+            case 2:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements/query")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, emptyListPayload)
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+
+        let request = ToriiOfflineSettlementSubmitRequest(
+            authority: accountId,
+            privateKey: "ed0120deadbeef",
+            transfer: .object(["bundle_id": .string("aa")])
+        )
+        let client = makeClient()
+        do {
+            _ = try await client.submitOfflineSettlement(request)
+            XCTFail("expected submit to fail")
+        } catch let error as ToriiClientError {
+            guard case let .httpStatus(code, _, headerRejectCode) = error else {
+                XCTFail("unexpected error type: \(error)")
+                return
+            }
+            XCTAssertEqual(code, 422)
+            XCTAssertEqual(headerRejectCode, rejectCode)
+        }
+
+        let status = try await client.getSettlementStatus(bundleIdHex: "aa")
+        XCTAssertEqual(status, .rejected(reason: rejectCode))
+        XCTAssertEqual(step, 2)
+    }
+
+    func testGetSettlementStatusReturnsRejectedReasonFromRevocation() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let settlementPayload = """
+        {
+          "items": [{
+            "bundle_id_hex": "aa",
+            "controller_id": "\(accountId)",
+            "controller_display": "\(accountId)",
+            "receiver_id": "\(accountId)",
+            "receiver_display": "\(accountId)",
+            "deposit_account_id": "\(accountId)",
+            "deposit_account_display": "\(accountId)",
+            "receipt_count": 1,
+            "total_amount": "10",
+            "claimed_delta": "10",
+            "status": "rejected",
+            "recorded_at_ms": 123,
+            "recorded_at_height": 456,
+            "verdict_id_hex": "beef",
+            "transfer": {}
+          }],
+          "total": 1
+        }
+        """.data(using: .utf8)!
+        let revocationPayload = """
+        {
+          "items": [{
+            "verdict_id_hex": "beef",
+            "issuer_id": "\(accountId)",
+            "issuer_display": "\(accountId)",
+            "revoked_at_ms": 124,
+            "reason": "policy_violation",
+            "record": {"reason": "policy_violation"}
+          }],
+          "total": 1
+        }
+        """.data(using: .utf8)!
+        var step = 0
+
+        OfflineStubURLProtocol.handler = { request in
+            step += 1
+            switch step {
+            case 1:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements/query")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, settlementPayload)
+            case 2:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/revocations/query")
+                let body = try XCTUnwrap(self.requestBody(from: request))
+                let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                let filter = try XCTUnwrap(envelope["filter"] as? [String: Any])
+                let args = try XCTUnwrap(filter["args"] as? [Any])
+                XCTAssertEqual(args.count, 2)
+                XCTAssertEqual(args[0] as? String, "verdict_id_hex")
+                XCTAssertEqual(args[1] as? String, "beef")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, revocationPayload)
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+
+        let client = makeClient()
+        let status = try await client.getSettlementStatus(bundleIdHex: "aa")
+        XCTAssertEqual(status, .rejected(reason: "policy_violation"))
+        XCTAssertEqual(step, 2)
+    }
+
+    func testGetSettlementStatusReturnsUnknownForUnobservedBundle() async throws {
+        let emptyListPayload = """
+        {"items": [], "total": 0}
+        """.data(using: .utf8)!
+        var invoked = false
+
+        OfflineStubURLProtocol.handler = { request in
+            invoked = true
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/offline/settlements/query")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, emptyListPayload)
+        }
+
+        let client = makeClient()
+        let status = try await client.getSettlementStatus(bundleIdHex: "aa")
+        XCTAssertEqual(status, .unknown)
+        XCTAssertTrue(invoked)
+    }
 }

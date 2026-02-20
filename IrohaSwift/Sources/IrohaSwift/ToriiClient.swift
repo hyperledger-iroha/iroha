@@ -2916,6 +2916,28 @@ public struct ToriiOfflineTransferList: Decodable, Sendable {
     public let total: UInt64
 }
 
+/// Execution outcome for an offline settlement bundle.
+///
+/// Semantics:
+/// - ``settled``: a settlement record exists on Torii (`status=settled|archived`).
+/// - ``pending``: the bundle was submitted by this client but no settlement record exists yet.
+/// - ``rejected(reason:)``: a submit rejection was observed locally or the server reported a rejected status.
+/// - ``unknown``: no settlement record exists and this client has no local submit outcome for the bundle.
+public enum ToriiSettlementExecutionStatus: Sendable, Equatable {
+    case settled
+    case rejected(reason: String?)
+    case pending
+    case unknown
+
+    /// Rejection reason when ``self`` is ``rejected(reason:)``.
+    public var rejectionReason: String? {
+        guard case .rejected(let reason) = self else {
+            return nil
+        }
+        return reason
+    }
+}
+
 public struct ToriiOfflineReceiptListItem: Decodable, Sendable, Equatable {
     public let bundleIdHex: String
     public let txIdHex: String
@@ -7865,6 +7887,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     private var statusState = ToriiStatusState()
     private var dataModelCompatibility = ToriiDataModelCompatibility.unknown
     private let dataModelQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.data-model")
+    private var cachedOfflineSettlementStatusByBundleIdHex: [String: ToriiSettlementExecutionStatus] = [:]
+    private let offlineSettlementStatusQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.offline-settlement-status")
     private static let defaultListPageSize = 100
 
     public init(baseURL: URL, session: URLSession = .shared) {
@@ -8280,6 +8304,18 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func queryOfflineSettlements(_ envelope: ToriiQueryEnvelope,
                                         completion: @escaping (Result<ToriiOfflineTransferList, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.queryOfflineSettlements(envelope) }
+    }
+
+    @discardableResult
+    public func getSettlementStatus(bundleIdHex: String,
+                                    completion: @escaping (Result<ToriiSettlementExecutionStatus, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getSettlementStatus(bundleIdHex: bundleIdHex) }
+    }
+
+    @discardableResult
+    public func getOfflineSettlementStatus(bundleIdHex: String,
+                                           completion: @escaping (Result<ToriiSettlementExecutionStatus, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getOfflineSettlementStatus(bundleIdHex: bundleIdHex) }
     }
 
     @discardableResult
@@ -9367,6 +9403,37 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiOfflineTransferList.self, from: data)
     }
 
+    /// Resolves settlement execution status for a specific offline bundle id.
+    ///
+    /// This method combines server settlement rows with local submit outcomes:
+    /// - server row present with `settled`/`archived` -> ``ToriiSettlementExecutionStatus/settled``
+    /// - server row present with `rejected` -> ``ToriiSettlementExecutionStatus/rejected(reason:)``
+    /// - no server row but this client submitted the bundle -> ``ToriiSettlementExecutionStatus/pending``
+    /// - no row and no local knowledge -> ``ToriiSettlementExecutionStatus/unknown``
+    public func getSettlementStatus(bundleIdHex: String) async throws -> ToriiSettlementExecutionStatus {
+        let normalizedBundleId = try Self.normalizeBundleIdHex(bundleIdHex, field: "bundleIdHex")
+        let envelope = ToriiQueryEnvelope(
+            filter: Self.queryEqualsFilter(field: "bundle_id_hex", value: normalizedBundleId),
+            sort: [ToriiQuerySortKey(key: "recorded_at_ms", order: .desc)],
+            pagination: ToriiQueryPagination(limit: 1, offset: 0)
+        )
+        let settlements = try await queryOfflineSettlements(envelope)
+        if let item = settlements.items.first {
+            let resolved = try await settlementStatus(from: item)
+            cacheOfflineSettlementStatus(resolved, bundleIdHex: normalizedBundleId)
+            return resolved
+        }
+        if let cached = cachedOfflineSettlementStatus(bundleIdHex: normalizedBundleId) {
+            return cached
+        }
+        return .unknown
+    }
+
+    /// Alias for ``getSettlementStatus(bundleIdHex:)``.
+    public func getOfflineSettlementStatus(bundleIdHex: String) async throws -> ToriiSettlementExecutionStatus {
+        try await getSettlementStatus(bundleIdHex: bundleIdHex)
+    }
+
     public func queryOfflineRevocations(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineRevocationList {
         let encoder = JSONEncoder()
         let body = try encoder.encode(envelope)
@@ -9473,14 +9540,28 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func submitOfflineSettlement(_ requestBody: ToriiOfflineSettlementSubmitRequest) async throws -> ToriiOfflineSettlementSubmitResponse {
+        let normalizedBundleId = Self.extractBundleIdHex(from: requestBody.transfer)
         let encoder = JSONEncoder()
         let body = try encoder.encode(requestBody)
         let request = try makeRequest(path: "/v1/offline/settlements",
                                       method: .post,
                                       body: body,
                                       headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineSettlementSubmitResponse.self, from: data)
+        do {
+            let data = try await data(for: request)
+            let response = try decodeJSON(ToriiOfflineSettlementSubmitResponse.self, from: data)
+            let cachedBundleId = (try? Self.normalizeBundleIdHex(response.bundleIdHex, field: "bundle_id_hex")) ?? normalizedBundleId
+            if let cachedBundleId {
+                cacheOfflineSettlementStatus(.pending, bundleIdHex: cachedBundleId)
+            }
+            return response
+        } catch {
+            if let normalizedBundleId,
+               let rejectCode = Self.extractRejectCode(from: error) {
+                cacheOfflineSettlementStatus(.rejected(reason: rejectCode), bundleIdHex: normalizedBundleId)
+            }
+            throw error
+        }
     }
 
     public func requestOfflineTransferProof(_ requestBody: ToriiOfflineTransferProofRequest) async throws -> ToriiJSONValue {
@@ -11724,6 +11805,159 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       eventId: parsed.id,
                                       retryHintMilliseconds: parsed.retry,
                                       rawEvent: parsed.raw)
+    }
+
+    private func settlementStatus(from item: ToriiOfflineTransferItem) async throws -> ToriiSettlementExecutionStatus {
+        let normalizedStatus = item.status
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        switch normalizedStatus {
+        case "settled", "archived":
+            return .settled
+        case "rejected":
+            let reason = try await settlementRejectionReason(from: item)
+            return .rejected(reason: reason)
+        case "pending", "queued", "in_pool", "in-pool", "pool":
+            return .pending
+        default:
+            return .unknown
+        }
+    }
+
+    private func settlementRejectionReason(from item: ToriiOfflineTransferItem) async throws -> String? {
+        if let reason = Self.extractRejectionReason(from: item.transfer) {
+            return reason
+        }
+        guard let verdictIdHex = item.verdictIdHex,
+              let normalizedVerdictIdHex = try? Self.normalizeBundleIdHex(verdictIdHex,
+                                                                           field: "verdictIdHex") else {
+            return nil
+        }
+        let envelope = ToriiQueryEnvelope(
+            filter: Self.queryEqualsFilter(field: "verdict_id_hex", value: normalizedVerdictIdHex),
+            sort: [ToriiQuerySortKey(key: "revoked_at_ms", order: .desc)],
+            pagination: ToriiQueryPagination(limit: 1, offset: 0)
+        )
+        let revocations = try await queryOfflineRevocations(envelope)
+        return revocations.items.first?.reason
+    }
+
+    private func cacheOfflineSettlementStatus(_ status: ToriiSettlementExecutionStatus,
+                                              bundleIdHex: String) {
+        offlineSettlementStatusQueue.sync {
+            cachedOfflineSettlementStatusByBundleIdHex[bundleIdHex] = status
+        }
+    }
+
+    private func cachedOfflineSettlementStatus(bundleIdHex: String) -> ToriiSettlementExecutionStatus? {
+        offlineSettlementStatusQueue.sync {
+            cachedOfflineSettlementStatusByBundleIdHex[bundleIdHex]
+        }
+    }
+
+    private static func extractRejectCode(from error: Error) -> String? {
+        guard let clientError = error as? ToriiClientError else {
+            return nil
+        }
+        guard case let .httpStatus(_, _, rejectCode) = clientError else {
+            return nil
+        }
+        return rejectCode
+    }
+
+    private static func queryEqualsFilter(field: String, value: String) -> ToriiJSONValue {
+        .object([
+            "op": .string("eq"),
+            "args": .array([.string(field), .string(value)])
+        ])
+    }
+
+    private static func normalizeBundleIdHex(_ bundleIdHex: String,
+                                             field: String) throws -> String {
+        let trimmed = try ToriiRequestValidation.normalizedNonEmpty(bundleIdHex, field: field)
+        if trimmed.lowercased().hasPrefix("hash:") {
+            return try normalizeHashLiteralBundleId(trimmed, field: field)
+        }
+        var normalized = trimmed
+        if normalized.hasPrefix("0x") || normalized.hasPrefix("0X") {
+            normalized = String(normalized.dropFirst(2))
+        }
+        guard Data(hexString: normalized) != nil else {
+            throw ToriiClientError.invalidPayload("\(field) must be a valid hex string.")
+        }
+        return normalized.lowercased()
+    }
+
+    private static func normalizeHashLiteralBundleId(_ literal: String,
+                                                     field: String) throws -> String {
+        guard let separator = literal.lastIndex(of: "#") else {
+            throw ToriiClientError.invalidPayload("\(field) must be a valid hash literal.")
+        }
+        let start = literal.index(literal.startIndex, offsetBy: 5)
+        guard separator > start else {
+            throw ToriiClientError.invalidPayload("\(field) must be a valid hash literal.")
+        }
+        let body = String(literal[start..<separator])
+        let checksum = String(literal[literal.index(after: separator)...])
+        guard !body.isEmpty,
+              checksum.count == 4,
+              UInt16(checksum, radix: 16) != nil,
+              Data(hexString: body) != nil else {
+            throw ToriiClientError.invalidPayload("\(field) must be a valid hash literal.")
+        }
+        return body.lowercased()
+    }
+
+    private static func extractBundleIdHex(from transfer: ToriiJSONValue) -> String? {
+        guard case let .object(transferObject) = transfer else {
+            return nil
+        }
+        if let explicit = transferObject["bundle_id_hex"]?.normalizedString,
+           let normalized = try? normalizeBundleIdHex(explicit, field: "transfer.bundle_id_hex") {
+            return normalized
+        }
+        if let literal = transferObject["bundle_id"]?.normalizedString,
+           let normalized = try? normalizeBundleIdHex(literal, field: "transfer.bundle_id") {
+            return normalized
+        }
+        return nil
+    }
+
+    private static func extractRejectionReason(from transfer: ToriiJSONValue) -> String? {
+        guard case let .object(record) = transfer else {
+            return nil
+        }
+        if let reason = firstNormalizedString(in: record,
+                                              keys: ["rejection_reason", "reject_code", "reason"]) {
+            return reason
+        }
+        if let rejection = objectValue(record["rejection"]),
+           let reason = firstNormalizedString(in: rejection,
+                                              keys: ["reason", "code", "reject_code"]) {
+            return reason
+        }
+        if let error = objectValue(record["error"]),
+           let reason = firstNormalizedString(in: error,
+                                              keys: ["reason", "code", "reject_code"]) {
+            return reason
+        }
+        return nil
+    }
+
+    private static func objectValue(_ value: ToriiJSONValue?) -> [String: ToriiJSONValue]? {
+        guard let value else { return nil }
+        guard case let .object(object) = value else { return nil }
+        return object
+    }
+
+    private static func firstNormalizedString(in object: [String: ToriiJSONValue],
+                                              keys: [String]) -> String? {
+        for key in keys {
+            if let value = object[key]?.normalizedString {
+                return value
+            }
+        }
+        return nil
     }
 
     private struct ToriiProofEventEnvelope: Decodable {

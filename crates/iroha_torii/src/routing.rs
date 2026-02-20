@@ -3903,10 +3903,23 @@ pub async fn handle_v1_sumeragi_collectors(
     let tail = topology.proxy_tail_index();
     let available = n.saturating_sub(tail);
     let current_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+    let fallback_mode = match snap.mode_tag.as_str() {
+        iroha_core::sumeragi::consensus::NPOS_TAG | "Npos" => ConsensusMode::Npos,
+        iroha_core::sumeragi::consensus::PERMISSIONED_TAG | "Permissioned" => {
+            ConsensusMode::Permissioned
+        }
+        _ => {
+            if world.sumeragi_npos_parameters().is_some() {
+                ConsensusMode::Npos
+            } else {
+                ConsensusMode::Permissioned
+            }
+        }
+    };
     let mode = sumeragi::effective_consensus_mode_for_height_from_world(
         &world,
         current_height,
-        ConsensusMode::Permissioned,
+        fallback_mode,
     );
     let (mut k_raw, redundant_send_r, seed_from_mode) = match mode {
         ConsensusMode::Permissioned => {
@@ -25437,12 +25450,18 @@ pub async fn handle_v1_sumeragi_vrf_penalties(
             ))
         })?
     };
+    let (penalty_epoch, committed_total, no_participation_total, late_reveals_total) =
+        status::vrf_penalty_snapshot();
     if let Some(r) = iroha_core::sumeragi::epoch_report::get(ep) {
         let payload = crate::json_object(vec![
             json_entry("epoch", r.epoch),
             json_entry("roster_len", r.roster_len),
             json_entry("committed_no_reveal", r.committed_no_reveal),
             json_entry("no_participation", r.no_participation),
+            json_entry("vrf_penalty_epoch", penalty_epoch),
+            json_entry("vrf_committed_no_reveal_total", committed_total),
+            json_entry("vrf_no_participation_total", no_participation_total),
+            json_entry("vrf_late_reveals_total", late_reveals_total),
         ]);
         let body = norito::json::to_json_pretty(&payload).map_err(|e| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -25460,8 +25479,12 @@ pub async fn handle_v1_sumeragi_vrf_penalties(
         let payload = crate::json_object(vec![
             json_entry("epoch", ep),
             json_entry("roster_len", 0u64),
-            json_entry("committed_no_reveal", Vec::<String>::new()),
-            json_entry("no_participation", Vec::<String>::new()),
+            json_entry("committed_no_reveal", Vec::<u32>::new()),
+            json_entry("no_participation", Vec::<u32>::new()),
+            json_entry("vrf_penalty_epoch", penalty_epoch),
+            json_entry("vrf_committed_no_reveal_total", committed_total),
+            json_entry("vrf_no_participation_total", no_participation_total),
+            json_entry("vrf_late_reveals_total", late_reveals_total),
         ]);
         let body = norito::json::to_json_pretty(&payload).map_err(|e| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -25491,6 +25514,17 @@ pub async fn handle_v1_sumeragi_vrf_epoch(
         .map(|(_, rec)| rec.clone());
 
     let payload = if let Some(record) = record_opt {
+        let late_reveals_total = u64::try_from(record.late_reveals.len()).unwrap_or(0);
+        let late_reveals: Vec<Value> = record
+            .late_reveals
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("signer", entry.signer),
+                    json_entry("noted_at_height", entry.noted_at_height),
+                ])
+            })
+            .collect();
         let participants: Vec<Value> = record
             .participants
             .iter()
@@ -25521,6 +25555,8 @@ pub async fn handle_v1_sumeragi_vrf_epoch(
             json_entry("participants", Value::Array(participants)),
             json_entry("committed_no_reveal", record.committed_no_reveal.clone()),
             json_entry("no_participation", record.no_participation.clone()),
+            json_entry("late_reveals_total", late_reveals_total),
+            json_entry("late_reveals", Value::Array(late_reveals)),
         ])
     } else {
         crate::json_object(vec![
@@ -25536,6 +25572,8 @@ pub async fn handle_v1_sumeragi_vrf_epoch(
             json_entry("participants", Value::Array(Vec::new())),
             json_entry("committed_no_reveal", Vec::<u32>::new()),
             json_entry("no_participation", Vec::<u32>::new()),
+            json_entry("late_reveals_total", 0u64),
+            json_entry("late_reveals", Value::Array(Vec::new())),
         ])
     };
 
