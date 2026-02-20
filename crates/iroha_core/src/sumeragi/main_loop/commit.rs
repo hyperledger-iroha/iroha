@@ -183,8 +183,7 @@ pub(super) fn spawn_commit_worker(
     let result_queue_cap = result_queue_cap.max(1);
     let (work_tx, work_rx) = mpsc::sync_channel::<CommitWork>(work_queue_cap);
     let (result_tx, result_rx) = mpsc::sync_channel::<CommitResult>(result_queue_cap);
-    let join_handle = std::thread::Builder::new()
-        .name("sumeragi-commit".to_owned())
+    let join_handle = crate::sumeragi::sumeragi_thread_builder("sumeragi-commit")
         .spawn(move || {
             while let Ok(work) = work_rx.recv() {
                 let id = work.id;

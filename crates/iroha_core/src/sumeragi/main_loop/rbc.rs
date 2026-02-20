@@ -208,9 +208,8 @@ fn spawn_rbc_persist_worker(
         cfg.max_sessions,
         cfg.max_bytes,
     )?;
-    let join_handle = std::thread::Builder::new()
-        .name("sumeragi-rbc-persist".to_owned())
-        .spawn(move || {
+    let join_handle =
+        crate::sumeragi::sumeragi_thread_builder("sumeragi-rbc-persist").spawn(move || {
             while let Ok(work) = work_rx.recv() {
                 let key = work.key;
                 let outcome = store.persist_snapshot(&work.persisted);
@@ -239,49 +238,46 @@ fn spawn_rbc_seed_worker(wake_tx: Option<mpsc::SyncSender<()>>) -> io::Result<Rb
         let result_tx = result_tx.clone();
         let wake_tx = wake_tx.clone();
         let thread_name = format!("sumeragi-rbc-seed-{idx}");
-        let handle = std::thread::Builder::new()
-            .name(thread_name)
-            .spawn(move || {
-                loop {
-                    let work = {
-                        let guard = match work_rx.lock() {
-                            Ok(guard) => guard,
-                            Err(poisoned) => poisoned.into_inner(),
-                        };
-                        guard.recv()
+        let handle = crate::sumeragi::sumeragi_thread_builder(thread_name).spawn(move || {
+            loop {
+                let work = {
+                    let guard = match work_rx.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
                     };
-                    let Ok(work) = work else {
-                        break;
-                    };
-                    let key = work.key;
-                    let payload_hash = work.payload_hash;
-                    let outcome = Actor::build_rbc_session_from_payload(
-                        &work.payload_bytes,
+                    guard.recv()
+                };
+                let Ok(work) = work else {
+                    break;
+                };
+                let key = work.key;
+                let payload_hash = work.payload_hash;
+                let outcome = Actor::build_rbc_session_from_payload(
+                    &work.payload_bytes,
+                    payload_hash,
+                    work.chunk_size,
+                    work.epoch,
+                )
+                .map_err(eyre::Report::from);
+                if result_tx
+                    .send(RbcSeedResult {
+                        key,
                         payload_hash,
-                        work.chunk_size,
-                        work.epoch,
-                    )
-                    .map_err(eyre::Report::from);
-                    if result_tx
-                        .send(RbcSeedResult {
-                            key,
-                            payload_hash,
-                            outcome,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                    if let Some(wake) = wake_tx.as_ref() {
-                        let _ = wake.try_send(());
-                    }
+                        outcome,
+                    })
+                    .is_err()
+                {
+                    break;
                 }
-            })?;
+                if let Some(wake) = wake_tx.as_ref() {
+                    let _ = wake.try_send(());
+                }
+            }
+        })?;
         worker_handles.push(handle);
     }
     drop(result_tx);
-    let join_handle = std::thread::Builder::new()
-        .name("sumeragi-rbc-seed-supervisor".to_owned())
+    let join_handle = crate::sumeragi::sumeragi_thread_builder("sumeragi-rbc-seed-supervisor")
         .spawn(move || {
             for handle in worker_handles {
                 if handle.join().is_err() {
