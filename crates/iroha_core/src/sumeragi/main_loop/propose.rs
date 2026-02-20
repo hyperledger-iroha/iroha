@@ -1755,7 +1755,8 @@ impl Actor {
             (pending.block.clone(), pending.block.hash())
         };
 
-        let proposal_roster = self.effective_commit_topology();
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let proposal_roster = self.roster_for_live_vote_with_mode(height, consensus_mode);
         if proposal_roster.is_empty() {
             trace!(
                 height,
@@ -1954,8 +1955,6 @@ impl Actor {
         let prev_attempt = self.subsystems.propose.last_pacemaker_attempt.replace(now);
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
-        let topology_peers = self.effective_commit_topology();
-        let active_topology_peers = topology_peers.clone();
         let pending_queue_len = self.queue.queued_len();
         let active_pending = self.active_pending_blocks_len_for_tip(tip_height, tip_hash);
         let view_height = tip_height;
@@ -1972,6 +1971,9 @@ impl Actor {
         let committed_qc = self.latest_committed_qc();
         let precommit_qc = precommit_qc_for_view_change(self.highest_qc, committed_qc);
         let tracked_height = active_round_height(self.highest_qc, committed_qc, committed_height);
+        let (consensus_mode, _, _) = self.consensus_context_for_height(tracked_height);
+        let topology_peers = self.roster_for_live_vote_with_mode(tracked_height, consensus_mode);
+        let active_topology_peers = topology_peers.clone();
         // Drop stale NEW_VIEW entries so proposals cannot regress after higher QCs arrive.
         self.subsystems
             .propose

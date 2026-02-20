@@ -1908,7 +1908,8 @@ impl Actor {
             .max_by_key(|qc| qc.view)
             .cloned()
         {
-            if self.process_precommit_qc(&qc, true, false) {
+            let block_known_for_lock = self.block_known_for_lock(block_hash);
+            if self.process_precommit_qc(&qc, block_known_for_lock, false) {
                 debug!(
                     height,
                     view,

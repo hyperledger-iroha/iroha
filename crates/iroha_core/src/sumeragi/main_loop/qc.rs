@@ -1337,26 +1337,26 @@ impl Actor {
                         }
                     };
                 let world = self.state.world_view();
-                let commit_topology = self.state.commit_topology_snapshot();
-                let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
-                let stake_roster = {
-                    let active = super::roster::derive_active_topology_for_mode_from_world(
-                        &world,
-                        commit_topology.as_slice(),
-                        height,
-                        self.common_config.trusted_peers.value(),
-                        self.common_config.peer.id(),
-                        consensus_mode,
-                    );
-                    if active.is_empty() {
-                        topology.as_ref().to_vec()
-                    } else {
-                        active
-                    }
+                let stake_roster = if !canonical_topology.as_ref().is_empty() {
+                    canonical_topology.as_ref()
+                } else if !topology.as_ref().is_empty() {
+                    topology.as_ref()
+                } else {
+                    signature_topology.as_ref()
                 };
+                if stake_roster.is_empty() {
+                    warn!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = ?block_hash,
+                        "skipping QC aggregation: stake roster unavailable"
+                    );
+                    return;
+                }
                 match super::stake_snapshot::stake_quorum_reached_for_world(
                     &world,
-                    &stake_roster,
+                    stake_roster,
                     &signer_peers,
                 ) {
                     Ok(result) => result,
