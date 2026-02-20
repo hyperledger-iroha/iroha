@@ -41,7 +41,9 @@ Frames are mapped into a square grid of `grid_size × grid_size` cells.
   a deterministic preset selected by `--katakana-preset`:
   - `balanced` (default): `chunk_size=176`, `grid_size>=41` with `41` preferred.
   - `distance-safe`: `chunk_size=96`, `grid_size>=33` with `33` preferred for
-    larger per-cell boxes at longer camera distances.
+    larger per-cell boxes at longer camera distances. When `--parity-group` is not
+    forced, this preset also defaults to `parity_group=4` for stronger recovery in
+    camera-capture conditions.
 
 If the header + payload bits exceed capacity, the encoder must choose a larger grid size
 or fail.
@@ -108,8 +110,12 @@ drops below the configured threshold.
 `simulate-realtime` example (frame-by-frame live-read simulation):
 
 ```bash
-iroha offline petal simulate-realtime --input-dir ./petal_out/png --channel katakana-base94 --profile default --simulate-fps 24 --output-payload ./petal_out/realtime_decoded.bin --output-report ./petal_out/realtime_report.json
+iroha offline petal simulate-realtime --input-dir ./petal_out/png --channel katakana-base94 --profile default --simulate-fps 24 --realtime-loops 3 --output-payload ./petal_out/realtime_decoded.bin --output-report ./petal_out/realtime_report.json
 ```
+
+`simulate-realtime` replays rendered frames in order and now supports deterministic
+looped playback with `--realtime-loops <n>`, including `loop_index` and `source_index`
+per frame in the JSON report.
 
 `score-styles` example (repeatable style ranking report):
 

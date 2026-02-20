@@ -1074,6 +1074,11 @@ impl Actor {
         let local_known = self
             .local_block_height_view(highest.subject_block_hash)
             .is_some();
+        self.observe_sidecar_mismatch_for_height(
+            highest.height,
+            highest.subject_block_hash,
+            "highest_qc_missing_block",
+        );
         if payload_available && !force_fetch && local_known {
             self.clear_missing_block_request(
                 &highest.subject_block_hash,
@@ -1196,6 +1201,7 @@ impl Actor {
             highest.height,
             highest.view,
         );
+        let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
         let now = Instant::now();
         let decision = plan_missing_block_fetch(
             &mut self.pending.missing_block_requests,
@@ -1209,7 +1215,7 @@ impl Actor {
             now,
             retry_window,
             None,
-            self.config.recovery.missing_block_signer_fallback_attempts,
+            signer_fallback_attempts,
         );
         let dwell = self
             .pending
@@ -1226,6 +1232,43 @@ impl Actor {
         super::status::record_missing_block_fetch(
             targets_len,
             dwell.as_millis().try_into().unwrap_or(u64::MAX),
+        );
+        match &decision {
+            MissingBlockFetchDecision::Requested { target_kind, .. } => {
+                self.note_missing_block_height_attempt(
+                    highest.subject_block_hash,
+                    highest.height,
+                    highest.view,
+                    super::MissingBlockRecoveryStage::HashFetch,
+                    Some(*target_kind),
+                    now,
+                );
+            }
+            MissingBlockFetchDecision::NoTargets => {
+                self.note_missing_block_height_attempt(
+                    highest.subject_block_hash,
+                    highest.height,
+                    highest.view,
+                    super::MissingBlockRecoveryStage::HashFetch,
+                    None,
+                    now,
+                );
+            }
+            MissingBlockFetchDecision::Backoff => {
+                self.note_missing_block_height_hash_miss(
+                    highest.subject_block_hash,
+                    highest.height,
+                    highest.view,
+                    super::MissingBlockRecoveryStage::HashFetch,
+                    now,
+                );
+            }
+        }
+        let _ = self.maybe_escalate_missing_block_height_recovery(
+            highest.subject_block_hash,
+            highest.height,
+            highest.view,
+            now,
         );
         match decision {
             MissingBlockFetchDecision::Requested {
@@ -1856,6 +1899,7 @@ impl Actor {
         let topology = super::network_topology::Topology::new(roster);
         let retry_window =
             self.consensus_missing_block_retry_window(vote.block_hash, vote.height, vote.view);
+        let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
         let now = Instant::now();
         let signers = BTreeSet::new();
         let decision = plan_missing_block_fetch(
@@ -1870,7 +1914,7 @@ impl Actor {
             now,
             retry_window,
             None,
-            self.config.recovery.missing_block_signer_fallback_attempts,
+            signer_fallback_attempts,
         );
         let dwell = self
             .pending
@@ -2283,6 +2327,47 @@ impl Actor {
         )
     }
 
+    /// Canonical roster derivation for a consensus round.
+    ///
+    /// This path is deterministic for active/future rounds and depends only on
+    /// canonical chain/on-chain state for the target height.
+    pub(super) fn canonical_round_roster_with_mode(
+        &self,
+        height: u64,
+        _view: u64,
+        consensus_mode: ConsensusMode,
+    ) -> Vec<PeerId> {
+        let canonicalize =
+            |roster| super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if height > committed_height.saturating_add(1) {
+            if let Some(roster) = self.roster_from_commit_qc_history_roll_forward(height, None) {
+                return canonicalize(roster);
+            }
+            if let Some(roster) = self.roster_from_commit_qc_history(height) {
+                return canonicalize(roster);
+            }
+            return Vec::new();
+        }
+        if let Some(pending) = self.pending_activation_roster_for_height(height, consensus_mode) {
+            return canonicalize(pending);
+        }
+        if height == committed_height {
+            let prev = self.state.prev_commit_topology_snapshot();
+            if !prev.is_empty() {
+                return canonicalize(prev);
+            }
+        }
+        let world = self.state.world_view();
+        let commit_topology = self.state.commit_topology_snapshot();
+        canonicalize(self.active_topology_with_genesis_fallback_from_world(
+            &world,
+            commit_topology.as_slice(),
+            committed_height,
+            consensus_mode,
+        ))
+    }
+
     // Prefer the cached roster once votes are validated to keep signatures stable across roster changes.
     pub(super) fn roster_for_vote_with_mode(
         &self,
@@ -2299,19 +2384,20 @@ impl Actor {
             }
         }
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
-        let mut roster_height = height;
-        let mut roster_view = None;
-        if let Some(block_height) = self.kura.get_block_height_by_hash(block_hash) {
-            roster_height = u64::try_from(block_height.get()).unwrap_or(height);
-            if let Some(block) = self.kura.get_block(block_height) {
-                roster_view = Some(block.header().view_change_index());
+        if height <= committed_height {
+            let mut roster_height = height;
+            let mut roster_view = None;
+            if let Some(block_height) = self.kura.get_block_height_by_hash(block_hash) {
+                roster_height = u64::try_from(block_height.get()).unwrap_or(height);
+                if let Some(block) = self.kura.get_block(block_height) {
+                    roster_view = Some(block.header().view_change_index());
+                }
             }
-        }
-        if roster_view.is_none() && roster_height == height {
-            roster_view = Some(view);
-        }
-        let roster_selection = || {
-            super::persisted_roster_for_block(
+            if roster_view.is_none() && roster_height == height {
+                roster_view = Some(view);
+            }
+            let allow_sidecar = !self.sidecar_quarantined_for_height(roster_height);
+            let roster_selection = super::persisted_roster_for_block(
                 self.state.as_ref(),
                 &self.kura,
                 consensus_mode,
@@ -2320,6 +2406,7 @@ impl Actor {
                 roster_view,
                 &self.roster_validation_cache,
                 None,
+                allow_sidecar,
             )
             .or_else(|| {
                 super::block_sync_history_roster_for_block(
@@ -2330,71 +2417,22 @@ impl Actor {
                     &self.chain_id,
                     &self.roster_validation_cache,
                 )
-            })
-        };
-        if height <= committed_height {
-            if let Some(selection) = roster_selection() {
+            });
+            if let Some(selection) = roster_selection {
                 if !selection.roster.is_empty() {
                     return canonicalize(selection.roster);
                 }
             }
-        }
-        let mut active = Vec::new();
-        if height <= committed_height.saturating_add(1) {
             if height == committed_height {
                 let prev = self.state.prev_commit_topology_snapshot();
                 if !prev.is_empty() {
                     return canonicalize(prev);
                 }
             }
-            let world = self.state.world_view();
-            let commit_topology = self.state.commit_topology_snapshot();
-            active = self.active_topology_with_genesis_fallback_from_world(
-                &world,
-                commit_topology.as_slice(),
-                committed_height,
-                consensus_mode,
-            );
-            if height == committed_height.saturating_add(1)
-                && let Some(pending) =
-                    self.pending_activation_roster_for_height(height, consensus_mode)
-            {
-                active = pending;
-            }
-            if !active.is_empty() {
-                if let Some(selection) = roster_selection() {
-                    if !selection.roster.is_empty() {
-                        return canonicalize(selection.roster);
-                    }
-                }
-                return canonicalize(active);
-            }
-        }
-        if let Some(selection) = roster_selection() {
-            if !selection.roster.is_empty() {
-                return canonicalize(selection.roster);
-            }
-        }
-        if height > committed_height.saturating_add(1) {
-            let parent_hash = self
-                .pending
-                .pending_blocks
-                .get(&block_hash)
-                .and_then(|pending| pending.block.header().prev_block_hash());
-            if let Some(roster) =
-                self.roster_from_commit_qc_history_roll_forward(height, parent_hash)
-            {
-                return canonicalize(roster);
-            }
-            if parent_hash.is_some() {
-                return Vec::new();
-            }
-            if let Some(roster) = self.roster_from_commit_qc_history(height) {
-                return canonicalize(roster);
-            }
             return Vec::new();
         }
-        canonicalize(active)
+
+        self.canonical_round_roster_with_mode(height, view, consensus_mode)
     }
 
     fn pending_activation_roster_for_height(
@@ -2425,38 +2463,15 @@ impl Actor {
         view: u64,
         consensus_mode: ConsensusMode,
     ) -> Vec<PeerId> {
-        let canonicalize =
-            |roster| super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         if height <= committed_height {
             return self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
         }
-        let mut active = Vec::new();
-        if height == committed_height.saturating_add(1) {
-            let world = self.state.world_view();
-            let commit_topology = self.state.commit_topology_snapshot();
-            active = self.active_topology_with_genesis_fallback_from_world(
-                &world,
-                commit_topology.as_slice(),
-                committed_height,
-                consensus_mode,
-            );
-            if !active.is_empty() {
-                return canonicalize(active);
-            }
+        let roster = self.canonical_round_roster_with_mode(height, view, consensus_mode);
+        if !roster.is_empty() {
+            return roster;
         }
-        if let Some(roster) =
-            self.roster_from_commit_qc_history_roll_forward(height, Some(block_hash))
-        {
-            return canonicalize(roster);
-        }
-        if height > committed_height.saturating_add(1) {
-            return Vec::new();
-        }
-        if !active.is_empty() {
-            return canonicalize(active);
-        }
-        self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
+        Vec::new()
     }
 }
 

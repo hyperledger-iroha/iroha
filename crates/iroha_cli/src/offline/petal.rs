@@ -6,8 +6,8 @@ use iroha_data_model::{
         PetalStreamOptions, PetalStreamSampleGrid,
     },
     qr_stream::{
-        QrStreamAssembler, QrStreamDecodeResult, QrStreamEncoder, QrStreamEnvelope, QrStreamFrame,
-        QrStreamFrameKind, QrStreamOptions,
+        QrStreamAssembler, QrStreamAssemblerLimits, QrStreamDecodeResult, QrStreamEncoder,
+        QrStreamEnvelope, QrStreamFrame, QrStreamFrameKind, QrStreamOptions,
     },
 };
 use norito::json::{Map, Value};
@@ -15,7 +15,7 @@ use std::{
     fs,
     io::BufWriter,
     path::{Path, PathBuf},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use super::qr::QrPayloadKindArg;
@@ -105,9 +105,16 @@ impl PetalEncodeArgs {
             self.katakana_preset,
             use_katakana_preset_defaults,
         );
+        let resolved_parity_group = resolve_encode_parity_group(
+            self.channel,
+            self.parity_group,
+            self.grid_size,
+            self.katakana_preset,
+            use_katakana_preset_defaults,
+        );
         let options = QrStreamOptions {
             chunk_size: resolved_chunk_size,
-            parity_group: self.parity_group,
+            parity_group: resolved_parity_group,
             payload_kind: self.payload_kind.into(),
             ..QrStreamOptions::default()
         };
@@ -272,7 +279,7 @@ impl PetalEncodeArgs {
         );
         manifest_map.insert(
             "parity_group".to_string(),
-            Value::from(self.parity_group as u64),
+            Value::from(resolved_parity_group as u64),
         );
         manifest_map.insert(
             "grid_size".to_string(),
@@ -646,6 +653,9 @@ pub struct PetalSimulateRealtimeArgs {
     /// Optional cap on number of frames to process from the input directory.
     #[arg(long)]
     pub frame_limit: Option<usize>,
+    /// Number of playback loops to simulate over the same frame set.
+    #[arg(long, default_value_t = 1)]
+    pub realtime_loops: u16,
     /// Disable capture perturbation and decode pristine frames only.
     #[arg(long)]
     pub disable_capture_perturbation: bool,
@@ -661,6 +671,9 @@ impl PetalSimulateRealtimeArgs {
         }
         if self.frame_limit == Some(0) {
             return Err(eyre!("frame-limit must be > 0 when provided"));
+        }
+        if self.realtime_loops == 0 {
+            return Err(eyre!("realtime-loops must be > 0"));
         }
 
         let mut entries = fs::read_dir(&self.input_dir)
@@ -725,6 +738,7 @@ impl PetalSimulateRealtimeArgs {
             self.profile,
             self.seed,
             self.simulate_fps,
+            usize::from(self.realtime_loops),
             !self.disable_capture_perturbation,
         )?;
         if let Some(path) = self.output_payload {
@@ -741,6 +755,7 @@ impl PetalSimulateRealtimeArgs {
             resolved_grid_size,
             self.seed,
             self.simulate_fps,
+            self.realtime_loops,
             !self.disable_capture_perturbation,
             self.allow_incomplete,
         );
@@ -2820,6 +2835,7 @@ fn katakana_symbol_base() -> u32 {
 const BINARY_DEFAULT_CHUNK_SIZE: u16 = 140;
 const KATAKANA_BALANCED_DEFAULT_CHUNK_SIZE: u16 = 176;
 const KATAKANA_DISTANCE_SAFE_DEFAULT_CHUNK_SIZE: u16 = 96;
+const KATAKANA_DISTANCE_SAFE_DEFAULT_PARITY_GROUP: u8 = 4;
 const KATAKANA_BALANCED_MIN_GRID_SIZE: u16 = 41;
 const KATAKANA_DISTANCE_SAFE_MIN_GRID_SIZE: u16 = 33;
 const KATAKANA_BASE94_REPETITION: usize = 5;
@@ -2856,6 +2872,25 @@ fn resolve_encode_chunk_size(
         }
     } else {
         chunk_size
+    }
+}
+
+fn resolve_encode_parity_group(
+    channel: PetalDataChannel,
+    parity_group: u8,
+    grid_size: u16,
+    preset: PetalKatakanaPreset,
+    use_katakana_preset_defaults: bool,
+) -> u8 {
+    if channel == PetalDataChannel::KatakanaBase94
+        && grid_size == 0
+        && use_katakana_preset_defaults
+        && parity_group == 0
+        && preset == PetalKatakanaPreset::DistanceSafe
+    {
+        KATAKANA_DISTANCE_SAFE_DEFAULT_PARITY_GROUP
+    } else {
+        parity_group
     }
 }
 
@@ -3269,6 +3304,8 @@ impl CaptureEvalMetrics {
 #[derive(Clone, Debug)]
 struct RealtimeFrameMetrics {
     index: usize,
+    source_index: usize,
+    loop_index: usize,
     scenario: &'static str,
     decoded: bool,
     ingested: bool,
@@ -3298,6 +3335,7 @@ impl RealtimeDecodeMetrics {
         grid_size: u16,
         seed: u64,
         simulate_fps: u16,
+        realtime_loops: u16,
         capture_perturbation: bool,
         allow_incomplete: bool,
     ) -> Value {
@@ -3309,6 +3347,10 @@ impl RealtimeDecodeMetrics {
         map.insert("seed".to_string(), Value::from(seed));
         map.insert("grid_size".to_string(), Value::from(grid_size as u64));
         map.insert("simulate_fps".to_string(), Value::from(simulate_fps as u64));
+        map.insert(
+            "realtime_loops".to_string(),
+            Value::from(realtime_loops as u64),
+        );
         map.insert(
             "capture_perturbation".to_string(),
             Value::from(capture_perturbation),
@@ -3357,6 +3399,14 @@ impl RealtimeDecodeMetrics {
             .map(|frame| {
                 let mut frame_map = Map::new();
                 frame_map.insert("index".to_string(), Value::from(frame.index as u64));
+                frame_map.insert(
+                    "source_index".to_string(),
+                    Value::from(frame.source_index as u64),
+                );
+                frame_map.insert(
+                    "loop_index".to_string(),
+                    Value::from(frame.loop_index as u64),
+                );
                 frame_map.insert("scenario".to_string(), Value::from(frame.scenario));
                 frame_map.insert("decoded".to_string(), Value::from(frame.decoded));
                 frame_map.insert("ingested".to_string(), Value::from(frame.ingested));
@@ -3717,6 +3767,7 @@ fn simulate_realtime_decode(
     profile: PetalCaptureProfile,
     seed: u64,
     simulate_fps: u16,
+    realtime_loops: usize,
     capture_perturbation: bool,
 ) -> Result<RealtimeDecodeMetrics> {
     if images.is_empty() {
@@ -3728,6 +3779,9 @@ fn simulate_realtime_decode(
     if simulate_fps == 0 {
         return Err(eyre!("simulate-fps must be > 0"));
     }
+    if realtime_loops == 0 {
+        return Err(eyre!("realtime simulation requires at least one loop"));
+    }
 
     let scenarios = capture_scenarios(profile);
     if scenarios.is_empty() {
@@ -3736,21 +3790,30 @@ fn simulate_realtime_decode(
 
     let search_radius = capture_alignment_search_radius(profile);
     let frame_interval_ms = 1000u64 / u64::from(simulate_fps);
+    let total_frames = images.len().saturating_mul(realtime_loops);
     let simulated_duration_ms =
-        frame_interval_ms.saturating_mul(images.len().saturating_sub(1) as u64);
+        frame_interval_ms.saturating_mul(total_frames.saturating_sub(1) as u64);
 
     let wall_start = Instant::now();
-    let mut assembler = QrStreamAssembler::default();
+    let mut assembler_limits = QrStreamAssemblerLimits::default();
+    // Realtime simulation can spend much longer than live playback while doing
+    // heavy perturbation and alignment-search decoding. Keep assembly open.
+    assembler_limits.timeout = Duration::from_secs(60 * 60);
+    let mut assembler = QrStreamAssembler::new(assembler_limits);
     let mut final_result: Option<QrStreamDecodeResult> = None;
+    let mut stream_id_lock: Option<[u8; 16]> = None;
     let mut decoded_frames = 0usize;
     let mut ingested_frames = 0usize;
     let mut decode_ms_total = 0.0;
-    let mut frame_metrics = Vec::with_capacity(images.len());
+    let mut frame_metrics = Vec::with_capacity(total_frames);
 
-    for (frame_index, image) in images.iter().enumerate() {
+    for frame_index in 0..total_frames {
+        let source_index = frame_index % images.len();
+        let loop_index = frame_index / images.len();
+        let image = &images[source_index];
         let scenario = scenarios[frame_index % scenarios.len()];
         let simulated = if capture_perturbation {
-            simulate_capture_frame(image, scenario, frame_index, 0, seed)
+            simulate_capture_frame(image, scenario, frame_index, loop_index, seed)
         } else {
             image.clone()
         };
@@ -3762,6 +3825,7 @@ fn simulate_realtime_decode(
             options,
             channel,
             search_radius,
+            stream_id_lock,
         );
         let decode_ms = decode_started.elapsed().as_secs_f64() * 1_000.0;
         decode_ms_total += decode_ms;
@@ -3772,16 +3836,36 @@ fn simulate_realtime_decode(
             decoded_ok = true;
             decoded_frames += 1;
             if let Ok(frame) = QrStreamFrame::decode(&bytes) {
-                if let Ok(result) = assembler.ingest_frame(frame) {
+                let is_duplicate_header = frame.kind == QrStreamFrameKind::Header
+                    && stream_id_lock
+                        .map(|stream_id| frame.stream_id == stream_id)
+                        .unwrap_or(false);
+                if !is_duplicate_header {
+                    let stream_id_matches = stream_id_lock
+                        .map(|stream_id| frame.stream_id == stream_id)
+                        .unwrap_or(true);
+                    if stream_id_matches {
+                        let frame_kind = frame.kind;
+                        let frame_stream_id = frame.stream_id;
+                        if let Ok(result) = assembler.ingest_frame(frame) {
+                            ingested = true;
+                            ingested_frames += 1;
+                            final_result = Some(result);
+                            if frame_kind == QrStreamFrameKind::Header && stream_id_lock.is_none() {
+                                stream_id_lock = Some(frame_stream_id);
+                            }
+                        }
+                    }
+                } else {
                     ingested = true;
-                    ingested_frames += 1;
-                    final_result = Some(result);
                 }
             }
         }
 
         frame_metrics.push(RealtimeFrameMetrics {
             index: frame_index,
+            source_index,
+            loop_index,
             scenario: scenario.name,
             decoded: decoded_ok,
             ingested,
@@ -3793,7 +3877,7 @@ fn simulate_realtime_decode(
     let avg_decode_ms = if images.is_empty() {
         0.0
     } else {
-        decode_ms_total / images.len() as f64
+        decode_ms_total / total_frames as f64
     };
     let (stream_complete, stream_received_chunks, stream_total_chunks, payload) =
         if let Some(result) = final_result {
@@ -3808,7 +3892,7 @@ fn simulate_realtime_decode(
         };
 
     Ok(RealtimeDecodeMetrics {
-        frame_count: images.len(),
+        frame_count: total_frames,
         decoded_frames,
         ingested_frames,
         stream_complete,
@@ -3868,6 +3952,7 @@ fn evaluate_capture_robustness(
                 options,
                 channel,
                 search_radius,
+                None,
             );
             let ok = decoded.map(|bytes| bytes == *expected).unwrap_or(false);
             if ok {
@@ -3912,8 +3997,11 @@ fn decode_frame_with_alignment_search(
     options: PetalStreamOptions,
     channel: PetalDataChannel,
     search_radius: i32,
+    expected_stream_id: Option<[u8; 16]>,
 ) -> Result<Vec<u8>> {
-    if let Ok(bytes) = decode_frame_with_grid_and_channel(image, grid_size, options, channel) {
+    if let Ok(bytes) =
+        decode_stream_frame_candidate(image, grid_size, options, channel, expected_stream_id)
+    {
         return Ok(bytes);
     }
     for radius in 1..=search_radius.max(0) {
@@ -3923,15 +4011,37 @@ fn decode_frame_with_alignment_search(
                     continue;
                 }
                 let shifted = translate_image(image, dx, dy, image::Rgba([4, 1, 8, 0xFF]));
-                if let Ok(bytes) =
-                    decode_frame_with_grid_and_channel(&shifted, grid_size, options, channel)
-                {
+                if let Ok(bytes) = decode_stream_frame_candidate(
+                    &shifted,
+                    grid_size,
+                    options,
+                    channel,
+                    expected_stream_id,
+                ) {
                     return Ok(bytes);
                 }
             }
         }
     }
     Err(eyre!("decode failed after alignment search"))
+}
+
+fn decode_stream_frame_candidate(
+    image: &image::RgbaImage,
+    grid_size: u16,
+    options: PetalStreamOptions,
+    channel: PetalDataChannel,
+    expected_stream_id: Option<[u8; 16]>,
+) -> Result<Vec<u8>> {
+    let bytes = decode_frame_with_grid_and_channel(image, grid_size, options, channel)?;
+    let frame = QrStreamFrame::decode(&bytes)
+        .map_err(|err| eyre!("decoded frame failed qr validation: {err}"))?;
+    if let Some(stream_id) = expected_stream_id {
+        if frame.stream_id != stream_id {
+            return Err(eyre!("decoded frame stream id mismatch"));
+        }
+    }
+    Ok(bytes)
 }
 
 fn reconstruct_stream_completion(recovered: &[Option<Vec<u8>>]) -> Result<(bool, usize, usize)> {
@@ -4561,6 +4671,14 @@ mod tests {
             true,
         );
         assert_eq!(resolved_chunk, KATAKANA_BALANCED_DEFAULT_CHUNK_SIZE);
+        let resolved_parity = resolve_encode_parity_group(
+            PetalDataChannel::KatakanaBase94,
+            0,
+            0,
+            PetalKatakanaPreset::Balanced,
+            true,
+        );
+        assert_eq!(resolved_parity, 0);
 
         let payload = fixture_aggregate_proof_payload();
         let stream_options = QrStreamOptions {
@@ -4602,6 +4720,14 @@ mod tests {
             true,
         );
         assert_eq!(resolved_chunk, KATAKANA_DISTANCE_SAFE_DEFAULT_CHUNK_SIZE);
+        let resolved_parity = resolve_encode_parity_group(
+            PetalDataChannel::KatakanaBase94,
+            0,
+            0,
+            PetalKatakanaPreset::DistanceSafe,
+            true,
+        );
+        assert_eq!(resolved_parity, KATAKANA_DISTANCE_SAFE_DEFAULT_PARITY_GROUP);
 
         let payload = fixture_aggregate_proof_payload();
         let stream_options = QrStreamOptions {
@@ -4700,6 +4826,7 @@ mod tests {
             PetalCaptureProfile::Default,
             11,
             24,
+            1,
             false,
         )
         .expect("realtime simulation");
@@ -4710,6 +4837,40 @@ mod tests {
             "stream should complete in realtime simulation"
         );
         assert_eq!(metrics.payload.expect("payload"), payload);
+    }
+
+    #[test]
+    fn realtime_simulation_supports_looped_playback_without_resetting_stream() {
+        let payload = b"petal-realtime-looped-distance-safe-katakana";
+        let (images, _frame_bytes, petal_options) = render_katakana_stream(
+            payload,
+            640,
+            PetalRenderStyle::SoraTempleCommand,
+            KATAKANA_DISTANCE_SAFE_DEFAULT_CHUNK_SIZE,
+            KatakanaGridSizingMode::DistanceSafe,
+        );
+        let loops = 2usize;
+        let metrics = simulate_realtime_decode(
+            &images,
+            petal_options,
+            PetalDataChannel::KatakanaBase94,
+            PetalCaptureProfile::Default,
+            13,
+            24,
+            loops,
+            false,
+        )
+        .expect("realtime simulation");
+        assert_eq!(metrics.frame_count, images.len() * loops);
+        assert_eq!(metrics.decoded_frames, images.len() * loops);
+        assert!(
+            metrics.stream_complete,
+            "stream should complete with looped realtime playback"
+        );
+        assert_eq!(metrics.payload.expect("payload"), payload);
+        let last = metrics.frames.last().expect("frame metrics");
+        assert_eq!(last.loop_index, loops - 1);
+        assert_eq!(last.source_index, images.len() - 1);
     }
 
     #[test]

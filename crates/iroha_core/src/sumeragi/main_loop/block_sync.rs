@@ -170,7 +170,7 @@ impl Actor {
                 continue;
             }
             let age = now.saturating_duration_since(entry.first_seen);
-            if age < self.config.recovery.deferred_qc_ttl {
+            if age < self.recovery_deferred_qc_ttl() {
                 continue;
             }
             if entry.escalated_fetch || entry.attempts >= QUARANTINED_BLOCK_SYNC_QC_MAX_ATTEMPTS {
@@ -1315,6 +1315,12 @@ impl Actor {
         });
         let roster_start = Instant::now();
         let persisted_roster_start = Instant::now();
+        self.observe_sidecar_mismatch_for_height(
+            block_height,
+            block_hash,
+            "block_sync_update_roster",
+        );
+        let allow_sidecar = !self.sidecar_quarantined_for_height(block_height);
         let persisted_roster = snapshot_selection.or_else(|| {
             persisted_roster_for_block(
                 self.state.as_ref(),
@@ -1325,6 +1331,7 @@ impl Actor {
                 Some(block_view),
                 &self.roster_validation_cache,
                 Some(&mut self.block_sync_roster_cache),
+                allow_sidecar,
             )
         });
         let roster_persisted_ms =

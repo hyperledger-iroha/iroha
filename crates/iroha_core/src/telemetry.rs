@@ -5470,6 +5470,67 @@ impl Telemetry {
             .inc();
     }
 
+    /// Record deterministic hard-cap escalations for height-scoped missing-block recovery.
+    pub fn inc_consensus_missing_block_height_escalation(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics
+            .consensus_missing_block_height_escalation_total
+            .inc();
+    }
+
+    /// Record sidecar mismatch quarantines in fail-closed mode.
+    pub fn inc_consensus_sidecar_quarantine(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics.consensus_sidecar_quarantine_total.inc();
+    }
+
+    /// Record sidecar mismatch final drops after retry/TTL bounds.
+    pub fn inc_consensus_sidecar_final_drop(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics.consensus_sidecar_final_drop_total.inc();
+    }
+
+    /// Record range-pull escalation attempts.
+    pub fn inc_blocksync_range_pull_escalation(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics.blocksync_range_pull_escalation_total.inc();
+    }
+
+    /// Record range-pull recovery success.
+    pub fn inc_blocksync_range_pull_success(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics.blocksync_range_pull_success_total.inc();
+    }
+
+    /// Record range-pull recovery expiry/failure.
+    pub fn inc_blocksync_range_pull_failure(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics.blocksync_range_pull_failure_total.inc();
+    }
+
+    /// Observe how long a recovery round stayed stuck before making progress/escalating.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn observe_consensus_recovery_stuck_round(&self, age: Duration) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics
+            .consensus_recovery_stuck_round_seconds
+            .observe(age.as_secs_f64());
+    }
+
     #[inline]
     fn da_gate_reason_label(reason: GateReason) -> (&'static str, u64) {
         match reason {

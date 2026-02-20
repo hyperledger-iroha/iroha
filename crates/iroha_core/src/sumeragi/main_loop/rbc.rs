@@ -2163,7 +2163,7 @@ impl Actor {
             now,
             retry_window,
             view_change_window,
-            self.config.recovery.missing_block_signer_fallback_attempts,
+            self.recovery_signer_fallback_attempts(),
         );
         self.pending.missing_block_requests = requests;
         if defer_view_change {
@@ -2310,7 +2310,7 @@ impl Actor {
             now,
             retry_window,
             view_change_window,
-            self.config.recovery.missing_block_signer_fallback_attempts,
+            self.recovery_signer_fallback_attempts(),
         );
         self.pending.missing_block_requests = requests;
         if defer_view_change {
@@ -2924,12 +2924,10 @@ impl Actor {
                 let world = self.state.world_view();
                 let commit_topology = self.state.commit_topology_snapshot();
                 let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
-                let roster = super::roster::derive_active_topology_for_mode_from_world(
+                let roster = self.active_topology_with_genesis_fallback_from_world(
                     &world,
                     commit_topology.as_slice(),
                     height,
-                    self.common_config.trusted_peers.value(),
-                    self.common_config.peer.id(),
                     consensus_mode,
                 );
                 super::roster::canonicalize_roster_for_mode(roster, consensus_mode)

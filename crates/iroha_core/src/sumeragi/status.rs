@@ -406,6 +406,13 @@ static CONSENSUS_EMPTY_COMMIT_TOPOLOGY_DEFER_TOTAL: AtomicU64 = AtomicU64::new(0
 static CONSENSUS_EMPTY_COMMIT_TOPOLOGY_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_RECOVERY_STATE_TRANSITIONS: OnceLock<Mutex<BTreeMap<&'static str, u64>>> =
     OnceLock::new();
+static CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_SIDECAR_QUARANTINE_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_SIDECAR_FINAL_DROP_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BLOCKSYNC_RANGE_PULL_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BLOCKSYNC_RANGE_PULL_SUCCESS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BLOCKSYNC_RANGE_PULL_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_RECOVERY_STUCK_ROUND_SECONDS_LAST: AtomicU64 = AtomicU64::new(0);
 static VALIDATION_REJECT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VALIDATION_REJECT_REASON: OnceLock<Mutex<Option<&'static str>>> = OnceLock::new();
 static VALIDATION_REJECT_STATELESS_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -3367,6 +3374,20 @@ pub struct StatusSnapshot {
     pub consensus_empty_commit_topology_escalation_total: u64,
     /// Recovery state transition totals keyed by recovery state label.
     pub consensus_recovery_state_transitions: BTreeMap<&'static str, u64>,
+    /// Height-scoped missing-block recoveries escalated via deterministic hard cap.
+    pub consensus_missing_block_height_escalation_total: u64,
+    /// Sidecar mismatches quarantined in fail-closed mode.
+    pub consensus_sidecar_quarantine_total: u64,
+    /// Sidecar mismatches final-dropped after retry/TTL bounds.
+    pub consensus_sidecar_final_drop_total: u64,
+    /// Range-pull escalations requested by dependency recovery.
+    pub blocksync_range_pull_escalation_total: u64,
+    /// Range-pull recoveries that succeeded.
+    pub blocksync_range_pull_success_total: u64,
+    /// Range-pull recoveries that expired without progress.
+    pub blocksync_range_pull_failure_total: u64,
+    /// Last observed stuck-round duration in seconds.
+    pub consensus_recovery_stuck_round_seconds_last: u64,
     /// Total blocks rejected by the validation gate before voting.
     pub validation_reject_total: u64,
     /// Last validation-reject reason label (best-effort).
@@ -4241,6 +4262,20 @@ pub fn snapshot() -> StatusSnapshot {
         consensus_empty_commit_topology_escalation_total:
             CONSENSUS_EMPTY_COMMIT_TOPOLOGY_ESCALATION_TOTAL.load(Ordering::Relaxed),
         consensus_recovery_state_transitions: consensus_recovery_state_transition_snapshot(),
+        consensus_missing_block_height_escalation_total:
+            CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL.load(Ordering::Relaxed),
+        consensus_sidecar_quarantine_total: CONSENSUS_SIDECAR_QUARANTINE_TOTAL
+            .load(Ordering::Relaxed),
+        consensus_sidecar_final_drop_total: CONSENSUS_SIDECAR_FINAL_DROP_TOTAL
+            .load(Ordering::Relaxed),
+        blocksync_range_pull_escalation_total: BLOCKSYNC_RANGE_PULL_ESCALATION_TOTAL
+            .load(Ordering::Relaxed),
+        blocksync_range_pull_success_total: BLOCKSYNC_RANGE_PULL_SUCCESS_TOTAL
+            .load(Ordering::Relaxed),
+        blocksync_range_pull_failure_total: BLOCKSYNC_RANGE_PULL_FAILURE_TOTAL
+            .load(Ordering::Relaxed),
+        consensus_recovery_stuck_round_seconds_last: CONSENSUS_RECOVERY_STUCK_ROUND_SECONDS_LAST
+            .load(Ordering::Relaxed),
         validation_reject_total: validation_rejects.total,
         validation_reject_reason: validation_rejects.last_reason,
         validation_rejects,
@@ -4796,6 +4831,55 @@ pub fn inc_consensus_recovery_state_transition(state: &'static str) {
     }
 }
 
+/// Increment counter for deterministic missing-block hard-cap escalations.
+pub fn inc_consensus_missing_block_height_escalation() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when sidecar mismatch is quarantined.
+pub fn inc_consensus_sidecar_quarantine() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_SIDECAR_QUARANTINE_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when sidecar mismatch is final-dropped.
+pub fn inc_consensus_sidecar_final_drop() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_SIDECAR_FINAL_DROP_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when range-pull escalation is requested.
+pub fn inc_blocksync_range_pull_escalation() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    BLOCKSYNC_RANGE_PULL_ESCALATION_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when range-pull recovery succeeds.
+pub fn inc_blocksync_range_pull_success() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    BLOCKSYNC_RANGE_PULL_SUCCESS_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when range-pull recovery expires.
+pub fn inc_blocksync_range_pull_failure() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    BLOCKSYNC_RANGE_PULL_FAILURE_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Record the last observed stuck-round duration in seconds.
+pub fn observe_consensus_recovery_stuck_round(seconds: u64) {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_RECOVERY_STUCK_ROUND_SECONDS_LAST.store(seconds, Ordering::Relaxed);
+}
+
 /// Increment counter when a block is rejected by the validation gate before voting.
 pub fn record_validation_reject(
     reason: &'static str,
@@ -5123,6 +5207,10 @@ pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
     QC_DEFERRED_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_EMPTY_COMMIT_TOPOLOGY_DEFER_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_EMPTY_COMMIT_TOPOLOGY_ESCALATION_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_SIDECAR_QUARANTINE_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_SIDECAR_FINAL_DROP_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_RECOVERY_STUCK_ROUND_SECONDS_LAST.store(0, Ordering::Relaxed);
     if let Ok(mut guard) = CONSENSUS_RECOVERY_STATE_TRANSITIONS
         .get_or_init(|| Mutex::new(BTreeMap::new()))
         .lock()
@@ -5151,6 +5239,9 @@ pub(crate) fn reset_block_sync_counters_for_tests() {
     BLOCKSYNC_QC_QUARANTINE_TOTAL.store(0, Ordering::Relaxed);
     BLOCKSYNC_QC_REVALIDATED_TOTAL.store(0, Ordering::Relaxed);
     BLOCKSYNC_QC_FINAL_DROP_TOTAL.store(0, Ordering::Relaxed);
+    BLOCKSYNC_RANGE_PULL_ESCALATION_TOTAL.store(0, Ordering::Relaxed);
+    BLOCKSYNC_RANGE_PULL_SUCCESS_TOTAL.store(0, Ordering::Relaxed);
+    BLOCKSYNC_RANGE_PULL_FAILURE_TOTAL.store(0, Ordering::Relaxed);
     if let Ok(mut guard) = BLOCKSYNC_QC_FINAL_DROP_LAST_REASON
         .get_or_init(|| Mutex::new(None))
         .lock()

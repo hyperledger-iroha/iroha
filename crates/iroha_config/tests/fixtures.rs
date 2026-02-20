@@ -353,6 +353,8 @@ fn minimal_config_snapshot() {
                 idle_timeout: 300s,
                 connect_startup_delay: 0ns,
                 dial_timeout: 5s,
+                deferred_send_ttl: 1.5s,
+                deferred_send_max_per_peer: 256,
                 peer_gossip_period: 1s,
                 peer_gossip_max_period: 30s,
                 trust_gossip: true,
@@ -1093,6 +1095,14 @@ fn minimal_config_snapshot() {
                 },
                 recovery: SumeragiRecovery {
                     missing_block_signer_fallback_attempts: 1,
+                    view_change_backlog_extension_factor: 1.5,
+                    view_change_backlog_extension_cap: 200ms,
+                    deferred_qc_ttl: 2s,
+                    missing_block_height_attempt_cap: 48,
+                    missing_block_height_ttl: 2s,
+                    sidecar_mismatch_retry_cap: 8,
+                    sidecar_mismatch_ttl: 2s,
+                    range_pull_escalation_after_hash_misses: 3,
                 },
                 gating: SumeragiGating {
                     future_height_window: 8,
@@ -1106,7 +1116,7 @@ fn minimal_config_snapshot() {
                 rbc: SumeragiRbc {
                     chunk_max_bytes: 262144,
                     chunk_fanout: None,
-                    pending_max_chunks: 128,
+                    pending_max_chunks: 1024,
                     pending_max_bytes: 16777216,
                     pending_session_limit: 256,
                     pending_ttl: 120s,
@@ -2080,6 +2090,7 @@ fn minimal_config_snapshot() {
                     escrow_required: false,
                     escrow_accounts: {},
                     android_trust_anchors: [],
+                    skip_platform_attestation: false,
                 },
                 router: Router {
                     twap_window: 60s,
