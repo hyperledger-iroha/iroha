@@ -6641,6 +6641,20 @@ pub struct Metrics {
     pub consensus_empty_commit_topology_escalation_total: IntCounter,
     /// Recovery state-machine transitions labeled by state.
     pub consensus_recovery_state_transitions_total: IntCounterVec,
+    /// Height-scoped missing-block recoveries escalated via deterministic hard cap.
+    pub consensus_missing_block_height_escalation_total: IntCounter,
+    /// Sidecar mismatches quarantined in fail-closed mode.
+    pub consensus_sidecar_quarantine_total: IntCounter,
+    /// Sidecar mismatches final-dropped after retry/TTL bounds.
+    pub consensus_sidecar_final_drop_total: IntCounter,
+    /// Range-pull escalation attempts triggered by dependency recovery.
+    pub blocksync_range_pull_escalation_total: IntCounter,
+    /// Successful range-pull recoveries.
+    pub blocksync_range_pull_success_total: IntCounter,
+    /// Range-pull recoveries that expired without progress.
+    pub blocksync_range_pull_failure_total: IntCounter,
+    /// Stuck-round duration observed while recovery waits for dependencies.
+    pub consensus_recovery_stuck_round_seconds: Histogram,
     /// Sumeragi DA availability: missing availability artifacts (labeled by reason)
     pub sumeragi_da_gate_block_total: IntCounterVec,
     /// Sumeragi DA availability: last recorded reason code (0=none,1=missing_local_data,3=manifest_missing,4=manifest_hash_mismatch,5=manifest_read_failed,6=manifest_spool_scan)
@@ -9804,6 +9818,44 @@ impl Default for Metrics {
                 "Consensus recovery state transitions (labeled by state)",
             ),
             &["state"],
+        )
+        .expect("Infallible");
+        let consensus_missing_block_height_escalation_total = IntCounter::new(
+            "consensus_missing_block_height_escalation_total",
+            "Height-scoped missing-block recoveries escalated via deterministic hard cap (cumulative)",
+        )
+        .expect("Infallible");
+        let consensus_sidecar_quarantine_total = IntCounter::new(
+            "consensus_sidecar_quarantine_total",
+            "Sidecar mismatches quarantined in fail-closed mode (cumulative)",
+        )
+        .expect("Infallible");
+        let consensus_sidecar_final_drop_total = IntCounter::new(
+            "consensus_sidecar_final_drop_total",
+            "Sidecar mismatch entries final-dropped after retry/TTL bounds (cumulative)",
+        )
+        .expect("Infallible");
+        let blocksync_range_pull_escalation_total = IntCounter::new(
+            "blocksync_range_pull_escalation_total",
+            "Block-sync range-pull escalations requested by recovery logic (cumulative)",
+        )
+        .expect("Infallible");
+        let blocksync_range_pull_success_total = IntCounter::new(
+            "blocksync_range_pull_success_total",
+            "Block-sync range-pull recoveries that succeeded (cumulative)",
+        )
+        .expect("Infallible");
+        let blocksync_range_pull_failure_total = IntCounter::new(
+            "blocksync_range_pull_failure_total",
+            "Block-sync range-pull recoveries that expired without progress (cumulative)",
+        )
+        .expect("Infallible");
+        let consensus_recovery_stuck_round_seconds = Histogram::with_opts(
+            HistogramOpts::new(
+                "consensus_recovery_stuck_round_seconds",
+                "Observed seconds spent in empty-topology/missing-dependency recovery rounds",
+            )
+            .buckets(prometheus::exponential_buckets(0.1, 2.0, 10).expect("inputs are valid")),
         )
         .expect("Infallible");
         let sumeragi_da_gate_block_total = IntCounterVec::new(
@@ -13528,6 +13580,13 @@ impl Default for Metrics {
             consensus_empty_commit_topology_defer_total,
             consensus_empty_commit_topology_escalation_total,
             consensus_recovery_state_transitions_total,
+            consensus_missing_block_height_escalation_total,
+            consensus_sidecar_quarantine_total,
+            consensus_sidecar_final_drop_total,
+            blocksync_range_pull_escalation_total,
+            blocksync_range_pull_success_total,
+            blocksync_range_pull_failure_total,
+            consensus_recovery_stuck_round_seconds,
             sumeragi_da_gate_block_total,
             sumeragi_da_gate_last_reason,
             sumeragi_da_gate_last_satisfied,
@@ -14166,6 +14225,13 @@ impl Default for Metrics {
             consensus_empty_commit_topology_defer_total,
             consensus_empty_commit_topology_escalation_total,
             consensus_recovery_state_transitions_total,
+            consensus_missing_block_height_escalation_total,
+            consensus_sidecar_quarantine_total,
+            consensus_sidecar_final_drop_total,
+            blocksync_range_pull_escalation_total,
+            blocksync_range_pull_success_total,
+            blocksync_range_pull_failure_total,
+            consensus_recovery_stuck_round_seconds,
             sumeragi_da_gate_block_total,
             sumeragi_da_gate_last_reason,
             sumeragi_da_gate_last_satisfied,

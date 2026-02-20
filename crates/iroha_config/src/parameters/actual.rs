@@ -3821,6 +3821,16 @@ pub struct SumeragiRecovery {
     pub view_change_backlog_extension_cap: Duration,
     /// TTL for deferred QC missing-payload recovery before escalation.
     pub deferred_qc_ttl: Duration,
+    /// Deterministic per-height missing-block attempt cap before hard escalation.
+    pub missing_block_height_attempt_cap: u32,
+    /// Deterministic per-height missing-block dwell cap before hard escalation.
+    pub missing_block_height_ttl: Duration,
+    /// Sidecar mismatch retries before final-drop and canonical-only rebuild.
+    pub sidecar_mismatch_retry_cap: u32,
+    /// Sidecar mismatch TTL before final-drop.
+    pub sidecar_mismatch_ttl: Duration,
+    /// Hash-miss threshold before escalating dependency recovery to range pull.
+    pub range_pull_escalation_after_hash_misses: u32,
 }
 
 /// Ingress gating and penalty configuration.

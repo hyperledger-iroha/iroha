@@ -2520,6 +2520,18 @@ pub mod sumeragi {
     pub const VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS: u64 = 200;
     /// TTL for deferred QC missing-payload recovery before escalation (milliseconds).
     pub const DEFERRED_QC_TTL_MS: u64 = 2_000;
+    /// Deterministic per-height missing-block attempt cap before hard escalation.
+    pub const MISSING_BLOCK_HEIGHT_ATTEMPT_CAP: u32 = 48;
+    /// Deterministic per-height missing-block dwell cap before hard escalation (milliseconds).
+    /// Defaults to 2 * commit_time with the default 1s commit timeout.
+    pub const MISSING_BLOCK_HEIGHT_TTL_MS: u64 = 2_000;
+    /// Sidecar mismatch retries before final-drop and canonical-only rebuild.
+    pub const SIDECAR_MISMATCH_RETRY_CAP: u32 = 8;
+    /// Sidecar mismatch TTL before final-drop (milliseconds).
+    /// Defaults to 2 * commit_time with the default 1s commit timeout.
+    pub const SIDECAR_MISMATCH_TTL_MS: u64 = 2_000;
+    /// Number of hash misses before escalating missing dependencies to range pull.
+    pub const RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: u32 = 3;
     /// Consecutive membership mismatches required before alerting.
     pub const MEMBERSHIP_MISMATCH_ALERT_THRESHOLD: u32 = 1;
     /// Whether to drop consensus messages from peers with repeated membership mismatches.

@@ -734,6 +734,17 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                     defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS,
                 ),
                 deferred_qc_ttl: Duration::from_millis(defaults::sumeragi::DEFERRED_QC_TTL_MS),
+                missing_block_height_attempt_cap:
+                    defaults::sumeragi::MISSING_BLOCK_HEIGHT_ATTEMPT_CAP,
+                missing_block_height_ttl: Duration::from_millis(
+                    defaults::sumeragi::MISSING_BLOCK_HEIGHT_TTL_MS,
+                ),
+                sidecar_mismatch_retry_cap: defaults::sumeragi::SIDECAR_MISMATCH_RETRY_CAP,
+                sidecar_mismatch_ttl: Duration::from_millis(
+                    defaults::sumeragi::SIDECAR_MISMATCH_TTL_MS,
+                ),
+                range_pull_escalation_after_hash_misses:
+                    defaults::sumeragi::RANGE_PULL_ESCALATION_AFTER_HASH_MISSES,
             },
             gating: A::SumeragiGating {
                 future_height_window: defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,

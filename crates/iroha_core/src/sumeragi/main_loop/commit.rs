@@ -5395,6 +5395,10 @@ impl Actor {
         self.pending
             .missing_block_requests
             .retain(|_, request| request.height > height);
+        let now = Instant::now();
+        self.clear_missing_block_recovery_for_height(height, now);
+        self.clear_sidecar_mismatch_for_height(height);
+        self.prune_missing_block_recovery_state(now);
         self.refresh_p2p_topology();
         let commit_topology = self.effective_commit_topology();
         match self.refresh_commit_topology_state(&commit_topology) {

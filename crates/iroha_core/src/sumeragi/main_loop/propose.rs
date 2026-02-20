@@ -1975,6 +1975,23 @@ impl Actor {
         let topology_peers = self.roster_for_live_vote_with_mode(tracked_height, consensus_mode);
         let active_topology_peers = topology_peers.clone();
         let tracked_view = self.phase_tracker.current_view(tracked_height).unwrap_or(0);
+        if self.proposal_gated_by_missing_dependencies(tracked_height) {
+            self.subsystems.propose.pacemaker.next_deadline = now
+                .checked_add(
+                    self.subsystems
+                        .propose
+                        .pacemaker
+                        .propose_interval
+                        .max(Duration::from_millis(1)),
+                )
+                .unwrap_or(now);
+            debug!(
+                height = tracked_height,
+                view = tracked_view,
+                "deferring proposal while canonical dependencies are still recovering"
+            );
+            return false;
+        }
         // Drop stale NEW_VIEW entries so proposals cannot regress after higher QCs arrive.
         self.subsystems
             .propose

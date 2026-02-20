@@ -8258,6 +8258,64 @@ mod tests {
     }
 
     #[test]
+    fn missing_session_deferred_burst_schedules_single_reconnect() {
+        let _guard = deferred_send_test_guard();
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_addr = socket_addr!(127.0.0.1:45680);
+        network.current_topology.insert(peer_id.clone());
+        network
+            .current_peers_addresses
+            .push((peer_id.clone(), peer_addr.clone()));
+
+        let now = tokio::time::Instant::now();
+        network.retry_backoff.insert(
+            peer_id.clone(),
+            HashMap::from([(
+                peer_addr.to_string(),
+                (now + Duration::from_secs(2), Duration::from_millis(50)),
+            )]),
+        );
+
+        let reconnect_before = session_reconnect_total();
+        for _ in 0..8 {
+            let frame = RelayMessage::new(
+                network.self_id.clone(),
+                RelayTarget::Direct(peer_id.clone()),
+                DEFAULT_RELAY_TTL,
+                Priority::High,
+                DummyMsg,
+            );
+            assert!(
+                network.send_frame_to_peer(&peer_id, frame, message::Topic::Consensus),
+                "missing-session send should defer outbound frame"
+            );
+        }
+
+        assert!(
+            network.pending_connects.len() <= 1,
+            "deferred burst should not schedule duplicate reconnect attempts"
+        );
+        assert!(
+            network
+                .connecting_peers
+                .values()
+                .filter(|peer| peer.id() == &peer_id)
+                .count()
+                <= 1,
+            "deferred burst should not spawn duplicate active reconnects"
+        );
+        assert_eq!(
+            session_reconnect_total(),
+            reconnect_before.saturating_add(1),
+            "deferred burst should trigger reconnect once per unsatisfied peer session"
+        );
+    }
+
+    #[test]
     fn allowlist_only_does_not_gate_ip_without_cidr_allowlist() {
         let ip = IpAddr::from([10, 0, 0, 1]);
         let mut prefix = HashMap::new();
