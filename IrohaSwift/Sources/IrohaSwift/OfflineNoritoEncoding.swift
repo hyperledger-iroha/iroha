@@ -12,7 +12,8 @@ public typealias OfflineAccountResolver = (OfflineAccountResolutionKind, String)
 /// Global registry for offline account ID resolution.
 public enum OfflineAccountResolvers {
     private static let resolverQueue = DispatchQueue(label: "org.hyperledger.iroha.offline.account-resolver")
-    private static var resolver: OfflineAccountResolver?
+    /// Access is synchronized through `resolverQueue`.
+    private static nonisolated(unsafe) var resolver: OfflineAccountResolver?
 
     /// Register a resolver (or clear by passing `nil`) used by offline Norito encoding.
     /// The resolver should return an IH58 account address (preferred) or a valid

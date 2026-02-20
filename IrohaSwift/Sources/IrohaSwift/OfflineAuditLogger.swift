@@ -28,7 +28,7 @@ public enum OfflineAuditLoggerError: Swift.Error {
     case serializationFailed(Swift.Error)
 }
 
-public final class OfflineAuditLogger {
+public final class OfflineAuditLogger: @unchecked Sendable {
     private let queue = DispatchQueue(label: "org.hyperledger.iroha.offline-audit-logger", qos: .utility)
     private var entries: [OfflineAuditEntry]
     private let encoder: JSONEncoder
