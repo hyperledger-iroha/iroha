@@ -445,7 +445,6 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
     public let platformProof: OfflinePlatformProof
     public let platformSnapshot: OfflinePlatformTokenSnapshot?
     public let senderCertificateId: Data
-    public let senderCertificate: OfflineWalletCertificate
     public let senderSignature: Data
 
     public init(txId: Data,
@@ -457,11 +456,8 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
                 invoiceId: String,
                 platformProof: OfflinePlatformProof,
                 platformSnapshot: OfflinePlatformTokenSnapshot?,
-                senderCertificate: OfflineWalletCertificate,
+                senderCertificateId: Data,
                 senderSignature: Data) {
-        guard let certificateId = try? senderCertificate.certificateId() else {
-            preconditionFailure("sender certificate must produce a deterministic certificate id")
-        }
         self.txId = txId
         self.from = from
         self.to = to
@@ -471,8 +467,7 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
         self.invoiceId = invoiceId
         self.platformProof = platformProof
         self.platformSnapshot = platformSnapshot
-        self.senderCertificateId = certificateId
-        self.senderCertificate = senderCertificate
+        self.senderCertificateId = senderCertificateId
         self.senderSignature = senderSignature
     }
 
@@ -538,7 +533,7 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
                                    invoiceId: invoiceId,
                                    platformProof: platformProof,
                                    platformSnapshot: platformSnapshot,
-                                   senderCertificate: senderCertificate,
+                                   senderCertificateId: senderCertificateId,
                                    senderSignature: signature)
     }
 

@@ -1169,6 +1169,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     let mut soak_barrier_durations = Vec::with_capacity(SOAK_ITERATIONS);
     let mut soak_query_durations = Vec::with_capacity(SOAK_ITERATIONS);
     let mut soak_failure: Option<eyre::Report> = None;
+    let mut next_soak_target_height = alice
+        .get_sumeragi_status_wire()
+        .map_err(|err| eyre!(err))?
+        .commit_qc
+        .height
+        .saturating_add(1);
     {
         let _phase = phase_timings.phase("soak 10 iterations: paired swap throughput");
         let mut soak_submitter = leader_targeted_client_for_account(
@@ -1180,11 +1186,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         for iteration in 0..SOAK_ITERATIONS {
             let iteration_started = Instant::now();
             let run_result = (|| -> Result<(Duration, Duration, Duration, Duration)> {
-                let soak_baseline_height = alice
-                    .get_sumeragi_status_wire()
-                    .map_err(|err| eyre!(err))?
-                    .commit_qc
-                    .height;
                 let retarget_started = Instant::now();
                 if iteration > 0 && iteration % SOAK_SUBMITTER_REFRESH_EVERY == 0 {
                     soak_submitter = leader_targeted_client_for_account(
@@ -1246,10 +1247,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 let barrier_started = Instant::now();
                 let synced_after_paired_swaps = wait_for_height(
                     &alice,
-                    soak_baseline_height.saturating_add(1),
+                    next_soak_target_height,
                     "soak paired swaps barrier on alice",
                 )?;
                 let barrier_elapsed = barrier_started.elapsed();
+                next_soak_target_height =
+                    synced_after_paired_swaps.commit_qc.height.saturating_add(1);
                 last_soak_synced_height = Some(synced_after_paired_swaps.commit_qc.height);
                 let query_started = Instant::now();
                 wait_for_expected_balances(

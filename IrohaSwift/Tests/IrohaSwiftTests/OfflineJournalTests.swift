@@ -133,7 +133,7 @@ final class OfflineJournalTests: XCTestCase {
             invoiceId: "inv-1",
             platformProof: proof,
             platformSnapshot: nil,
-            senderCertificate: certificate,
+            senderCertificateId: try certificate.certificateId(),
             senderSignature: Data(repeating: 0x01, count: 64)
         )
 

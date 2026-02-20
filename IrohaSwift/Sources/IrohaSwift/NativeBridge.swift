@@ -57,8 +57,8 @@ enum NoritoBridgeLoader {
     static let expectedVersion = "0.1.0"
     private static let expectedHashes: [String: String] = [
         "macos-arm64": "407f4a279856fa063546d7822154cea369a88e0ea6524cc88b11a70a25fd6bc0",
-        "ios-arm64": "3ca37e78caa09db893547238c25f1d33b2ef4d47f882c21727f58d78a8862991",
-        "ios-arm64_x86_64-simulator": "5f14995fc47746f93dcc7a3768791a74043ff946371fd8ff5a73567d6501e362"
+        "ios-arm64": "d07e217df1cba1fa393624e41fa2be6ec9dcb45d1f19b1f45d19e5ede2991d26",
+        "ios-arm64_x86_64-simulator": "cfba32aee5f1a6036129d962984dc19c37f2a1c56f40caefa3bf0d53226c23f3"
     ]
 
     static func openHandle() -> (UnsafeMutableRawPointer?, ValidationStatus) {
@@ -66,16 +66,10 @@ enum NoritoBridgeLoader {
             return (nil, .disabled(reason: "\(BridgePolicyHint.envVar)=0"))
         }
 
-        if let defaultHandle = dlopen(nil, RTLD_NOW),
-           dlsym(defaultHandle, "connect_norito_free") != nil,
-           dlsym(defaultHandle, "connect_norito_offline_commitment_update") != nil {
-            NSLog("[NoritoBridgeLoader] found via dlopen(nil)")
-            return (defaultHandle, .valid(path: "embedded", identifier: currentIdentifier()))
-        }
-
         // Xcode 26 debug-dylib: app code lives in <name>.debug.dylib, not the main executable.
-        // dlopen(nil) returns a handle to the 57 KB stub, so symbols from the debug dylib are invisible.
-        // Try loading the debug dylib explicitly.
+        // dlopen(nil) returns a handle to the 57 KB stub. The stub may re-export a few symbols
+        // (e.g. connect_norito_free) so the dlsym probe succeeds, but calling heavier functions
+        // like offlineReceiptChallenge through the stub crashes.  Always prefer the debug dylib.
         if let execURL = Bundle.main.executableURL {
             let debugDylibURL = execURL.deletingLastPathComponent()
                 .appendingPathComponent(execURL.lastPathComponent + ".debug.dylib")
@@ -115,6 +109,16 @@ enum NoritoBridgeLoader {
                 lastFailure = status
             }
         }
+
+        // Final fallback: try dlopen(nil) for builds where symbols are truly provided by the
+        // process image and no validated on-disk bridge binary was found.
+        if let defaultHandle = dlopen(nil, RTLD_NOW),
+           dlsym(defaultHandle, "connect_norito_free") != nil,
+           dlsym(defaultHandle, "connect_norito_offline_commitment_update") != nil {
+            NSLog("[NoritoBridgeLoader] found via dlopen(nil)")
+            return (defaultHandle, .valid(path: "embedded", identifier: currentIdentifier()))
+        }
+
         return (nil, lastFailure)
     }
 
@@ -2083,6 +2087,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 self.offlineBlindingFromSeedFn = unsafeBitCast(offlineBlindingSeedSymbol, to: OfflineBlindingFromSeedFn.self)
             } else {
                 self.offlineBlindingFromSeedFn = nil
+            }
+            // `offline_receipt_challenge` gained the `sender_certificate_id` arguments in a newer ABI.
+            // Older bridge binaries can still export the same symbol name with the legacy signature,
+            // which would make this function pointer call unsafe. Require a newer offline symbol as
+            // an ABI marker before enabling the native challenge entrypoint.
+            if self.offlineBlindingFromSeedFn == nil {
+                self.offlineReceiptChallengeFn = nil
             }
             if let offlineProofSymbol = dlsym(handle, "connect_norito_offline_balance_proof") {
                 self.offlineBalanceProofFn = unsafeBitCast(offlineProofSymbol, to: OfflineBalanceProofFn.self)

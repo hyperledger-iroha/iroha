@@ -135,6 +135,42 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         XCTAssertEqual(try rawPreimage.noritoPayload(), try canonicalPreimage.noritoPayload())
     }
 
+    /// Calls the native bridge `offlineReceiptChallenge` directly (no Swift fallback)
+    /// to verify that the C function pointer obtained via dlsym is valid and callable.
+    /// This reproduces the EXC_BAD_ACCESS that occurs when dlopen returns a stale handle.
+    func testNativeBridgeOfflineReceiptChallengeDoesNotCrash() throws {
+        #if canImport(Darwin)
+        let bridge = NoritoNativeBridge.shared
+        guard bridge.isAvailable else {
+            throw XCTSkip("NoritoBridge not available")
+        }
+        let publicKey = Data(repeating: 0x11, count: 32)
+        let domain = "wonderland"
+        let receiverAccountId = AccountId.make(publicKey: publicKey, domain: domain)
+        let assetId = "xor#\(domain)#\(receiverAccountId)"
+        let senderCertificateIdHex = sampleSenderCertificateIdHex()
+        let nonceHex = sampleNonceHex()
+        let result = try bridge.offlineReceiptChallenge(
+            chainId: "00000000-0000-0000-0000-000000000000",
+            invoiceId: "5C91387D-5210-4908-913F-608F1BB4FE9A",
+            receiverId: receiverAccountId,
+            assetId: assetId,
+            amount: "4.00",
+            issuedAtMs: 1_700_000_000_000,
+            senderCertificateIdHex: senderCertificateIdHex,
+            nonceHex: nonceHex
+        )
+        guard let native = result else {
+            throw XCTSkip("offline receipt challenge ABI unavailable in loaded bridge")
+        }
+        XCTAssertEqual(native.irohaHash.count, 32)
+        XCTAssertEqual(native.clientHash.count, 32)
+        XCTAssertFalse(native.preimage.isEmpty)
+        #else
+        throw XCTSkip("NoritoBridge not available on this platform")
+        #endif
+    }
+
     private func sampleNonceHex() -> String {
         IrohaHash.hash(Data("receipt-nonce".utf8)).hexUppercased()
     }
