@@ -7,7 +7,11 @@ use integration_tests::sandbox;
 use iroha::{
     client::Client,
     config::{DEFAULT_TRANSACTION_STATUS_TIMEOUT, DEFAULT_TRANSACTION_TIME_TO_LIVE},
-    crypto::{ExposedPrivateKey, KeyPair},
+    crypto::{ExposedPrivateKey, Hash, KeyPair},
+    data_model::{
+        Encode,
+        soracloud::{SoraContainerManifestV1, SoraServiceManifestV1},
+    },
 };
 use iroha_config_base::toml::WriteExt;
 use iroha_data_model::prelude::AccountId;
@@ -42,6 +46,14 @@ fn ivm_build_profile_exists() -> bool {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../crates/ivm/target/prebuilt/build_config.toml")
         .exists()
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
+}
+
+fn soracloud_fixture(path: &str) -> PathBuf {
+    workspace_root().join(path)
 }
 
 struct ProgramConfig {
@@ -271,6 +283,200 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
     assert!(network_status.contains_key("routing"));
     assert!(network_status.contains_key("resource_pressure"));
     assert!(network_status.contains_key("failed_admissions"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_min_peers(4)
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full");
+        });
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(soracloud_mutations_use_live_torii_control_plane),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let config = ProgramConfig::from(&network.client());
+    let dir = tempfile::tempdir()?;
+    tokio::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&config.toml())?.as_bytes(),
+    )
+    .await?;
+
+    let container_fixture = soracloud_fixture("fixtures/soracloud/sora_container_manifest_v1.json");
+    let service_fixture = soracloud_fixture("fixtures/soracloud/sora_service_manifest_v1.json");
+    let container: SoraContainerManifestV1 =
+        norito::json::from_slice(&std::fs::read(&container_fixture)?)?;
+    let mut service_v1: SoraServiceManifestV1 =
+        norito::json::from_slice(&std::fs::read(&service_fixture)?)?;
+    service_v1.service_version = "1.0.0".to_string();
+    service_v1.container.manifest_hash = Hash::new(Encode::encode(&container));
+    let mut service_v2 = service_v1.clone();
+    service_v2.service_version = "1.1.0".to_string();
+
+    let container_path = dir.path().join("container_manifest.json");
+    let service_v1_path = dir.path().join("service_v1.json");
+    let service_v2_path = dir.path().join("service_v2.json");
+    tokio::fs::write(
+        &container_path,
+        norito::json::to_vec_pretty(&container).expect("encode container"),
+    )
+    .await?;
+    tokio::fs::write(
+        &service_v1_path,
+        norito::json::to_vec_pretty(&service_v1).expect("encode service v1"),
+    )
+    .await?;
+    tokio::fs::write(
+        &service_v2_path,
+        norito::json::to_vec_pretty(&service_v2).expect("encode service v2"),
+    )
+    .await?;
+
+    let deploy = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("deploy")
+        .arg("--container")
+        .arg(container_path.to_string_lossy().into_owned())
+        .arg("--service")
+        .arg(service_v1_path.to_string_lossy().into_owned())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        deploy.status.success(),
+        "deploy failed with status {} and stderr: {}",
+        deploy.status,
+        String::from_utf8_lossy(&deploy.stderr)
+    );
+
+    let deploy_payload: Value =
+        json::from_slice(&deploy.stdout).expect("CLI should emit deploy JSON payload");
+    assert_eq!(
+        deploy_payload
+            .get("current_version")
+            .and_then(Value::as_str),
+        Some("1.0.0")
+    );
+
+    let upgrade = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("upgrade")
+        .arg("--container")
+        .arg(container_path.to_string_lossy().into_owned())
+        .arg("--service")
+        .arg(service_v2_path.to_string_lossy().into_owned())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        upgrade.status.success(),
+        "upgrade failed with status {} and stderr: {}",
+        upgrade.status,
+        String::from_utf8_lossy(&upgrade.stderr)
+    );
+
+    let upgrade_payload: Value =
+        json::from_slice(&upgrade.stdout).expect("CLI should emit upgrade JSON payload");
+    assert_eq!(
+        upgrade_payload
+            .get("current_version")
+            .and_then(Value::as_str),
+        Some("1.1.0")
+    );
+
+    let rollback = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("rollback")
+        .arg("--service-name")
+        .arg(service_v1.service_name.to_string())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        rollback.status.success(),
+        "rollback failed with status {} and stderr: {}",
+        rollback.status,
+        String::from_utf8_lossy(&rollback.stderr)
+    );
+
+    let rollback_payload: Value =
+        json::from_slice(&rollback.stdout).expect("CLI should emit rollback JSON payload");
+    assert_eq!(
+        rollback_payload
+            .get("current_version")
+            .and_then(Value::as_str),
+        Some("1.0.0")
+    );
+
+    let status = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("status")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        status.status.success(),
+        "status failed with status {} and stderr: {}",
+        status.status,
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let status_payload: Value =
+        json::from_slice(&status.stdout).expect("CLI should emit soracloud status payload");
+    let network_status = status_payload
+        .get("network_status")
+        .and_then(Value::as_object)
+        .expect("network_status object");
+    let control_plane = network_status
+        .get("control_plane")
+        .and_then(Value::as_object)
+        .expect("control_plane object");
+    assert_eq!(
+        control_plane.get("service_count").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        control_plane
+            .get("audit_event_count")
+            .and_then(Value::as_u64),
+        Some(3)
+    );
+    let services = control_plane
+        .get("services")
+        .and_then(Value::as_array)
+        .expect("services array");
+    assert_eq!(services.len(), 1);
+    assert_eq!(
+        services[0].get("current_version").and_then(Value::as_str),
+        Some("1.0.0")
+    );
 
     Ok(())
 }
