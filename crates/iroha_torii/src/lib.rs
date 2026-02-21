@@ -14531,6 +14531,10 @@ impl Torii {
                     post(soracloud::handle_state_mutation),
                 )
                 .route(
+                    "/v1/soracloud/fhe/job/run",
+                    post(soracloud::handle_fhe_job_run),
+                )
+                .route(
                     "/v1/soracloud/registry",
                     get(soracloud::handle_registry_status),
                 )
@@ -14539,8 +14543,40 @@ impl Torii {
                     post(soracloud::handle_agent_deploy),
                 )
                 .route(
+                    "/v1/soracloud/agent/lease/renew",
+                    post(soracloud::handle_agent_lease_renew),
+                )
+                .route(
+                    "/v1/soracloud/agent/restart",
+                    post(soracloud::handle_agent_restart),
+                )
+                .route(
+                    "/v1/soracloud/agent/status",
+                    get(soracloud::handle_agent_status),
+                )
+                .route(
+                    "/v1/soracloud/agent/wallet/spend",
+                    post(soracloud::handle_agent_wallet_spend),
+                )
+                .route(
+                    "/v1/soracloud/agent/wallet/approve",
+                    post(soracloud::handle_agent_wallet_approve),
+                )
+                .route(
                     "/v1/soracloud/agent/policy/revoke",
                     post(soracloud::handle_agent_policy_revoke),
+                )
+                .route(
+                    "/v1/soracloud/agent/message/send",
+                    post(soracloud::handle_agent_message_send),
+                )
+                .route(
+                    "/v1/soracloud/agent/message/ack",
+                    post(soracloud::handle_agent_message_ack),
+                )
+                .route(
+                    "/v1/soracloud/agent/mailbox/status",
+                    get(soracloud::handle_agent_mailbox_status),
                 )
                 .route(
                     "/v1/soracloud/agent/autonomy/allow",
@@ -15861,7 +15897,16 @@ impl Torii {
             #[cfg(feature = "app_api")]
             sns_registry: Arc::new(sns::Registry::bootstrap_default()),
             #[cfg(feature = "app_api")]
-            soracloud_registry: Arc::new(soracloud::Registry::default()),
+            soracloud_registry: Arc::new({
+                #[cfg(test)]
+                {
+                    soracloud::Registry::default()
+                }
+                #[cfg(not(test))]
+                {
+                    soracloud::Registry::with_default_persistence()
+                }
+            }),
         });
 
         #[cfg(feature = "app_api")]

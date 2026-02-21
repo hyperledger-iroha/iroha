@@ -923,6 +923,1317 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
 }
 
 #[tokio::test]
+async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyre::Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_min_peers(4)
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full");
+        });
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(soracloud_agent_autonomy_runtime_uses_live_torii_control_plane),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let config = ProgramConfig::from(&network.client());
+    let dir = tempfile::tempdir()?;
+    tokio::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&config.toml())?.as_bytes(),
+    )
+    .await?;
+
+    let mut manifest: AgentApartmentManifestV1 = norito::json::from_slice(&std::fs::read(
+        soracloud_fixture("fixtures/soracloud/agent_apartment_manifest_v1.json"),
+    )?)?;
+    manifest
+        .policy_capabilities
+        .push("agent.autonomy.run".parse().expect("valid capability"));
+    manifest.validate().expect("manifest should remain valid");
+
+    let manifest_path = dir.path().join("agent_apartment_manifest.json");
+    tokio::fs::write(
+        &manifest_path,
+        norito::json::to_vec_pretty(&manifest).expect("encode apartment manifest"),
+    )
+    .await?;
+
+    let deploy = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-deploy")
+        .arg("--manifest")
+        .arg(manifest_path.to_string_lossy().into_owned())
+        .arg("--lease-ticks")
+        .arg("30")
+        .arg("--autonomy-budget-units")
+        .arg("500")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        deploy.status.success(),
+        "agent deploy failed with status {} and stderr: {}",
+        deploy.status,
+        String::from_utf8_lossy(&deploy.stderr)
+    );
+    let deploy_payload: Value =
+        json::from_slice(&deploy.stdout).expect("agent deploy JSON payload");
+    assert_eq!(
+        deploy_payload
+            .get("action")
+            .and_then(Value::as_object)
+            .and_then(|action| action.get("action"))
+            .and_then(Value::as_str),
+        Some("Deploy")
+    );
+    assert_eq!(
+        deploy_payload
+            .get("budget_remaining_units")
+            .and_then(Value::as_u64),
+        Some(500)
+    );
+
+    let allow = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-artifact-allow")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--artifact-hash")
+        .arg("hash:ABCD0123#01")
+        .arg("--provenance-hash")
+        .arg("hash:PROV0001#01")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        allow.status.success(),
+        "artifact allow failed with status {} and stderr: {}",
+        allow.status,
+        String::from_utf8_lossy(&allow.stderr)
+    );
+    let allow_payload: Value = json::from_slice(&allow.stdout).expect("agent allow JSON payload");
+    assert_eq!(
+        allow_payload.get("allowlist_count").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        allow_payload
+            .get("budget_remaining_units")
+            .and_then(Value::as_u64),
+        Some(500)
+    );
+
+    let run = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-autonomy-run")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--artifact-hash")
+        .arg("hash:ABCD0123#01")
+        .arg("--provenance-hash")
+        .arg("hash:PROV0001#01")
+        .arg("--budget-units")
+        .arg("120")
+        .arg("--run-label")
+        .arg("nightly-train-step-1")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        run.status.success(),
+        "autonomy run failed with status {} and stderr: {}",
+        run.status,
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let run_payload: Value = json::from_slice(&run.stdout).expect("agent run JSON payload");
+    assert_eq!(
+        run_payload.get("run_count").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        run_payload
+            .get("budget_remaining_units")
+            .and_then(Value::as_u64),
+        Some(380)
+    );
+    assert!(
+        run_payload
+            .get("run_id")
+            .and_then(Value::as_str)
+            .is_some_and(|run_id| !run_id.is_empty())
+    );
+
+    let status = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-autonomy-status")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        status.status.success(),
+        "autonomy status failed with status {} and stderr: {}",
+        status.status,
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_payload: Value =
+        json::from_slice(&status.stdout).expect("autonomy status JSON payload");
+    assert_eq!(
+        status_payload
+            .get("allowlist_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        status_payload.get("run_count").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        status_payload
+            .get("budget_remaining_units")
+            .and_then(Value::as_u64),
+        Some(380)
+    );
+
+    let revoke = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-policy-revoke")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--capability")
+        .arg("agent.autonomy.run")
+        .arg("--reason")
+        .arg("manual-review")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        revoke.status.success(),
+        "policy revoke failed with status {} and stderr: {}",
+        revoke.status,
+        String::from_utf8_lossy(&revoke.stderr)
+    );
+    let revoke_payload: Value =
+        json::from_slice(&revoke.stdout).expect("policy revoke JSON payload");
+    assert_eq!(
+        revoke_payload
+            .get("revoked_policy_capability_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let revoked_run = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-autonomy-run")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--artifact-hash")
+        .arg("hash:ABCD0123#01")
+        .arg("--provenance-hash")
+        .arg("hash:PROV0001#01")
+        .arg("--budget-units")
+        .arg("1")
+        .arg("--run-label")
+        .arg("revoked")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        !revoked_run.status.success(),
+        "autonomy run with revoked capability should fail, stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&revoked_run.stdout),
+        String::from_utf8_lossy(&revoked_run.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&revoked_run.stderr).contains("agent.autonomy.run"),
+        "unexpected revoked-capability error: {}",
+        String::from_utf8_lossy(&revoked_run.stderr)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_control_plane()
+-> eyre::Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_min_peers(4)
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full");
+        });
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_control_plane),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let config = ProgramConfig::from(&network.client());
+    let dir = tempfile::tempdir()?;
+    tokio::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&config.toml())?.as_bytes(),
+    )
+    .await?;
+
+    let mut sender: AgentApartmentManifestV1 = norito::json::from_slice(&std::fs::read(
+        soracloud_fixture("fixtures/soracloud/agent_apartment_manifest_v1.json"),
+    )?)?;
+    sender
+        .policy_capabilities
+        .push("agent.mailbox.send".parse().expect("valid capability"));
+    sender
+        .validate()
+        .expect("sender manifest should remain valid");
+
+    let mut recipient = sender.clone();
+    recipient.apartment_name = "worker_agent".parse().expect("valid apartment name");
+    recipient
+        .policy_capabilities
+        .retain(|capability| capability.as_ref() != "agent.mailbox.send");
+    recipient
+        .policy_capabilities
+        .push("agent.mailbox.receive".parse().expect("valid capability"));
+    recipient
+        .validate()
+        .expect("recipient manifest should remain valid");
+
+    let sender_manifest_path = dir.path().join("sender_agent_manifest.json");
+    let recipient_manifest_path = dir.path().join("recipient_agent_manifest.json");
+    tokio::fs::write(
+        &sender_manifest_path,
+        norito::json::to_vec_pretty(&sender).expect("encode sender manifest"),
+    )
+    .await?;
+    tokio::fs::write(
+        &recipient_manifest_path,
+        norito::json::to_vec_pretty(&recipient).expect("encode recipient manifest"),
+    )
+    .await?;
+
+    let sender_deploy = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-deploy")
+        .arg("--manifest")
+        .arg(sender_manifest_path.to_string_lossy().into_owned())
+        .arg("--lease-ticks")
+        .arg("1")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        sender_deploy.status.success(),
+        "sender deploy failed with status {} and stderr: {}",
+        sender_deploy.status,
+        String::from_utf8_lossy(&sender_deploy.stderr)
+    );
+
+    let recipient_deploy = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-deploy")
+        .arg("--manifest")
+        .arg(recipient_manifest_path.to_string_lossy().into_owned())
+        .arg("--lease-ticks")
+        .arg("30")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        recipient_deploy.status.success(),
+        "recipient deploy failed with status {} and stderr: {}",
+        recipient_deploy.status,
+        String::from_utf8_lossy(&recipient_deploy.stderr)
+    );
+
+    let expired_wallet = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-wallet-spend")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--asset-definition")
+        .arg("xor#sora")
+        .arg("--amount-nanos")
+        .arg("1000")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        !expired_wallet.status.success(),
+        "wallet spend with expired lease should fail, stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&expired_wallet.stdout),
+        String::from_utf8_lossy(&expired_wallet.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&expired_wallet.stderr).contains("lease expired"),
+        "unexpected lease-expiry rejection error: {}",
+        String::from_utf8_lossy(&expired_wallet.stderr)
+    );
+
+    let renew = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-lease-renew")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--lease-ticks")
+        .arg("20")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        renew.status.success(),
+        "lease renew failed with status {} and stderr: {}",
+        renew.status,
+        String::from_utf8_lossy(&renew.stderr)
+    );
+
+    let restart = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-restart")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--reason")
+        .arg("manual-restart")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        restart.status.success(),
+        "restart failed with status {} and stderr: {}",
+        restart.status,
+        String::from_utf8_lossy(&restart.stderr)
+    );
+    let restart_payload: Value = json::from_slice(&restart.stdout).expect("restart JSON payload");
+    assert_eq!(
+        restart_payload.get("restart_count").and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let status = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-status")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        status.status.success(),
+        "agent status failed with status {} and stderr: {}",
+        status.status,
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_payload: Value =
+        json::from_slice(&status.stdout).expect("agent status JSON payload");
+    let apartments = status_payload
+        .get("apartments")
+        .and_then(Value::as_array)
+        .expect("apartments array");
+    assert_eq!(apartments.len(), 1);
+    let apartment = &apartments[0];
+    assert_eq!(
+        apartment
+            .get("status")
+            .and_then(Value::as_object)
+            .and_then(|status| status.get("status"))
+            .and_then(Value::as_str),
+        Some("Running")
+    );
+    assert_eq!(
+        apartment.get("restart_count").and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let wallet_request = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-wallet-spend")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--asset-definition")
+        .arg("xor#sora")
+        .arg("--amount-nanos")
+        .arg("1000000")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        wallet_request.status.success(),
+        "wallet spend failed with status {} and stderr: {}",
+        wallet_request.status,
+        String::from_utf8_lossy(&wallet_request.stderr)
+    );
+    let wallet_request_payload: Value =
+        json::from_slice(&wallet_request.stdout).expect("wallet request JSON payload");
+    let request_id = wallet_request_payload
+        .get("request_id")
+        .and_then(Value::as_str)
+        .expect("wallet request id present")
+        .to_owned();
+    assert_eq!(
+        wallet_request_payload
+            .get("pending_request_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let wallet_approve = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-wallet-approve")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--request-id")
+        .arg(request_id)
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        wallet_approve.status.success(),
+        "wallet approve failed with status {} and stderr: {}",
+        wallet_approve.status,
+        String::from_utf8_lossy(&wallet_approve.stderr)
+    );
+    let wallet_approve_payload: Value =
+        json::from_slice(&wallet_approve.stdout).expect("wallet approve JSON payload");
+    assert_eq!(
+        wallet_approve_payload
+            .get("pending_request_count")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    let message_send = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-message-send")
+        .arg("--from-apartment")
+        .arg("ops_agent")
+        .arg("--to-apartment")
+        .arg("worker_agent")
+        .arg("--channel")
+        .arg("ops.sync")
+        .arg("--payload")
+        .arg("rotate-key-42")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        message_send.status.success(),
+        "message send failed with status {} and stderr: {}",
+        message_send.status,
+        String::from_utf8_lossy(&message_send.stderr)
+    );
+    let message_send_payload: Value =
+        json::from_slice(&message_send.stdout).expect("message send JSON payload");
+    let message_id = message_send_payload
+        .get("message_id")
+        .and_then(Value::as_str)
+        .expect("message id present")
+        .to_owned();
+    assert_eq!(
+        message_send_payload
+            .get("pending_message_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let mailbox_status_queued = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-mailbox-status")
+        .arg("--apartment-name")
+        .arg("worker_agent")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        mailbox_status_queued.status.success(),
+        "mailbox status (queued) failed with status {} and stderr: {}",
+        mailbox_status_queued.status,
+        String::from_utf8_lossy(&mailbox_status_queued.stderr)
+    );
+    let mailbox_status_queued_payload: Value =
+        json::from_slice(&mailbox_status_queued.stdout).expect("mailbox status JSON payload");
+    assert_eq!(
+        mailbox_status_queued_payload
+            .get("pending_message_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    let queued_messages = mailbox_status_queued_payload
+        .get("messages")
+        .and_then(Value::as_array)
+        .expect("mailbox messages array");
+    assert_eq!(queued_messages.len(), 1);
+    assert_eq!(
+        queued_messages[0].get("message_id").and_then(Value::as_str),
+        Some(message_id.as_str())
+    );
+
+    let message_ack = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-message-ack")
+        .arg("--apartment-name")
+        .arg("worker_agent")
+        .arg("--message-id")
+        .arg(message_id)
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        message_ack.status.success(),
+        "message ack failed with status {} and stderr: {}",
+        message_ack.status,
+        String::from_utf8_lossy(&message_ack.stderr)
+    );
+    let message_ack_payload: Value =
+        json::from_slice(&message_ack.stdout).expect("message ack JSON payload");
+    assert_eq!(
+        message_ack_payload
+            .get("pending_message_count")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    let mailbox_status_empty = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-mailbox-status")
+        .arg("--apartment-name")
+        .arg("worker_agent")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        mailbox_status_empty.status.success(),
+        "mailbox status (empty) failed with status {} and stderr: {}",
+        mailbox_status_empty.status,
+        String::from_utf8_lossy(&mailbox_status_empty.stderr)
+    );
+    let mailbox_status_empty_payload: Value =
+        json::from_slice(&mailbox_status_empty.stdout).expect("mailbox status JSON payload");
+    assert_eq!(
+        mailbox_status_empty_payload
+            .get("pending_message_count")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    let empty_messages = mailbox_status_empty_payload
+        .get("messages")
+        .and_then(Value::as_array)
+        .expect("empty mailbox messages array");
+    assert!(empty_messages.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_control_plane()
+-> eyre::Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_min_peers(4)
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full");
+        });
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(
+            soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_control_plane
+        ),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let config = ProgramConfig::from(&network.client());
+    let dir = tempfile::tempdir()?;
+    tokio::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&config.toml())?.as_bytes(),
+    )
+    .await?;
+
+    let mut sender: AgentApartmentManifestV1 = norito::json::from_slice(&std::fs::read(
+        soracloud_fixture("fixtures/soracloud/agent_apartment_manifest_v1.json"),
+    )?)?;
+    for capability in ["agent.mailbox.send", "agent.autonomy.run"] {
+        let parsed = capability.parse().expect("valid capability");
+        if !sender.policy_capabilities.contains(&parsed) {
+            sender.policy_capabilities.push(parsed);
+        }
+    }
+    sender
+        .validate()
+        .expect("sender manifest should remain valid");
+
+    let mut recipient = sender.clone();
+    recipient.apartment_name = "worker_agent".parse().expect("valid apartment name");
+    recipient
+        .policy_capabilities
+        .retain(|capability| capability.as_ref() != "agent.mailbox.send");
+    recipient
+        .policy_capabilities
+        .push("agent.mailbox.receive".parse().expect("valid capability"));
+    recipient
+        .validate()
+        .expect("recipient manifest should remain valid");
+
+    let sender_manifest_path = dir.path().join("sender_agent_manifest.json");
+    let recipient_manifest_path = dir.path().join("recipient_agent_manifest.json");
+    tokio::fs::write(
+        &sender_manifest_path,
+        norito::json::to_vec_pretty(&sender).expect("encode sender manifest"),
+    )
+    .await?;
+    tokio::fs::write(
+        &recipient_manifest_path,
+        norito::json::to_vec_pretty(&recipient).expect("encode recipient manifest"),
+    )
+    .await?;
+
+    let restart_peer = network.peers().first().expect("network peer").clone();
+    let restart_torii_url = restart_peer.torii_url();
+
+    let sender_deploy = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-deploy")
+        .arg("--manifest")
+        .arg(sender_manifest_path.to_string_lossy().into_owned())
+        .arg("--lease-ticks")
+        .arg("80")
+        .arg("--autonomy-budget-units")
+        .arg("500")
+        .arg("--torii-url")
+        .arg(&restart_torii_url)
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        sender_deploy.status.success(),
+        "sender deploy failed with status {} and stderr: {}",
+        sender_deploy.status,
+        String::from_utf8_lossy(&sender_deploy.stderr)
+    );
+
+    let recipient_deploy = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-deploy")
+        .arg("--manifest")
+        .arg(recipient_manifest_path.to_string_lossy().into_owned())
+        .arg("--lease-ticks")
+        .arg("80")
+        .arg("--autonomy-budget-units")
+        .arg("250")
+        .arg("--torii-url")
+        .arg(&restart_torii_url)
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        recipient_deploy.status.success(),
+        "recipient deploy failed with status {} and stderr: {}",
+        recipient_deploy.status,
+        String::from_utf8_lossy(&recipient_deploy.stderr)
+    );
+
+    let allow = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-artifact-allow")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--artifact-hash")
+        .arg("hash:ABCD0123#01")
+        .arg("--provenance-hash")
+        .arg("hash:PROV0001#01")
+        .arg("--torii-url")
+        .arg(&restart_torii_url)
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        allow.status.success(),
+        "artifact allow failed with status {} and stderr: {}",
+        allow.status,
+        String::from_utf8_lossy(&allow.stderr)
+    );
+
+    let run_before_restart = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-autonomy-run")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--artifact-hash")
+        .arg("hash:ABCD0123#01")
+        .arg("--provenance-hash")
+        .arg("hash:PROV0001#01")
+        .arg("--budget-units")
+        .arg("120")
+        .arg("--run-label")
+        .arg("before-restart")
+        .arg("--torii-url")
+        .arg(&restart_torii_url)
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        run_before_restart.status.success(),
+        "autonomy run before restart failed with status {} and stderr: {}",
+        run_before_restart.status,
+        String::from_utf8_lossy(&run_before_restart.stderr)
+    );
+    let run_before_restart_payload: Value =
+        json::from_slice(&run_before_restart.stdout).expect("autonomy run JSON payload");
+    assert_eq!(
+        run_before_restart_payload
+            .get("budget_remaining_units")
+            .and_then(Value::as_u64),
+        Some(380)
+    );
+    assert_eq!(
+        run_before_restart_payload
+            .get("checkpoint_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        run_before_restart_payload
+            .get("persistent_state_key_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    let persistent_bytes_after_first_run = run_before_restart_payload
+        .get("persistent_state_total_bytes")
+        .and_then(Value::as_u64)
+        .expect("persistent_state_total_bytes after first run");
+    assert!(
+        persistent_bytes_after_first_run > 0,
+        "first autonomy run should create a persisted checkpoint"
+    );
+
+    let wallet_request = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-wallet-spend")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--asset-definition")
+        .arg("xor#sora")
+        .arg("--amount-nanos")
+        .arg("1000000")
+        .arg("--torii-url")
+        .arg(&restart_torii_url)
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        wallet_request.status.success(),
+        "wallet request failed with status {} and stderr: {}",
+        wallet_request.status,
+        String::from_utf8_lossy(&wallet_request.stderr)
+    );
+    let wallet_request_payload: Value =
+        json::from_slice(&wallet_request.stdout).expect("wallet request JSON payload");
+    let request_id = wallet_request_payload
+        .get("request_id")
+        .and_then(Value::as_str)
+        .expect("wallet request id present")
+        .to_owned();
+    assert_eq!(
+        wallet_request_payload
+            .get("pending_request_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let message_send = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-message-send")
+        .arg("--from-apartment")
+        .arg("ops_agent")
+        .arg("--to-apartment")
+        .arg("worker_agent")
+        .arg("--channel")
+        .arg("ops.sync")
+        .arg("--payload")
+        .arg("rotate-key-42")
+        .arg("--torii-url")
+        .arg(&restart_torii_url)
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        message_send.status.success(),
+        "message send failed with status {} and stderr: {}",
+        message_send.status,
+        String::from_utf8_lossy(&message_send.stderr)
+    );
+    let message_send_payload: Value =
+        json::from_slice(&message_send.stdout).expect("message send JSON payload");
+    let message_id = message_send_payload
+        .get("message_id")
+        .and_then(Value::as_str)
+        .expect("message id present")
+        .to_owned();
+
+    let config_layers: Vec<_> = network.config_layers().collect();
+    restart_peer.shutdown().await;
+    let restart_timeout = network.peer_startup_timeout();
+    tokio::time::timeout(
+        restart_timeout,
+        restart_peer.start_checked(config_layers.iter().cloned(), None),
+    )
+    .await
+    .map_err(|_| {
+        eyre::eyre!(
+            "restarted peer did not become healthy within {:?}",
+            restart_timeout
+        )
+    })??;
+
+    let status_after_restart = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-status")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--torii-url")
+        .arg(&restart_torii_url)
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        status_after_restart.status.success(),
+        "agent status after restart failed with status {} and stderr: {}",
+        status_after_restart.status,
+        String::from_utf8_lossy(&status_after_restart.stderr)
+    );
+    let status_after_restart_payload: Value =
+        json::from_slice(&status_after_restart.stdout).expect("agent status JSON payload");
+    let apartments = status_after_restart_payload
+        .get("apartments")
+        .and_then(Value::as_array)
+        .expect("apartments array");
+    assert_eq!(apartments.len(), 1);
+    let apartment = &apartments[0];
+    assert_eq!(
+        apartment
+            .get("status")
+            .and_then(Value::as_object)
+            .and_then(|status| status.get("status"))
+            .and_then(Value::as_str),
+        Some("Running")
+    );
+    assert_eq!(
+        apartment
+            .get("pending_wallet_request_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        apartment.get("autonomy_run_count").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        apartment.get("process_generation").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        apartment.get("checkpoint_count").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        apartment
+            .get("persistent_state_key_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert!(
+        apartment
+            .get("persistent_state_total_bytes")
+            .and_then(Value::as_u64)
+            .is_some_and(|bytes| bytes >= persistent_bytes_after_first_run)
+    );
+    assert!(
+        apartment
+            .get("lease_remaining_ticks")
+            .and_then(Value::as_u64)
+            .is_some_and(|ticks| ticks > 0)
+    );
+    let process_generation_before_manual_restart = apartment
+        .get("process_generation")
+        .and_then(Value::as_u64)
+        .expect("process_generation in status after peer restart");
+
+    let manual_restart = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-restart")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--reason")
+        .arg("resume-after-peer-restart")
+        .arg("--torii-url")
+        .arg(&restart_torii_url)
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        manual_restart.status.success(),
+        "manual agent restart after peer restart failed with status {} and stderr: {}",
+        manual_restart.status,
+        String::from_utf8_lossy(&manual_restart.stderr)
+    );
+    let manual_restart_payload: Value =
+        json::from_slice(&manual_restart.stdout).expect("manual restart payload");
+    let process_generation_after_manual_restart = manual_restart_payload
+        .get("process_generation")
+        .and_then(Value::as_u64)
+        .expect("process_generation after manual restart");
+    assert_eq!(
+        process_generation_after_manual_restart,
+        process_generation_before_manual_restart.saturating_add(1)
+    );
+
+    let autonomy_status_after_restart = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-autonomy-status")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--torii-url")
+        .arg(&restart_torii_url)
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        autonomy_status_after_restart.status.success(),
+        "autonomy status after restart failed with status {} and stderr: {}",
+        autonomy_status_after_restart.status,
+        String::from_utf8_lossy(&autonomy_status_after_restart.stderr)
+    );
+    let autonomy_status_after_restart_payload: Value =
+        json::from_slice(&autonomy_status_after_restart.stdout).expect("autonomy status payload");
+    assert_eq!(
+        autonomy_status_after_restart_payload
+            .get("run_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        autonomy_status_after_restart_payload
+            .get("budget_remaining_units")
+            .and_then(Value::as_u64),
+        Some(380)
+    );
+    assert_eq!(
+        autonomy_status_after_restart_payload
+            .get("process_generation")
+            .and_then(Value::as_u64),
+        Some(process_generation_after_manual_restart)
+    );
+    assert_eq!(
+        autonomy_status_after_restart_payload
+            .get("checkpoint_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        autonomy_status_after_restart_payload
+            .get("persistent_state_key_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert!(
+        autonomy_status_after_restart_payload
+            .get("persistent_state_total_bytes")
+            .and_then(Value::as_u64)
+            .is_some_and(|bytes| bytes >= persistent_bytes_after_first_run)
+    );
+
+    let mailbox_status_after_restart = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-mailbox-status")
+        .arg("--apartment-name")
+        .arg("worker_agent")
+        .arg("--torii-url")
+        .arg(&restart_torii_url)
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        mailbox_status_after_restart.status.success(),
+        "mailbox status after restart failed with status {} and stderr: {}",
+        mailbox_status_after_restart.status,
+        String::from_utf8_lossy(&mailbox_status_after_restart.stderr)
+    );
+    let mailbox_status_after_restart_payload: Value =
+        json::from_slice(&mailbox_status_after_restart.stdout).expect("mailbox status payload");
+    assert_eq!(
+        mailbox_status_after_restart_payload
+            .get("pending_message_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    let queued_messages = mailbox_status_after_restart_payload
+        .get("messages")
+        .and_then(Value::as_array)
+        .expect("mailbox messages array");
+    assert_eq!(queued_messages.len(), 1);
+    assert_eq!(
+        queued_messages[0].get("message_id").and_then(Value::as_str),
+        Some(message_id.as_str())
+    );
+
+    let wallet_approve_after_restart = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-wallet-approve")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--request-id")
+        .arg(request_id)
+        .arg("--torii-url")
+        .arg(&restart_torii_url)
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        wallet_approve_after_restart.status.success(),
+        "wallet approve after restart failed with status {} and stderr: {}",
+        wallet_approve_after_restart.status,
+        String::from_utf8_lossy(&wallet_approve_after_restart.stderr)
+    );
+    let wallet_approve_after_restart_payload: Value =
+        json::from_slice(&wallet_approve_after_restart.stdout).expect("wallet approve payload");
+    assert_eq!(
+        wallet_approve_after_restart_payload
+            .get("pending_request_count")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    let message_ack_after_restart = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-message-ack")
+        .arg("--apartment-name")
+        .arg("worker_agent")
+        .arg("--message-id")
+        .arg(message_id)
+        .arg("--torii-url")
+        .arg(&restart_torii_url)
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        message_ack_after_restart.status.success(),
+        "message ack after restart failed with status {} and stderr: {}",
+        message_ack_after_restart.status,
+        String::from_utf8_lossy(&message_ack_after_restart.stderr)
+    );
+    let message_ack_after_restart_payload: Value =
+        json::from_slice(&message_ack_after_restart.stdout).expect("message ack payload");
+    assert_eq!(
+        message_ack_after_restart_payload
+            .get("pending_message_count")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    let run_after_restart = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-autonomy-run")
+        .arg("--apartment-name")
+        .arg("ops_agent")
+        .arg("--artifact-hash")
+        .arg("hash:ABCD0123#01")
+        .arg("--provenance-hash")
+        .arg("hash:PROV0001#01")
+        .arg("--budget-units")
+        .arg("50")
+        .arg("--run-label")
+        .arg("after-restart")
+        .arg("--torii-url")
+        .arg(&restart_torii_url)
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        run_after_restart.status.success(),
+        "autonomy run after restart failed with status {} and stderr: {}",
+        run_after_restart.status,
+        String::from_utf8_lossy(&run_after_restart.stderr)
+    );
+    let run_after_restart_payload: Value =
+        json::from_slice(&run_after_restart.stdout).expect("autonomy run after restart payload");
+    assert_eq!(
+        run_after_restart_payload
+            .get("run_count")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        run_after_restart_payload
+            .get("budget_remaining_units")
+            .and_then(Value::as_u64),
+        Some(330)
+    );
+    assert_eq!(
+        run_after_restart_payload
+            .get("checkpoint_count")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        run_after_restart_payload
+            .get("persistent_state_key_count")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        run_after_restart_payload
+            .get("process_generation")
+            .and_then(Value::as_u64),
+        Some(process_generation_after_manual_restart)
+    );
+    assert!(
+        run_after_restart_payload
+            .get("persistent_state_total_bytes")
+            .and_then(Value::as_u64)
+            .is_some_and(|bytes| bytes > persistent_bytes_after_first_run)
+    );
+
+    let mailbox_status_empty = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("agent-mailbox-status")
+        .arg("--apartment-name")
+        .arg("worker_agent")
+        .arg("--torii-url")
+        .arg(&restart_torii_url)
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        mailbox_status_empty.status.success(),
+        "mailbox status final check failed with status {} and stderr: {}",
+        mailbox_status_empty.status,
+        String::from_utf8_lossy(&mailbox_status_empty.stderr)
+    );
+    let mailbox_status_empty_payload: Value =
+        json::from_slice(&mailbox_status_empty.stdout).expect("mailbox status payload");
+    assert_eq!(
+        mailbox_status_empty_payload
+            .get("pending_message_count")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn soracloud_agent_autonomy_local_policy_flow() -> eyre::Result<()> {
     let config = local_program_config();
     let dir = tempfile::tempdir()?;

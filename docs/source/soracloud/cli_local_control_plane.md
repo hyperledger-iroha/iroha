@@ -42,6 +42,8 @@
 - `iroha app soracloud agent-deploy`
   - validates `AgentApartmentManifestV1` and registers apartment runtime state.
   - initializes lease expiry (`--lease-ticks`) and append-only apartment events.
+  - when `--torii-url` is supplied, signs payload metadata and calls
+    `POST /v1/soracloud/agent/deploy`.
 - `iroha app soracloud agent-lease-renew`
   - extends lease duration for an existing apartment.
   - revives expired leases into `Running` status in local scheduler state.
@@ -60,6 +62,8 @@
 - `iroha app soracloud agent-policy-revoke`
   - revokes a declared apartment policy capability (for example `wallet.sign`).
   - updates runtime guardrails without mutating the original manifest payload.
+  - when `--torii-url` is supplied, signs payload metadata and calls
+    `POST /v1/soracloud/agent/policy/revoke`.
 - `iroha app soracloud agent-message-send`
   - enqueues a deterministic mailbox message to another apartment.
   - requires active `agent.mailbox.send` on sender and `agent.mailbox.receive` on recipient.
@@ -72,13 +76,19 @@
   - adds/updates an autonomy artifact allowlist entry (`artifact_hash` +
     optional required `provenance_hash`) for one apartment.
   - requires active `governance.audit` or `agent.autonomy.allow`.
+  - when `--torii-url` is supplied, signs payload metadata and calls
+    `POST /v1/soracloud/agent/autonomy/allow`.
 - `iroha app soracloud agent-autonomy-run`
   - approves a deterministic autonomous run for an allowlisted artifact.
   - requires active `agent.autonomy.run`, allowlist match, optional provenance
     match, and available budget (`--budget-units`).
+  - when `--torii-url` is supplied, signs payload metadata and calls
+    `POST /v1/soracloud/agent/autonomy/run`.
 - `iroha app soracloud agent-autonomy-status`
   - shows autonomy budget ceiling/remaining, artifact allowlist entries, and
     recent autonomous run approvals for one apartment.
+  - when `--torii-url` is supplied, queries
+    `GET /v1/soracloud/agent/autonomy/status`.
 
 ## Deterministic admission checks
 
@@ -230,7 +240,18 @@ These endpoints enforce deterministic runtime policy checks:
 - capability revocation guardrails (`agent.autonomy.run`, etc.);
 - artifact allowlist + optional provenance pin matching;
 - autonomy budget accounting and non-negative budget enforcement;
+- deterministic autonomy checkpoint persistence under
+  `manifest.state_quota_bytes` with quota rejection on overflow;
 - append-only apartment audit events with signer linkage.
+
+Torii persists this runtime/control-plane state to:
+
+- `torii.data_dir/soracloud/registry_state.to`
+
+using atomic Norito snapshot writes (`*.tmp` then rename), so apartment queue
+state (wallet approvals, mailbox messages, autonomy budget/history, lease
+windows, process-generation lifecycle metadata, and persisted autonomy
+checkpoint usage) survives peer restarts.
 
 ## Runbooks
 

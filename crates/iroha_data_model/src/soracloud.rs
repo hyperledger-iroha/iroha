@@ -2,10 +2,11 @@
 //!
 //! The initial SoraCloud release uses canonical Norito payloads:
 //! [`SoraContainerManifestV1`], [`SoraServiceManifestV1`],
-//! [`SoraStateBindingV1`], and [`AgentApartmentManifestV1`]. Together they
-//! describe executable bundles, deployment/routing policy, state mutation
-//! limits, and persistent agent-policy envelopes in a deterministic form
-//! suitable for validator admission and audit trails.
+//! [`SoraStateBindingV1`], [`AgentApartmentManifestV1`], [`FheParamSetV1`],
+//! and [`FheExecutionPolicyV1`]. Together they describe executable bundles,
+//! deployment/routing policy, state mutation limits, agent-policy envelopes,
+//! and deterministic confidential-compute policy in a form suitable for
+//! validator admission and audit trails.
 
 #![allow(clippy::module_name_repetitions)]
 
@@ -31,8 +32,20 @@ pub const SORA_STATE_BINDING_VERSION_V1: u16 = 1;
 pub const SORA_DEPLOYMENT_BUNDLE_VERSION_V1: u16 = 1;
 /// Schema version for [`AgentApartmentManifestV1`].
 pub const AGENT_APARTMENT_MANIFEST_VERSION_V1: u16 = 1;
+/// Schema version for [`FheParamSetV1`].
+pub const FHE_PARAM_SET_VERSION_V1: u16 = 1;
+/// Schema version for [`FheExecutionPolicyV1`].
+pub const FHE_EXECUTION_POLICY_VERSION_V1: u16 = 1;
+/// Schema version for [`FheGovernanceBundleV1`].
+pub const FHE_GOVERNANCE_BUNDLE_VERSION_V1: u16 = 1;
+/// Schema version for [`SecretEnvelopeV1`].
+pub const SECRET_ENVELOPE_VERSION_V1: u16 = 1;
+/// Schema version for [`CiphertextStateRecordV1`].
+pub const CIPHERTEXT_STATE_RECORD_VERSION_V1: u16 = 1;
+/// Schema version for [`FheJobSpecV1`].
+pub const FHE_JOB_SPEC_VERSION_V1: u16 = 1;
 
-/// Validation errors returned by SoraCloud manifest helpers.
+/// Validation errors returned by `SoraCloud` manifest helpers.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SoraCloudManifestError {
     /// The payload references an unsupported schema version.
@@ -170,7 +183,7 @@ pub struct SoraLifecycleHooksV1 {
     pub healthcheck_path: Option<String>,
 }
 
-/// Canonical executable bundle manifest for SoraCloud workloads.
+/// Canonical executable bundle manifest for `SoraCloud` workloads.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -181,9 +194,9 @@ pub struct SoraContainerManifestV1 {
     pub schema_version: u16,
     /// Runtime target for the bundle.
     pub runtime: SoraContainerRuntimeV1,
-    /// Digest of the code bundle stored in SoraFS.
+    /// Digest of the code bundle stored in `SoraFS`.
     pub bundle_hash: Hash,
-    /// Path inside the SoraFS bundle with executable payload.
+    /// Path inside the `SoraFS` bundle with executable payload.
     pub bundle_path: String,
     /// Entrypoint symbol or executable path.
     pub entrypoint: String,
@@ -283,7 +296,7 @@ pub enum SoraTlsModeV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct SoraRouteTargetV1 {
-    /// Hostname assigned by SoraDNS.
+    /// Hostname assigned by `SoraDNS`.
     pub host: String,
     /// Path prefix exposed by the service.
     pub path_prefix: String,
@@ -457,7 +470,7 @@ impl SoraStateBindingV1 {
     }
 }
 
-/// Canonical deployment manifest for a routable SoraCloud service.
+/// Canonical deployment manifest for a routable `SoraCloud` service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -741,6 +754,1100 @@ impl AgentApartmentManifestV1 {
     }
 }
 
+/// Fully homomorphic encryption scheme family used by a parameter set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "scheme", content = "value"))]
+pub enum FheSchemeV1 {
+    /// Brakerski/Fan-Vercauteren integer arithmetic scheme.
+    #[default]
+    Bfv,
+    /// Brakerski-Gentry-Vaikuntanathan integer arithmetic scheme.
+    Bgv,
+    /// Approximate arithmetic CKKS scheme.
+    Ckks,
+}
+
+/// Governance lifecycle state for a registered FHE parameter set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "lifecycle", content = "value"))]
+pub enum FheParamLifecycleV1 {
+    /// Parameter set is published and awaiting activation.
+    #[default]
+    Proposed,
+    /// Parameter set is active and may be used for job admission.
+    Active,
+    /// Parameter set is still valid but scheduled for migration/retirement.
+    Deprecated,
+    /// Parameter set is withdrawn and must be rejected for new jobs.
+    Withdrawn,
+}
+
+/// Governance-managed FHE parameter-set descriptor for SoraCloud workloads.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct FheParamSetV1 {
+    /// Schema version; must equal [`FHE_PARAM_SET_VERSION_V1`].
+    pub schema_version: u16,
+    /// Stable on-chain identifier for the parameter family.
+    pub param_set: Name,
+    /// Monotonic version number under the same `param_set` name.
+    pub version: NonZeroU32,
+    /// Backend profile identifier (`fhe/bfv-rns/v1`, etc.).
+    pub backend: String,
+    /// Cryptosystem family used by this parameter set.
+    pub scheme: FheSchemeV1,
+    /// RNS modulus chain in bits, canonical order from highest to lowest level.
+    #[norito(default)]
+    pub ciphertext_modulus_bits: Vec<NonZeroU16>,
+    /// Plaintext modulus size in bits.
+    pub plaintext_modulus_bits: NonZeroU16,
+    /// Polynomial modulus degree.
+    pub polynomial_modulus_degree: NonZeroU32,
+    /// Number of plaintext slots exposed by this profile.
+    pub slot_count: NonZeroU32,
+    /// Minimum targeted security level in bits.
+    pub security_level_bits: NonZeroU16,
+    /// Maximum admissible multiplication depth under this chain.
+    pub max_multiplicative_depth: NonZeroU16,
+    /// Governance lifecycle state.
+    pub lifecycle: FheParamLifecycleV1,
+    /// First block where this set can be admitted.
+    #[norito(default)]
+    pub activation_height: Option<u64>,
+    /// Optional block where this set enters deprecation.
+    #[norito(default)]
+    pub deprecation_height: Option<u64>,
+    /// Optional block where this set is fully withdrawn.
+    #[norito(default)]
+    pub withdraw_height: Option<u64>,
+    /// Canonical digest of backend parameter bytes.
+    pub parameter_digest: Hash,
+}
+
+impl FheParamSetV1 {
+    /// Validate schema version and deterministic lifecycle constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
+    /// parameter/lifecycle fields violate deterministic governance rules.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != FHE_PARAM_SET_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "fhe parameter set",
+                expected: FHE_PARAM_SET_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+
+        if self.backend.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "fhe parameter set",
+                field: "backend",
+            });
+        }
+
+        if self.ciphertext_modulus_bits.is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "fhe parameter set",
+                field: "ciphertext_modulus_bits",
+            });
+        }
+
+        let mut previous_bits = u16::MAX;
+        for modulus_bits in &self.ciphertext_modulus_bits {
+            let current = modulus_bits.get();
+            if !(2..=120).contains(&current) {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "fhe parameter set",
+                    field: "ciphertext_modulus_bits",
+                    reason: format!("value {current} must be within 2..=120"),
+                });
+            }
+            if current > previous_bits {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "fhe parameter set",
+                    field: "ciphertext_modulus_bits",
+                    reason: "chain must be non-increasing".to_string(),
+                });
+            }
+            previous_bits = current;
+        }
+
+        let largest_modulus = self
+            .ciphertext_modulus_bits
+            .first()
+            .expect("ciphertext modulus chain is non-empty due prior check")
+            .get();
+        if self.plaintext_modulus_bits.get() >= largest_modulus {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe parameter set",
+                field: "plaintext_modulus_bits",
+                reason: format!(
+                    "must be smaller than the largest ciphertext modulus ({largest_modulus})"
+                ),
+            });
+        }
+
+        if self.slot_count > self.polynomial_modulus_degree {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe parameter set",
+                field: "slot_count",
+                reason: "cannot exceed polynomial_modulus_degree".to_string(),
+            });
+        }
+
+        let chain_len = u16::try_from(self.ciphertext_modulus_bits.len()).map_err(|_| {
+            SoraCloudManifestError::InvalidField {
+                manifest: "fhe parameter set",
+                field: "ciphertext_modulus_bits",
+                reason: "chain length exceeds supported u16 range".to_string(),
+            }
+        })?;
+        if self.max_multiplicative_depth.get() >= chain_len {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe parameter set",
+                field: "max_multiplicative_depth",
+                reason: format!(
+                    "must be smaller than ciphertext modulus chain length ({chain_len})"
+                ),
+            });
+        }
+
+        if let Some(deprecation_height) = self.deprecation_height {
+            let Some(activation_height) = self.activation_height else {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "fhe parameter set",
+                    field: "deprecation_height",
+                    reason: "requires activation_height".to_string(),
+                });
+            };
+            if deprecation_height <= activation_height {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "fhe parameter set",
+                    field: "deprecation_height",
+                    reason: "must be strictly greater than activation_height".to_string(),
+                });
+            }
+        }
+
+        if let Some(withdraw_height) = self.withdraw_height {
+            let Some(activation_height) = self.activation_height else {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "fhe parameter set",
+                    field: "withdraw_height",
+                    reason: "requires activation_height".to_string(),
+                });
+            };
+            if withdraw_height <= activation_height {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "fhe parameter set",
+                    field: "withdraw_height",
+                    reason: "must be strictly greater than activation_height".to_string(),
+                });
+            }
+        }
+
+        if let (Some(deprecation_height), Some(withdraw_height)) =
+            (self.deprecation_height, self.withdraw_height)
+            && withdraw_height <= deprecation_height
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe parameter set",
+                field: "withdraw_height",
+                reason: "must be strictly greater than deprecation_height".to_string(),
+            });
+        }
+
+        match self.lifecycle {
+            FheParamLifecycleV1::Proposed => {
+                if self.deprecation_height.is_some() || self.withdraw_height.is_some() {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe parameter set",
+                        field: "lifecycle",
+                        reason: "proposed sets cannot define deprecation/withdraw heights"
+                            .to_string(),
+                    });
+                }
+            }
+            FheParamLifecycleV1::Active => {
+                if self.activation_height.is_none() {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe parameter set",
+                        field: "lifecycle",
+                        reason: "active sets require activation_height".to_string(),
+                    });
+                }
+            }
+            FheParamLifecycleV1::Deprecated => {
+                if self.activation_height.is_none() || self.deprecation_height.is_none() {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe parameter set",
+                        field: "lifecycle",
+                        reason: "deprecated sets require activation_height and deprecation_height"
+                            .to_string(),
+                    });
+                }
+            }
+            FheParamLifecycleV1::Withdrawn => {
+                if self.activation_height.is_none() || self.withdraw_height.is_none() {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe parameter set",
+                        field: "lifecycle",
+                        reason: "withdrawn sets require activation_height and withdraw_height"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Rounding mode used for deterministic ciphertext arithmetic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "rounding_mode", content = "value"))]
+pub enum FheDeterministicRoundingModeV1 {
+    /// Always round toward negative infinity.
+    Floor,
+    /// Round to nearest value; ties resolve to even.
+    #[default]
+    NearestTiesToEven,
+}
+
+/// Deterministic execution policy for validator-side ciphertext operations.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct FheExecutionPolicyV1 {
+    /// Schema version; must equal [`FHE_EXECUTION_POLICY_VERSION_V1`].
+    pub schema_version: u16,
+    /// Stable policy identifier.
+    pub policy_name: Name,
+    /// Referenced parameter-set name.
+    pub param_set: Name,
+    /// Referenced parameter-set version.
+    pub param_set_version: NonZeroU32,
+    /// Maximum admitted ciphertext size in bytes.
+    pub max_ciphertext_bytes: NonZeroU64,
+    /// Maximum admitted plaintext input size in bytes.
+    pub max_plaintext_bytes: NonZeroU64,
+    /// Maximum ciphertext inputs per operation.
+    pub max_input_ciphertexts: NonZeroU16,
+    /// Maximum ciphertext outputs per operation.
+    pub max_output_ciphertexts: NonZeroU16,
+    /// Maximum multiplication depth requested by an admitted job.
+    pub max_multiplication_depth: NonZeroU16,
+    /// Maximum homomorphic rotations per job.
+    pub max_rotation_count: NonZeroU32,
+    /// Maximum bootstrap operations per job.
+    pub max_bootstrap_count: u16,
+    /// Canonical rounding mode used by evaluators.
+    pub rounding_mode: FheDeterministicRoundingModeV1,
+}
+
+impl FheExecutionPolicyV1 {
+    /// Validate schema version and deterministic policy constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
+    /// execution limits violate deterministic admission rules.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != FHE_EXECUTION_POLICY_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "fhe execution policy",
+                expected: FHE_EXECUTION_POLICY_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+
+        if self.max_plaintext_bytes > self.max_ciphertext_bytes {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "max_plaintext_bytes",
+                reason: "cannot exceed max_ciphertext_bytes".to_string(),
+            });
+        }
+
+        if self.max_output_ciphertexts > self.max_input_ciphertexts {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "max_output_ciphertexts",
+                reason: "cannot exceed max_input_ciphertexts".to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Validate this policy against an admitted FHE parameter set.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when parameter identifiers do not
+    /// match, policy depth exceeds the parameter budget, or the parameter set
+    /// lifecycle is not admissible for new job execution.
+    pub fn validate_for_param_set(
+        &self,
+        param_set: &FheParamSetV1,
+    ) -> Result<(), SoraCloudManifestError> {
+        self.validate()?;
+        param_set.validate()?;
+
+        if self.param_set != param_set.param_set {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "param_set",
+                reason: format!(
+                    "policy references `{}` but parameter set is `{}`",
+                    self.param_set, param_set.param_set
+                ),
+            });
+        }
+
+        if self.param_set_version != param_set.version {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "param_set_version",
+                reason: format!(
+                    "policy references version {} but parameter set is version {}",
+                    self.param_set_version, param_set.version
+                ),
+            });
+        }
+
+        if self.max_multiplication_depth > param_set.max_multiplicative_depth {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "max_multiplication_depth",
+                reason: format!(
+                    "cannot exceed parameter-set maximum ({})",
+                    param_set.max_multiplicative_depth
+                ),
+            });
+        }
+
+        match param_set.lifecycle {
+            FheParamLifecycleV1::Proposed => Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "param_set.lifecycle",
+                reason: "parameter set is not active yet".to_string(),
+            }),
+            FheParamLifecycleV1::Active | FheParamLifecycleV1::Deprecated => Ok(()),
+            FheParamLifecycleV1::Withdrawn => Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "param_set.lifecycle",
+                reason: "parameter set is withdrawn".to_string(),
+            }),
+        }
+    }
+}
+
+/// Governance admission bundle coupling an FHE parameter set and execution policy.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct FheGovernanceBundleV1 {
+    /// Schema version; must equal [`FHE_GOVERNANCE_BUNDLE_VERSION_V1`].
+    pub schema_version: u16,
+    /// Governance-authored parameter set descriptor.
+    pub param_set: FheParamSetV1,
+    /// Deterministic execution policy bound to the parameter set.
+    pub execution_policy: FheExecutionPolicyV1,
+}
+
+impl FheGovernanceBundleV1 {
+    /// Validate deterministic admission constraints across FHE governance records.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
+    /// policy/parameter references are inconsistent.
+    pub fn validate_for_admission(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != FHE_GOVERNANCE_BUNDLE_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "fhe governance bundle",
+                expected: FHE_GOVERNANCE_BUNDLE_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        self.execution_policy
+            .validate_for_param_set(&self.param_set)
+    }
+}
+
+/// Encryption class for an opaque secret envelope payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "encryption", content = "value"))]
+pub enum SecretEnvelopeEncryptionV1 {
+    /// Payload is client-encrypted and opaque to validators.
+    ClientCiphertext,
+    /// Payload is FHE ciphertext and may be operated on homomorphically.
+    FheCiphertext,
+}
+
+/// Opaque encrypted payload with commitment used by ciphertext-native state.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SecretEnvelopeV1 {
+    /// Schema version; must equal [`SECRET_ENVELOPE_VERSION_V1`].
+    pub schema_version: u16,
+    /// Encryption class used by the payload.
+    pub encryption: SecretEnvelopeEncryptionV1,
+    /// Key material identifier (KMS alias / threshold key id / FHE key tag).
+    pub key_id: String,
+    /// Key version under the same `key_id`.
+    pub key_version: NonZeroU32,
+    /// Deterministic nonce/IV bytes supplied by the producer.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub nonce: Vec<u8>,
+    /// Opaque encrypted payload bytes.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub ciphertext: Vec<u8>,
+    /// Commitment hash for verifying payload integrity against metadata.
+    pub commitment: Hash,
+    /// Optional digest over associated public metadata.
+    #[norito(default)]
+    pub aad_digest: Option<Hash>,
+}
+
+impl SecretEnvelopeV1 {
+    const MAX_NONCE_BYTES: usize = 256;
+    const MAX_CIPHERTEXT_BYTES: usize = 33_554_432;
+
+    /// Validate schema version and ciphertext envelope constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
+    /// encrypted payload fields violate deterministic bounds.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SECRET_ENVELOPE_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "secret envelope",
+                expected: SECRET_ENVELOPE_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+
+        if self.key_id.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "secret envelope",
+                field: "key_id",
+            });
+        }
+
+        if self.nonce.is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "secret envelope",
+                field: "nonce",
+            });
+        }
+        if self.nonce.len() > Self::MAX_NONCE_BYTES {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "secret envelope",
+                field: "nonce",
+                reason: format!(
+                    "length {} exceeds max {} bytes",
+                    self.nonce.len(),
+                    Self::MAX_NONCE_BYTES
+                ),
+            });
+        }
+
+        if self.ciphertext.is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "secret envelope",
+                field: "ciphertext",
+            });
+        }
+        if self.ciphertext.len() > Self::MAX_CIPHERTEXT_BYTES {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "secret envelope",
+                field: "ciphertext",
+                reason: format!(
+                    "length {} exceeds max {} bytes",
+                    self.ciphertext.len(),
+                    Self::MAX_CIPHERTEXT_BYTES
+                ),
+            });
+        }
+
+        Ok(())
+    }
+}
+
+/// Public metadata attached to ciphertext-native state records.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CiphertextStateMetadataV1 {
+    /// MIME-style content hint for encrypted payload decoding.
+    pub content_type: String,
+    /// Ciphertext payload size in bytes.
+    pub payload_bytes: NonZeroU64,
+    /// Commitment hash mirrored from the secret envelope.
+    pub commitment: Hash,
+    /// Optional governance policy tag for access/disclosure controls.
+    #[norito(default)]
+    pub policy_tag: Option<String>,
+    /// Optional deterministic labels for index/query routing.
+    #[norito(default)]
+    pub tags: Vec<String>,
+}
+
+impl CiphertextStateMetadataV1 {
+    /// Validate metadata fields for deterministic ciphertext state indexing.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when metadata fields are empty or
+    /// include duplicate tag entries.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.content_type.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "ciphertext state metadata",
+                field: "content_type",
+            });
+        }
+
+        if let Some(policy_tag) = self.policy_tag.as_ref()
+            && policy_tag.trim().is_empty()
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "ciphertext state metadata",
+                field: "policy_tag",
+                reason: "must not be empty when provided".to_string(),
+            });
+        }
+
+        let mut seen = BTreeSet::new();
+        for tag in &self.tags {
+            let normalized = tag.trim();
+            if normalized.is_empty() {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "ciphertext state metadata",
+                    field: "tags",
+                    reason: "tag entries must be non-empty".to_string(),
+                });
+            }
+            if !seen.insert(normalized.to_owned()) {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "ciphertext state metadata",
+                    field: "tags",
+                    reason: format!("duplicate tag `{normalized}`"),
+                });
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Ciphertext-native key-value record with public metadata and secret payload.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CiphertextStateRecordV1 {
+    /// Schema version; must equal [`CIPHERTEXT_STATE_RECORD_VERSION_V1`].
+    pub schema_version: u16,
+    /// Binding that governs this encrypted state key.
+    pub binding_name: Name,
+    /// Canonical key path scoped under a state binding prefix.
+    pub state_key: String,
+    /// Publicly visible metadata used for indexing, policy, and audit.
+    pub metadata: CiphertextStateMetadataV1,
+    /// Encrypted payload envelope.
+    pub secret: SecretEnvelopeV1,
+}
+
+impl CiphertextStateRecordV1 {
+    /// Validate schema version and metadata/secret consistency constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch,
+    /// key paths are invalid, or metadata does not match secret payload state.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != CIPHERTEXT_STATE_RECORD_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "ciphertext state record",
+                expected: CIPHERTEXT_STATE_RECORD_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+
+        if self.state_key.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "ciphertext state record",
+                field: "state_key",
+            });
+        }
+        if !self.state_key.starts_with('/') {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "ciphertext state record",
+                field: "state_key",
+                reason: "must start with '/'".to_string(),
+            });
+        }
+
+        self.metadata.validate()?;
+        self.secret.validate()?;
+
+        let ciphertext_len = u64::try_from(self.secret.ciphertext.len())
+            .expect("ciphertext length always fits in u64");
+        if self.metadata.payload_bytes.get() != ciphertext_len {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "ciphertext state record",
+                field: "metadata.payload_bytes",
+                reason: format!(
+                    "metadata declares {} bytes but envelope has {} bytes",
+                    self.metadata.payload_bytes, ciphertext_len
+                ),
+            });
+        }
+
+        if self.metadata.commitment != self.secret.commitment {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "ciphertext state record",
+                field: "metadata.commitment",
+                reason: "must match secret.commitment".to_string(),
+            });
+        }
+
+        Ok(())
+    }
+}
+
+/// Deterministic FHE operation class admitted for Soracloud ciphertext jobs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
+pub enum FheJobOperationV1 {
+    /// Element-wise homomorphic addition over two or more inputs.
+    Add,
+    /// Element-wise homomorphic multiplication over two or more inputs.
+    Multiply,
+    /// Deterministic left-rotation over one ciphertext input.
+    RotateLeft,
+    /// Deterministic bootstrap/relinearization refresh over one input.
+    Bootstrap,
+}
+
+/// Input ciphertext reference for deterministic FHE job admission.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct FheJobInputRefV1 {
+    /// Canonical state key of the ciphertext input.
+    pub state_key: String,
+    /// Input payload size in bytes.
+    pub payload_bytes: NonZeroU64,
+    /// Input commitment hash bound to the ciphertext payload.
+    pub commitment: Hash,
+}
+
+impl FheJobInputRefV1 {
+    /// Validate deterministic input reference constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when state keys are empty or outside
+    /// canonical path formatting rules.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.state_key.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "fhe job spec",
+                field: "inputs.state_key",
+            });
+        }
+        if !self.state_key.starts_with('/') {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe job spec",
+                field: "inputs.state_key",
+                reason: "must start with '/'".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Deterministic FHE admission/execution job descriptor.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct FheJobSpecV1 {
+    /// Schema version; must equal [`FHE_JOB_SPEC_VERSION_V1`].
+    pub schema_version: u16,
+    /// Stable deterministic job identifier.
+    pub job_id: String,
+    /// Referenced deterministic execution policy identifier.
+    pub policy_name: Name,
+    /// Referenced parameter-set identifier.
+    pub param_set: Name,
+    /// Referenced parameter-set version.
+    pub param_set_version: NonZeroU32,
+    /// Homomorphic operation class.
+    pub operation: FheJobOperationV1,
+    /// Ordered ciphertext inputs for deterministic replay.
+    #[norito(default)]
+    pub inputs: Vec<FheJobInputRefV1>,
+    /// Output ciphertext state key.
+    pub output_state_key: String,
+    /// Requested multiplicative depth consumed by this job.
+    pub requested_multiplication_depth: u16,
+    /// Number of deterministic ciphertext rotations requested.
+    pub rotation_count: u32,
+    /// Number of bootstrap/refresh operations requested.
+    pub bootstrap_count: u16,
+}
+
+impl FheJobSpecV1 {
+    /// Validate schema version and deterministic FHE job constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when job identifiers, key paths,
+    /// inputs, or operation-specific constraints are invalid.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != FHE_JOB_SPEC_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "fhe job spec",
+                expected: FHE_JOB_SPEC_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+
+        if self.job_id.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "fhe job spec",
+                field: "job_id",
+            });
+        }
+
+        if self.output_state_key.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "fhe job spec",
+                field: "output_state_key",
+            });
+        }
+        if !self.output_state_key.starts_with('/') {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe job spec",
+                field: "output_state_key",
+                reason: "must start with '/'".to_string(),
+            });
+        }
+
+        if self.inputs.is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "fhe job spec",
+                field: "inputs",
+            });
+        }
+
+        let mut seen_inputs = BTreeSet::new();
+        for input in &self.inputs {
+            input.validate()?;
+            if !seen_inputs.insert(input.state_key.clone()) {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "fhe job spec",
+                    field: "inputs.state_key",
+                    reason: format!("duplicate input key `{}`", input.state_key),
+                });
+            }
+        }
+
+        match self.operation {
+            FheJobOperationV1::Add => {
+                if self.inputs.len() < 2 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "inputs",
+                        reason: "add operation requires at least two inputs".to_string(),
+                    });
+                }
+                if self.requested_multiplication_depth != 0 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "requested_multiplication_depth",
+                        reason: "add operation must use depth 0".to_string(),
+                    });
+                }
+                if self.rotation_count != 0 || self.bootstrap_count != 0 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "operation",
+                        reason: "add operation cannot request rotation/bootstrap".to_string(),
+                    });
+                }
+            }
+            FheJobOperationV1::Multiply => {
+                if self.inputs.len() < 2 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "inputs",
+                        reason: "multiply operation requires at least two inputs".to_string(),
+                    });
+                }
+                if self.requested_multiplication_depth == 0 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "requested_multiplication_depth",
+                        reason: "multiply operation requires non-zero depth".to_string(),
+                    });
+                }
+                if self.rotation_count != 0 || self.bootstrap_count != 0 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "operation",
+                        reason: "multiply operation cannot request rotation/bootstrap".to_string(),
+                    });
+                }
+            }
+            FheJobOperationV1::RotateLeft => {
+                if self.inputs.len() != 1 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "inputs",
+                        reason: "rotate operation requires exactly one input".to_string(),
+                    });
+                }
+                if self.rotation_count == 0 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "rotation_count",
+                        reason: "rotate operation requires non-zero rotation_count".to_string(),
+                    });
+                }
+                if self.requested_multiplication_depth != 0 || self.bootstrap_count != 0 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "operation",
+                        reason: "rotate operation cannot request depth/bootstrap".to_string(),
+                    });
+                }
+            }
+            FheJobOperationV1::Bootstrap => {
+                if self.inputs.len() != 1 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "inputs",
+                        reason: "bootstrap operation requires exactly one input".to_string(),
+                    });
+                }
+                if self.bootstrap_count == 0 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "bootstrap_count",
+                        reason: "bootstrap operation requires non-zero bootstrap_count".to_string(),
+                    });
+                }
+                if self.requested_multiplication_depth != 0 || self.rotation_count != 0 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "operation",
+                        reason: "bootstrap operation cannot request depth/rotation".to_string(),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate job admission against deterministic policy + parameter constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when policy linkage mismatches, input
+    /// bounds exceed policy limits, or deterministic output bounds are violated.
+    pub fn validate_for_execution(
+        &self,
+        policy: &FheExecutionPolicyV1,
+        param_set: &FheParamSetV1,
+    ) -> Result<(), SoraCloudManifestError> {
+        self.validate()?;
+        policy.validate_for_param_set(param_set)?;
+
+        if self.policy_name != policy.policy_name {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe job spec",
+                field: "policy_name",
+                reason: format!(
+                    "job references `{}` but policy is `{}`",
+                    self.policy_name, policy.policy_name
+                ),
+            });
+        }
+        if self.param_set != policy.param_set {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe job spec",
+                field: "param_set",
+                reason: format!(
+                    "job references `{}` but policy is `{}`",
+                    self.param_set, policy.param_set
+                ),
+            });
+        }
+        if self.param_set_version != policy.param_set_version {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe job spec",
+                field: "param_set_version",
+                reason: format!(
+                    "job references version {} but policy is version {}",
+                    self.param_set_version, policy.param_set_version
+                ),
+            });
+        }
+
+        let input_count =
+            u16::try_from(self.inputs.len()).map_err(|_| SoraCloudManifestError::InvalidField {
+                manifest: "fhe job spec",
+                field: "inputs",
+                reason: "input count exceeds supported u16 range".to_string(),
+            })?;
+        if input_count > policy.max_input_ciphertexts.get() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe job spec",
+                field: "inputs",
+                reason: format!(
+                    "input count {} exceeds policy max_input_ciphertexts {}",
+                    input_count, policy.max_input_ciphertexts
+                ),
+            });
+        }
+
+        if self.requested_multiplication_depth > policy.max_multiplication_depth.get() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe job spec",
+                field: "requested_multiplication_depth",
+                reason: format!(
+                    "requested depth {} exceeds policy max_multiplication_depth {}",
+                    self.requested_multiplication_depth, policy.max_multiplication_depth
+                ),
+            });
+        }
+        if self.rotation_count > policy.max_rotation_count.get() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe job spec",
+                field: "rotation_count",
+                reason: format!(
+                    "rotation_count {} exceeds policy max_rotation_count {}",
+                    self.rotation_count, policy.max_rotation_count
+                ),
+            });
+        }
+        if self.bootstrap_count > policy.max_bootstrap_count {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe job spec",
+                field: "bootstrap_count",
+                reason: format!(
+                    "bootstrap_count {} exceeds policy max_bootstrap_count {}",
+                    self.bootstrap_count, policy.max_bootstrap_count
+                ),
+            });
+        }
+
+        for input in &self.inputs {
+            if input.payload_bytes > policy.max_ciphertext_bytes {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "fhe job spec",
+                    field: "inputs.payload_bytes",
+                    reason: format!(
+                        "input payload {} exceeds policy max_ciphertext_bytes {}",
+                        input.payload_bytes, policy.max_ciphertext_bytes
+                    ),
+                });
+            }
+        }
+
+        let output_bytes = self.deterministic_output_payload_bytes();
+        if output_bytes > policy.max_ciphertext_bytes.get() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "fhe job spec",
+                field: "output_state_key",
+                reason: format!(
+                    "deterministic output size {} exceeds policy max_ciphertext_bytes {}",
+                    output_bytes, policy.max_ciphertext_bytes
+                ),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Deterministic projected output payload size in bytes for admission checks.
+    #[must_use]
+    pub fn deterministic_output_payload_bytes(&self) -> u64 {
+        let max_input = self
+            .inputs
+            .iter()
+            .map(|input| input.payload_bytes.get())
+            .max()
+            .unwrap_or(0);
+        let op_overhead = match self.operation {
+            FheJobOperationV1::Add => 16,
+            FheJobOperationV1::Multiply => {
+                u64::from(self.requested_multiplication_depth).saturating_mul(64)
+            }
+            FheJobOperationV1::RotateLeft => u64::from(self.rotation_count).min(1_024),
+            FheJobOperationV1::Bootstrap => u64::from(self.bootstrap_count).saturating_mul(128),
+        };
+        max_input.saturating_add(op_overhead).max(1)
+    }
+
+    /// Deterministic output commitment derived from operation + input commitments.
+    #[must_use]
+    pub fn deterministic_output_commitment(&self) -> Hash {
+        let input_commitments = self
+            .inputs
+            .iter()
+            .map(|input| input.commitment)
+            .collect::<Vec<_>>();
+        Hash::new(Encode::encode(&(
+            self.job_id.clone(),
+            self.policy_name.clone(),
+            self.param_set.clone(),
+            self.param_set_version,
+            self.operation,
+            self.requested_multiplication_depth,
+            self.rotation_count,
+            self.bootstrap_count,
+            input_commitments,
+        )))
+    }
+}
+
 /// Admission bundle coupling container + service manifests for deterministic checks.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -841,18 +1948,23 @@ impl SoraDeploymentBundleV1 {
     }
 }
 
-/// Re-export commonly used SoraCloud schema types.
+/// Re-export commonly used `SoraCloud` schema types.
 pub mod prelude {
     pub use super::{
         AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentSpendLimitV1,
-        AgentToolCapabilityV1, AgentUpgradePolicyV1, SORA_CONTAINER_MANIFEST_VERSION_V1,
+        AgentToolCapabilityV1, AgentUpgradePolicyV1, CIPHERTEXT_STATE_RECORD_VERSION_V1,
+        CiphertextStateMetadataV1, CiphertextStateRecordV1, FHE_EXECUTION_POLICY_VERSION_V1,
+        FHE_GOVERNANCE_BUNDLE_VERSION_V1, FHE_JOB_SPEC_VERSION_V1, FHE_PARAM_SET_VERSION_V1,
+        FheDeterministicRoundingModeV1, FheExecutionPolicyV1, FheGovernanceBundleV1,
+        FheJobInputRefV1, FheJobOperationV1, FheJobSpecV1, FheParamLifecycleV1, FheParamSetV1,
+        FheSchemeV1, SECRET_ENVELOPE_VERSION_V1, SORA_CONTAINER_MANIFEST_VERSION_V1,
         SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_SERVICE_MANIFEST_VERSION_V1,
-        SORA_STATE_BINDING_VERSION_V1, SoraCapabilityPolicyV1, SoraCloudManifestError,
-        SoraContainerManifestRefV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
-        SoraDeploymentBundleV1, SoraLifecycleHooksV1, SoraNetworkPolicyV1, SoraResourceLimitsV1,
-        SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceManifestV1,
-        SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1,
-        SoraTlsModeV1,
+        SORA_STATE_BINDING_VERSION_V1, SecretEnvelopeEncryptionV1, SecretEnvelopeV1,
+        SoraCapabilityPolicyV1, SoraCloudManifestError, SoraContainerManifestRefV1,
+        SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
+        SoraLifecycleHooksV1, SoraNetworkPolicyV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
+        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceManifestV1, SoraStateBindingV1,
+        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
     };
 }
 
@@ -979,6 +2091,106 @@ mod tests {
                 "torii.sora.internal".to_string(),
             ]),
             upgrade_policy: AgentUpgradePolicyV1::Governed,
+        }
+    }
+
+    fn sample_fhe_param_set() -> FheParamSetV1 {
+        FheParamSetV1 {
+            schema_version: FHE_PARAM_SET_VERSION_V1,
+            param_set: "fhe_bfv_med".parse().expect("valid name"),
+            version: NonZeroU32::new(2).expect("nonzero"),
+            backend: "fhe/bfv-rns/v1".to_string(),
+            scheme: FheSchemeV1::Bfv,
+            ciphertext_modulus_bits: vec![
+                NonZeroU16::new(60).expect("nonzero"),
+                NonZeroU16::new(50).expect("nonzero"),
+                NonZeroU16::new(40).expect("nonzero"),
+            ],
+            plaintext_modulus_bits: NonZeroU16::new(20).expect("nonzero"),
+            polynomial_modulus_degree: NonZeroU32::new(8_192).expect("nonzero"),
+            slot_count: NonZeroU32::new(4_096).expect("nonzero"),
+            security_level_bits: NonZeroU16::new(128).expect("nonzero"),
+            max_multiplicative_depth: NonZeroU16::new(2).expect("nonzero"),
+            lifecycle: FheParamLifecycleV1::Active,
+            activation_height: Some(10_000),
+            deprecation_height: Some(20_000),
+            withdraw_height: Some(40_000),
+            parameter_digest: sample_hash(77),
+        }
+    }
+
+    fn sample_fhe_execution_policy() -> FheExecutionPolicyV1 {
+        FheExecutionPolicyV1 {
+            schema_version: FHE_EXECUTION_POLICY_VERSION_V1,
+            policy_name: "fhe_policy_med".parse().expect("valid name"),
+            param_set: "fhe_bfv_med".parse().expect("valid name"),
+            param_set_version: NonZeroU32::new(2).expect("nonzero"),
+            max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
+            max_plaintext_bytes: NonZeroU64::new(16_384).expect("nonzero"),
+            max_input_ciphertexts: NonZeroU16::new(8).expect("nonzero"),
+            max_output_ciphertexts: NonZeroU16::new(4).expect("nonzero"),
+            max_multiplication_depth: NonZeroU16::new(2).expect("nonzero"),
+            max_rotation_count: NonZeroU32::new(128).expect("nonzero"),
+            max_bootstrap_count: 1,
+            rounding_mode: FheDeterministicRoundingModeV1::NearestTiesToEven,
+        }
+    }
+
+    fn sample_fhe_job_spec() -> FheJobSpecV1 {
+        FheJobSpecV1 {
+            schema_version: FHE_JOB_SPEC_VERSION_V1,
+            job_id: "job-add-001".to_string(),
+            policy_name: "fhe_policy_med".parse().expect("valid name"),
+            param_set: "fhe_bfv_med".parse().expect("valid name"),
+            param_set_version: NonZeroU32::new(2).expect("nonzero"),
+            operation: FheJobOperationV1::Add,
+            inputs: vec![
+                FheJobInputRefV1 {
+                    state_key: "/state/health/patient-1".to_string(),
+                    payload_bytes: NonZeroU64::new(2_048).expect("nonzero"),
+                    commitment: sample_hash(121),
+                },
+                FheJobInputRefV1 {
+                    state_key: "/state/health/patient-2".to_string(),
+                    payload_bytes: NonZeroU64::new(2_048).expect("nonzero"),
+                    commitment: sample_hash(122),
+                },
+            ],
+            output_state_key: "/state/health/result-1".to_string(),
+            requested_multiplication_depth: 0,
+            rotation_count: 0,
+            bootstrap_count: 0,
+        }
+    }
+
+    fn sample_secret_envelope() -> SecretEnvelopeV1 {
+        SecretEnvelopeV1 {
+            schema_version: SECRET_ENVELOPE_VERSION_V1,
+            encryption: SecretEnvelopeEncryptionV1::FheCiphertext,
+            key_id: "kms/fhe/team-a".to_string(),
+            key_version: NonZeroU32::new(3).expect("nonzero"),
+            nonce: vec![1, 2, 3, 4, 5, 6, 7, 8],
+            ciphertext: vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+            commitment: sample_hash(91),
+            aad_digest: Some(sample_hash(99)),
+        }
+    }
+
+    fn sample_ciphertext_state_record() -> CiphertextStateRecordV1 {
+        let secret = sample_secret_envelope();
+        let payload_bytes = u64::try_from(secret.ciphertext.len()).expect("fits in u64");
+        CiphertextStateRecordV1 {
+            schema_version: CIPHERTEXT_STATE_RECORD_VERSION_V1,
+            binding_name: "private_state".parse().expect("valid name"),
+            state_key: "/state/private/patient-1".to_string(),
+            metadata: CiphertextStateMetadataV1 {
+                content_type: "application/vnd.sora.secret+norito".to_string(),
+                payload_bytes: NonZeroU64::new(payload_bytes).expect("nonzero"),
+                commitment: secret.commitment,
+                policy_tag: Some("health.phi.minimum".to_string()),
+                tags: vec!["phi".to_string(), "tenant:alpha".to_string()],
+            },
+            secret,
         }
     }
 
@@ -1174,6 +2386,176 @@ mod tests {
         assert!(
             manifest.validate().is_ok(),
             "valid agent apartment manifest must pass"
+        );
+    }
+
+    #[test]
+    fn fhe_param_set_validate_rejects_empty_modulus_chain() {
+        let mut param_set = sample_fhe_param_set();
+        param_set.ciphertext_modulus_bits.clear();
+        let error = param_set
+            .validate()
+            .expect_err("empty modulus chain must be rejected");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::EmptyField {
+                field: "ciphertext_modulus_bits",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_param_set_validate_rejects_invalid_lifecycle_order() {
+        let mut param_set = sample_fhe_param_set();
+        param_set.deprecation_height = Some(8_000);
+        let error = param_set
+            .validate()
+            .expect_err("deprecation height before activation must be rejected");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "deprecation_height",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_execution_policy_validate_rejects_output_overflow() {
+        let mut policy = sample_fhe_execution_policy();
+        policy.max_output_ciphertexts = NonZeroU16::new(16).expect("nonzero");
+        let error = policy
+            .validate()
+            .expect_err("output ciphertext count above input count must fail");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "max_output_ciphertexts",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_execution_policy_validate_for_param_set_rejects_withdrawn_param_set() {
+        let mut param_set = sample_fhe_param_set();
+        param_set.lifecycle = FheParamLifecycleV1::Withdrawn;
+        let policy = sample_fhe_execution_policy();
+        let error = policy
+            .validate_for_param_set(&param_set)
+            .expect_err("withdrawn parameter sets must reject new execution policy admission");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "param_set.lifecycle",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_governance_bundle_validate_accepts_consistent_payload() {
+        let bundle = FheGovernanceBundleV1 {
+            schema_version: FHE_GOVERNANCE_BUNDLE_VERSION_V1,
+            param_set: sample_fhe_param_set(),
+            execution_policy: sample_fhe_execution_policy(),
+        };
+        assert!(
+            bundle.validate_for_admission().is_ok(),
+            "consistent FHE governance bundle must pass validation"
+        );
+    }
+
+    #[test]
+    fn fhe_job_spec_validate_rejects_duplicate_input_keys() {
+        let mut job = sample_fhe_job_spec();
+        job.inputs.push(FheJobInputRefV1 {
+            state_key: "/state/health/patient-1".to_string(),
+            payload_bytes: NonZeroU64::new(64).expect("nonzero"),
+            commitment: sample_hash(123),
+        });
+        let error = job
+            .validate()
+            .expect_err("duplicate input state keys must be rejected");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "inputs.state_key",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_job_spec_validate_for_execution_rejects_policy_mismatch() {
+        let mut job = sample_fhe_job_spec();
+        job.policy_name = "fhe_policy_other".parse().expect("valid name");
+        let error = job
+            .validate_for_execution(&sample_fhe_execution_policy(), &sample_fhe_param_set())
+            .expect_err("job with policy mismatch must fail execution admission");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "policy_name",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_job_spec_validate_for_execution_accepts_consistent_job() {
+        let job = sample_fhe_job_spec();
+        let policy = sample_fhe_execution_policy();
+        let param_set = sample_fhe_param_set();
+        assert!(
+            job.validate_for_execution(&policy, &param_set).is_ok(),
+            "consistent FHE job should pass execution admission checks"
+        );
+        assert!(
+            job.deterministic_output_payload_bytes() > 0,
+            "deterministic output size must be non-zero"
+        );
+    }
+
+    #[test]
+    fn secret_envelope_validate_rejects_empty_ciphertext() {
+        let mut envelope = sample_secret_envelope();
+        envelope.ciphertext.clear();
+        let error = envelope
+            .validate()
+            .expect_err("secret envelope without ciphertext must fail");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::EmptyField {
+                field: "ciphertext",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn ciphertext_state_record_validate_rejects_payload_size_mismatch() {
+        let mut record = sample_ciphertext_state_record();
+        record.metadata.payload_bytes = NonZeroU64::new(1).expect("nonzero");
+        let error = record
+            .validate()
+            .expect_err("payload size mismatch must be rejected");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "metadata.payload_bytes",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn ciphertext_state_record_validate_accepts_consistent_record() {
+        let record = sample_ciphertext_state_record();
+        assert!(
+            record.validate().is_ok(),
+            "consistent ciphertext state record must validate"
         );
     }
 }
