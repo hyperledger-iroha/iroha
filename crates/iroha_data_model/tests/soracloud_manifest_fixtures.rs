@@ -12,13 +12,14 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     Decode, Encode,
     soracloud::{
-        SORA_CONTAINER_MANIFEST_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-        SORA_SERVICE_MANIFEST_VERSION_V1, SORA_STATE_BINDING_VERSION_V1, SoraCapabilityPolicyV1,
-        SoraContainerManifestRefV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
-        SoraDeploymentBundleV1, SoraLifecycleHooksV1, SoraNetworkPolicyV1, SoraResourceLimitsV1,
-        SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceManifestV1,
-        SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1,
-        SoraTlsModeV1,
+        AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentSpendLimitV1,
+        AgentToolCapabilityV1, AgentUpgradePolicyV1, SORA_CONTAINER_MANIFEST_VERSION_V1,
+        SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_SERVICE_MANIFEST_VERSION_V1,
+        SORA_STATE_BINDING_VERSION_V1, SoraCapabilityPolicyV1, SoraContainerManifestRefV1,
+        SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
+        SoraLifecycleHooksV1, SoraNetworkPolicyV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
+        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceManifestV1, SoraStateBindingV1,
+        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
     },
 };
 #[cfg(feature = "json")]
@@ -39,6 +40,10 @@ const STATE_BINDING_FIXTURE: &str = include_str!(concat!(
 const DEPLOYMENT_BUNDLE_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/soracloud/sora_deployment_bundle_v1.json"
+));
+const AGENT_APARTMENT_FIXTURE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/soracloud/agent_apartment_manifest_v1.json"
 ));
 
 fn sample_hash(seed: u8) -> Hash {
@@ -148,6 +153,53 @@ fn expected_deployment_bundle() -> SoraDeploymentBundleV1 {
     }
 }
 
+fn expected_agent_apartment_manifest() -> AgentApartmentManifestV1 {
+    AgentApartmentManifestV1 {
+        schema_version: AGENT_APARTMENT_MANIFEST_VERSION_V1,
+        apartment_name: "ops_agent".parse().expect("valid name"),
+        container: SoraContainerManifestRefV1 {
+            manifest_hash: sample_hash(33),
+            expected_schema_version: SORA_CONTAINER_MANIFEST_VERSION_V1,
+        },
+        tool_capabilities: vec![
+            AgentToolCapabilityV1 {
+                tool: "soracloud.deploy".to_string(),
+                max_invocations_per_epoch: NonZeroU32::new(120).expect("nonzero"),
+                allow_network: true,
+                allow_filesystem_write: false,
+            },
+            AgentToolCapabilityV1 {
+                tool: "wallet.transfer".to_string(),
+                max_invocations_per_epoch: NonZeroU32::new(24).expect("nonzero"),
+                allow_network: false,
+                allow_filesystem_write: false,
+            },
+        ],
+        policy_capabilities: vec![
+            "wallet.sign".parse().expect("valid name"),
+            "governance.audit".parse().expect("valid name"),
+        ],
+        spend_limits: vec![
+            AgentSpendLimitV1 {
+                asset_definition: "xor#sora".to_string(),
+                max_per_tx_nanos: NonZeroU64::new(5_000_000).expect("nonzero"),
+                max_per_day_nanos: NonZeroU64::new(20_000_000).expect("nonzero"),
+            },
+            AgentSpendLimitV1 {
+                asset_definition: "usd#bank".to_string(),
+                max_per_tx_nanos: NonZeroU64::new(2_000_000).expect("nonzero"),
+                max_per_day_nanos: NonZeroU64::new(10_000_000).expect("nonzero"),
+            },
+        ],
+        state_quota_bytes: NonZeroU64::new(134_217_728).expect("nonzero"),
+        network_egress: SoraNetworkPolicyV1::Allowlist(vec![
+            "rpc.sora.internal".to_string(),
+            "torii.sora.internal".to_string(),
+        ]),
+        upgrade_policy: AgentUpgradePolicyV1::Governed,
+    }
+}
+
 fn assert_norito_roundtrip<T>(value: &T)
 where
     T: Encode + Decode + PartialEq + Debug,
@@ -237,6 +289,19 @@ fn deployment_bundle_fixture_is_canonical() {
 
 #[cfg(feature = "json")]
 #[test]
+fn agent_apartment_manifest_fixture_is_canonical() {
+    let manifest = expected_agent_apartment_manifest();
+    assert_fixture_eq(
+        "agent_apartment_manifest_v1.json",
+        AGENT_APARTMENT_FIXTURE,
+        &manifest,
+    );
+    assert_norito_roundtrip(&manifest);
+    manifest.validate().expect("fixture should validate");
+}
+
+#[cfg(feature = "json")]
+#[test]
 #[ignore = "regenerates Soracloud fixture files"]
 fn regenerate_soracloud_fixtures() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -259,5 +324,9 @@ fn regenerate_soracloud_fixtures() {
     write_fixture(
         &base.join("sora_deployment_bundle_v1.json"),
         &expected_deployment_bundle(),
+    );
+    write_fixture(
+        &base.join("agent_apartment_manifest_v1.json"),
+        &expected_agent_apartment_manifest(),
     );
 }
