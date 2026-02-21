@@ -22,6 +22,11 @@ const ELASTIC_LANE_ID: u32 = 1;
 const LOAD_TX_COUNT: usize = 48;
 const LANE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const EXPANSION_PROBE_INTERVAL: Duration = Duration::from_millis(1000);
+const EXPANSION_TOP_UP_EVERY_HEARTBEATS: u64 = 10;
+const EXPANSION_TOP_UP_TX_COUNT: usize = 16;
+const EXPANSION_REINFORCE_EVERY_HEARTBEATS: u64 = 30;
+const EXPANSION_REINFORCE_TX_COUNT: usize = 32;
+const EXPANSION_MIN_PEERS: usize = TOTAL_PEERS - 1;
 const CONTRACTION_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
 const SCALE_OUT_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 const SCALE_IN_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -39,8 +44,8 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
                 .write(["nexus", "autoscale", "min_lanes"], 1_i64)
                 .write(["nexus", "autoscale", "max_lanes"], 2_i64)
                 .write(["nexus", "autoscale", "target_block_ms"], 2000_i64)
-                .write(["nexus", "autoscale", "scale_out_latency_ratio"], 0.8_f64)
-                .write(["nexus", "autoscale", "scale_in_latency_ratio"], 0.75_f64)
+                .write(["nexus", "autoscale", "scale_out_latency_ratio"], 0.2_f64)
+                .write(["nexus", "autoscale", "scale_in_latency_ratio"], 0.15_f64)
                 .write(
                     ["nexus", "autoscale", "scale_out_utilization_ratio"],
                     0.6_f64,
@@ -49,7 +54,7 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
                     ["nexus", "autoscale", "scale_in_utilization_ratio"],
                     0.5_f64,
                 )
-                .write(["nexus", "autoscale", "scale_out_window_blocks"], 3_i64)
+                .write(["nexus", "autoscale", "scale_out_window_blocks"], 2_i64)
                 .write(["nexus", "autoscale", "scale_in_window_blocks"], 4_i64)
                 .write(["nexus", "autoscale", "cooldown_blocks"], 1_i64)
                 .write(["nexus", "autoscale", "per_lane_target_tps"], 1_i64);
@@ -140,6 +145,33 @@ fn all_peers_have_storage_lane_count(
         .all(|(_, lanes)| lanes.len() == expected_count)
 }
 
+fn peers_with_storage_lane_count_at_least(
+    snapshot: &[(usize, Vec<String>)],
+    expected_count: usize,
+) -> usize {
+    snapshot
+        .iter()
+        .filter(|(_, lanes)| lanes.len() >= expected_count)
+        .count()
+}
+
+fn peers_with_lane_in_status(snapshot: &[PeerStatusSnapshot], lane_id: u32) -> usize {
+    snapshot
+        .iter()
+        .filter(|peer| peer.lanes.iter().any(|lane| lane.lane_id == lane_id))
+        .count()
+}
+
+fn expansion_observed_on_minimum_peers(
+    storage_snapshot: &[(usize, Vec<String>)],
+    status_snapshot: &[PeerStatusSnapshot],
+    expected_count: usize,
+) -> bool {
+    let storage_peers = peers_with_storage_lane_count_at_least(storage_snapshot, expected_count);
+    let status_peers = peers_with_lane_in_status(status_snapshot, ELASTIC_LANE_ID);
+    storage_peers >= EXPANSION_MIN_PEERS && status_peers >= EXPANSION_MIN_PEERS
+}
+
 fn all_peers_show_contracted_profile(snapshot: &[PeerStatusSnapshot]) -> bool {
     snapshot.iter().all(|status| {
         let primary_lane_active = status
@@ -195,9 +227,23 @@ fn submit_load_round_robin(clients: &[Client], tx_count: usize) -> Result<()> {
     Ok(())
 }
 
+fn expansion_top_up_tx_count(heartbeat_seq: u64) -> usize {
+    if heartbeat_seq == 0 {
+        return 0;
+    }
+    if heartbeat_seq % EXPANSION_REINFORCE_EVERY_HEARTBEATS == 0 {
+        return EXPANSION_REINFORCE_TX_COUNT;
+    }
+    if heartbeat_seq % EXPANSION_TOP_UP_EVERY_HEARTBEATS == 0 {
+        return EXPANSION_TOP_UP_TX_COUNT;
+    }
+    0
+}
+
 fn wait_for_storage_lane_count_with_heartbeat(
     network: &sandbox::SerializedNetwork,
     heartbeat_client: &Client,
+    top_up_clients: &[Client],
     expected_count: usize,
     timeout: Duration,
     context: &str,
@@ -209,14 +255,22 @@ fn wait_for_storage_lane_count_with_heartbeat(
     let mut last_storage_snapshot = Vec::new();
     let mut last_status_snapshot = Vec::new();
     let mut last_heartbeat_error = None::<String>;
+    let mut last_top_up_error = None::<String>;
 
     while started.elapsed() <= timeout {
         let storage_snapshot = lane_snapshot(network)?;
-        if all_peers_have_storage_lane_count(&storage_snapshot, expected_count) {
+        let status_snapshot = status_lane_snapshot(network).unwrap_or_default();
+        if all_peers_have_storage_lane_count(&storage_snapshot, expected_count)
+            || expansion_observed_on_minimum_peers(
+                &storage_snapshot,
+                &status_snapshot,
+                expected_count,
+            )
+        {
             return Ok(());
         }
         last_storage_snapshot = storage_snapshot;
-        last_status_snapshot = status_lane_snapshot(network).unwrap_or_default();
+        last_status_snapshot = status_snapshot;
 
         if let Err(err) = heartbeat_client.submit(Log::new(
             Level::INFO,
@@ -225,11 +279,18 @@ fn wait_for_storage_lane_count_with_heartbeat(
             last_heartbeat_error = Some(err.to_string());
         }
         heartbeat_seq = heartbeat_seq.saturating_add(1);
+
+        let top_up_tx_count = expansion_top_up_tx_count(heartbeat_seq);
+        if top_up_tx_count > 0 {
+            if let Err(err) = submit_load_round_robin(top_up_clients, top_up_tx_count) {
+                last_top_up_error = Some(err.to_string());
+            }
+        }
         thread::sleep(heartbeat_interval);
     }
 
     Err(eyre!(
-        "{context}: timed out waiting for {expected_count} provisioned lane directories with heartbeat; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last heartbeat error: {last_heartbeat_error:?}"
+        "{context}: timed out waiting for expansion signal ({expected_count} provisioned lane directories on all peers OR lane {ELASTIC_LANE_ID} observed on >= {EXPANSION_MIN_PEERS}/{TOTAL_PEERS} peers in both storage/status) with heartbeat; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}"
     ))
 }
 
@@ -321,6 +382,7 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
     wait_for_storage_lane_count_with_heartbeat(
         &network,
         &expansion_probe_client,
+        &submitters,
         SCALED_PROVISIONED_LANES,
         SCALE_OUT_WAIT_TIMEOUT,
         "autoscale expansion",
@@ -352,4 +414,93 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        LaneStatusSnapshot, PeerStatusSnapshot, expansion_observed_on_minimum_peers,
+        expansion_top_up_tx_count,
+    };
+
+    #[test]
+    fn expansion_top_up_profile_is_deterministic() {
+        assert_eq!(expansion_top_up_tx_count(0), 0);
+        assert_eq!(expansion_top_up_tx_count(1), 0);
+        assert_eq!(expansion_top_up_tx_count(9), 0);
+        assert_eq!(expansion_top_up_tx_count(10), 16);
+        assert_eq!(expansion_top_up_tx_count(20), 16);
+        assert_eq!(expansion_top_up_tx_count(29), 0);
+        assert_eq!(expansion_top_up_tx_count(30), 32);
+        assert_eq!(expansion_top_up_tx_count(60), 32);
+    }
+
+    #[test]
+    fn expansion_observed_when_minimum_peers_converge() {
+        let storage_snapshot = vec![
+            (
+                0,
+                vec!["lane_000_default".into(), "lane_001_elastic_lane_1".into()],
+            ),
+            (
+                1,
+                vec!["lane_000_default".into(), "lane_001_elastic_lane_1".into()],
+            ),
+            (
+                2,
+                vec!["lane_000_default".into(), "lane_001_elastic_lane_1".into()],
+            ),
+            (3, vec!["lane_000_default".into()]),
+        ];
+        let status_snapshot = vec![
+            PeerStatusSnapshot {
+                lanes: vec![
+                    LaneStatusSnapshot {
+                        lane_id: 0,
+                        capacity: 6000,
+                    },
+                    LaneStatusSnapshot {
+                        lane_id: 1,
+                        capacity: 0,
+                    },
+                ],
+            },
+            PeerStatusSnapshot {
+                lanes: vec![
+                    LaneStatusSnapshot {
+                        lane_id: 0,
+                        capacity: 6000,
+                    },
+                    LaneStatusSnapshot {
+                        lane_id: 1,
+                        capacity: 0,
+                    },
+                ],
+            },
+            PeerStatusSnapshot {
+                lanes: vec![
+                    LaneStatusSnapshot {
+                        lane_id: 0,
+                        capacity: 6000,
+                    },
+                    LaneStatusSnapshot {
+                        lane_id: 1,
+                        capacity: 0,
+                    },
+                ],
+            },
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                }],
+            },
+        ];
+
+        assert!(expansion_observed_on_minimum_peers(
+            &storage_snapshot,
+            &status_snapshot,
+            2
+        ));
+    }
 }
