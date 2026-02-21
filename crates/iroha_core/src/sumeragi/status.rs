@@ -409,6 +409,9 @@ static CONSENSUS_RECOVERY_STATE_TRANSITIONS: OnceLock<Mutex<BTreeMap<&'static st
 static CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_SIDECAR_QUARANTINE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_SIDECAR_FINAL_DROP_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_NO_ROSTER_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_NO_ROSTER_FAIL_CLOSED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_DETERMINISTIC_COMMITTEE_SIZE: AtomicU64 = AtomicU64::new(0);
 static BLOCKSYNC_RANGE_PULL_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCKSYNC_RANGE_PULL_SUCCESS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCKSYNC_RANGE_PULL_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -3380,6 +3383,12 @@ pub struct StatusSnapshot {
     pub consensus_sidecar_quarantine_total: u64,
     /// Sidecar mismatches final-dropped after retry/TTL bounds.
     pub consensus_sidecar_final_drop_total: u64,
+    /// Bounded no-roster fallback broadcasts allowed before fail-closed escalation.
+    pub consensus_no_roster_fallback_total: u64,
+    /// Fail-closed no-roster escalations after fallback budget exhaustion.
+    pub consensus_no_roster_fail_closed_total: u64,
+    /// Last selected deterministic transport committee size.
+    pub consensus_deterministic_committee_size: u64,
     /// Range-pull escalations requested by dependency recovery.
     pub blocksync_range_pull_escalation_total: u64,
     /// Range-pull recoveries that succeeded.
@@ -4268,6 +4277,12 @@ pub fn snapshot() -> StatusSnapshot {
             .load(Ordering::Relaxed),
         consensus_sidecar_final_drop_total: CONSENSUS_SIDECAR_FINAL_DROP_TOTAL
             .load(Ordering::Relaxed),
+        consensus_no_roster_fallback_total: CONSENSUS_NO_ROSTER_FALLBACK_TOTAL
+            .load(Ordering::Relaxed),
+        consensus_no_roster_fail_closed_total: CONSENSUS_NO_ROSTER_FAIL_CLOSED_TOTAL
+            .load(Ordering::Relaxed),
+        consensus_deterministic_committee_size: CONSENSUS_DETERMINISTIC_COMMITTEE_SIZE
+            .load(Ordering::Relaxed),
         blocksync_range_pull_escalation_total: BLOCKSYNC_RANGE_PULL_ESCALATION_TOTAL
             .load(Ordering::Relaxed),
         blocksync_range_pull_success_total: BLOCKSYNC_RANGE_PULL_SUCCESS_TOTAL
@@ -4852,6 +4867,25 @@ pub fn inc_consensus_sidecar_final_drop() {
     CONSENSUS_SIDECAR_FINAL_DROP_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Increment counter when bounded no-roster fallback broadcast is used.
+pub fn inc_consensus_no_roster_fallback() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_NO_ROSTER_FALLBACK_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when no-roster fallback budget is exhausted and fail-closed escalation triggers.
+pub fn inc_consensus_no_roster_fail_closed() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_NO_ROSTER_FAIL_CLOSED_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Record the deterministic transport committee size selected for fanout.
+pub fn set_consensus_deterministic_committee_size(size: u64) {
+    CONSENSUS_DETERMINISTIC_COMMITTEE_SIZE.store(size, Ordering::Relaxed);
+}
+
 /// Increment counter when range-pull escalation is requested.
 pub fn inc_blocksync_range_pull_escalation() {
     #[cfg(test)]
@@ -5210,6 +5244,9 @@ pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
     CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_SIDECAR_QUARANTINE_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_SIDECAR_FINAL_DROP_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_NO_ROSTER_FALLBACK_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_NO_ROSTER_FAIL_CLOSED_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_DETERMINISTIC_COMMITTEE_SIZE.store(0, Ordering::Relaxed);
     CONSENSUS_RECOVERY_STUCK_ROUND_SECONDS_LAST.store(0, Ordering::Relaxed);
     if let Ok(mut guard) = CONSENSUS_RECOVERY_STATE_TRANSITIONS
         .get_or_init(|| Mutex::new(BTreeMap::new()))

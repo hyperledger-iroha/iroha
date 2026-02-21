@@ -28,11 +28,11 @@ use eyre::eyre;
 use iroha_config::parameters::actual::{
     AdaptiveObservability, ConsensusMode, NodeRole, ProofPolicy, Queue as QueueConfig,
     SoranetHandshake, SoranetPrivacy, SoranetVpn, Sumeragi as SumeragiConfig, SumeragiBlock,
-    SumeragiCollectors, SumeragiDa, SumeragiDebug, SumeragiDebugRbc, SumeragiFinality,
-    SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos, SumeragiNposElection,
-    SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposVrf, SumeragiPacemaker,
-    SumeragiPacingGovernor, SumeragiPersistence, SumeragiQueues, SumeragiRbc, SumeragiRecovery,
-    SumeragiWorker,
+    SumeragiCollectors, SumeragiDa, SumeragiDebug, SumeragiDebugRbc, SumeragiFanout,
+    SumeragiFinality, SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos,
+    SumeragiNposElection, SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposVrf,
+    SumeragiPacemaker, SumeragiPacingGovernor, SumeragiPersistence, SumeragiQueues, SumeragiRbc,
+    SumeragiRecovery, SumeragiWorker,
 };
 use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature, SignatureOf,
@@ -1321,6 +1321,15 @@ fn test_sumeragi_config() -> SumeragiConfig {
                 iroha_config::parameters::defaults::sumeragi::COMMIT_RESULT_QUEUE_CAP,
         },
         recovery: SumeragiRecovery {
+            height_attempt_cap:
+                iroha_config::parameters::defaults::sumeragi::RECOVERY_HEIGHT_ATTEMPT_CAP,
+            height_window: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::RECOVERY_HEIGHT_WINDOW_MS,
+            ),
+            hash_miss_cap_before_range_pull: iroha_config::parameters::defaults::sumeragi::
+                RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL,
+            no_roster_fallback_views:
+                iroha_config::parameters::defaults::sumeragi::RECOVERY_NO_ROSTER_FALLBACK_VIEWS,
             missing_block_signer_fallback_attempts:
                 iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
             view_change_backlog_extension_factor:
@@ -1343,6 +1352,12 @@ fn test_sumeragi_config() -> SumeragiConfig {
             ),
             range_pull_escalation_after_hash_misses:
                 iroha_config::parameters::defaults::sumeragi::RANGE_PULL_ESCALATION_AFTER_HASH_MISSES,
+        },
+        fanout: SumeragiFanout {
+            large_set_threshold:
+                iroha_config::parameters::defaults::sumeragi::FANOUT_LARGE_SET_THRESHOLD,
+            activity_lookback_blocks:
+                iroha_config::parameters::defaults::sumeragi::FANOUT_ACTIVITY_LOOKBACK_BLOCKS,
         },
         gating: SumeragiGating {
             future_height_window:
@@ -2577,6 +2592,24 @@ async fn actor_tick_clears_commit_pipeline_wakeup() {
         "tick should clear commit pipeline wakeup"
     );
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_tick_skips_reentrant_invocation() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    let tick_before = actor.tick_counter;
+    actor.tick_in_progress = true;
+
+    let progressed = actor.tick();
+    assert!(!progressed, "nested tick should be dropped");
+    assert_eq!(
+        actor.tick_counter, tick_before,
+        "dropped nested tick should not advance counters"
+    );
+
+    actor.tick_in_progress = false;
     harness.shutdown.send();
 }
 
@@ -33187,6 +33220,175 @@ async fn missing_block_height_budget_clears_after_recovery_success() {
     assert!(
         !actor.missing_block_height_recovery.contains_key(&key),
         "canonical recovery success should clear only the target height budget"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn no_roster_fallback_is_bounded_and_fail_closed_once_per_view() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.recovery.no_roster_fallback_views = 1;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let _missing_guard = super::status::missing_block_fetch_test_guard();
+    let _view_guard = super::status::view_change_proof_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let actor = &mut harness.actor;
+    let _genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0_u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDC; Hash::LENGTH]));
+    let before = super::status::snapshot();
+
+    assert!(
+        actor.allow_no_roster_fallback_or_fail_closed(
+            height,
+            view,
+            block_hash,
+            ViewChangeCause::MissingQc,
+            "test_no_roster_budget",
+        ),
+        "first view should use bounded no-roster fallback"
+    );
+    let after_first = super::status::snapshot();
+    assert_eq!(
+        after_first.consensus_no_roster_fallback_total,
+        before.consensus_no_roster_fallback_total.saturating_add(1)
+    );
+    assert_eq!(
+        after_first.consensus_no_roster_fail_closed_total,
+        before.consensus_no_roster_fail_closed_total
+    );
+
+    assert!(
+        !actor.allow_no_roster_fallback_or_fail_closed(
+            height,
+            view.saturating_add(1),
+            block_hash,
+            ViewChangeCause::MissingQc,
+            "test_no_roster_budget",
+        ),
+        "budget exhaustion should fail-closed"
+    );
+    let after_fail_closed = super::status::snapshot();
+    assert_eq!(
+        after_fail_closed.consensus_no_roster_fail_closed_total,
+        before
+            .consensus_no_roster_fail_closed_total
+            .saturating_add(1)
+    );
+    assert_eq!(
+        after_fail_closed.view_change_causes.missing_qc_total,
+        before.view_change_causes.missing_qc_total.saturating_add(1),
+        "fail-closed escalation should trigger one missing-QC view change"
+    );
+
+    assert!(
+        !actor.allow_no_roster_fallback_or_fail_closed(
+            height,
+            view.saturating_add(1),
+            block_hash,
+            ViewChangeCause::MissingQc,
+            "test_no_roster_budget",
+        ),
+        "same view should not re-escalate fail-closed counters"
+    );
+    let after_repeat = super::status::snapshot();
+    assert_eq!(
+        after_repeat.consensus_no_roster_fail_closed_total,
+        after_fail_closed.consensus_no_roster_fail_closed_total
+    );
+    assert_eq!(
+        after_repeat.view_change_causes.missing_qc_total,
+        after_fail_closed.view_change_causes.missing_qc_total
+    );
+
+    actor.note_missing_block_height_recovery_success(
+        block_hash,
+        height,
+        Instant::now() + Duration::from_millis(1),
+    );
+    assert!(
+        actor.allow_no_roster_fallback_or_fail_closed(
+            height,
+            view.saturating_add(2),
+            block_hash,
+            ViewChangeCause::MissingQc,
+            "test_no_roster_budget",
+        ),
+        "recovery success should reset height-scoped no-roster budget"
+    );
+    let after_reset = super::status::snapshot();
+    assert_eq!(
+        after_reset.consensus_no_roster_fallback_total,
+        after_first
+            .consensus_no_roster_fallback_total
+            .saturating_add(1)
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn deterministic_fanout_committee_uses_formula_and_key_tiebreak() {
+    let mut harness = test_actor_harness(10).await;
+    let mut fallback_peers: Vec<_> = harness
+        .key_pairs
+        .iter()
+        .map(|key_pair| PeerId::new(key_pair.public_key().clone()))
+        .collect();
+    fallback_peers.sort();
+    fallback_peers.dedup();
+    let actor = &mut harness.actor;
+    actor.config.fanout.large_set_threshold = 1;
+    actor.config.fanout.activity_lookback_blocks = 64;
+
+    let mut peers = actor.effective_commit_topology();
+    if peers.len() <= 1 {
+        peers = fallback_peers;
+    }
+    assert!(peers.len() > 1, "test requires a multi-peer topology");
+    let committee = actor.deterministic_fanout_committee_for_round(
+        &peers,
+        actor.config.fanout.activity_lookback_blocks,
+    );
+    let topology = super::network_topology::Topology::new(peers.clone());
+    let required_commit_votes = topology.min_votes_for_commit();
+    let redundancy_margin = std::cmp::max(2, required_commit_votes.saturating_add(9) / 10);
+    let expected_size = required_commit_votes
+        .saturating_add(redundancy_margin)
+        .min(peers.len());
+    assert_eq!(
+        committee.peers.len(),
+        expected_size,
+        "deterministic committee size should follow quorum + redundancy formula"
+    );
+
+    let mut expected_sorted = peers.clone();
+    expected_sorted.sort_by(|lhs, rhs| {
+        lhs.public_key()
+            .cmp(rhs.public_key())
+            .then_with(|| lhs.cmp(rhs))
+    });
+    let expected_sorted: Vec<_> = expected_sorted.into_iter().take(expected_size).collect();
+    assert_eq!(
+        committee.peers, expected_sorted,
+        "without activity evidence, committee should tie-break by peer key ordering"
+    );
+
+    let selected = actor.transport_fanout_targets_for_round(&peers, 7, 3, "test_committee");
+    assert_eq!(
+        selected, committee.peers,
+        "transport fanout should use the deterministic committee for large sets"
+    );
+
+    let snapshot = super::status::snapshot();
+    assert_eq!(
+        snapshot.consensus_deterministic_committee_size,
+        u64::try_from(expected_size).unwrap_or(u64::MAX)
     );
 
     harness.shutdown.send();

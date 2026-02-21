@@ -3273,7 +3273,13 @@ impl Actor {
                     targets = topology_peers.len(),
                     "sending block sync update to commit topology after emitting local precommit vote"
                 );
-            } else {
+            } else if self.allow_no_roster_fallback_or_fail_closed(
+                vote.height,
+                vote.view,
+                vote.block_hash,
+                ViewChangeCause::MissingPayload,
+                "local_precommit_no_roster",
+            ) {
                 self.broadcast_block_created_for_block_sync(
                     super::message::BlockCreated::from(&pending.block),
                     &topology_peers,
@@ -3285,6 +3291,13 @@ impl Actor {
                     signer = vote.signer,
                     targets = topology_peers.len(),
                     "sending BlockCreated payload to commit topology (no verifiable roster snapshot)"
+                );
+            } else {
+                iroha_logger::warn!(
+                    height = vote.height,
+                    view = vote.view,
+                    block = %vote.block_hash,
+                    "skipping BlockCreated fallback broadcast after no-roster fail-closed escalation"
                 );
             }
         } else {
@@ -4454,6 +4467,10 @@ impl Actor {
         update: super::message::BlockSyncUpdate,
         peers: &[PeerId],
     ) {
+        let height = update.block.header().height().get();
+        let view = update.block.header().view_change_index();
+        let fanout_peers =
+            self.transport_fanout_targets_for_round(peers, height, view, "block_sync_update");
         let online_peers = self
             .network
             .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
@@ -4467,7 +4484,7 @@ impl Actor {
         let targets = Self::block_sync_update_targets_for_peers(
             self.common_config.peer.id(),
             self.block_sync_gossip_limit,
-            peers,
+            &fanout_peers,
             &registered_peers,
             &trusted_peers,
             &online_peers,
@@ -4498,6 +4515,10 @@ impl Actor {
         created: super::message::BlockCreated,
         peers: &[PeerId],
     ) {
+        let height = created.block.header().height().get();
+        let view = created.block.header().view_change_index();
+        let fanout_peers =
+            self.transport_fanout_targets_for_round(peers, height, view, "block_created");
         let online_peers = self
             .network
             .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
@@ -4511,7 +4532,7 @@ impl Actor {
         let targets = Self::block_sync_update_targets_for_peers(
             self.common_config.peer.id(),
             self.block_sync_gossip_limit,
-            peers,
+            &fanout_peers,
             &registered_peers,
             &trusted_peers,
             &online_peers,
