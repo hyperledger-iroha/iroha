@@ -2981,7 +2981,8 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_pacemaker_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/pacemaker");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp =
+            self.send_builder(self.operator_signed_request(HttpMethod::GET, url, Vec::new()))?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get sumeragi pacemaker: {} {}",
@@ -2998,7 +2999,8 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_phases_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/phases");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp =
+            self.send_builder(self.operator_signed_request(HttpMethod::GET, url, Vec::new()))?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get sumeragi phases: {} {}",
@@ -3032,7 +3034,8 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_rbc_status_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/rbc");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp =
+            self.send_builder(self.operator_signed_request(HttpMethod::GET, url, Vec::new()))?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get sumeragi rbc status: {} {}",
@@ -13850,6 +13853,75 @@ mod tests {
                 .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_SIGNATURE)),
             "missing operator signature header"
         );
+    }
+
+    #[test]
+    fn sumeragi_operator_endpoints_include_signature_headers_when_key_configured() {
+        let cases: [(&str, fn(&Client) -> Result<norito::json::Value>); 3] = [
+            (
+                "/v1/sumeragi/pacemaker",
+                Client::get_sumeragi_pacemaker_json,
+            ),
+            ("/v1/sumeragi/phases", Client::get_sumeragi_phases_json),
+            ("/v1/sumeragi/rbc", Client::get_sumeragi_rbc_status_json),
+        ];
+
+        for (path, request) in cases {
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let mut client = client_with_base_url(base_url());
+            client.set_operator_key_pair(KeyPair::random());
+
+            with_mock_http(
+                respond_with(
+                    &snapshots,
+                    Response::builder()
+                        .status(StatusCode::UNAUTHORIZED)
+                        .body(Vec::new())
+                        .expect("response build"),
+                ),
+                || {
+                    let _err =
+                        request(&client).expect_err("mocked unauthorized response should fail");
+                },
+            );
+
+            let snapshot = snapshots
+                .lock()
+                .expect("lock snapshots")
+                .first()
+                .cloned()
+                .expect("request snapshot");
+            assert_eq!(snapshot.method, HttpMethod::GET);
+            assert_eq!(snapshot.url.path(), path);
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_PUBLIC_KEY)),
+                "missing operator public key header"
+            );
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_TIMESTAMP_MS)),
+                "missing operator timestamp header"
+            );
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_NONCE)),
+                "missing operator nonce header"
+            );
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_SIGNATURE)),
+                "missing operator signature header"
+            );
+        }
     }
 
     #[test]
