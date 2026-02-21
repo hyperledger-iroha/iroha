@@ -45,7 +45,11 @@ const DEFAULT_CHURN_INTERVAL_SECS: u64 = 300;
 const DEFAULT_MAX_HEIGHT_SKEW: u64 = 2;
 const DEFAULT_MAX_HEIGHT_SKEW_GRACE_SECS: u64 = 30;
 const INTERIM_CONVERGENCE_MAX_SKEW: u64 = 6;
+const DEFAULT_MAX_TRANSIENT_HEIGHT_SKEW: u64 =
+    DEFAULT_MAX_HEIGHT_SKEW + INTERIM_CONVERGENCE_MAX_SKEW + 2;
 const DEFAULT_MAX_VIEW_CHANGE_RATE: f64 = 0.2;
+const DEFAULT_MAX_LAGGED_CYCLE_RATIO: f64 = 0.35;
+const DEFAULT_MIN_COMMITTED_TPS_RATIO: f64 = 0.6;
 const PROCESS_DOWNTIME_SECS: u64 = 5;
 const JOINER_CATCHUP_TIMEOUT_SECS: u64 = 60;
 const RESTART_CATCHUP_TIMEOUT_SECS: u64 = 60;
@@ -76,8 +80,11 @@ struct SimulationConfig {
     churn_interval: Duration,
     max_height_skew: u64,
     max_height_skew_grace: Duration,
+    max_transient_height_skew: u64,
     stall_timeout: Duration,
     max_view_change_rate: f64,
+    max_lagged_cycle_ratio: f64,
+    min_committed_tps_ratio: f64,
     process_downtime: Duration,
 }
 
@@ -101,6 +108,11 @@ impl SimulationConfig {
                 DEFAULT_MAX_HEIGHT_SKEW_GRACE_SECS,
                 0,
             )),
+            max_transient_height_skew: env_u64(
+                "IROHA_TESTUS_MAX_TRANSIENT_HEIGHT_SKEW",
+                DEFAULT_MAX_TRANSIENT_HEIGHT_SKEW,
+                0,
+            ),
             stall_timeout: Duration::from_secs(env_u64(
                 "IROHA_TESTUS_STALL_TIMEOUT_SECS",
                 DEFAULT_STALL_TIMEOUT_SECS,
@@ -109,6 +121,16 @@ impl SimulationConfig {
             max_view_change_rate: env_f64(
                 "IROHA_TESTUS_MAX_VIEW_CHANGE_RATE",
                 DEFAULT_MAX_VIEW_CHANGE_RATE,
+                0.0,
+            ),
+            max_lagged_cycle_ratio: env_f64(
+                "IROHA_TESTUS_MAX_LAGGED_CYCLE_RATIO",
+                DEFAULT_MAX_LAGGED_CYCLE_RATIO,
+                0.0,
+            ),
+            min_committed_tps_ratio: env_f64(
+                "IROHA_TESTUS_MIN_COMMITTED_TPS_RATIO",
+                DEFAULT_MIN_COMMITTED_TPS_RATIO,
                 0.0,
             ),
             process_downtime: Duration::from_secs(PROCESS_DOWNTIME_SECS),
@@ -122,8 +144,11 @@ impl SimulationConfig {
             churn_interval: Duration::from_secs(churn_interval_secs),
             max_height_skew: DEFAULT_MAX_HEIGHT_SKEW,
             max_height_skew_grace: Duration::from_secs(DEFAULT_MAX_HEIGHT_SKEW_GRACE_SECS),
+            max_transient_height_skew: DEFAULT_MAX_TRANSIENT_HEIGHT_SKEW,
             stall_timeout: Duration::from_secs(DEFAULT_STALL_TIMEOUT_SECS),
             max_view_change_rate: DEFAULT_MAX_VIEW_CHANGE_RATE,
+            max_lagged_cycle_ratio: DEFAULT_MAX_LAGGED_CYCLE_RATIO,
+            min_committed_tps_ratio: DEFAULT_MIN_COMMITTED_TPS_RATIO,
             process_downtime: Duration::from_secs(2),
         }
     }
@@ -145,6 +170,8 @@ struct SimulationSummary {
     view_changes_end: u64,
     view_change_rate_per_sec: f64,
     submitted_tps: f64,
+    committed_tps: f64,
+    committed_txs_min_delta: u64,
     saturated_samples: u64,
     total_samples: u64,
 }
@@ -166,6 +193,8 @@ impl SimulationSummary {
             "view_changes_end": (self.view_changes_end),
             "view_change_rate_per_sec": (self.view_change_rate_per_sec),
             "submitted_tps": (self.submitted_tps),
+            "committed_tps": (self.committed_tps),
+            "committed_txs_min_delta": (self.committed_txs_min_delta),
             "saturated_samples": (self.saturated_samples),
             "total_samples": (self.total_samples),
         })
@@ -456,6 +485,22 @@ async fn run_testus_simulation(
     modes: SimulationModes,
 ) -> Result<SimulationSummary> {
     ensure!(cfg.tps > 0, "tps must be greater than zero");
+    ensure!(
+        (0.0..=1.0).contains(&cfg.max_lagged_cycle_ratio),
+        "max lagged cycle ratio must be in [0,1], got {}",
+        cfg.max_lagged_cycle_ratio
+    );
+    ensure!(
+        (0.0..=1.0).contains(&cfg.min_committed_tps_ratio),
+        "min committed tps ratio must be in [0,1], got {}",
+        cfg.min_committed_tps_ratio
+    );
+    ensure!(
+        cfg.max_transient_height_skew >= cfg.max_height_skew,
+        "max transient height skew must be >= max height skew (transient={}, steady={})",
+        cfg.max_transient_height_skew,
+        cfg.max_height_skew
+    );
 
     let mut tx_sent = 0_u64;
     let mut tx_submit_errors = 0_u64;
@@ -476,6 +521,7 @@ async fn run_testus_simulation(
     let initial_statuses = collect_statuses(&harness.validator_clients)?;
     let view_changes_start = max_view_changes(&initial_statuses);
     let mut view_changes_end = view_changes_start;
+    let initial_min_txs_approved = min_txs_approved(&initial_statuses);
     let mut last_progress_height = max_height(&initial_statuses);
     let mut last_progress_at = Instant::now();
     let mut last_min_progress_height = min_height(&initial_statuses);
@@ -483,8 +529,11 @@ async fn run_testus_simulation(
 
     let mut next_tx = Instant::now();
     let mut next_monitor = Instant::now();
-    let mut next_process_churn = Instant::now() + cfg.churn_interval;
-    let membership_offset = cfg.churn_interval / 2;
+    let final_settle_window = effective_final_settle_window(cfg.duration);
+    let churn_window = cfg.duration.saturating_sub(final_settle_window);
+    let mut next_process_churn =
+        Instant::now() + initial_churn_delay(cfg.churn_interval, churn_window);
+    let membership_offset = initial_churn_delay(cfg.churn_interval / 2, churn_window);
     let mut next_membership_churn = Instant::now() + membership_offset;
     let tx_period = Duration::from_secs_f64(1.0 / cfg.tps as f64);
     let start_time = Instant::now();
@@ -492,7 +541,7 @@ async fn run_testus_simulation(
 
     while Instant::now() < deadline {
         let now = Instant::now();
-        let allow_churn = deadline.saturating_duration_since(now) > FINAL_SETTLE_WINDOW;
+        let allow_churn = deadline.saturating_duration_since(now) > final_settle_window;
 
         if modes.process_churn && allow_churn && now >= next_process_churn {
             let churn_start = Instant::now();
@@ -592,6 +641,11 @@ async fn run_testus_simulation(
             let min_height = min_height(&statuses);
             let skew = max_height.saturating_sub(min_height);
             max_height_skew_observed = max_height_skew_observed.max(skew);
+            ensure!(
+                skew <= cfg.max_transient_height_skew,
+                "validator height skew exceeded absolute transient cap: observed={skew}, cap={}, max_height={max_height}, min_height={min_height}",
+                cfg.max_transient_height_skew,
+            );
             skew_breach_started_at =
                 update_skew_breach_started(skew_breach_started_at, skew, cfg.max_height_skew, now);
             if let Some(breach_start) = skew_breach_started_at {
@@ -677,8 +731,47 @@ async fn run_testus_simulation(
     let duration_secs = elapsed.as_secs().max(1);
     let active_elapsed = elapsed.saturating_sub(paused_for_churn);
     let submitted_tps = tx_sent as f64 / active_elapsed.as_secs_f64().max(1.0);
+    let membership_churn_cycles = membership_join_cycles.saturating_add(membership_leave_cycles);
     let view_change_rate_per_sec = (view_changes_end.saturating_sub(view_changes_start)) as f64
         / elapsed.as_secs_f64().max(1.0);
+
+    if modes.process_churn {
+        ensure!(
+            process_churn_cycles > 0,
+            "process churn did not execute (duration={:?}, churn_interval={:?}, final_settle_window={final_settle_window:?})",
+            cfg.duration,
+            cfg.churn_interval
+        );
+    }
+    if modes.membership_churn {
+        ensure!(
+            membership_join_cycles > 0,
+            "membership join churn did not execute (duration={:?}, churn_interval={:?}, final_settle_window={final_settle_window:?})",
+            cfg.duration,
+            cfg.churn_interval
+        );
+        ensure!(
+            membership_leave_cycles > 0,
+            "membership leave churn did not execute (duration={:?}, churn_interval={:?}, final_settle_window={final_settle_window:?})",
+            cfg.duration,
+            cfg.churn_interval
+        );
+    }
+
+    let max_process_lagged =
+        max_allowed_lagged_cycles(process_churn_cycles, cfg.max_lagged_cycle_ratio);
+    ensure!(
+        process_churn_lagged_cycles <= max_process_lagged,
+        "process churn lagged cycles exceeded threshold: lagged={process_churn_lagged_cycles}, total={process_churn_cycles}, allowed={max_process_lagged}, ratio={}",
+        cfg.max_lagged_cycle_ratio
+    );
+    let max_membership_lagged =
+        max_allowed_lagged_cycles(membership_churn_cycles, cfg.max_lagged_cycle_ratio);
+    ensure!(
+        membership_churn_lagged_cycles <= max_membership_lagged,
+        "membership churn lagged cycles exceeded threshold: lagged={membership_churn_lagged_cycles}, total={membership_churn_cycles}, allowed={max_membership_lagged}, ratio={}",
+        cfg.max_lagged_cycle_ratio
+    );
 
     ensure!(
         submitted_tps >= (cfg.tps as f64 * 0.8),
@@ -705,6 +798,25 @@ async fn run_testus_simulation(
         READY_TIMEOUT,
     )
     .await?;
+    wait_for_cluster_convergence(
+        &harness.validator_clients,
+        final_target,
+        cfg.max_height_skew,
+        READY_TIMEOUT,
+    )
+    .await?;
+
+    let final_statuses = collect_statuses(&harness.validator_clients)?;
+    view_changes_end = max_view_changes(&final_statuses);
+    let final_min_txs_approved = min_txs_approved(&final_statuses);
+    let committed_txs_min_delta = final_min_txs_approved.saturating_sub(initial_min_txs_approved);
+    let committed_tps = committed_txs_min_delta as f64 / active_elapsed.as_secs_f64().max(1.0);
+    ensure!(
+        committed_tps >= (cfg.tps as f64 * cfg.min_committed_tps_ratio),
+        "committed/finalized tps is below threshold: committed_tps={committed_tps:.2}, target={}, min_ratio={}",
+        cfg.tps,
+        cfg.min_committed_tps_ratio
+    );
 
     Ok(SimulationSummary {
         duration_secs,
@@ -721,6 +833,8 @@ async fn run_testus_simulation(
         view_changes_end,
         view_change_rate_per_sec,
         submitted_tps,
+        committed_tps,
+        committed_txs_min_delta,
         saturated_samples,
         total_samples,
     })
@@ -1189,6 +1303,10 @@ fn min_height(statuses: &[iroha::client::Status]) -> u64 {
     statuses.iter().map(|s| s.blocks).min().unwrap_or(0)
 }
 
+fn min_txs_approved(statuses: &[iroha::client::Status]) -> u64 {
+    statuses.iter().map(|s| s.txs_approved).min().unwrap_or(0)
+}
+
 fn max_view_changes(statuses: &[iroha::client::Status]) -> u64 {
     statuses
         .iter()
@@ -1557,6 +1675,28 @@ fn next_churn_deadline(now: Instant, interval: Duration, lagged: bool) -> Instan
     now + delay
 }
 
+fn effective_final_settle_window(duration: Duration) -> Duration {
+    let scaled = duration / 3;
+    let bounded = FINAL_SETTLE_WINDOW.min(scaled);
+    if duration <= Duration::from_secs(1) {
+        Duration::ZERO
+    } else {
+        bounded.min(duration.saturating_sub(Duration::from_secs(1)))
+    }
+}
+
+fn initial_churn_delay(interval: Duration, churn_window: Duration) -> Duration {
+    if churn_window <= Duration::from_secs(1) {
+        Duration::ZERO
+    } else {
+        interval.min(churn_window.saturating_sub(Duration::from_secs(1)))
+    }
+}
+
+fn max_allowed_lagged_cycles(total_cycles: u64, max_ratio: f64) -> u64 {
+    ((total_cycles as f64) * max_ratio).ceil() as u64
+}
+
 async fn validator_max_height_with_retry(clients: &[Client], timeout: Duration) -> Result<u64> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -1798,7 +1938,10 @@ fn simulation_config_defaults_are_valid() {
     assert!(cfg.tps >= 1);
     assert!(cfg.churn_interval >= Duration::from_secs(1));
     assert!(cfg.max_height_skew_grace >= Duration::from_secs(1));
+    assert!(cfg.max_transient_height_skew >= cfg.max_height_skew);
     assert!(cfg.stall_timeout >= Duration::from_secs(10));
+    assert!((0.0..=1.0).contains(&cfg.max_lagged_cycle_ratio));
+    assert!((0.0..=1.0).contains(&cfg.min_committed_tps_ratio));
 }
 
 #[test]
@@ -1889,4 +2032,50 @@ fn next_churn_deadline_adds_backoff_when_lagged() {
         deadline.duration_since(now),
         interval.saturating_add(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS))
     );
+}
+
+#[test]
+fn effective_final_settle_window_scales_with_duration() {
+    assert_eq!(
+        effective_final_settle_window(Duration::from_secs(3_600)),
+        FINAL_SETTLE_WINDOW
+    );
+    assert_eq!(
+        effective_final_settle_window(Duration::from_secs(90)),
+        Duration::from_secs(30)
+    );
+    assert_eq!(
+        effective_final_settle_window(Duration::from_secs(30)),
+        Duration::from_secs(10)
+    );
+}
+
+#[test]
+fn initial_churn_delay_stays_inside_churn_window() {
+    assert_eq!(
+        initial_churn_delay(Duration::from_secs(30), Duration::from_secs(20)),
+        Duration::from_secs(19)
+    );
+    assert_eq!(
+        initial_churn_delay(Duration::from_secs(30), Duration::from_secs(60)),
+        Duration::from_secs(30)
+    );
+}
+
+#[test]
+fn max_allowed_lagged_cycles_uses_ceiling_ratio() {
+    assert_eq!(max_allowed_lagged_cycles(0, 0.35), 0);
+    assert_eq!(max_allowed_lagged_cycles(3, 0.35), 2);
+    assert_eq!(max_allowed_lagged_cycles(10, 0.1), 1);
+}
+
+#[test]
+fn min_txs_approved_returns_lowest_counter() {
+    let mut first = iroha::client::Status::default();
+    first.txs_approved = 42;
+    let mut second = iroha::client::Status::default();
+    second.txs_approved = 17;
+    let mut third = iroha::client::Status::default();
+    third.txs_approved = 99;
+    assert_eq!(min_txs_approved(&[first, second, third]), 17);
 }

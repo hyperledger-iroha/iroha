@@ -129,8 +129,14 @@ async fn submit_and_wait_non_empty_block(
     Ok(())
 }
 
-#[tokio::test]
-async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
+struct ConfidentialLocalnetCtx {
+    network: sandbox::SerializedNetwork,
+    tx_builder_client: Client,
+    peer_clients: Vec<Client>,
+    non_empty_target: u64,
+}
+
+async fn start_confidential_localnet(test_name: &str) -> Result<Option<ConfidentialLocalnetCtx>> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -138,21 +144,13 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
             layer.write(["confidential", "enabled"], true);
         });
 
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(confidential_public_and_shielded_three_hop_localnet),
-    )
-    .await?
-    else {
-        return Ok(());
+    let Some(network) = sandbox::start_network_async_or_skip(builder, test_name).await? else {
+        return Ok(None);
     };
 
     network.ensure_blocks(1).await?;
 
     let tx_builder_client = network.client();
-    let source = tx_builder_client.account.clone();
-    let recipient = BOB_ID.clone();
-
     let mut peer_clients = network
         .peers()
         .iter()
@@ -162,10 +160,34 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
         peer_clients.push(tx_builder_client.clone());
     }
 
+    Ok(Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        non_empty_target: 1_u64,
+    }))
+}
+
+#[tokio::test]
+async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) = start_confidential_localnet(stringify!(
+        confidential_public_and_shielded_three_hop_localnet
+    ))
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let source = tx_builder_client.account.clone();
+    let recipient = BOB_ID.clone();
+
     let public_asset_def: AssetDefinitionId = "zkpublichop#wonderland".parse().unwrap();
     let shielded_asset_def: AssetDefinitionId = "zkshieldhop#wonderland".parse().unwrap();
-
-    let mut non_empty_target = 1_u64;
 
     let setup_instructions: Vec<InstructionBox> = vec![
         Register::asset_definition(AssetDefinition::numeric(public_asset_def.clone())).into(),
@@ -352,39 +374,186 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
 }
 
 #[tokio::test]
-async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
-    let builder = NetworkBuilder::new()
-        .with_peers(4)
-        .with_auto_populated_trusted_peers()
-        .with_config_layer(|layer| {
-            layer.write(["confidential", "enabled"], true);
-        });
-
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(confidential_unshield_rejected_when_disabled),
-    )
-    .await?
+async fn confidential_shielded_asset_three_hop_localnet() -> Result<()> {
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) = start_confidential_localnet(stringify!(confidential_shielded_asset_three_hop_localnet))
+        .await?
     else {
         return Ok(());
     };
 
-    network.ensure_blocks(1).await?;
-
-    let tx_builder_client = network.client();
     let source = tx_builder_client.account.clone();
+    let shielded_asset_def: AssetDefinitionId = "zkshieldedthreehop#wonderland".parse().unwrap();
 
-    let mut peer_clients = network
-        .peers()
-        .iter()
-        .map(NetworkPeer::client)
-        .collect::<Vec<_>>();
-    if peer_clients.is_empty() {
-        peer_clients.push(tx_builder_client.clone());
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Register::asset_definition(AssetDefinition::numeric(shielded_asset_def.clone())).into(),
+            Mint::asset_numeric(
+                700_u64,
+                AssetId::new(shielded_asset_def.clone(), source.clone()),
+            )
+            .into(),
+            iroha_data_model::isi::zk::RegisterZkAsset::new(
+                shielded_asset_def.clone(),
+                iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+                true,
+                true,
+                None,
+                None,
+                None,
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "prepare dedicated shielded-asset flow",
+    )
+    .await?;
+
+    let before_shield = numeric_balance_any(
+        &peer_clients,
+        AssetId::new(shielded_asset_def.clone(), source.clone()),
+    )?;
+    assert_eq!(before_shield, Numeric::from(700_u32));
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            iroha_data_model::isi::zk::Shield::new(
+                shielded_asset_def.clone(),
+                source.clone(),
+                500_u128,
+                marker(71),
+                ConfidentialEncryptedPayload::default(),
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "dedicated shielded-asset shield failed",
+    )
+    .await?;
+
+    for output_commitment in [72_u8, 73_u8, 74_u8] {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                iroha_data_model::isi::zk::ZkTransfer::new(
+                    shielded_asset_def.clone(),
+                    Vec::new(),
+                    vec![marker(output_commitment)],
+                    debug_ok_attachment(),
+                    None,
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "dedicated shielded-asset 3-hop transfer failed",
+        )
+        .await?;
     }
 
+    let after_three_hops =
+        numeric_balance_any(&peer_clients, AssetId::new(shielded_asset_def, source))?;
+    assert_eq!(after_three_hops, Numeric::from(200_u32));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn confidential_zknative_asset_three_hop_localnet() -> Result<()> {
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) = start_confidential_localnet(stringify!(confidential_zknative_asset_three_hop_localnet))
+        .await?
+    else {
+        return Ok(());
+    };
+
+    let source = tx_builder_client.account.clone();
+    let zknative_asset_def: AssetDefinitionId = "zkzknativethreehop#wonderland".parse().unwrap();
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Register::asset_definition(AssetDefinition::numeric(zknative_asset_def.clone())).into(),
+            iroha_data_model::isi::zk::RegisterZkAsset::new(
+                zknative_asset_def.clone(),
+                iroha_data_model::isi::zk::ZkAssetMode::ZkNative,
+                false,
+                false,
+                None,
+                None,
+                None,
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "prepare zknative shielded-only asset",
+    )
+    .await?;
+
+    for output_commitment in [81_u8, 82_u8, 83_u8] {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                iroha_data_model::isi::zk::ZkTransfer::new(
+                    zknative_asset_def.clone(),
+                    Vec::new(),
+                    vec![marker(output_commitment)],
+                    debug_ok_attachment(),
+                    None,
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "zknative shielded-asset 3-hop transfer failed",
+        )
+        .await?;
+    }
+
+    let transparent_balance =
+        numeric_balance_any(&peer_clients, AssetId::new(zknative_asset_def, source));
+    assert!(
+        transparent_balance.is_err(),
+        "zknative asset unexpectedly exposes a transparent balance"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) = start_confidential_localnet(stringify!(confidential_unshield_rejected_when_disabled))
+        .await?
+    else {
+        return Ok(());
+    };
+
+    let source = tx_builder_client.account.clone();
+
     let asset_def: AssetDefinitionId = "zkunshielddeny#wonderland".parse().unwrap();
-    let mut non_empty_target = 1_u64;
 
     submit_and_wait_non_empty_block(
         &network,
@@ -481,38 +650,20 @@ async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
 
 #[tokio::test]
 async fn confidential_shield_rejected_when_disabled() -> Result<()> {
-    let builder = NetworkBuilder::new()
-        .with_peers(4)
-        .with_auto_populated_trusted_peers()
-        .with_config_layer(|layer| {
-            layer.write(["confidential", "enabled"], true);
-        });
-
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(confidential_shield_rejected_when_disabled),
-    )
-    .await?
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) =
+        start_confidential_localnet(stringify!(confidential_shield_rejected_when_disabled)).await?
     else {
         return Ok(());
     };
 
-    network.ensure_blocks(1).await?;
-
-    let tx_builder_client = network.client();
     let source = tx_builder_client.account.clone();
 
-    let mut peer_clients = network
-        .peers()
-        .iter()
-        .map(NetworkPeer::client)
-        .collect::<Vec<_>>();
-    if peer_clients.is_empty() {
-        peer_clients.push(tx_builder_client.clone());
-    }
-
     let asset_def: AssetDefinitionId = "zkshielddeny#wonderland".parse().unwrap();
-    let mut non_empty_target = 1_u64;
 
     submit_and_wait_non_empty_block(
         &network,
@@ -589,38 +740,22 @@ async fn confidential_shield_rejected_when_disabled() -> Result<()> {
 
 #[tokio::test]
 async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
-    let builder = NetworkBuilder::new()
-        .with_peers(4)
-        .with_auto_populated_trusted_peers()
-        .with_config_layer(|layer| {
-            layer.write(["confidential", "enabled"], true);
-        });
-
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(confidential_shield_rejected_without_zk_registration),
-    )
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) = start_confidential_localnet(stringify!(
+        confidential_shield_rejected_without_zk_registration
+    ))
     .await?
     else {
         return Ok(());
     };
 
-    network.ensure_blocks(1).await?;
-
-    let tx_builder_client = network.client();
     let source = tx_builder_client.account.clone();
 
-    let mut peer_clients = network
-        .peers()
-        .iter()
-        .map(NetworkPeer::client)
-        .collect::<Vec<_>>();
-    if peer_clients.is_empty() {
-        peer_clients.push(tx_builder_client.clone());
-    }
-
     let asset_def: AssetDefinitionId = "zknotregistered#wonderland".parse().unwrap();
-    let mut non_empty_target = 1_u64;
 
     submit_and_wait_non_empty_block(
         &network,
@@ -693,38 +828,22 @@ async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
 
 #[tokio::test]
 async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
-    let builder = NetworkBuilder::new()
-        .with_peers(4)
-        .with_auto_populated_trusted_peers()
-        .with_config_layer(|layer| {
-            layer.write(["confidential", "enabled"], true);
-        });
-
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(confidential_unshield_rejected_with_stale_root_hint),
-    )
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) = start_confidential_localnet(stringify!(
+        confidential_unshield_rejected_with_stale_root_hint
+    ))
     .await?
     else {
         return Ok(());
     };
 
-    network.ensure_blocks(1).await?;
-
-    let tx_builder_client = network.client();
     let source = tx_builder_client.account.clone();
 
-    let mut peer_clients = network
-        .peers()
-        .iter()
-        .map(NetworkPeer::client)
-        .collect::<Vec<_>>();
-    if peer_clients.is_empty() {
-        peer_clients.push(tx_builder_client.clone());
-    }
-
     let asset_def: AssetDefinitionId = "zkstaleroot#wonderland".parse().unwrap();
-    let mut non_empty_target = 1_u64;
 
     submit_and_wait_non_empty_block(
         &network,
@@ -821,38 +940,22 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
 
 #[tokio::test]
 async fn confidential_unshield_rejected_without_zk_registration() -> Result<()> {
-    let builder = NetworkBuilder::new()
-        .with_peers(4)
-        .with_auto_populated_trusted_peers()
-        .with_config_layer(|layer| {
-            layer.write(["confidential", "enabled"], true);
-        });
-
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(confidential_unshield_rejected_without_zk_registration),
-    )
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) = start_confidential_localnet(stringify!(
+        confidential_unshield_rejected_without_zk_registration
+    ))
     .await?
     else {
         return Ok(());
     };
 
-    network.ensure_blocks(1).await?;
-
-    let tx_builder_client = network.client();
     let source = tx_builder_client.account.clone();
 
-    let mut peer_clients = network
-        .peers()
-        .iter()
-        .map(NetworkPeer::client)
-        .collect::<Vec<_>>();
-    if peer_clients.is_empty() {
-        peer_clients.push(tx_builder_client.clone());
-    }
-
     let asset_def: AssetDefinitionId = "zkunshieldnotregistered#wonderland".parse().unwrap();
-    let mut non_empty_target = 1_u64;
 
     submit_and_wait_non_empty_block(
         &network,
@@ -926,38 +1029,22 @@ async fn confidential_unshield_rejected_without_zk_registration() -> Result<()> 
 
 #[tokio::test]
 async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
-    let builder = NetworkBuilder::new()
-        .with_peers(4)
-        .with_auto_populated_trusted_peers()
-        .with_config_layer(|layer| {
-            layer.write(["confidential", "enabled"], true);
-        });
-
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(confidential_unshield_duplicate_nullifier_rejected),
-    )
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) = start_confidential_localnet(stringify!(
+        confidential_unshield_duplicate_nullifier_rejected
+    ))
     .await?
     else {
         return Ok(());
     };
 
-    network.ensure_blocks(1).await?;
-
-    let tx_builder_client = network.client();
     let source = tx_builder_client.account.clone();
 
-    let mut peer_clients = network
-        .peers()
-        .iter()
-        .map(NetworkPeer::client)
-        .collect::<Vec<_>>();
-    if peer_clients.is_empty() {
-        peer_clients.push(tx_builder_client.clone());
-    }
-
     let asset_def: AssetDefinitionId = "zkdupnullifier#wonderland".parse().unwrap();
-    let mut non_empty_target = 1_u64;
 
     submit_and_wait_non_empty_block(
         &network,
@@ -1075,6 +1162,251 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
     let after_duplicate_attempt =
         numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
     assert_eq!(after_duplicate_attempt, Numeric::from(320_u32));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() -> Result<()> {
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) = start_confidential_localnet(stringify!(
+        confidential_shield_and_unshield_rejected_in_transparent_only_mode
+    ))
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let source = tx_builder_client.account.clone();
+    let asset_def: AssetDefinitionId = "zktransparentonly#wonderland".parse().unwrap();
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            iroha_data_model::isi::zk::RegisterZkAsset::new(
+                asset_def.clone(),
+                iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+                false,
+                false,
+                None,
+                None,
+                None,
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "prepare transparent-only confidential policy asset",
+    )
+    .await?;
+
+    let initial_balance = numeric_balance_any(
+        &peer_clients,
+        AssetId::new(asset_def.clone(), source.clone()),
+    )?;
+    assert_eq!(initial_balance, Numeric::from(300_u32));
+
+    let denied_shield_tx = tx_builder_client.build_transaction_from_items(
+        vec![InstructionBox::from(
+            iroha_data_model::isi::zk::Shield::new(
+                asset_def.clone(),
+                source.clone(),
+                200_u128,
+                marker(15),
+                ConfidentialEncryptedPayload::default(),
+            ),
+        )],
+        iroha_data_model::metadata::Metadata::default(),
+    );
+    let shield_result = submit_transaction_on_any_peer(
+        &peer_clients,
+        &denied_shield_tx,
+        "transparent-only shield unexpectedly accepted",
+    );
+    if let Err(err) = shield_result {
+        assert!(
+            err.chain().any(|cause| {
+                let text = cause.to_string().to_lowercase();
+                text.contains("policy") || text.contains("permitted")
+            }),
+            "expected transparent-only shield policy rejection, got: {err:?}"
+        );
+    }
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Log::new(
+                Level::INFO,
+                "post transparent-only denied shield barrier".to_owned(),
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "post transparent-only denied shield barrier failed",
+    )
+    .await?;
+
+    let after_denied_shield = numeric_balance_any(
+        &peer_clients,
+        AssetId::new(asset_def.clone(), source.clone()),
+    )?;
+    assert_eq!(after_denied_shield, Numeric::from(300_u32));
+
+    let denied_unshield_tx = tx_builder_client.build_transaction_from_items(
+        vec![InstructionBox::from(
+            iroha_data_model::isi::zk::Unshield::new(
+                asset_def.clone(),
+                source.clone(),
+                100_u128,
+                vec![marker(16)],
+                debug_ok_attachment(),
+                None,
+            ),
+        )],
+        iroha_data_model::metadata::Metadata::default(),
+    );
+    let unshield_result = submit_transaction_on_any_peer(
+        &peer_clients,
+        &denied_unshield_tx,
+        "transparent-only unshield unexpectedly accepted",
+    );
+    if let Err(err) = unshield_result {
+        assert!(
+            err.chain().any(|cause| {
+                let text = cause.to_string().to_lowercase();
+                text.contains("policy") || text.contains("permitted")
+            }),
+            "expected transparent-only unshield policy rejection, got: {err:?}"
+        );
+    }
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Log::new(
+                Level::INFO,
+                "post transparent-only denied unshield barrier".to_owned(),
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "post transparent-only denied unshield barrier failed",
+    )
+    .await?;
+
+    let after_denied_unshield =
+        numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
+    assert_eq!(after_denied_unshield, Numeric::from(300_u32));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn confidential_transfer_rejected_in_transparent_only_mode() -> Result<()> {
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) = start_confidential_localnet(stringify!(
+        confidential_transfer_rejected_in_transparent_only_mode
+    ))
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let source = tx_builder_client.account.clone();
+    let asset_def: AssetDefinitionId = "zktransfertransparentonly#wonderland".parse().unwrap();
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            iroha_data_model::isi::zk::RegisterZkAsset::new(
+                asset_def.clone(),
+                iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+                false,
+                false,
+                None,
+                None,
+                None,
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "prepare transparent-only zk-transfer policy asset",
+    )
+    .await?;
+
+    let before_balance = numeric_balance_any(
+        &peer_clients,
+        AssetId::new(asset_def.clone(), source.clone()),
+    )?;
+    assert_eq!(before_balance, Numeric::from(300_u32));
+
+    let denied_transfer_tx = tx_builder_client.build_transaction_from_items(
+        vec![InstructionBox::from(
+            iroha_data_model::isi::zk::ZkTransfer::new(
+                asset_def.clone(),
+                Vec::new(),
+                vec![marker(33)],
+                debug_ok_attachment(),
+                None,
+            ),
+        )],
+        iroha_data_model::metadata::Metadata::default(),
+    );
+
+    let transfer_result = submit_transaction_on_any_peer(
+        &peer_clients,
+        &denied_transfer_tx,
+        "transparent-only transfer unexpectedly accepted",
+    );
+    if let Err(err) = transfer_result {
+        assert!(
+            err.chain().any(|cause| {
+                let text = cause.to_string().to_lowercase();
+                text.contains("transfer") || text.contains("policy") || text.contains("permitted")
+            }),
+            "expected transparent-only transfer policy rejection, got: {err:?}"
+        );
+    }
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Log::new(
+                Level::INFO,
+                "post transparent-only denied transfer barrier".to_owned(),
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "post transparent-only denied transfer barrier failed",
+    )
+    .await?;
+
+    let after_denied_transfer =
+        numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
+    assert_eq!(after_denied_transfer, Numeric::from(300_u32));
 
     Ok(())
 }
