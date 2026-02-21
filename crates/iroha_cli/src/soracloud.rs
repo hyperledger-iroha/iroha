@@ -1,13 +1,15 @@
-//! Soracloud deployment helpers (`init/deploy/status/upgrade/rollback`).
+//! Soracloud deployment helpers (`init/deploy/status/upgrade/rollback/rollout`).
 //!
 //! These commands provide a deterministic local control-plane simulation for
 //! Soracloud manifests. They validate `SoraDeploymentBundleV1` admission rules
 //! and maintain a machine-readable registry/audit log file that can be used by
-//! scripts and CI checks.
+//! scripts and CI checks. `init` also supports Vue3 scaffolding templates for
+//! static sites and dynamic webapps.
 
 use std::{
     collections::BTreeMap,
     fs,
+    num::{NonZeroU16, NonZeroU64},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -16,12 +18,16 @@ use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
     Encode,
     name::Name,
+    smart_contract::manifest::ManifestProvenance,
     soracloud::{
-        SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SoraContainerManifestV1, SoraDeploymentBundleV1,
-        SoraServiceManifestV1,
+        AgentApartmentManifestV1, AgentUpgradePolicyV1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        SORA_STATE_BINDING_VERSION_V1, SoraContainerManifestV1, SoraContainerRuntimeV1,
+        SoraDeploymentBundleV1, SoraNetworkPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+        SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+        SoraStateScopeV1, SoraTlsModeV1,
     },
 };
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, KeyPair, Signature};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use reqwest::{
     blocking::Client as BlockingHttpClient,
@@ -32,8 +38,15 @@ use crate::{Run, RunContext};
 
 const DEFAULT_CONTAINER_MANIFEST: &str = "fixtures/soracloud/sora_container_manifest_v1.json";
 const DEFAULT_SERVICE_MANIFEST: &str = "fixtures/soracloud/sora_service_manifest_v1.json";
+const DEFAULT_AGENT_APARTMENT_MANIFEST: &str =
+    "fixtures/soracloud/agent_apartment_manifest_v1.json";
 const DEFAULT_REGISTRY_PATH: &str = ".soracloud/registry.json";
 const REGISTRY_SCHEMA_VERSION: u16 = 1;
+const AGENT_WALLET_DAY_TICKS: u64 = 10_000;
+const AGENT_MAILBOX_MAX_PAYLOAD_BYTES: usize = 8 * 1024;
+const AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS: u64 = 10_000;
+const AGENT_AUTONOMY_MAX_LABEL_BYTES: usize = 256;
+const AGENT_AUTONOMY_MAX_HASH_BYTES: usize = 256;
 
 /// Soracloud local control-plane commands.
 #[derive(clap::Subcommand, Debug)]
@@ -48,16 +61,70 @@ pub enum Command {
     Upgrade(UpgradeArgs),
     /// Roll back a deployed service to a previous (or specified) version.
     Rollback(RollbackArgs),
+    /// Advance or fail a rollout step using health-gated canary controls.
+    Rollout(RolloutArgs),
+    /// Register a persistent AI apartment manifest into local scheduler state.
+    AgentDeploy(AgentDeployArgs),
+    /// Renew an apartment lease in local scheduler state.
+    AgentLeaseRenew(AgentLeaseRenewArgs),
+    /// Request deterministic apartment restart in local scheduler state.
+    AgentRestart(AgentRestartArgs),
+    /// Show local apartment scheduler status.
+    AgentStatus(AgentStatusArgs),
+    /// Submit an apartment wallet spend request under policy guardrails.
+    AgentWalletSpend(AgentWalletSpendArgs),
+    /// Approve a pending apartment wallet spend request.
+    AgentWalletApprove(AgentWalletApproveArgs),
+    /// Revoke an apartment policy capability.
+    AgentPolicyRevoke(AgentPolicyRevokeArgs),
+    /// Send a deterministic mailbox message between apartments.
+    AgentMessageSend(AgentMessageSendArgs),
+    /// Acknowledge (consume) a mailbox message from an apartment queue.
+    AgentMessageAck(AgentMessageAckArgs),
+    /// Inspect mailbox queue state for an apartment.
+    AgentMailboxStatus(AgentMailboxStatusArgs),
+    /// Add an artifact hash (and optional provenance hash) to autonomy allowlist.
+    AgentArtifactAllow(AgentArtifactAllowArgs),
+    /// Approve an autonomous run under allowlist/provenance/budget guardrails.
+    AgentAutonomyRun(AgentAutonomyRunArgs),
+    /// Show autonomous-run policy state for an apartment.
+    AgentAutonomyStatus(AgentAutonomyStatusArgs),
 }
 
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Command::Init(args) => context.print_data(&args.run()?),
-            Command::Deploy(args) => context.print_data(&args.run(MutationMode::Deploy)?),
+            Command::Deploy(args) => {
+                let output = args.run(MutationMode::Deploy, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
             Command::Status(args) => context.print_data(&args.run()?),
-            Command::Upgrade(args) => context.print_data(&args.run(MutationMode::Upgrade)?),
-            Command::Rollback(args) => context.print_data(&args.run()?),
+            Command::Upgrade(args) => {
+                let output = args.run(MutationMode::Upgrade, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::Rollback(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::Rollout(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::AgentDeploy(args) => context.print_data(&args.run()?),
+            Command::AgentLeaseRenew(args) => context.print_data(&args.run()?),
+            Command::AgentRestart(args) => context.print_data(&args.run()?),
+            Command::AgentStatus(args) => context.print_data(&args.run()?),
+            Command::AgentWalletSpend(args) => context.print_data(&args.run()?),
+            Command::AgentWalletApprove(args) => context.print_data(&args.run()?),
+            Command::AgentPolicyRevoke(args) => context.print_data(&args.run()?),
+            Command::AgentMessageSend(args) => context.print_data(&args.run()?),
+            Command::AgentMessageAck(args) => context.print_data(&args.run()?),
+            Command::AgentMailboxStatus(args) => context.print_data(&args.run()?),
+            Command::AgentArtifactAllow(args) => context.print_data(&args.run()?),
+            Command::AgentAutonomyRun(args) => context.print_data(&args.run()?),
+            Command::AgentAutonomyStatus(args) => context.print_data(&args.run()?),
         }
     }
 }
@@ -74,9 +141,33 @@ pub struct InitArgs {
     /// Version string used in the scaffolded service manifest.
     #[arg(long, value_name = "VERSION", default_value = "0.1.0")]
     service_version: String,
+    /// Scaffolding template to generate in addition to control-plane manifests.
+    #[arg(long, value_enum, default_value_t = InitTemplate::Baseline)]
+    template: InitTemplate,
     /// Overwrite existing files in the output directory.
     #[arg(long)]
     overwrite: bool,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum InitTemplate {
+    /// Generate only Soracloud control-plane manifests.
+    #[default]
+    Baseline,
+    /// Generate a Vue3/Vite static SPA starter with SoraFS publish workflow.
+    Site,
+    /// Generate a Vue3 SPA + API starter with session/auth and chain-ID hooks.
+    Webapp,
+}
+
+impl InitTemplate {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Baseline => "baseline",
+            Self::Site => "site",
+            Self::Webapp => "webapp",
+        }
+    }
 }
 
 impl InitArgs {
@@ -96,12 +187,12 @@ impl InitArgs {
             return Err(eyre!("--service-version must not be empty"));
         }
 
-        let container = load_json::<SoraContainerManifestV1>(&workspace_fixture(
-            DEFAULT_CONTAINER_MANIFEST,
-        ))?;
-        let mut service = load_json::<SoraServiceManifestV1>(&workspace_fixture(
-            DEFAULT_SERVICE_MANIFEST,
-        ))?;
+        let mut container =
+            load_json::<SoraContainerManifestV1>(&workspace_fixture(DEFAULT_CONTAINER_MANIFEST))?;
+        let mut service =
+            load_json::<SoraServiceManifestV1>(&workspace_fixture(DEFAULT_SERVICE_MANIFEST))?;
+
+        apply_init_template_defaults(self.template, &service_name, &mut service, &mut container)?;
 
         service.service_name = service_name;
         service.service_version = self.service_version;
@@ -126,13 +217,21 @@ impl InitArgs {
         write_json(&container_path, &container)?;
         write_json(&service_path, &service)?;
         write_json(&registry_path, &RegistryState::default())?;
+        let template_artifacts = scaffold_init_template(
+            self.template,
+            &self.output_dir,
+            service.service_name.as_ref(),
+            self.overwrite,
+        )?;
 
         Ok(InitOutput {
+            template: self.template.as_str().to_owned(),
             container_manifest_path: container_path.to_string_lossy().into_owned(),
             service_manifest_path: service_path.to_string_lossy().into_owned(),
             registry_path: registry_path.to_string_lossy().into_owned(),
             container_manifest_hash: bundle.container_manifest_hash(),
             service_manifest_hash: bundle.service_manifest_hash(),
+            template_artifacts,
         })
     }
 }
@@ -149,10 +248,19 @@ pub struct DeployArgs {
     /// Registry state JSON path.
     #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
     registry: PathBuf,
+    /// Optional Torii base URL to execute deploy against live control-plane APIs.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for Torii mutation requests.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl DeployArgs {
-    fn run(self, mode: MutationMode) -> Result<MutationOutput> {
+    fn run(self, mode: MutationMode, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let container: SoraContainerManifestV1 = load_json(&self.container)?;
         let service: SoraServiceManifestV1 = load_json(&self.service)?;
         let bundle = SoraDeploymentBundleV1 {
@@ -162,10 +270,26 @@ impl DeployArgs {
         };
         bundle.validate_for_admission()?;
 
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let endpoint_path = match mode {
+                MutationMode::Deploy => "v1/soracloud/deploy",
+                MutationMode::Upgrade => "v1/soracloud/upgrade",
+            };
+            let request = signed_bundle_request(bundle, key_pair)?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                endpoint_path,
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output = apply_mutation(&mut registry, mode, &bundle)?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud deploy output")
     }
 }
 
@@ -181,10 +305,19 @@ pub struct UpgradeArgs {
     /// Registry state JSON path.
     #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
     registry: PathBuf,
+    /// Optional Torii base URL to execute upgrade against live control-plane APIs.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for Torii mutation requests.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl UpgradeArgs {
-    fn run(self, mode: MutationMode) -> Result<MutationOutput> {
+    fn run(self, mode: MutationMode, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let container: SoraContainerManifestV1 = load_json(&self.container)?;
         let service: SoraServiceManifestV1 = load_json(&self.service)?;
         let bundle = SoraDeploymentBundleV1 {
@@ -194,10 +327,26 @@ impl UpgradeArgs {
         };
         bundle.validate_for_admission()?;
 
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let endpoint_path = match mode {
+                MutationMode::Deploy => "v1/soracloud/deploy",
+                MutationMode::Upgrade => "v1/soracloud/upgrade",
+            };
+            let request = signed_bundle_request(bundle, key_pair)?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                endpoint_path,
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output = apply_mutation(&mut registry, mode, &bundle)?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud upgrade output")
     }
 }
 
@@ -267,15 +416,546 @@ pub struct RollbackArgs {
     /// Optional target version. When omitted, rolls back to the previous version.
     #[arg(long, value_name = "VERSION")]
     target_version: Option<String>,
+    /// Optional Torii base URL to execute rollback against live control-plane APIs.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for Torii mutation requests.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl RollbackArgs {
-    fn run(self) -> Result<MutationOutput> {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let request = signed_rollback_request(
+                &self.service_name,
+                self.target_version.as_deref(),
+                key_pair,
+            )?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                "v1/soracloud/rollback",
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
-        let output =
-            apply_rollback(&mut registry, &self.service_name, self.target_version.as_deref())?;
+        let output = apply_rollback(
+            &mut registry,
+            &self.service_name,
+            self.target_version.as_deref(),
+        )?;
+        write_json(&self.registry, &registry)?;
+        json::to_value(&output).wrap_err("failed to encode soracloud rollback output")
+    }
+}
+
+/// Arguments for `app soracloud rollout`.
+#[derive(clap::Args, Debug)]
+pub struct RolloutArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Service name with an active rollout.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Rollout handle emitted by `upgrade` output (`rollout_handle`).
+    #[arg(long, value_name = "HANDLE")]
+    rollout_handle: String,
+    /// Health signal for this rollout step.
+    #[arg(long, value_enum, default_value_t = RolloutHealth::Healthy)]
+    health: RolloutHealth,
+    /// Optional target traffic percentage for healthy promotions.
+    #[arg(long, value_name = "PERCENT")]
+    promote_to_percent: Option<u8>,
+    /// Governance transaction hash linked to this rollout action.
+    #[arg(long, value_name = "HASH")]
+    governance_tx_hash: Hash,
+    /// Optional Torii base URL to execute rollout against live control-plane APIs.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for Torii mutation requests.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl RolloutArgs {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let request = signed_rollout_request(
+                &self.service_name,
+                &self.rollout_handle,
+                self.health.is_healthy(),
+                self.promote_to_percent,
+                self.governance_tx_hash,
+                key_pair,
+            )?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                "v1/soracloud/rollout",
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_rollout(
+            &mut registry,
+            &self.service_name,
+            &self.rollout_handle,
+            self.health.is_healthy(),
+            self.promote_to_percent,
+            self.governance_tx_hash,
+        )?;
+        write_json(&self.registry, &registry)?;
+        json::to_value(&output).wrap_err("failed to encode soracloud rollout output")
+    }
+}
+
+/// Arguments for `app soracloud agent-deploy`.
+#[derive(clap::Args, Debug)]
+pub struct AgentDeployArgs {
+    /// Path to an `AgentApartmentManifestV1` JSON document.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_AGENT_APARTMENT_MANIFEST)]
+    manifest: PathBuf,
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Lease length, measured in deterministic control-plane sequence ticks.
+    #[arg(long, value_name = "TICKS", default_value_t = 120)]
+    lease_ticks: u64,
+    /// Initial autonomy execution budget units.
+    #[arg(long, value_name = "UNITS", default_value_t = AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS)]
+    autonomy_budget_units: u64,
+}
+
+impl AgentDeployArgs {
+    fn run(self) -> Result<AgentMutationOutput> {
+        if self.lease_ticks == 0 {
+            return Err(eyre!("--lease-ticks must be greater than zero"));
+        }
+        if self.autonomy_budget_units == 0 {
+            return Err(eyre!("--autonomy-budget-units must be greater than zero"));
+        }
+        let manifest: AgentApartmentManifestV1 = load_json(&self.manifest)?;
+        manifest.validate()?;
+
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_agent_deploy_with_budget(
+            &mut registry,
+            &manifest,
+            self.lease_ticks,
+            self.autonomy_budget_units,
+        )?;
         write_json(&self.registry, &registry)?;
         Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-lease-renew`.
+#[derive(clap::Args, Debug)]
+pub struct AgentLeaseRenewArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name to renew.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Lease extension ticks.
+    #[arg(long, value_name = "TICKS", default_value_t = 120)]
+    lease_ticks: u64,
+}
+
+impl AgentLeaseRenewArgs {
+    fn run(self) -> Result<AgentMutationOutput> {
+        if self.lease_ticks == 0 {
+            return Err(eyre!("--lease-ticks must be greater than zero"));
+        }
+        let mut registry = load_registry(&self.registry)?;
+        let output =
+            apply_agent_lease_renew(&mut registry, &self.apartment_name, self.lease_ticks)?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-restart`.
+#[derive(clap::Args, Debug)]
+pub struct AgentRestartArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name to restart.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Human-readable reason captured in scheduler events.
+    #[arg(long, value_name = "TEXT")]
+    reason: String,
+}
+
+impl AgentRestartArgs {
+    fn run(self) -> Result<AgentMutationOutput> {
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_agent_restart(&mut registry, &self.apartment_name, &self.reason)?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-status`.
+#[derive(clap::Args, Debug)]
+pub struct AgentStatusArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Optional apartment name filter.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: Option<String>,
+}
+
+impl AgentStatusArgs {
+    fn run(self) -> Result<AgentStatusOutput> {
+        let registry = load_registry(&self.registry)?;
+        let mut apartments = Vec::new();
+        for (apartment_name, entry) in &registry.apartments {
+            if self
+                .apartment_name
+                .as_ref()
+                .is_some_and(|needle| needle != apartment_name)
+            {
+                continue;
+            }
+            apartments.push(AgentApartmentStatusEntry::from_state(
+                apartment_name,
+                entry,
+                registry.next_sequence,
+            ));
+        }
+        Ok(AgentStatusOutput {
+            schema_version: registry.schema_version,
+            apartment_count: u32::try_from(apartments.len()).unwrap_or(u32::MAX),
+            event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+            apartments,
+        })
+    }
+}
+
+/// Arguments for `app soracloud agent-wallet-spend`.
+#[derive(clap::Args, Debug)]
+pub struct AgentWalletSpendArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name issuing the spend request.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Asset definition identifier (`definition#domain`).
+    #[arg(long, value_name = "ASSET")]
+    asset_definition: String,
+    /// Spend amount in nanos.
+    #[arg(long, value_name = "NANOS")]
+    amount_nanos: u64,
+}
+
+impl AgentWalletSpendArgs {
+    fn run(self) -> Result<AgentWalletMutationOutput> {
+        if self.amount_nanos == 0 {
+            return Err(eyre!("--amount-nanos must be greater than zero"));
+        }
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_agent_wallet_spend(
+            &mut registry,
+            &self.apartment_name,
+            &self.asset_definition,
+            self.amount_nanos,
+        )?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-wallet-approve`.
+#[derive(clap::Args, Debug)]
+pub struct AgentWalletApproveArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name owning the request.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Wallet request identifier emitted by `agent-wallet-spend`.
+    #[arg(long, value_name = "REQUEST")]
+    request_id: String,
+}
+
+impl AgentWalletApproveArgs {
+    fn run(self) -> Result<AgentWalletMutationOutput> {
+        let mut registry = load_registry(&self.registry)?;
+        let output =
+            apply_agent_wallet_approve(&mut registry, &self.apartment_name, &self.request_id)?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-policy-revoke`.
+#[derive(clap::Args, Debug)]
+pub struct AgentPolicyRevokeArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name whose policy should be updated.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Capability identifier to revoke (for example `wallet.sign`).
+    #[arg(long, value_name = "CAPABILITY")]
+    capability: String,
+    /// Optional reason included in audit events.
+    #[arg(long, value_name = "TEXT")]
+    reason: Option<String>,
+}
+
+impl AgentPolicyRevokeArgs {
+    fn run(self) -> Result<AgentWalletMutationOutput> {
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_agent_policy_revoke(
+            &mut registry,
+            &self.apartment_name,
+            &self.capability,
+            self.reason.as_deref(),
+        )?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-message-send`.
+#[derive(clap::Args, Debug)]
+pub struct AgentMessageSendArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Sender apartment name.
+    #[arg(long, value_name = "NAME")]
+    from_apartment: String,
+    /// Recipient apartment name.
+    #[arg(long, value_name = "NAME")]
+    to_apartment: String,
+    /// Logical mailbox channel.
+    #[arg(long, value_name = "CHANNEL", default_value = "default")]
+    channel: String,
+    /// Message payload (UTF-8 text).
+    #[arg(long, value_name = "TEXT")]
+    payload: String,
+}
+
+impl AgentMessageSendArgs {
+    fn run(self) -> Result<AgentMailboxMutationOutput> {
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_agent_message_send(
+            &mut registry,
+            &self.from_apartment,
+            &self.to_apartment,
+            &self.channel,
+            &self.payload,
+        )?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-message-ack`.
+#[derive(clap::Args, Debug)]
+pub struct AgentMessageAckArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name consuming the message.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Message identifier emitted by `agent-message-send`.
+    #[arg(long, value_name = "MESSAGE")]
+    message_id: String,
+}
+
+impl AgentMessageAckArgs {
+    fn run(self) -> Result<AgentMailboxMutationOutput> {
+        let mut registry = load_registry(&self.registry)?;
+        let output =
+            apply_agent_message_ack(&mut registry, &self.apartment_name, &self.message_id)?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-mailbox-status`.
+#[derive(clap::Args, Debug)]
+pub struct AgentMailboxStatusArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name to inspect.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+}
+
+impl AgentMailboxStatusArgs {
+    fn run(self) -> Result<AgentMailboxStatusOutput> {
+        let registry = load_registry(&self.registry)?;
+        let apartment_name = self.apartment_name.trim();
+        if apartment_name.is_empty() {
+            return Err(eyre!("--apartment-name must not be empty"));
+        }
+        let runtime = registry
+            .apartments
+            .get(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        let messages = runtime
+            .mailbox_queue
+            .iter()
+            .map(AgentMailboxMessageEntry::from_message)
+            .collect::<Vec<_>>();
+        Ok(AgentMailboxStatusOutput {
+            schema_version: registry.schema_version,
+            apartment_name: apartment_name.to_owned(),
+            status: runtime_status_for_sequence(runtime, registry.next_sequence),
+            pending_message_count: u32::try_from(messages.len()).unwrap_or(u32::MAX),
+            event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+            messages,
+        })
+    }
+}
+
+/// Arguments for `app soracloud agent-artifact-allow`.
+#[derive(clap::Args, Debug)]
+pub struct AgentArtifactAllowArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name whose allowlist should be updated.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Artifact hash identifier.
+    #[arg(long, value_name = "HASH")]
+    artifact_hash: String,
+    /// Optional provenance hash required for this artifact.
+    #[arg(long, value_name = "HASH")]
+    provenance_hash: Option<String>,
+}
+
+impl AgentArtifactAllowArgs {
+    fn run(self) -> Result<AgentAutonomyMutationOutput> {
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_agent_artifact_allow(
+            &mut registry,
+            &self.apartment_name,
+            &self.artifact_hash,
+            self.provenance_hash.as_deref(),
+        )?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-autonomy-run`.
+#[derive(clap::Args, Debug)]
+pub struct AgentAutonomyRunArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name requesting autonomous execution.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Artifact hash identifier.
+    #[arg(long, value_name = "HASH")]
+    artifact_hash: String,
+    /// Optional provenance hash for this run request.
+    #[arg(long, value_name = "HASH")]
+    provenance_hash: Option<String>,
+    /// Budget units requested for this run.
+    #[arg(long, value_name = "UNITS")]
+    budget_units: u64,
+    /// Human-readable run label.
+    #[arg(long, value_name = "LABEL")]
+    run_label: String,
+}
+
+impl AgentAutonomyRunArgs {
+    fn run(self) -> Result<AgentAutonomyMutationOutput> {
+        if self.budget_units == 0 {
+            return Err(eyre!("--budget-units must be greater than zero"));
+        }
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_agent_autonomy_run(
+            &mut registry,
+            &self.apartment_name,
+            &self.artifact_hash,
+            self.provenance_hash.as_deref(),
+            self.budget_units,
+            &self.run_label,
+        )?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-autonomy-status`.
+#[derive(clap::Args, Debug)]
+pub struct AgentAutonomyStatusArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name to inspect.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+}
+
+impl AgentAutonomyStatusArgs {
+    fn run(self) -> Result<AgentAutonomyStatusOutput> {
+        let registry = load_registry(&self.registry)?;
+        let apartment_name = self.apartment_name.trim();
+        if apartment_name.is_empty() {
+            return Err(eyre!("--apartment-name must not be empty"));
+        }
+        let runtime = registry
+            .apartments
+            .get(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        let allowlist = runtime
+            .artifact_allowlist
+            .values()
+            .map(AgentAutonomyAllowlistEntry::from_rule)
+            .collect::<Vec<_>>();
+        let recent_runs = runtime
+            .autonomy_run_history
+            .iter()
+            .rev()
+            .take(20)
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(AgentAutonomyStatusOutput {
+            schema_version: registry.schema_version,
+            apartment_name: apartment_name.to_owned(),
+            status: runtime_status_for_sequence(runtime, registry.next_sequence),
+            budget_ceiling_units: runtime.autonomy_budget_ceiling_units,
+            budget_remaining_units: runtime.autonomy_budget_remaining_units,
+            allowlist_count: u32::try_from(runtime.artifact_allowlist.len()).unwrap_or(u32::MAX),
+            run_count: u32::try_from(runtime.autonomy_run_history.len()).unwrap_or(u32::MAX),
+            event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+            allowlist,
+            recent_runs,
+        })
     }
 }
 
@@ -285,12 +965,58 @@ enum MutationMode {
     Upgrade,
 }
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum RolloutHealth {
+    #[default]
+    Healthy,
+    Unhealthy,
+}
+
+impl RolloutHealth {
+    fn is_healthy(self) -> bool {
+        matches!(self, Self::Healthy)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "action", content = "value")]
 enum SoracloudAction {
     Deploy,
     Upgrade,
     Rollback,
+    Rollout,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(tag = "stage", content = "value")]
+enum RolloutStage {
+    Canary,
+    Promoted,
+    RolledBack,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(tag = "status", content = "value")]
+enum AgentRuntimeStatus {
+    Running,
+    LeaseExpired,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct RolloutRuntimeState {
+    rollout_handle: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    baseline_version: Option<String>,
+    candidate_version: String,
+    canary_percent: u8,
+    traffic_percent: u8,
+    stage: RolloutStage,
+    health_failures: u32,
+    max_health_failures: u32,
+    health_window_secs: u32,
+    created_sequence: u64,
+    updated_sequence: u64,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -301,6 +1027,10 @@ struct RegistryState {
     services: BTreeMap<String, RegistryServiceEntry>,
     #[norito(default)]
     audit_log: Vec<RegistryAuditEvent>,
+    #[norito(default)]
+    apartments: BTreeMap<String, AgentApartmentRuntimeState>,
+    #[norito(default)]
+    apartment_events: Vec<AgentApartmentEvent>,
 }
 
 impl Default for RegistryState {
@@ -310,6 +1040,8 @@ impl Default for RegistryState {
             next_sequence: 1,
             services: BTreeMap::new(),
             audit_log: Vec::new(),
+            apartments: BTreeMap::new(),
+            apartment_events: Vec::new(),
         }
     }
 }
@@ -320,6 +1052,12 @@ struct RegistryServiceEntry {
     current_version: String,
     #[norito(default)]
     revisions: Vec<RegistryServiceRevision>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    active_rollout: Option<RolloutRuntimeState>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    last_rollout: Option<RolloutRuntimeState>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -350,15 +1088,172 @@ struct RegistryAuditEvent {
     to_version: String,
     service_manifest_hash: Hash,
     container_manifest_hash: Hash,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    governance_tx_hash: Option<Hash>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    rollout_handle: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(tag = "action", content = "value")]
+enum AgentApartmentAction {
+    Deploy,
+    LeaseRenew,
+    Restart,
+    WalletSpendRequested,
+    WalletSpendApproved,
+    PolicyRevoked,
+    MessageEnqueued,
+    MessageAcknowledged,
+    ArtifactAllowed,
+    AutonomyRunApproved,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentWalletSpendRequest {
+    request_id: String,
+    asset_definition: String,
+    amount_nanos: u64,
+    created_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentWalletDailySpendEntry {
+    asset_definition: String,
+    day_bucket: u64,
+    spent_nanos: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentMailboxMessage {
+    message_id: String,
+    from_apartment: String,
+    channel: String,
+    payload: String,
+    payload_hash: Hash,
+    enqueued_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentArtifactAllowRule {
+    artifact_hash: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    provenance_hash: Option<String>,
+    added_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentAutonomyRunRecord {
+    run_id: String,
+    artifact_hash: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    provenance_hash: Option<String>,
+    budget_units: u64,
+    run_label: String,
+    approved_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentApartmentRuntimeState {
+    manifest: AgentApartmentManifestV1,
+    manifest_hash: Hash,
+    status: AgentRuntimeStatus,
+    deployed_sequence: u64,
+    lease_started_sequence: u64,
+    lease_expires_sequence: u64,
+    last_renewed_sequence: u64,
+    restart_count: u32,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    last_restart_sequence: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    last_restart_reason: Option<String>,
+    #[norito(default)]
+    revoked_policy_capabilities: Vec<String>,
+    #[norito(default)]
+    pending_wallet_requests: BTreeMap<String, AgentWalletSpendRequest>,
+    #[norito(default)]
+    wallet_daily_spend: BTreeMap<String, AgentWalletDailySpendEntry>,
+    #[norito(default)]
+    mailbox_queue: Vec<AgentMailboxMessage>,
+    #[norito(default)]
+    autonomy_budget_ceiling_units: u64,
+    #[norito(default)]
+    autonomy_budget_remaining_units: u64,
+    #[norito(default)]
+    artifact_allowlist: BTreeMap<String, AgentArtifactAllowRule>,
+    #[norito(default)]
+    autonomy_run_history: Vec<AgentAutonomyRunRecord>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentApartmentEvent {
+    sequence: u64,
+    action: AgentApartmentAction,
+    apartment_name: String,
+    status: AgentRuntimeStatus,
+    lease_expires_sequence: u64,
+    manifest_hash: Hash,
+    restart_count: u32,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    asset_definition: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    amount_nanos: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    capability: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    from_apartment: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    to_apartment: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    channel: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    payload_hash: Option<Hash>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    artifact_hash: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    provenance_hash: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    run_label: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    budget_units: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    budget_remaining_units: Option<u64>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct InitOutput {
+    template: String,
     container_manifest_path: String,
     service_manifest_path: String,
     registry_path: String,
     container_manifest_hash: Hash,
     service_manifest_hash: Hash,
+    #[norito(default)]
+    template_artifacts: Vec<String>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -373,6 +1268,30 @@ struct MutationOutput {
     service_manifest_hash: Hash,
     container_manifest_hash: Hash,
     revision_count: u32,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    rollout_handle: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    rollout_stage: Option<RolloutStage>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    rollout_percent: Option<u8>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct RolloutOutput {
+    action: SoracloudAction,
+    service_name: String,
+    rollout_handle: String,
+    stage: RolloutStage,
+    current_version: String,
+    traffic_percent: u8,
+    health_failures: u32,
+    max_health_failures: u32,
+    sequence: u64,
+    governance_tx_hash: Hash,
+    audit_event_count: u32,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -404,6 +1323,266 @@ struct ServiceStatusOutput {
     revision_count: u32,
     #[norito(default)]
     latest_revision: Option<RegistryServiceRevision>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    active_rollout: Option<RolloutRuntimeState>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    last_rollout: Option<RolloutRuntimeState>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentMutationOutput {
+    action: AgentApartmentAction,
+    apartment_name: String,
+    sequence: u64,
+    manifest_hash: Hash,
+    status: AgentRuntimeStatus,
+    lease_expires_sequence: u64,
+    lease_remaining_ticks: u64,
+    restart_count: u32,
+    revoked_policy_capability_count: u32,
+    pending_wallet_request_count: u32,
+    event_count: u32,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    asset_definition: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    amount_nanos: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    day_bucket: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    day_spent_nanos: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    capability: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentWalletMutationOutput {
+    action: AgentApartmentAction,
+    apartment_name: String,
+    sequence: u64,
+    manifest_hash: Hash,
+    status: AgentRuntimeStatus,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    asset_definition: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    amount_nanos: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    day_bucket: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    day_spent_nanos: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    capability: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    pending_request_count: u32,
+    revoked_policy_capability_count: u32,
+    event_count: u32,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentMailboxMutationOutput {
+    action: AgentApartmentAction,
+    apartment_name: String,
+    sequence: u64,
+    message_id: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    from_apartment: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    to_apartment: Option<String>,
+    channel: String,
+    payload_hash: Hash,
+    status: AgentRuntimeStatus,
+    pending_message_count: u32,
+    event_count: u32,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentMailboxStatusOutput {
+    schema_version: u16,
+    apartment_name: String,
+    status: AgentRuntimeStatus,
+    pending_message_count: u32,
+    event_count: u32,
+    messages: Vec<AgentMailboxMessageEntry>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentMailboxMessageEntry {
+    message_id: String,
+    from_apartment: String,
+    channel: String,
+    payload: String,
+    payload_hash: Hash,
+    enqueued_sequence: u64,
+}
+
+impl AgentMailboxMessageEntry {
+    fn from_message(message: &AgentMailboxMessage) -> Self {
+        Self {
+            message_id: message.message_id.clone(),
+            from_apartment: message.from_apartment.clone(),
+            channel: message.channel.clone(),
+            payload: message.payload.clone(),
+            payload_hash: message.payload_hash,
+            enqueued_sequence: message.enqueued_sequence,
+        }
+    }
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentAutonomyMutationOutput {
+    action: AgentApartmentAction,
+    apartment_name: String,
+    sequence: u64,
+    artifact_hash: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    provenance_hash: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    run_id: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    run_label: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    budget_units: Option<u64>,
+    status: AgentRuntimeStatus,
+    budget_remaining_units: u64,
+    allowlist_count: u32,
+    run_count: u32,
+    event_count: u32,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentAutonomyStatusOutput {
+    schema_version: u16,
+    apartment_name: String,
+    status: AgentRuntimeStatus,
+    budget_ceiling_units: u64,
+    budget_remaining_units: u64,
+    allowlist_count: u32,
+    run_count: u32,
+    event_count: u32,
+    allowlist: Vec<AgentAutonomyAllowlistEntry>,
+    recent_runs: Vec<AgentAutonomyRunRecord>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentAutonomyAllowlistEntry {
+    artifact_hash: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    provenance_hash: Option<String>,
+    added_sequence: u64,
+}
+
+impl AgentAutonomyAllowlistEntry {
+    fn from_rule(rule: &AgentArtifactAllowRule) -> Self {
+        Self {
+            artifact_hash: rule.artifact_hash.clone(),
+            provenance_hash: rule.provenance_hash.clone(),
+            added_sequence: rule.added_sequence,
+        }
+    }
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentStatusOutput {
+    schema_version: u16,
+    apartment_count: u32,
+    event_count: u32,
+    apartments: Vec<AgentApartmentStatusEntry>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentApartmentStatusEntry {
+    apartment_name: String,
+    manifest_hash: Hash,
+    status: AgentRuntimeStatus,
+    lease_started_sequence: u64,
+    lease_expires_sequence: u64,
+    lease_remaining_ticks: u64,
+    restart_count: u32,
+    state_quota_bytes: u64,
+    tool_capability_count: u32,
+    policy_capability_count: u32,
+    revoked_policy_capability_count: u32,
+    pending_wallet_request_count: u32,
+    pending_mailbox_message_count: u32,
+    autonomy_budget_ceiling_units: u64,
+    autonomy_budget_remaining_units: u64,
+    artifact_allowlist_count: u32,
+    autonomy_run_count: u32,
+    spend_limit_count: u32,
+    upgrade_policy: AgentUpgradePolicyV1,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    last_restart_sequence: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    last_restart_reason: Option<String>,
+}
+
+impl AgentApartmentStatusEntry {
+    fn from_state(
+        apartment_name: &str,
+        state: &AgentApartmentRuntimeState,
+        current_sequence: u64,
+    ) -> Self {
+        Self {
+            apartment_name: apartment_name.to_owned(),
+            manifest_hash: state.manifest_hash,
+            status: runtime_status_for_sequence(state, current_sequence),
+            lease_started_sequence: state.lease_started_sequence,
+            lease_expires_sequence: state.lease_expires_sequence,
+            lease_remaining_ticks: lease_remaining_ticks(state, current_sequence),
+            restart_count: state.restart_count,
+            state_quota_bytes: state.manifest.state_quota_bytes.get(),
+            tool_capability_count: u32::try_from(state.manifest.tool_capabilities.len())
+                .unwrap_or(u32::MAX),
+            policy_capability_count: u32::try_from(state.manifest.policy_capabilities.len())
+                .unwrap_or(u32::MAX),
+            revoked_policy_capability_count: u32::try_from(state.revoked_policy_capabilities.len())
+                .unwrap_or(u32::MAX),
+            pending_wallet_request_count: u32::try_from(state.pending_wallet_requests.len())
+                .unwrap_or(u32::MAX),
+            pending_mailbox_message_count: u32::try_from(state.mailbox_queue.len())
+                .unwrap_or(u32::MAX),
+            autonomy_budget_ceiling_units: state.autonomy_budget_ceiling_units,
+            autonomy_budget_remaining_units: state.autonomy_budget_remaining_units,
+            artifact_allowlist_count: u32::try_from(state.artifact_allowlist.len())
+                .unwrap_or(u32::MAX),
+            autonomy_run_count: u32::try_from(state.autonomy_run_history.len()).unwrap_or(u32::MAX),
+            spend_limit_count: u32::try_from(state.manifest.spend_limits.len()).unwrap_or(u32::MAX),
+            upgrade_policy: state.manifest.upgrade_policy,
+            last_restart_sequence: state.last_restart_sequence,
+            last_restart_reason: state.last_restart_reason.clone(),
+        }
+    }
 }
 
 impl ServiceStatusOutput {
@@ -413,6 +1592,8 @@ impl ServiceStatusOutput {
             current_version: entry.current_version.clone(),
             revision_count: u32::try_from(entry.revisions.len()).unwrap_or(u32::MAX),
             latest_revision: entry.revisions.last().cloned(),
+            active_rollout: entry.active_rollout.clone(),
+            last_rollout: entry.last_rollout.clone(),
         }
     }
 }
@@ -448,6 +1629,55 @@ impl StatusOutput {
     }
 }
 
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedBundleRequest {
+    bundle: SoraDeploymentBundleV1,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct RollbackPayload {
+    service_name: String,
+    #[norito(default)]
+    target_version: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedRollbackRequest {
+    payload: RollbackPayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct RolloutAdvancePayload {
+    service_name: String,
+    rollout_handle: String,
+    healthy: bool,
+    #[norito(default)]
+    promote_to_percent: Option<u8>,
+    governance_tx_hash: Hash,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedRolloutAdvanceRequest {
+    payload: RolloutAdvancePayload,
+    provenance: ManifestProvenance,
+}
+
 fn apply_mutation(
     registry: &mut RegistryState,
     mode: MutationMode,
@@ -470,7 +1700,10 @@ fn apply_mutation(
                 "service `{service_name}` not found; deploy it before upgrading"
             ));
         }
-        (MutationMode::Upgrade, true) => (SoracloudAction::Upgrade, entry.map(|e| e.current_version.clone())),
+        (MutationMode::Upgrade, true) => (
+            SoracloudAction::Upgrade,
+            entry.map(|e| e.current_version.clone()),
+        ),
     };
 
     let container_manifest_hash = bundle.container_manifest_hash();
@@ -492,7 +1725,11 @@ fn apply_mutation(
         service_manifest_hash,
         container_manifest_hash,
         replicas: bundle.service.replicas.get(),
-        route_host: bundle.service.route.as_ref().map(|route| route.host.clone()),
+        route_host: bundle
+            .service
+            .route
+            .as_ref()
+            .map(|route| route.host.clone()),
         route_path_prefix: bundle
             .service
             .route
@@ -501,6 +1738,9 @@ fn apply_mutation(
         state_binding_count: u32::try_from(bundle.service.state_bindings.len()).unwrap_or(u32::MAX),
     };
 
+    let mut response_rollout_handle = None;
+    let mut response_rollout_stage = None;
+    let mut response_rollout_percent = None;
     let entry = registry
         .services
         .entry(service_name.clone())
@@ -508,9 +1748,48 @@ fn apply_mutation(
             service_name: service_name.clone(),
             current_version: service_version.clone(),
             revisions: Vec::new(),
+            active_rollout: None,
+            last_rollout: None,
         });
     entry.current_version = service_version.clone();
     entry.revisions.push(revision);
+    if action == SoracloudAction::Upgrade {
+        let canary_percent = bundle.service.rollout.canary_percent.min(100);
+        let traffic_percent = if canary_percent == 0 {
+            100
+        } else {
+            canary_percent
+        };
+        let rollout_state = RolloutRuntimeState {
+            rollout_handle: rollout_handle(&service_name, next_sequence),
+            baseline_version: previous_version.clone(),
+            candidate_version: service_version.clone(),
+            canary_percent,
+            traffic_percent,
+            stage: if traffic_percent >= 100 {
+                RolloutStage::Promoted
+            } else {
+                RolloutStage::Canary
+            },
+            health_failures: 0,
+            max_health_failures: bundle.service.rollout.automatic_rollback_failures.get(),
+            health_window_secs: bundle.service.rollout.health_window_secs.get(),
+            created_sequence: next_sequence,
+            updated_sequence: next_sequence,
+        };
+        response_rollout_handle = Some(rollout_state.rollout_handle.clone());
+        response_rollout_stage = Some(rollout_state.stage);
+        response_rollout_percent = Some(rollout_state.traffic_percent);
+        if rollout_state.stage == RolloutStage::Promoted {
+            entry.active_rollout = None;
+        } else {
+            entry.active_rollout = Some(rollout_state.clone());
+        }
+        entry.last_rollout = Some(rollout_state);
+    } else {
+        entry.active_rollout = None;
+        entry.last_rollout = None;
+    }
 
     registry.audit_log.push(RegistryAuditEvent {
         sequence: next_sequence,
@@ -520,6 +1799,8 @@ fn apply_mutation(
         to_version: service_version.clone(),
         service_manifest_hash,
         container_manifest_hash,
+        governance_tx_hash: None,
+        rollout_handle: response_rollout_handle.clone(),
     });
     registry.next_sequence = registry.next_sequence.saturating_add(1);
 
@@ -532,6 +1813,9 @@ fn apply_mutation(
         service_manifest_hash,
         container_manifest_hash,
         revision_count: u32::try_from(entry.revisions.len()).unwrap_or(u32::MAX),
+        rollout_handle: response_rollout_handle,
+        rollout_stage: response_rollout_stage,
+        rollout_percent: response_rollout_percent,
     })
 }
 
@@ -567,9 +1851,7 @@ fn apply_rollback(
             .find(|revision| revision.service_version != entry.current_version)
             .cloned()
             .ok_or_else(|| {
-                eyre!(
-                    "service `{service_name}` has no previous revision to roll back to"
-                )
+                eyre!("service `{service_name}` has no previous revision to roll back to")
             })?
     };
 
@@ -587,6 +1869,8 @@ fn apply_rollback(
     };
     entry.current_version = target.service_version.clone();
     entry.revisions.push(rollback_revision);
+    entry.active_rollout = None;
+    entry.last_rollout = None;
 
     registry.audit_log.push(RegistryAuditEvent {
         sequence,
@@ -596,6 +1880,8 @@ fn apply_rollback(
         to_version: target.service_version.clone(),
         service_manifest_hash: target.service_manifest_hash,
         container_manifest_hash: target.container_manifest_hash,
+        governance_tx_hash: None,
+        rollout_handle: None,
     });
     registry.next_sequence = registry.next_sequence.saturating_add(1);
 
@@ -608,7 +1894,1443 @@ fn apply_rollback(
         service_manifest_hash: target.service_manifest_hash,
         container_manifest_hash: target.container_manifest_hash,
         revision_count: u32::try_from(entry.revisions.len()).unwrap_or(u32::MAX),
+        rollout_handle: None,
+        rollout_stage: None,
+        rollout_percent: None,
     })
+}
+
+fn apply_rollout(
+    registry: &mut RegistryState,
+    service_name: &str,
+    rollout_handle: &str,
+    healthy: bool,
+    promote_to_percent: Option<u8>,
+    governance_tx_hash: Hash,
+) -> Result<RolloutOutput> {
+    ensure_registry_schema(registry)?;
+    if service_name.trim().is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    if rollout_handle.trim().is_empty() {
+        return Err(eyre!("--rollout-handle must not be empty"));
+    }
+    if promote_to_percent.is_some_and(|value| value > 100) {
+        return Err(eyre!("--promote-to-percent must be within 0..=100"));
+    }
+
+    let sequence = registry.next_sequence;
+    let (mut response, audit_event) = {
+        let entry = registry
+            .services
+            .get_mut(service_name)
+            .ok_or_else(|| eyre!("service `{service_name}` not found in registry"))?;
+
+        let mut rollout = entry
+            .active_rollout
+            .clone()
+            .ok_or_else(|| eyre!("service `{service_name}` has no active rollout to advance"))?;
+        if rollout.rollout_handle != rollout_handle {
+            return Err(eyre!(
+                "service `{service_name}` active rollout handle mismatch (expected `{}`)",
+                rollout.rollout_handle
+            ));
+        }
+
+        if healthy {
+            let promote_to = promote_to_percent.unwrap_or(100);
+            if promote_to < rollout.traffic_percent {
+                return Err(eyre!(
+                    "rollout traffic cannot decrease from {} to {promote_to}",
+                    rollout.traffic_percent
+                ));
+            }
+            if promote_to < rollout.canary_percent {
+                return Err(eyre!(
+                    "rollout traffic cannot be below canary_percent {}",
+                    rollout.canary_percent
+                ));
+            }
+            rollout.traffic_percent = promote_to;
+            rollout.stage = if promote_to >= 100 {
+                RolloutStage::Promoted
+            } else {
+                RolloutStage::Canary
+            };
+            rollout.health_failures = 0;
+            rollout.updated_sequence = sequence;
+
+            if rollout.stage == RolloutStage::Promoted {
+                entry.active_rollout = None;
+            } else {
+                entry.active_rollout = Some(rollout.clone());
+            }
+            entry.last_rollout = Some(rollout.clone());
+
+            let current_version = entry.current_version.clone();
+            let current_revision = entry
+                .revisions
+                .last()
+                .cloned()
+                .ok_or_else(|| eyre!("service `{service_name}` has no active revision"))?;
+            let audit_event = RegistryAuditEvent {
+                sequence,
+                action: SoracloudAction::Rollout,
+                service_name: service_name.to_string(),
+                from_version: Some(current_version.clone()),
+                to_version: current_version.clone(),
+                service_manifest_hash: current_revision.service_manifest_hash,
+                container_manifest_hash: current_revision.container_manifest_hash,
+                governance_tx_hash: Some(governance_tx_hash),
+                rollout_handle: Some(rollout_handle.to_string()),
+            };
+            let response = RolloutOutput {
+                action: SoracloudAction::Rollout,
+                service_name: service_name.to_string(),
+                rollout_handle: rollout_handle.to_string(),
+                stage: rollout.stage,
+                current_version,
+                traffic_percent: rollout.traffic_percent,
+                health_failures: rollout.health_failures,
+                max_health_failures: rollout.max_health_failures,
+                sequence,
+                governance_tx_hash,
+                audit_event_count: 0,
+            };
+            (response, audit_event)
+        } else {
+            rollout.health_failures = rollout.health_failures.saturating_add(1);
+            rollout.updated_sequence = sequence;
+
+            if rollout.health_failures >= rollout.max_health_failures {
+                let baseline_version = rollout.baseline_version.clone().ok_or_else(|| {
+                    eyre!("service `{service_name}` has no baseline version for auto rollback")
+                })?;
+                let previous_version = entry.current_version.clone();
+                let target = entry
+                    .revisions
+                    .iter()
+                    .rev()
+                    .find(|revision| revision.service_version == baseline_version)
+                    .cloned()
+                    .ok_or_else(|| {
+                        eyre!(
+                            "service `{service_name}` missing baseline revision `{baseline_version}`"
+                        )
+                    })?;
+                let rollback_revision = RegistryServiceRevision {
+                    sequence,
+                    action: SoracloudAction::Rollback,
+                    service_version: target.service_version.clone(),
+                    service_manifest_hash: target.service_manifest_hash,
+                    container_manifest_hash: target.container_manifest_hash,
+                    replicas: target.replicas,
+                    route_host: target.route_host.clone(),
+                    route_path_prefix: target.route_path_prefix.clone(),
+                    state_binding_count: target.state_binding_count,
+                };
+                entry.current_version = target.service_version.clone();
+                entry.revisions.push(rollback_revision);
+
+                rollout.stage = RolloutStage::RolledBack;
+                rollout.traffic_percent = 0;
+                entry.active_rollout = None;
+                entry.last_rollout = Some(rollout.clone());
+
+                let audit_event = RegistryAuditEvent {
+                    sequence,
+                    action: SoracloudAction::Rollback,
+                    service_name: service_name.to_string(),
+                    from_version: Some(previous_version),
+                    to_version: target.service_version.clone(),
+                    service_manifest_hash: target.service_manifest_hash,
+                    container_manifest_hash: target.container_manifest_hash,
+                    governance_tx_hash: Some(governance_tx_hash),
+                    rollout_handle: Some(rollout_handle.to_string()),
+                };
+                let response = RolloutOutput {
+                    action: SoracloudAction::Rollback,
+                    service_name: service_name.to_string(),
+                    rollout_handle: rollout_handle.to_string(),
+                    stage: rollout.stage,
+                    current_version: target.service_version,
+                    traffic_percent: rollout.traffic_percent,
+                    health_failures: rollout.health_failures,
+                    max_health_failures: rollout.max_health_failures,
+                    sequence,
+                    governance_tx_hash,
+                    audit_event_count: 0,
+                };
+                (response, audit_event)
+            } else {
+                entry.active_rollout = Some(rollout.clone());
+                entry.last_rollout = Some(rollout.clone());
+
+                let current_version = entry.current_version.clone();
+                let current_revision = entry
+                    .revisions
+                    .last()
+                    .cloned()
+                    .ok_or_else(|| eyre!("service `{service_name}` has no active revision"))?;
+                let audit_event = RegistryAuditEvent {
+                    sequence,
+                    action: SoracloudAction::Rollout,
+                    service_name: service_name.to_string(),
+                    from_version: Some(current_version.clone()),
+                    to_version: current_version.clone(),
+                    service_manifest_hash: current_revision.service_manifest_hash,
+                    container_manifest_hash: current_revision.container_manifest_hash,
+                    governance_tx_hash: Some(governance_tx_hash),
+                    rollout_handle: Some(rollout_handle.to_string()),
+                };
+                let response = RolloutOutput {
+                    action: SoracloudAction::Rollout,
+                    service_name: service_name.to_string(),
+                    rollout_handle: rollout_handle.to_string(),
+                    stage: rollout.stage,
+                    current_version,
+                    traffic_percent: rollout.traffic_percent,
+                    health_failures: rollout.health_failures,
+                    max_health_failures: rollout.max_health_failures,
+                    sequence,
+                    governance_tx_hash,
+                    audit_event_count: 0,
+                };
+                (response, audit_event)
+            }
+        }
+    };
+
+    registry.audit_log.push(audit_event);
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+    response.audit_event_count = u32::try_from(registry.audit_log.len()).unwrap_or(u32::MAX);
+    Ok(response)
+}
+
+#[cfg(test)]
+fn apply_agent_deploy(
+    registry: &mut RegistryState,
+    manifest: &AgentApartmentManifestV1,
+    lease_ticks: u64,
+) -> Result<AgentMutationOutput> {
+    apply_agent_deploy_with_budget(
+        registry,
+        manifest,
+        lease_ticks,
+        AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS,
+    )
+}
+
+fn apply_agent_deploy_with_budget(
+    registry: &mut RegistryState,
+    manifest: &AgentApartmentManifestV1,
+    lease_ticks: u64,
+    autonomy_budget_units: u64,
+) -> Result<AgentMutationOutput> {
+    ensure_registry_schema(registry)?;
+    manifest.validate()?;
+    if lease_ticks == 0 {
+        return Err(eyre!("--lease-ticks must be greater than zero"));
+    }
+    if autonomy_budget_units == 0 {
+        return Err(eyre!("autonomy budget units must be greater than zero"));
+    }
+
+    let apartment_name = manifest.apartment_name.to_string();
+    validate_apartment_name(&apartment_name)?;
+    if registry.apartments.contains_key(&apartment_name) {
+        return Err(eyre!(
+            "apartment `{apartment_name}` already registered; use lease-renew/restart for lifecycle actions"
+        ));
+    }
+
+    let sequence = registry.next_sequence;
+    let manifest_hash = Hash::new(Encode::encode(manifest));
+    let runtime_state = AgentApartmentRuntimeState {
+        manifest: manifest.clone(),
+        manifest_hash,
+        status: AgentRuntimeStatus::Running,
+        deployed_sequence: sequence,
+        lease_started_sequence: sequence,
+        lease_expires_sequence: sequence.saturating_add(lease_ticks),
+        last_renewed_sequence: sequence,
+        restart_count: 0,
+        last_restart_sequence: None,
+        last_restart_reason: None,
+        revoked_policy_capabilities: Vec::new(),
+        pending_wallet_requests: BTreeMap::new(),
+        wallet_daily_spend: BTreeMap::new(),
+        mailbox_queue: Vec::new(),
+        autonomy_budget_ceiling_units: autonomy_budget_units,
+        autonomy_budget_remaining_units: autonomy_budget_units,
+        artifact_allowlist: BTreeMap::new(),
+        autonomy_run_history: Vec::new(),
+    };
+    let output = AgentMutationOutput {
+        action: AgentApartmentAction::Deploy,
+        apartment_name: apartment_name.clone(),
+        sequence,
+        manifest_hash,
+        status: runtime_status_for_sequence(&runtime_state, sequence.saturating_add(1)),
+        lease_expires_sequence: runtime_state.lease_expires_sequence,
+        lease_remaining_ticks: lease_remaining_ticks(&runtime_state, sequence.saturating_add(1)),
+        restart_count: runtime_state.restart_count,
+        revoked_policy_capability_count: 0,
+        pending_wallet_request_count: 0,
+        event_count: 0,
+        reason: None,
+        request_id: None,
+        asset_definition: None,
+        amount_nanos: None,
+        day_bucket: None,
+        day_spent_nanos: None,
+        capability: None,
+    };
+    registry
+        .apartments
+        .insert(apartment_name.clone(), runtime_state);
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::Deploy,
+        apartment_name,
+        status: AgentRuntimeStatus::Running,
+        lease_expires_sequence: output.lease_expires_sequence,
+        manifest_hash,
+        restart_count: output.restart_count,
+        reason: None,
+        request_id: None,
+        asset_definition: None,
+        amount_nanos: None,
+        capability: None,
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_lease_renew(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    lease_ticks: u64,
+) -> Result<AgentMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    if lease_ticks == 0 {
+        return Err(eyre!("--lease-ticks must be greater than zero"));
+    }
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let entry = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        let base = entry.lease_expires_sequence.max(sequence);
+        entry.lease_expires_sequence = base.saturating_add(lease_ticks);
+        entry.last_renewed_sequence = sequence;
+        entry.status = AgentRuntimeStatus::Running;
+        AgentMutationOutput {
+            action: AgentApartmentAction::LeaseRenew,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            manifest_hash: entry.manifest_hash,
+            status: runtime_status_for_sequence(entry, sequence.saturating_add(1)),
+            lease_expires_sequence: entry.lease_expires_sequence,
+            lease_remaining_ticks: lease_remaining_ticks(entry, sequence.saturating_add(1)),
+            restart_count: entry.restart_count,
+            revoked_policy_capability_count: revoked_policy_capability_count(entry),
+            pending_wallet_request_count: pending_wallet_request_count(entry),
+            event_count: 0,
+            reason: None,
+            request_id: None,
+            asset_definition: None,
+            amount_nanos: None,
+            day_bucket: None,
+            day_spent_nanos: None,
+            capability: None,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::LeaseRenew,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: output.lease_expires_sequence,
+        manifest_hash: output.manifest_hash,
+        restart_count: output.restart_count,
+        reason: None,
+        request_id: None,
+        asset_definition: None,
+        amount_nanos: None,
+        capability: None,
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_restart(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    reason: &str,
+) -> Result<AgentMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(eyre!("--reason must not be empty"));
+    }
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let entry = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        if runtime_status_for_sequence(entry, sequence) == AgentRuntimeStatus::LeaseExpired {
+            return Err(eyre!(
+                "apartment `{apartment_name}` lease expired at sequence {}; renew before restart",
+                entry.lease_expires_sequence
+            ));
+        }
+
+        entry.status = AgentRuntimeStatus::Running;
+        entry.restart_count = entry.restart_count.saturating_add(1);
+        entry.last_restart_sequence = Some(sequence);
+        entry.last_restart_reason = Some(reason.to_owned());
+        AgentMutationOutput {
+            action: AgentApartmentAction::Restart,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            manifest_hash: entry.manifest_hash,
+            status: runtime_status_for_sequence(entry, sequence.saturating_add(1)),
+            lease_expires_sequence: entry.lease_expires_sequence,
+            lease_remaining_ticks: lease_remaining_ticks(entry, sequence.saturating_add(1)),
+            restart_count: entry.restart_count,
+            revoked_policy_capability_count: revoked_policy_capability_count(entry),
+            pending_wallet_request_count: pending_wallet_request_count(entry),
+            event_count: 0,
+            reason: Some(reason.to_owned()),
+            request_id: None,
+            asset_definition: None,
+            amount_nanos: None,
+            day_bucket: None,
+            day_spent_nanos: None,
+            capability: None,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::Restart,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: output.lease_expires_sequence,
+        manifest_hash: output.manifest_hash,
+        restart_count: output.restart_count,
+        reason: Some(reason.to_owned()),
+        request_id: None,
+        asset_definition: None,
+        amount_nanos: None,
+        capability: None,
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_wallet_spend(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    asset_definition: &str,
+    amount_nanos: u64,
+) -> Result<AgentWalletMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    let asset_definition = asset_definition.trim();
+    if asset_definition.is_empty() {
+        return Err(eyre!("--asset-definition must not be empty"));
+    }
+    if amount_nanos == 0 {
+        return Err(eyre!("--amount-nanos must be greater than zero"));
+    }
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let entry = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        if runtime_status_for_sequence(entry, sequence) == AgentRuntimeStatus::LeaseExpired {
+            return Err(eyre!(
+                "apartment `{apartment_name}` lease expired at sequence {}; renew before wallet actions",
+                entry.lease_expires_sequence
+            ));
+        }
+        if !policy_capability_active(entry, "wallet.sign") {
+            return Err(eyre!(
+                "apartment `{apartment_name}` does not have active `wallet.sign` capability"
+            ));
+        }
+        let spend_limit = entry
+            .manifest
+            .spend_limits
+            .iter()
+            .find(|limit| limit.asset_definition == asset_definition)
+            .ok_or_else(|| {
+                eyre!(
+                    "apartment `{apartment_name}` has no spend limit configured for asset `{asset_definition}`"
+                )
+            })?;
+        if amount_nanos > spend_limit.max_per_tx_nanos.get() {
+            return Err(eyre!(
+                "requested amount {} exceeds max_per_tx_nanos {} for asset `{asset_definition}`",
+                amount_nanos,
+                spend_limit.max_per_tx_nanos.get()
+            ));
+        }
+
+        let day_bucket = wallet_day_bucket(sequence);
+        let current_day_spent = wallet_day_spent(entry, asset_definition, day_bucket);
+        let projected_day_spent = current_day_spent
+            .checked_add(amount_nanos)
+            .ok_or_else(|| eyre!("wallet daily spend overflow for apartment `{apartment_name}`"))?;
+        if projected_day_spent > spend_limit.max_per_day_nanos.get() {
+            return Err(eyre!(
+                "projected daily spend {} exceeds max_per_day_nanos {} for asset `{asset_definition}`",
+                projected_day_spent,
+                spend_limit.max_per_day_nanos.get()
+            ));
+        }
+
+        let request_id = format!("{apartment_name}:wallet:{sequence}");
+        let action = if policy_capability_active(entry, "wallet.auto_approve") {
+            wallet_record_spend(entry, asset_definition, day_bucket, projected_day_spent);
+            AgentApartmentAction::WalletSpendApproved
+        } else {
+            entry.pending_wallet_requests.insert(
+                request_id.clone(),
+                AgentWalletSpendRequest {
+                    request_id: request_id.clone(),
+                    asset_definition: asset_definition.to_owned(),
+                    amount_nanos,
+                    created_sequence: sequence,
+                },
+            );
+            AgentApartmentAction::WalletSpendRequested
+        };
+
+        let day_spent_nanos = wallet_day_spent(entry, asset_definition, day_bucket);
+        AgentWalletMutationOutput {
+            action,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            manifest_hash: entry.manifest_hash,
+            status: runtime_status_for_sequence(entry, sequence.saturating_add(1)),
+            request_id: Some(request_id),
+            asset_definition: Some(asset_definition.to_owned()),
+            amount_nanos: Some(amount_nanos),
+            day_bucket: Some(day_bucket),
+            day_spent_nanos: Some(day_spent_nanos),
+            capability: None,
+            reason: None,
+            pending_request_count: pending_wallet_request_count(entry),
+            revoked_policy_capability_count: revoked_policy_capability_count(entry),
+            event_count: 0,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: output.action,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.lease_expires_sequence)
+            .unwrap_or(sequence),
+        manifest_hash: output.manifest_hash,
+        restart_count: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.restart_count)
+            .unwrap_or(0),
+        reason: None,
+        request_id: output.request_id.clone(),
+        asset_definition: output.asset_definition.clone(),
+        amount_nanos: output.amount_nanos,
+        capability: None,
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentWalletMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_wallet_approve(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    request_id: &str,
+) -> Result<AgentWalletMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    let request_id = request_id.trim();
+    if request_id.is_empty() {
+        return Err(eyre!("--request-id must not be empty"));
+    }
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let entry = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        if runtime_status_for_sequence(entry, sequence) == AgentRuntimeStatus::LeaseExpired {
+            return Err(eyre!(
+                "apartment `{apartment_name}` lease expired at sequence {}; renew before wallet actions",
+                entry.lease_expires_sequence
+            ));
+        }
+        if !policy_capability_active(entry, "wallet.sign") {
+            return Err(eyre!(
+                "apartment `{apartment_name}` does not have active `wallet.sign` capability"
+            ));
+        }
+
+        let request = entry
+            .pending_wallet_requests
+            .remove(request_id)
+            .ok_or_else(|| {
+                eyre!("wallet request `{request_id}` not found for apartment `{apartment_name}`")
+            })?;
+
+        let spend_limit = entry
+            .manifest
+            .spend_limits
+            .iter()
+            .find(|limit| limit.asset_definition == request.asset_definition)
+            .ok_or_else(|| {
+                eyre!(
+                    "apartment `{apartment_name}` has no spend limit configured for asset `{}`",
+                    request.asset_definition
+                )
+            })?;
+        let day_bucket = wallet_day_bucket(sequence);
+        let current_day_spent = wallet_day_spent(entry, &request.asset_definition, day_bucket);
+        let projected_day_spent = current_day_spent
+            .checked_add(request.amount_nanos)
+            .ok_or_else(|| eyre!("wallet daily spend overflow for apartment `{apartment_name}`"))?;
+        if projected_day_spent > spend_limit.max_per_day_nanos.get() {
+            return Err(eyre!(
+                "projected daily spend {} exceeds max_per_day_nanos {} for asset `{}`",
+                projected_day_spent,
+                spend_limit.max_per_day_nanos.get(),
+                request.asset_definition
+            ));
+        }
+        wallet_record_spend(
+            entry,
+            &request.asset_definition,
+            day_bucket,
+            projected_day_spent,
+        );
+        AgentWalletMutationOutput {
+            action: AgentApartmentAction::WalletSpendApproved,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            manifest_hash: entry.manifest_hash,
+            status: runtime_status_for_sequence(entry, sequence.saturating_add(1)),
+            request_id: Some(request.request_id),
+            asset_definition: Some(request.asset_definition),
+            amount_nanos: Some(request.amount_nanos),
+            day_bucket: Some(day_bucket),
+            day_spent_nanos: Some(projected_day_spent),
+            capability: None,
+            reason: None,
+            pending_request_count: pending_wallet_request_count(entry),
+            revoked_policy_capability_count: revoked_policy_capability_count(entry),
+            event_count: 0,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::WalletSpendApproved,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.lease_expires_sequence)
+            .unwrap_or(sequence),
+        manifest_hash: output.manifest_hash,
+        restart_count: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.restart_count)
+            .unwrap_or(0),
+        reason: None,
+        request_id: output.request_id.clone(),
+        asset_definition: output.asset_definition.clone(),
+        amount_nanos: output.amount_nanos,
+        capability: None,
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentWalletMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_policy_revoke(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    capability: &str,
+    reason: Option<&str>,
+) -> Result<AgentWalletMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    let capability = capability.trim();
+    if capability.is_empty() {
+        return Err(eyre!("--capability must not be empty"));
+    }
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let entry = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        let capability_present = entry
+            .manifest
+            .policy_capabilities
+            .iter()
+            .any(|candidate| candidate.as_ref() == capability);
+        if !capability_present {
+            return Err(eyre!(
+                "apartment `{apartment_name}` does not declare policy capability `{capability}`"
+            ));
+        }
+        if entry
+            .revoked_policy_capabilities
+            .iter()
+            .any(|candidate| candidate == capability)
+        {
+            return Err(eyre!(
+                "policy capability `{capability}` already revoked for apartment `{apartment_name}`"
+            ));
+        }
+        entry
+            .revoked_policy_capabilities
+            .push(capability.to_owned());
+        entry.revoked_policy_capabilities.sort();
+        AgentWalletMutationOutput {
+            action: AgentApartmentAction::PolicyRevoked,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            manifest_hash: entry.manifest_hash,
+            status: runtime_status_for_sequence(entry, sequence.saturating_add(1)),
+            request_id: None,
+            asset_definition: None,
+            amount_nanos: None,
+            day_bucket: None,
+            day_spent_nanos: None,
+            capability: Some(capability.to_owned()),
+            reason: reason.map(str::to_owned),
+            pending_request_count: pending_wallet_request_count(entry),
+            revoked_policy_capability_count: revoked_policy_capability_count(entry),
+            event_count: 0,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::PolicyRevoked,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.lease_expires_sequence)
+            .unwrap_or(sequence),
+        manifest_hash: output.manifest_hash,
+        restart_count: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.restart_count)
+            .unwrap_or(0),
+        reason: output.reason.clone(),
+        request_id: None,
+        asset_definition: None,
+        amount_nanos: None,
+        capability: output.capability.clone(),
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentWalletMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_message_send(
+    registry: &mut RegistryState,
+    from_apartment: &str,
+    to_apartment: &str,
+    channel: &str,
+    payload: &str,
+) -> Result<AgentMailboxMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(from_apartment)?;
+    validate_apartment_name(to_apartment)?;
+    let channel = channel.trim();
+    if channel.is_empty() {
+        return Err(eyre!("--channel must not be empty"));
+    }
+    let payload = payload.trim();
+    if payload.is_empty() {
+        return Err(eyre!("--payload must not be empty"));
+    }
+    if payload.len() > AGENT_MAILBOX_MAX_PAYLOAD_BYTES {
+        return Err(eyre!(
+            "--payload exceeds max mailbox payload bytes ({AGENT_MAILBOX_MAX_PAYLOAD_BYTES})"
+        ));
+    }
+
+    let sequence = registry.next_sequence;
+    let sender = registry
+        .apartments
+        .get(from_apartment)
+        .ok_or_else(|| eyre!("apartment `{from_apartment}` not found in registry"))?;
+    if runtime_status_for_sequence(sender, sequence) == AgentRuntimeStatus::LeaseExpired {
+        return Err(eyre!(
+            "sender apartment `{from_apartment}` lease expired at sequence {}; renew before messaging",
+            sender.lease_expires_sequence
+        ));
+    }
+    if !policy_capability_active(sender, "agent.mailbox.send") {
+        return Err(eyre!(
+            "apartment `{from_apartment}` does not have active `agent.mailbox.send` capability"
+        ));
+    }
+
+    let recipient_snapshot = registry
+        .apartments
+        .get(to_apartment)
+        .ok_or_else(|| eyre!("apartment `{to_apartment}` not found in registry"))?;
+    if runtime_status_for_sequence(recipient_snapshot, sequence) == AgentRuntimeStatus::LeaseExpired
+    {
+        return Err(eyre!(
+            "recipient apartment `{to_apartment}` lease expired at sequence {}; renew before messaging",
+            recipient_snapshot.lease_expires_sequence
+        ));
+    }
+    if !policy_capability_active(recipient_snapshot, "agent.mailbox.receive") {
+        return Err(eyre!(
+            "apartment `{to_apartment}` does not have active `agent.mailbox.receive` capability"
+        ));
+    }
+
+    let message_id = format!("{to_apartment}:mail:{sequence}");
+    let payload_hash = Hash::new(payload.as_bytes());
+    let output = {
+        let recipient = registry
+            .apartments
+            .get_mut(to_apartment)
+            .ok_or_else(|| eyre!("apartment `{to_apartment}` not found in registry"))?;
+        recipient.mailbox_queue.push(AgentMailboxMessage {
+            message_id: message_id.clone(),
+            from_apartment: from_apartment.to_owned(),
+            channel: channel.to_owned(),
+            payload: payload.to_owned(),
+            payload_hash,
+            enqueued_sequence: sequence,
+        });
+        AgentMailboxMutationOutput {
+            action: AgentApartmentAction::MessageEnqueued,
+            apartment_name: to_apartment.to_owned(),
+            sequence,
+            message_id: message_id.clone(),
+            from_apartment: Some(from_apartment.to_owned()),
+            to_apartment: Some(to_apartment.to_owned()),
+            channel: channel.to_owned(),
+            payload_hash,
+            status: runtime_status_for_sequence(recipient, sequence.saturating_add(1)),
+            pending_message_count: pending_mailbox_message_count(recipient),
+            event_count: 0,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::MessageEnqueued,
+        apartment_name: to_apartment.to_owned(),
+        status: output.status,
+        lease_expires_sequence: registry
+            .apartments
+            .get(to_apartment)
+            .map(|entry| entry.lease_expires_sequence)
+            .unwrap_or(sequence),
+        manifest_hash: registry
+            .apartments
+            .get(to_apartment)
+            .map(|entry| entry.manifest_hash)
+            .unwrap_or(payload_hash),
+        restart_count: registry
+            .apartments
+            .get(to_apartment)
+            .map(|entry| entry.restart_count)
+            .unwrap_or(0),
+        reason: None,
+        request_id: Some(message_id),
+        asset_definition: None,
+        amount_nanos: None,
+        capability: None,
+        from_apartment: Some(from_apartment.to_owned()),
+        to_apartment: Some(to_apartment.to_owned()),
+        channel: Some(channel.to_owned()),
+        payload_hash: Some(payload_hash),
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentMailboxMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_message_ack(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    message_id: &str,
+) -> Result<AgentMailboxMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    let message_id = message_id.trim();
+    if message_id.is_empty() {
+        return Err(eyre!("--message-id must not be empty"));
+    }
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let recipient = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        if runtime_status_for_sequence(recipient, sequence) == AgentRuntimeStatus::LeaseExpired {
+            return Err(eyre!(
+                "apartment `{apartment_name}` lease expired at sequence {}; renew before mailbox actions",
+                recipient.lease_expires_sequence
+            ));
+        }
+        if !policy_capability_active(recipient, "agent.mailbox.receive") {
+            return Err(eyre!(
+                "apartment `{apartment_name}` does not have active `agent.mailbox.receive` capability"
+            ));
+        }
+        let index = recipient
+            .mailbox_queue
+            .iter()
+            .position(|message| message.message_id == message_id)
+            .ok_or_else(|| {
+                eyre!("mailbox message `{message_id}` not found for apartment `{apartment_name}`")
+            })?;
+        let message = recipient.mailbox_queue.remove(index);
+        AgentMailboxMutationOutput {
+            action: AgentApartmentAction::MessageAcknowledged,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            message_id: message.message_id,
+            from_apartment: Some(message.from_apartment),
+            to_apartment: Some(apartment_name.to_owned()),
+            channel: message.channel,
+            payload_hash: message.payload_hash,
+            status: runtime_status_for_sequence(recipient, sequence.saturating_add(1)),
+            pending_message_count: pending_mailbox_message_count(recipient),
+            event_count: 0,
+        }
+    };
+
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::MessageAcknowledged,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.lease_expires_sequence)
+            .unwrap_or(sequence),
+        manifest_hash: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.manifest_hash)
+            .unwrap_or(output.payload_hash),
+        restart_count: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.restart_count)
+            .unwrap_or(0),
+        reason: None,
+        request_id: Some(output.message_id.clone()),
+        asset_definition: None,
+        amount_nanos: None,
+        capability: None,
+        from_apartment: output.from_apartment.clone(),
+        to_apartment: Some(apartment_name.to_owned()),
+        channel: Some(output.channel.clone()),
+        payload_hash: Some(output.payload_hash),
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentMailboxMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_artifact_allow(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    artifact_hash: &str,
+    provenance_hash: Option<&str>,
+) -> Result<AgentAutonomyMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    let artifact_hash = artifact_hash.trim();
+    validate_hash_like_value("--artifact-hash", artifact_hash)?;
+    let provenance_hash = normalize_optional_hash_like_value("--provenance-hash", provenance_hash)?;
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let entry = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        if runtime_status_for_sequence(entry, sequence) == AgentRuntimeStatus::LeaseExpired {
+            return Err(eyre!(
+                "apartment `{apartment_name}` lease expired at sequence {}; renew before autonomy actions",
+                entry.lease_expires_sequence
+            ));
+        }
+        if !(policy_capability_active(entry, "governance.audit")
+            || policy_capability_active(entry, "agent.autonomy.allow"))
+        {
+            return Err(eyre!(
+                "apartment `{apartment_name}` does not have active `governance.audit` or `agent.autonomy.allow` capability"
+            ));
+        }
+        if entry
+            .artifact_allowlist
+            .get(artifact_hash)
+            .is_some_and(|rule| rule.provenance_hash == provenance_hash)
+        {
+            return Err(eyre!(
+                "artifact `{artifact_hash}` already allowlisted for apartment `{apartment_name}` with the same provenance rule"
+            ));
+        }
+        entry.artifact_allowlist.insert(
+            artifact_hash.to_owned(),
+            AgentArtifactAllowRule {
+                artifact_hash: artifact_hash.to_owned(),
+                provenance_hash: provenance_hash.clone(),
+                added_sequence: sequence,
+            },
+        );
+
+        AgentAutonomyMutationOutput {
+            action: AgentApartmentAction::ArtifactAllowed,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            artifact_hash: artifact_hash.to_owned(),
+            provenance_hash: provenance_hash.clone(),
+            run_id: None,
+            run_label: None,
+            budget_units: None,
+            status: runtime_status_for_sequence(entry, sequence.saturating_add(1)),
+            budget_remaining_units: entry.autonomy_budget_remaining_units,
+            allowlist_count: u32::try_from(entry.artifact_allowlist.len()).unwrap_or(u32::MAX),
+            run_count: u32::try_from(entry.autonomy_run_history.len()).unwrap_or(u32::MAX),
+            event_count: 0,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::ArtifactAllowed,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.lease_expires_sequence)
+            .unwrap_or(sequence),
+        manifest_hash: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.manifest_hash)
+            .unwrap_or(Hash::new(artifact_hash.as_bytes())),
+        restart_count: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.restart_count)
+            .unwrap_or(0),
+        reason: None,
+        request_id: None,
+        asset_definition: None,
+        amount_nanos: None,
+        capability: None,
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: Some(output.artifact_hash.clone()),
+        provenance_hash: output.provenance_hash.clone(),
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: Some(output.budget_remaining_units),
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentAutonomyMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_autonomy_run(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    artifact_hash: &str,
+    provenance_hash: Option<&str>,
+    budget_units: u64,
+    run_label: &str,
+) -> Result<AgentAutonomyMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    if budget_units == 0 {
+        return Err(eyre!("--budget-units must be greater than zero"));
+    }
+    let artifact_hash = artifact_hash.trim();
+    validate_hash_like_value("--artifact-hash", artifact_hash)?;
+    let provenance_hash = normalize_optional_hash_like_value("--provenance-hash", provenance_hash)?;
+    let run_label = run_label.trim();
+    if run_label.is_empty() {
+        return Err(eyre!("--run-label must not be empty"));
+    }
+    if run_label.len() > AGENT_AUTONOMY_MAX_LABEL_BYTES {
+        return Err(eyre!(
+            "--run-label exceeds max bytes ({AGENT_AUTONOMY_MAX_LABEL_BYTES})"
+        ));
+    }
+    if run_label.chars().any(|ch| ch.is_control()) {
+        return Err(eyre!("--run-label must not contain control characters"));
+    }
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let entry = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        if runtime_status_for_sequence(entry, sequence) == AgentRuntimeStatus::LeaseExpired {
+            return Err(eyre!(
+                "apartment `{apartment_name}` lease expired at sequence {}; renew before autonomy actions",
+                entry.lease_expires_sequence
+            ));
+        }
+        if !policy_capability_active(entry, "agent.autonomy.run") {
+            return Err(eyre!(
+                "apartment `{apartment_name}` does not have active `agent.autonomy.run` capability"
+            ));
+        }
+        let allow_rule = entry.artifact_allowlist.get(artifact_hash).ok_or_else(|| {
+            eyre!("artifact `{artifact_hash}` is not allowlisted for apartment `{apartment_name}`")
+        })?;
+        if let Some(expected_provenance) = allow_rule.provenance_hash.as_deref() {
+            let provided_provenance = provenance_hash.as_deref().ok_or_else(|| {
+                eyre!(
+                    "artifact `{artifact_hash}` requires --provenance-hash `{expected_provenance}`"
+                )
+            })?;
+            if provided_provenance != expected_provenance {
+                return Err(eyre!(
+                    "artifact `{artifact_hash}` provenance mismatch: expected `{expected_provenance}`, got `{provided_provenance}`"
+                ));
+            }
+        }
+        if budget_units > entry.autonomy_budget_remaining_units {
+            return Err(eyre!(
+                "requested budget {} exceeds remaining autonomy budget {} for apartment `{apartment_name}`",
+                budget_units,
+                entry.autonomy_budget_remaining_units
+            ));
+        }
+
+        entry.autonomy_budget_remaining_units = entry
+            .autonomy_budget_remaining_units
+            .saturating_sub(budget_units);
+        let run_id = format!("{apartment_name}:autonomy:{sequence}");
+        entry.autonomy_run_history.push(AgentAutonomyRunRecord {
+            run_id: run_id.clone(),
+            artifact_hash: artifact_hash.to_owned(),
+            provenance_hash: provenance_hash.clone(),
+            budget_units,
+            run_label: run_label.to_owned(),
+            approved_sequence: sequence,
+        });
+
+        AgentAutonomyMutationOutput {
+            action: AgentApartmentAction::AutonomyRunApproved,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            artifact_hash: artifact_hash.to_owned(),
+            provenance_hash: provenance_hash.clone(),
+            run_id: Some(run_id),
+            run_label: Some(run_label.to_owned()),
+            budget_units: Some(budget_units),
+            status: runtime_status_for_sequence(entry, sequence.saturating_add(1)),
+            budget_remaining_units: entry.autonomy_budget_remaining_units,
+            allowlist_count: u32::try_from(entry.artifact_allowlist.len()).unwrap_or(u32::MAX),
+            run_count: u32::try_from(entry.autonomy_run_history.len()).unwrap_or(u32::MAX),
+            event_count: 0,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::AutonomyRunApproved,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.lease_expires_sequence)
+            .unwrap_or(sequence),
+        manifest_hash: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.manifest_hash)
+            .unwrap_or(Hash::new(artifact_hash.as_bytes())),
+        restart_count: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.restart_count)
+            .unwrap_or(0),
+        reason: None,
+        request_id: output.run_id.clone(),
+        asset_definition: None,
+        amount_nanos: None,
+        capability: None,
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: Some(output.artifact_hash.clone()),
+        provenance_hash: output.provenance_hash.clone(),
+        run_label: output.run_label.clone(),
+        budget_units: output.budget_units,
+        budget_remaining_units: Some(output.budget_remaining_units),
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentAutonomyMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn policy_capability_active(state: &AgentApartmentRuntimeState, capability: &str) -> bool {
+    let declared = state
+        .manifest
+        .policy_capabilities
+        .iter()
+        .any(|candidate| candidate.as_ref() == capability);
+    let revoked = state
+        .revoked_policy_capabilities
+        .iter()
+        .any(|candidate| candidate == capability);
+    declared && !revoked
+}
+
+fn wallet_day_bucket(sequence: u64) -> u64 {
+    sequence / AGENT_WALLET_DAY_TICKS
+}
+
+fn wallet_day_key(asset_definition: &str, day_bucket: u64) -> String {
+    format!("{asset_definition}:{day_bucket}")
+}
+
+fn wallet_day_spent(
+    state: &AgentApartmentRuntimeState,
+    asset_definition: &str,
+    day_bucket: u64,
+) -> u64 {
+    state
+        .wallet_daily_spend
+        .get(&wallet_day_key(asset_definition, day_bucket))
+        .map(|entry| entry.spent_nanos)
+        .unwrap_or(0)
+}
+
+fn wallet_record_spend(
+    state: &mut AgentApartmentRuntimeState,
+    asset_definition: &str,
+    day_bucket: u64,
+    spent_nanos: u64,
+) {
+    let key = wallet_day_key(asset_definition, day_bucket);
+    state.wallet_daily_spend.insert(
+        key,
+        AgentWalletDailySpendEntry {
+            asset_definition: asset_definition.to_owned(),
+            day_bucket,
+            spent_nanos,
+        },
+    );
+}
+
+fn revoked_policy_capability_count(state: &AgentApartmentRuntimeState) -> u32 {
+    u32::try_from(state.revoked_policy_capabilities.len()).unwrap_or(u32::MAX)
+}
+
+fn pending_wallet_request_count(state: &AgentApartmentRuntimeState) -> u32 {
+    u32::try_from(state.pending_wallet_requests.len()).unwrap_or(u32::MAX)
+}
+
+fn pending_mailbox_message_count(state: &AgentApartmentRuntimeState) -> u32 {
+    u32::try_from(state.mailbox_queue.len()).unwrap_or(u32::MAX)
+}
+
+fn validate_hash_like_value(flag_name: &str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        return Err(eyre!("{flag_name} must not be empty"));
+    }
+    if value.len() > AGENT_AUTONOMY_MAX_HASH_BYTES {
+        return Err(eyre!(
+            "{flag_name} exceeds max bytes ({AGENT_AUTONOMY_MAX_HASH_BYTES})"
+        ));
+    }
+    if value.chars().any(|ch| ch.is_ascii_whitespace()) {
+        return Err(eyre!("{flag_name} must not contain whitespace"));
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | '-' | '_' | '.' | '#'))
+    {
+        return Err(eyre!(
+            "{flag_name} must use only ASCII letters, digits, or [: - _ . #]"
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_optional_hash_like_value(
+    flag_name: &str,
+    value: Option<&str>,
+) -> Result<Option<String>> {
+    match value {
+        Some(raw) => {
+            let normalized = raw.trim();
+            validate_hash_like_value(flag_name, normalized)?;
+            Ok(Some(normalized.to_owned()))
+        }
+        None => Ok(None),
+    }
+}
+
+fn validate_apartment_name(apartment_name: &str) -> Result<()> {
+    if apartment_name.trim().is_empty() {
+        return Err(eyre!("--apartment-name must not be empty"));
+    }
+    Ok(())
+}
+
+fn runtime_status_for_sequence(
+    state: &AgentApartmentRuntimeState,
+    current_sequence: u64,
+) -> AgentRuntimeStatus {
+    if current_sequence >= state.lease_expires_sequence {
+        AgentRuntimeStatus::LeaseExpired
+    } else {
+        state.status
+    }
+}
+
+fn lease_remaining_ticks(state: &AgentApartmentRuntimeState, current_sequence: u64) -> u64 {
+    state
+        .lease_expires_sequence
+        .saturating_sub(current_sequence)
 }
 
 fn ensure_registry_schema(registry: &RegistryState) -> Result<()> {
@@ -629,6 +3351,160 @@ fn load_registry(path: &Path) -> Result<RegistryState> {
     let state: RegistryState = load_json(path)?;
     ensure_registry_schema(&state)?;
     Ok(state)
+}
+
+fn rollout_handle(service_name: &str, sequence: u64) -> String {
+    format!("{service_name}:rollout:{sequence}")
+}
+
+fn signed_bundle_request(
+    bundle: SoraDeploymentBundleV1,
+    key_pair: &KeyPair,
+) -> Result<SignedBundleRequest> {
+    let payload =
+        norito::to_bytes(&bundle).wrap_err("failed to encode deployment bundle for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &payload);
+    Ok(SignedBundleRequest {
+        bundle,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_rollback_request(
+    service_name: &str,
+    target_version: Option<&str>,
+    key_pair: &KeyPair,
+) -> Result<SignedRollbackRequest> {
+    if service_name.trim().is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    let payload = RollbackPayload {
+        service_name: service_name.to_string(),
+        target_version: target_version.map(ToOwned::to_owned),
+    };
+    let encoded = encode_rollback_signature_payload(&payload)
+        .wrap_err("failed to encode rollback payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedRollbackRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn encode_rollback_signature_payload(payload: &RollbackPayload) -> Result<Vec<u8>> {
+    norito::to_bytes(&(
+        payload.service_name.as_str(),
+        payload.target_version.as_deref(),
+    ))
+    .wrap_err("failed to encode rollback signature payload tuple")
+}
+
+fn signed_rollout_request(
+    service_name: &str,
+    rollout_handle: &str,
+    healthy: bool,
+    promote_to_percent: Option<u8>,
+    governance_tx_hash: Hash,
+    key_pair: &KeyPair,
+) -> Result<SignedRolloutAdvanceRequest> {
+    if service_name.trim().is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    if rollout_handle.trim().is_empty() {
+        return Err(eyre!("--rollout-handle must not be empty"));
+    }
+    if promote_to_percent.is_some_and(|value| value > 100) {
+        return Err(eyre!("--promote-to-percent must be within 0..=100"));
+    }
+    let payload = RolloutAdvancePayload {
+        service_name: service_name.to_string(),
+        rollout_handle: rollout_handle.to_string(),
+        healthy,
+        promote_to_percent,
+        governance_tx_hash,
+    };
+    let encoded = encode_rollout_signature_payload(&payload)
+        .wrap_err("failed to encode rollout payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedRolloutAdvanceRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn encode_rollout_signature_payload(payload: &RolloutAdvancePayload) -> Result<Vec<u8>> {
+    norito::to_bytes(&(
+        payload.service_name.as_str(),
+        payload.rollout_handle.as_str(),
+        payload.healthy,
+        payload.promote_to_percent,
+        payload.governance_tx_hash,
+    ))
+    .wrap_err("failed to encode rollout signature payload tuple")
+}
+
+fn post_torii_soracloud_mutation<T>(
+    torii_url: &str,
+    endpoint_path: &str,
+    request_payload: &T,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)>
+where
+    T: JsonSerialize + ?Sized,
+{
+    let endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join(endpoint_path)
+        .wrap_err_with(|| format!("failed to derive /{endpoint_path} URL from --torii-url"))?;
+    let body = json::to_vec(request_payload)
+        .wrap_err("failed to encode soracloud mutation request payload")?;
+
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for soracloud mutation")?;
+
+    let mut request = client
+        .post(endpoint.clone())
+        .header(header::ACCEPT, HeaderValue::from_static("application/json"))
+        .header(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        )
+        .body(body);
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to call `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii mutation response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /{endpoint_path} returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+    let payload: norito::json::Value =
+        json::from_slice(&body).wrap_err("failed to decode Torii mutation JSON payload")?;
+    Ok((endpoint.to_string(), payload))
 }
 
 fn fetch_torii_soracloud_status(
@@ -723,6 +3599,680 @@ fn workspace_fixture(path: &str) -> PathBuf {
         .join(path)
 }
 
+fn apply_init_template_defaults(
+    template: InitTemplate,
+    service_name: &Name,
+    service: &mut SoraServiceManifestV1,
+    container: &mut SoraContainerManifestV1,
+) -> Result<()> {
+    let dns_label = normalized_service_label(service_name.as_ref());
+    let host = format!("{dns_label}.sora");
+    match template {
+        InitTemplate::Baseline => Ok(()),
+        InitTemplate::Site => {
+            container.runtime = SoraContainerRuntimeV1::NativeProcess;
+            container.bundle_path = "/bundles/site-static.car".to_owned();
+            container.entrypoint = "/usr/bin/sorafs-static-gateway".to_owned();
+            container.args = vec!["--root=/app/dist".to_owned(), "--port=8080".to_owned()];
+            container
+                .env
+                .insert("SORACLOUD_TEMPLATE".to_owned(), "site".to_owned());
+            container.capabilities.network =
+                SoraNetworkPolicyV1::Allowlist(vec!["torii.sora.internal".to_owned()]);
+            container.capabilities.allow_wallet_signing = false;
+            container.capabilities.allow_state_writes = false;
+            container.capabilities.allow_model_training = false;
+            container.lifecycle.healthcheck_path = Some("/healthz".to_owned());
+
+            service.route = Some(SoraRouteTargetV1 {
+                host,
+                path_prefix: "/".to_owned(),
+                service_port: NonZeroU16::new(8080).expect("nonzero literal"),
+                visibility: SoraRouteVisibilityV1::Public,
+                tls_mode: SoraTlsModeV1::Required,
+            });
+            service.replicas = NonZeroU16::new(2).expect("nonzero literal");
+            service.state_bindings.clear();
+            Ok(())
+        }
+        InitTemplate::Webapp => {
+            container.runtime = SoraContainerRuntimeV1::NativeProcess;
+            container.bundle_path = "/bundles/webapp-api.car".to_owned();
+            container.entrypoint = "/app/api/server.mjs".to_owned();
+            container.args = vec!["--port=8787".to_owned()];
+            container
+                .env
+                .insert("SORACLOUD_TEMPLATE".to_owned(), "webapp".to_owned());
+            container.env.insert(
+                "CHAIN_IDENTITY_ENDPOINT".to_owned(),
+                "http://127.0.0.1:8080".to_owned(),
+            );
+            container.capabilities.network = SoraNetworkPolicyV1::Allowlist(vec![
+                "torii.sora.internal".to_owned(),
+                "wallet.sora.internal".to_owned(),
+            ]);
+            container.capabilities.allow_wallet_signing = true;
+            container.capabilities.allow_state_writes = true;
+            container.capabilities.allow_model_training = false;
+            container.lifecycle.healthcheck_path = Some("/api/healthz".to_owned());
+
+            service.route = Some(SoraRouteTargetV1 {
+                host,
+                path_prefix: "/api".to_owned(),
+                service_port: NonZeroU16::new(8787).expect("nonzero literal"),
+                visibility: SoraRouteVisibilityV1::Public,
+                tls_mode: SoraTlsModeV1::Required,
+            });
+            service.state_bindings = vec![SoraStateBindingV1 {
+                schema_version: SORA_STATE_BINDING_VERSION_V1,
+                binding_name: "session_store"
+                    .parse()
+                    .expect("literal binding name is valid"),
+                scope: SoraStateScopeV1::ServiceState,
+                mutability: SoraStateMutabilityV1::ReadWrite,
+                encryption: SoraStateEncryptionV1::ClientCiphertext,
+                key_prefix: "/state/session".to_owned(),
+                max_item_bytes: NonZeroU64::new(4_096).expect("nonzero literal"),
+                max_total_bytes: NonZeroU64::new(262_144).expect("nonzero literal"),
+            }];
+            Ok(())
+        }
+    }
+}
+
+fn scaffold_init_template(
+    template: InitTemplate,
+    output_dir: &Path,
+    service_name: &str,
+    overwrite: bool,
+) -> Result<Vec<String>> {
+    match template {
+        InitTemplate::Baseline => Ok(Vec::new()),
+        InitTemplate::Site => scaffold_site_template(output_dir, service_name, overwrite),
+        InitTemplate::Webapp => scaffold_webapp_template(output_dir, service_name, overwrite),
+    }
+}
+
+fn scaffold_site_template(
+    output_dir: &Path,
+    service_name: &str,
+    overwrite: bool,
+) -> Result<Vec<String>> {
+    let project_dir = output_dir.join("site");
+    let package_name = normalized_service_label(service_name);
+    let dns_host = format!("{package_name}.sora");
+    let files = vec![
+        (
+            project_dir.join("package.json"),
+            site_package_json(&package_name),
+        ),
+        (
+            project_dir.join("tsconfig.json"),
+            site_tsconfig_json().to_owned(),
+        ),
+        (
+            project_dir.join("vite.config.ts"),
+            site_vite_config().to_owned(),
+        ),
+        (project_dir.join("index.html"), site_index_html().to_owned()),
+        (project_dir.join("src/main.ts"), site_main_ts().to_owned()),
+        (project_dir.join("src/App.vue"), site_app_vue(service_name)),
+        (
+            project_dir.join(".gitignore"),
+            "node_modules/\ndist/\n".to_owned(),
+        ),
+        (
+            project_dir.join("README.md"),
+            site_readme(service_name, &dns_host),
+        ),
+    ];
+    write_template_files(files, overwrite)
+}
+
+fn scaffold_webapp_template(
+    output_dir: &Path,
+    service_name: &str,
+    overwrite: bool,
+) -> Result<Vec<String>> {
+    let project_dir = output_dir.join("webapp");
+    let package_name = normalized_service_label(service_name);
+    let files = vec![
+        (
+            project_dir.join("package.json"),
+            webapp_root_package_json(&package_name),
+        ),
+        (
+            project_dir.join("frontend/package.json"),
+            webapp_frontend_package_json(&package_name),
+        ),
+        (
+            project_dir.join("frontend/tsconfig.json"),
+            site_tsconfig_json().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/vite.config.ts"),
+            webapp_frontend_vite_config().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/index.html"),
+            site_index_html().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/src/main.ts"),
+            site_main_ts().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/src/App.vue"),
+            webapp_frontend_app_vue(service_name),
+        ),
+        (
+            project_dir.join("api/server.mjs"),
+            webapp_api_server_mjs().to_owned(),
+        ),
+        (project_dir.join("README.md"), webapp_readme(service_name)),
+        (
+            project_dir.join(".gitignore"),
+            "node_modules/\nfrontend/node_modules/\nfrontend/dist/\n".to_owned(),
+        ),
+    ];
+    write_template_files(files, overwrite)
+}
+
+fn write_template_files(files: Vec<(PathBuf, String)>, overwrite: bool) -> Result<Vec<String>> {
+    let mut written = Vec::with_capacity(files.len());
+    for (path, body) in files {
+        write_template_file(&path, &body, overwrite)?;
+        written.push(path.to_string_lossy().into_owned());
+    }
+    Ok(written)
+}
+
+fn write_template_file(path: &Path, body: &str, overwrite: bool) -> Result<()> {
+    ensure_can_write(path, overwrite)?;
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).wrap_err_with(|| {
+            format!("failed to create template directory {}", parent.display())
+        })?;
+    }
+    fs::write(path, body)
+        .wrap_err_with(|| format!("failed to write template file {}", path.display()))
+}
+
+fn normalized_service_label(service_name: &str) -> String {
+    let mut out = String::new();
+    for ch in service_name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else if (ch == '-' || ch == '_') && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "sora-app".to_owned()
+    } else {
+        out
+    }
+}
+
+fn site_package_json(package_name: &str) -> String {
+    format!(
+        r#"{{
+  "name": "{package_name}-site",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {{
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }},
+  "dependencies": {{
+    "vue": "^3.5.0"
+  }},
+  "devDependencies": {{
+    "@vitejs/plugin-vue": "^5.2.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }}
+}}
+"#
+    )
+}
+
+fn webapp_root_package_json(package_name: &str) -> String {
+    format!(
+        r#"{{
+  "name": "{package_name}-webapp",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {{
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:api": "node api/server.mjs",
+    "build": "npm --prefix frontend run build",
+    "start": "node api/server.mjs"
+  }}
+}}
+"#
+    )
+}
+
+fn webapp_frontend_package_json(package_name: &str) -> String {
+    format!(
+        r#"{{
+  "name": "{package_name}-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {{
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }},
+  "dependencies": {{
+    "vue": "^3.5.0"
+  }},
+  "devDependencies": {{
+    "@vitejs/plugin-vue": "^5.2.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }}
+}}
+"#
+    )
+}
+
+fn site_tsconfig_json() -> &'static str {
+    r#"{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "strict": true,
+    "jsx": "preserve",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "lib": [
+      "ES2020",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "vite/client"
+    ]
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.vue"
+  ]
+}
+"#
+}
+
+fn site_vite_config() -> &'static str {
+    r#"import { defineConfig } from "vite";
+import vue from "@vitejs/plugin-vue";
+
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    host: "0.0.0.0",
+    port: 5173
+  }
+});
+"#
+}
+
+fn webapp_frontend_vite_config() -> &'static str {
+    r#"import { defineConfig } from "vite";
+import vue from "@vitejs/plugin-vue";
+
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    host: "0.0.0.0",
+    port: 5173,
+    proxy: {
+      "/api": "http://127.0.0.1:8787"
+    }
+  }
+});
+"#
+}
+
+fn site_index_html() -> &'static str {
+    r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SoraCloud App</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
+"#
+}
+
+fn site_main_ts() -> &'static str {
+    r##"import { createApp } from "vue";
+import App from "./App.vue";
+
+createApp(App).mount("#app");
+"##
+}
+
+fn site_app_vue(service_name: &str) -> String {
+    format!(
+        r#"<template>
+  <main class="shell">
+    <h1>{service_name}</h1>
+    <p>This Vue3 static site is ready for SoraFS packaging and SoraDNS binding.</p>
+  </main>
+</template>
+
+<style scoped>
+.shell {{
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  max-width: 720px;
+  margin: 4rem auto;
+  padding: 0 1.25rem;
+  color: #16324f;
+}}
+
+h1 {{
+  font-size: 2.25rem;
+  margin: 0 0 1rem;
+}}
+</style>
+"#
+    )
+}
+
+fn webapp_frontend_app_vue(service_name: &str) -> String {
+    format!(
+        r#"<template>
+  <main class="shell">
+    <h1>{service_name} Control Panel</h1>
+    <form @submit.prevent="login">
+      <label>
+        Account
+        <input v-model="account" placeholder="ih58..." />
+      </label>
+      <label>
+        Signature
+        <input v-model="signature" placeholder="hex signature" />
+      </label>
+      <button type="submit">Start Session</button>
+    </form>
+    <p v-if="session">{{{{ session }}}}</p>
+    <p v-if="error" class="error">{{{{ error }}}}</p>
+  </main>
+</template>
+
+<script setup lang="ts">
+import {{ ref }} from "vue";
+
+const account = ref("");
+const signature = ref("");
+const session = ref("");
+const error = ref("");
+
+async function login() {{
+  error.value = "";
+  const response = await fetch("/api/session", {{
+    method: "POST",
+    headers: {{ "content-type": "application/json" }},
+    body: JSON.stringify({{ account: account.value, signature: signature.value }})
+  }});
+  if (!response.ok) {{
+    error.value = await response.text();
+    return;
+  }}
+  const payload = await response.json();
+  session.value = `active for ${{payload.account}}`;
+}}
+</script>
+
+<style scoped>
+.shell {{
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  max-width: 720px;
+  margin: 4rem auto;
+  padding: 0 1.25rem;
+}}
+
+form {{
+  display: grid;
+  gap: 0.75rem;
+  margin: 1.5rem 0;
+}}
+
+input {{
+  width: 100%;
+  padding: 0.5rem;
+}}
+
+.error {{
+  color: #b42318;
+}}
+</style>
+"#
+    )
+}
+
+fn webapp_api_server_mjs() -> &'static str {
+    r#"import http from "node:http";
+import crypto from "node:crypto";
+
+const portArg = process.argv.find((value) => value.startsWith("--port="));
+const port = Number(portArg?.slice("--port=".length) ?? process.env.PORT ?? "8787");
+const sessionKey = process.env.SESSION_HMAC_KEY ?? "replace-me-with-a-random-key";
+
+function parseCookie(headerValue = "") {
+  const cookies = Object.create(null);
+  for (const entry of headerValue.split(";")) {
+    const [rawKey, rawValue] = entry.trim().split("=");
+    if (!rawKey || !rawValue) {
+      continue;
+    }
+    cookies[rawKey] = decodeURIComponent(rawValue);
+  }
+  return cookies;
+}
+
+function signSession(account) {
+  const mac = crypto.createHmac("sha256", sessionKey).update(account).digest("hex");
+  return `${account}.${mac}`;
+}
+
+function verifySession(token) {
+  const [account, mac] = token.split(".");
+  if (!account || !mac) {
+    return null;
+  }
+  const expected = crypto.createHmac("sha256", sessionKey).update(account).digest("hex");
+  const a = Buffer.from(mac, "hex");
+  const b = Buffer.from(expected, "hex");
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return null;
+  }
+  return account;
+}
+
+async function readJson(req) {
+  let body = "";
+  for await (const chunk of req) {
+    body += chunk.toString("utf8");
+  }
+  return JSON.parse(body);
+}
+
+async function verifyChainIdentity(account, signature) {
+  if (!account || !signature) {
+    return false;
+  }
+  // TODO: replace with deterministic Torii verification flow for signatures.
+  return true;
+}
+
+const server = http.createServer(async (req, res) => {
+  if (req.url === "/api/healthz") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/session") {
+    try {
+      const body = await readJson(req);
+      if (!(await verifyChainIdentity(body.account, body.signature))) {
+        res.writeHead(401, { "content-type": "text/plain" });
+        res.end("chain identity verification failed");
+        return;
+      }
+      const token = signSession(body.account);
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "set-cookie": `session=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax`
+      });
+      res.end(JSON.stringify({ account: body.account }));
+    } catch (error) {
+      res.writeHead(400, { "content-type": "text/plain" });
+      res.end(`invalid request: ${error.message}`);
+    }
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/api/me") {
+    const cookies = parseCookie(req.headers.cookie);
+    const account = cookies.session ? verifySession(cookies.session) : null;
+    if (!account) {
+      res.writeHead(401, { "content-type": "text/plain" });
+      res.end("no active session");
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ account }));
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/logout") {
+    res.writeHead(204, {
+      "set-cookie": "session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax"
+    });
+    res.end();
+    return;
+  }
+
+  res.writeHead(404, { "content-type": "text/plain" });
+  res.end("not found");
+});
+
+server.listen(port, "0.0.0.0", () => {
+  // eslint-disable-next-line no-console
+  console.log(`api listening on :${port}`);
+});
+"#
+}
+
+fn site_readme(service_name: &str, dns_host: &str) -> String {
+    format!(
+        r#"# {service_name} Static Site Template
+
+This template is generated by:
+
+```bash
+iroha app soracloud init --template site --service-name {service_name}
+```
+
+## Local dev
+
+```bash
+npm install
+npm run dev
+```
+
+## Build and package for SoraFS
+
+```bash
+npm run build
+iroha app sorafs toolkit pack ./dist \
+  --manifest-out ../sorafs/site_manifest.to \
+  --car-out ../sorafs/site_payload.car \
+  --json-out ../sorafs/site_pack_report.json
+```
+
+## Register and bind on SoraDNS
+
+`pin register` needs `chunk_digest_sha3_256` and governance alias proof material.
+
+```bash
+export CHUNK_DIGEST_HEX=<chunk_digest_sha3_256_hex>
+export CURRENT_EPOCH=<network_epoch>
+iroha app sorafs pin register \
+  --manifest ../sorafs/site_manifest.to \
+  --chunk-digest "$CHUNK_DIGEST_HEX" \
+  --submitted-epoch "$CURRENT_EPOCH" \
+  --alias-namespace soradns \
+  --alias-name {dns_host} \
+  --alias-proof ../sorafs/alias_proof.bin
+```
+"#
+    )
+}
+
+fn webapp_readme(service_name: &str) -> String {
+    format!(
+        r#"# {service_name} Webapp Template
+
+This template provides:
+
+- `frontend/` Vue3 SPA (Vite).
+- `api/server.mjs` deterministic HTTP API with signed-cookie sessions.
+- Soracloud manifests at the parent init directory (`container_manifest.json`, `service_manifest.json`).
+
+## Local dev
+
+```bash
+npm install
+npm --prefix frontend install
+npm run dev:api
+npm run dev:frontend
+```
+
+## Deploy API service on Soracloud
+
+```bash
+iroha app soracloud deploy \
+  --container ../container_manifest.json \
+  --service ../service_manifest.json \
+  --torii-url http://127.0.0.1:8080
+```
+
+## Publish frontend to SoraFS
+
+```bash
+npm run build
+iroha app sorafs toolkit pack ./frontend/dist \
+  --manifest-out ../sorafs/frontend_manifest.to \
+  --car-out ../sorafs/frontend_payload.car \
+  --json-out ../sorafs/frontend_pack_report.json
+```
+
+Update `api/server.mjs` `verifyChainIdentity` with your chain signature-verification policy before production use.
+"#
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -746,6 +4296,11 @@ mod tests {
         load_json(&workspace_fixture(DEFAULT_SERVICE_MANIFEST)).expect("service fixture")
     }
 
+    fn fixture_agent_apartment() -> AgentApartmentManifestV1 {
+        load_json(&workspace_fixture(DEFAULT_AGENT_APARTMENT_MANIFEST))
+            .expect("agent apartment fixture")
+    }
+
     #[test]
     fn deploy_upgrade_rollback_workflow_updates_registry() {
         let dir = temp_dir("workflow");
@@ -767,6 +4322,7 @@ mod tests {
         let deployed = apply_mutation(&mut registry, MutationMode::Deploy, &bundle_v1)
             .expect("deploy should succeed");
         assert_eq!(deployed.current_version, "1.0.0");
+        assert!(deployed.rollout_handle.is_none());
         write_json(&registry_path, &registry).expect("write registry");
 
         let mut service_v2 = fixture_service();
@@ -782,6 +4338,14 @@ mod tests {
             .expect("upgrade should succeed");
         assert_eq!(upgraded.previous_version.as_deref(), Some("1.0.0"));
         assert_eq!(upgraded.current_version, "1.1.0");
+        assert_eq!(upgraded.rollout_stage, Some(RolloutStage::Canary));
+        assert_eq!(upgraded.rollout_percent, Some(20));
+        assert!(
+            upgraded
+                .rollout_handle
+                .as_ref()
+                .is_some_and(|handle| !handle.is_empty())
+        );
 
         let rolled_back =
             apply_rollback(&mut loaded, "web_portal", None).expect("rollback should succeed");
@@ -830,6 +4394,139 @@ mod tests {
     }
 
     #[test]
+    fn rollout_canary_advances_and_promotes_locally() {
+        let container = fixture_container();
+        let container_hash = Hash::new(Encode::encode(&container));
+        let mut service_v1 = fixture_service();
+        service_v1.service_version = "1.0.0".to_string();
+        service_v1.container.manifest_hash = container_hash;
+        let bundle_v1 = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container: container.clone(),
+            service: service_v1,
+        };
+        let mut service_v2 = fixture_service();
+        service_v2.service_version = "1.1.0".to_string();
+        service_v2.container.manifest_hash = container_hash;
+        let bundle_v2 = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service: service_v2,
+        };
+
+        let mut registry = RegistryState::default();
+        apply_mutation(&mut registry, MutationMode::Deploy, &bundle_v1).expect("deploy");
+        let upgraded = apply_mutation(&mut registry, MutationMode::Upgrade, &bundle_v2)
+            .expect("upgrade should succeed");
+        let handle = upgraded
+            .rollout_handle
+            .as_deref()
+            .expect("upgrade should emit rollout handle");
+
+        let canary = apply_rollout(
+            &mut registry,
+            "web_portal",
+            handle,
+            true,
+            Some(60),
+            Hash::new(b"rollout-canary"),
+        )
+        .expect("canary advance");
+        assert_eq!(canary.action, SoracloudAction::Rollout);
+        assert_eq!(canary.stage, RolloutStage::Canary);
+        assert_eq!(canary.traffic_percent, 60);
+
+        let promoted = apply_rollout(
+            &mut registry,
+            "web_portal",
+            handle,
+            true,
+            Some(100),
+            Hash::new(b"rollout-promoted"),
+        )
+        .expect("promotion");
+        assert_eq!(promoted.action, SoracloudAction::Rollout);
+        assert_eq!(promoted.stage, RolloutStage::Promoted);
+        assert_eq!(promoted.current_version, "1.1.0");
+        assert_eq!(promoted.traffic_percent, 100);
+
+        let service = registry.services.get("web_portal").expect("service exists");
+        assert!(service.active_rollout.is_none());
+        assert_eq!(
+            service.last_rollout.as_ref().map(|rollout| rollout.stage),
+            Some(RolloutStage::Promoted)
+        );
+    }
+
+    #[test]
+    fn rollout_auto_rolls_back_after_failure_threshold_locally() {
+        let container = fixture_container();
+        let container_hash = Hash::new(Encode::encode(&container));
+        let mut service_v1 = fixture_service();
+        service_v1.service_version = "1.0.0".to_string();
+        service_v1.container.manifest_hash = container_hash;
+        let bundle_v1 = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container: container.clone(),
+            service: service_v1,
+        };
+        let mut service_v2 = fixture_service();
+        service_v2.service_version = "1.1.0".to_string();
+        service_v2.container.manifest_hash = container_hash;
+        let bundle_v2 = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service: service_v2,
+        };
+
+        let mut registry = RegistryState::default();
+        apply_mutation(&mut registry, MutationMode::Deploy, &bundle_v1).expect("deploy");
+        let upgraded = apply_mutation(&mut registry, MutationMode::Upgrade, &bundle_v2)
+            .expect("upgrade should succeed");
+        let handle = upgraded
+            .rollout_handle
+            .as_deref()
+            .expect("upgrade should emit rollout handle");
+
+        for index in 0_u8..2 {
+            let response = apply_rollout(
+                &mut registry,
+                "web_portal",
+                handle,
+                false,
+                None,
+                Hash::new(format!("rollout-fail-{index}").as_bytes()),
+            )
+            .expect("intermediate unhealthy report");
+            assert_eq!(response.action, SoracloudAction::Rollout);
+            assert_eq!(response.stage, RolloutStage::Canary);
+        }
+
+        let rollback = apply_rollout(
+            &mut registry,
+            "web_portal",
+            handle,
+            false,
+            None,
+            Hash::new(b"rollout-fail-terminal"),
+        )
+        .expect("terminal unhealthy report should rollback");
+        assert_eq!(rollback.action, SoracloudAction::Rollback);
+        assert_eq!(rollback.stage, RolloutStage::RolledBack);
+        assert_eq!(rollback.current_version, "1.0.0");
+        assert_eq!(rollback.traffic_percent, 0);
+        assert_eq!(registry.audit_log.len(), 5);
+
+        let service = registry.services.get("web_portal").expect("service exists");
+        assert_eq!(service.current_version, "1.0.0");
+        assert!(service.active_rollout.is_none());
+        assert_eq!(
+            service.last_rollout.as_ref().map(|rollout| rollout.stage),
+            Some(RolloutStage::RolledBack)
+        );
+    }
+
+    #[test]
     fn status_output_can_represent_torii_control_plane_snapshot() {
         let payload = norito::json!({
             "schema_version": 1,
@@ -846,7 +4543,9 @@ mod tests {
         assert!(output.torii_endpoint.is_some());
         let payload = output.network_status.expect("network payload");
         assert_eq!(
-            payload.get("schema_version").and_then(norito::json::Value::as_u64),
+            payload
+                .get("schema_version")
+                .and_then(norito::json::Value::as_u64),
             Some(1)
         );
     }
@@ -856,5 +4555,445 @@ mod tests {
         let err = fetch_torii_soracloud_status("not-a-url", None, None, 5)
             .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
+    }
+
+    #[test]
+    fn signed_bundle_request_uses_verifiable_signature() {
+        let container = fixture_container();
+        let mut service = fixture_service();
+        service.container.manifest_hash = Hash::new(Encode::encode(&container));
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+        let key_pair = KeyPair::random();
+        let request = signed_bundle_request(bundle, &key_pair).expect("signed request");
+        let payload = norito::to_bytes(&request.bundle).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_rollback_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_rollback_request("web_portal", None, &key_pair)
+            .expect("signed rollback request");
+        let payload = encode_rollback_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_rollout_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_rollout_request(
+            "web_portal",
+            "web_portal:rollout:2",
+            true,
+            Some(100),
+            Hash::new(b"governance"),
+            &key_pair,
+        )
+        .expect("signed rollout request");
+        let payload = encode_rollout_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn post_torii_mutation_rejects_invalid_url() {
+        let payload = norito::json!({ "noop": true });
+        let err =
+            post_torii_soracloud_mutation("not-a-url", "v1/soracloud/deploy", &payload, None, 5)
+                .expect_err("invalid URL must fail");
+        assert!(err.to_string().contains("invalid --torii-url"));
+    }
+
+    #[test]
+    fn init_site_template_scaffolds_vue_and_sorafs_workflow() {
+        let dir = temp_dir("site_template");
+        let output = InitArgs {
+            output_dir: dir.clone(),
+            service_name: "docs_portal".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::Site,
+            overwrite: false,
+        }
+        .run()
+        .expect("site init should succeed");
+
+        assert_eq!(output.template, "site");
+        assert!(dir.join("site/package.json").exists());
+        assert!(dir.join("site/src/App.vue").exists());
+
+        let readme = fs::read_to_string(dir.join("site/README.md")).expect("read site readme");
+        assert!(readme.contains("iroha app sorafs toolkit pack"));
+        assert!(readme.contains("alias-namespace soradns"));
+
+        let container: SoraContainerManifestV1 =
+            load_json(&dir.join("container_manifest.json")).expect("container manifest");
+        assert_eq!(container.runtime, SoraContainerRuntimeV1::NativeProcess);
+        let service: SoraServiceManifestV1 =
+            load_json(&dir.join("service_manifest.json")).expect("service manifest");
+        assert_eq!(
+            service
+                .route
+                .as_ref()
+                .map(|route| route.path_prefix.as_str()),
+            Some("/")
+        );
+    }
+
+    #[test]
+    fn init_webapp_template_scaffolds_frontend_and_api() {
+        let dir = temp_dir("webapp_template");
+        let output = InitArgs {
+            output_dir: dir.clone(),
+            service_name: "agent_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::Webapp,
+            overwrite: false,
+        }
+        .run()
+        .expect("webapp init should succeed");
+
+        assert_eq!(output.template, "webapp");
+        assert!(dir.join("webapp/frontend/package.json").exists());
+        assert!(dir.join("webapp/api/server.mjs").exists());
+
+        let api = fs::read_to_string(dir.join("webapp/api/server.mjs")).expect("read api file");
+        assert!(api.contains("verifyChainIdentity"));
+
+        let service: SoraServiceManifestV1 =
+            load_json(&dir.join("service_manifest.json")).expect("service manifest");
+        assert_eq!(
+            service
+                .route
+                .as_ref()
+                .map(|route| route.path_prefix.as_str()),
+            Some("/api")
+        );
+        assert!(
+            service
+                .state_bindings
+                .iter()
+                .any(|binding| binding.key_prefix == "/state/session")
+        );
+    }
+
+    #[test]
+    fn agent_apartment_scheduler_deploy_renew_restart_updates_registry() {
+        let manifest = fixture_agent_apartment();
+        let apartment_name = manifest.apartment_name.to_string();
+        let mut registry = RegistryState::default();
+
+        let deployed =
+            apply_agent_deploy(&mut registry, &manifest, 10).expect("agent deploy should succeed");
+        assert_eq!(deployed.action, AgentApartmentAction::Deploy);
+        assert_eq!(deployed.apartment_name, apartment_name);
+        assert_eq!(deployed.status, AgentRuntimeStatus::Running);
+
+        let renewed = apply_agent_lease_renew(&mut registry, "ops_agent", 5)
+            .expect("lease renewal should succeed");
+        assert_eq!(renewed.action, AgentApartmentAction::LeaseRenew);
+        assert_eq!(renewed.status, AgentRuntimeStatus::Running);
+
+        let restarted = apply_agent_restart(&mut registry, "ops_agent", "policy refresh")
+            .expect("restart should succeed");
+        assert_eq!(restarted.action, AgentApartmentAction::Restart);
+        assert_eq!(restarted.restart_count, 1);
+        assert_eq!(restarted.reason.as_deref(), Some("policy refresh"));
+        assert_eq!(registry.apartment_events.len(), 3);
+
+        let runtime = registry
+            .apartments
+            .get("ops_agent")
+            .expect("runtime should exist");
+        assert_eq!(runtime.restart_count, 1);
+        assert_eq!(
+            runtime.last_restart_reason.as_deref(),
+            Some("policy refresh")
+        );
+    }
+
+    #[test]
+    fn agent_apartment_deploy_rejects_duplicate_name() {
+        let manifest = fixture_agent_apartment();
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &manifest, 10).expect("initial deploy");
+        let err = apply_agent_deploy(&mut registry, &manifest, 10)
+            .expect_err("duplicate deploy must fail");
+        assert!(err.to_string().contains("already registered"));
+    }
+
+    #[test]
+    fn agent_apartment_restart_rejects_expired_lease() {
+        let manifest = fixture_agent_apartment();
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &manifest, 1).expect("initial deploy");
+        let err = apply_agent_restart(&mut registry, "ops_agent", "manual recover")
+            .expect_err("restart after lease expiry must fail");
+        assert!(err.to_string().contains("lease expired"));
+    }
+
+    #[test]
+    fn agent_apartment_status_entry_reports_lease_expiry() {
+        let manifest = fixture_agent_apartment();
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &manifest, 1).expect("initial deploy");
+        let runtime = registry
+            .apartments
+            .get("ops_agent")
+            .expect("runtime should exist");
+        let status =
+            AgentApartmentStatusEntry::from_state("ops_agent", runtime, registry.next_sequence);
+        assert_eq!(status.status, AgentRuntimeStatus::LeaseExpired);
+        assert_eq!(status.lease_remaining_ticks, 0);
+    }
+
+    #[test]
+    fn agent_wallet_spend_requests_then_approves_under_policy() {
+        let manifest = fixture_agent_apartment();
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &manifest, 120).expect("initial deploy");
+
+        let request = apply_agent_wallet_spend(&mut registry, "ops_agent", "xor#sora", 1_000_000)
+            .expect("wallet spend request should succeed");
+        assert_eq!(request.action, AgentApartmentAction::WalletSpendRequested);
+        assert_eq!(request.pending_request_count, 1);
+        let request_id = request.request_id.clone().expect("request id");
+
+        let approved = apply_agent_wallet_approve(&mut registry, "ops_agent", &request_id)
+            .expect("approval should succeed");
+        assert_eq!(approved.action, AgentApartmentAction::WalletSpendApproved);
+        assert_eq!(approved.pending_request_count, 0);
+        assert_eq!(approved.day_spent_nanos, Some(1_000_000));
+    }
+
+    #[test]
+    fn agent_wallet_auto_approve_applies_daily_spend() {
+        let mut manifest = fixture_agent_apartment();
+        manifest.policy_capabilities.push(
+            "wallet.auto_approve"
+                .parse()
+                .expect("valid capability name"),
+        );
+        manifest.validate().expect("manifest should remain valid");
+
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &manifest, 120).expect("initial deploy");
+
+        let approved = apply_agent_wallet_spend(&mut registry, "ops_agent", "usd#bank", 2_000_000)
+            .expect("auto approval should succeed");
+        assert_eq!(approved.action, AgentApartmentAction::WalletSpendApproved);
+        assert_eq!(approved.pending_request_count, 0);
+        assert_eq!(approved.day_spent_nanos, Some(2_000_000));
+    }
+
+    #[test]
+    fn agent_wallet_spend_rejects_when_wallet_sign_revoked() {
+        let manifest = fixture_agent_apartment();
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &manifest, 120).expect("initial deploy");
+        apply_agent_policy_revoke(&mut registry, "ops_agent", "wallet.sign", Some("rotated"))
+            .expect("revoke should succeed");
+
+        let err = apply_agent_wallet_spend(&mut registry, "ops_agent", "xor#sora", 1_000_000)
+            .expect_err("wallet spend should be rejected");
+        assert!(err.to_string().contains("wallet.sign"));
+    }
+
+    #[test]
+    fn agent_wallet_spend_rejects_amount_above_per_tx_limit() {
+        let manifest = fixture_agent_apartment();
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &manifest, 120).expect("initial deploy");
+
+        let err = apply_agent_wallet_spend(&mut registry, "ops_agent", "xor#sora", 6_000_000)
+            .expect_err("request should exceed per-tx limit");
+        assert!(err.to_string().contains("max_per_tx_nanos"));
+    }
+
+    #[test]
+    fn agent_mailbox_send_and_ack_flow_updates_queue_and_events() {
+        let mut sender = fixture_agent_apartment();
+        sender
+            .policy_capabilities
+            .push("agent.mailbox.send".parse().expect("valid capability"));
+        sender.validate().expect("sender manifest should be valid");
+
+        let mut recipient = fixture_agent_apartment();
+        recipient.apartment_name = "worker_agent".parse().expect("valid apartment name");
+        recipient
+            .policy_capabilities
+            .push("agent.mailbox.receive".parse().expect("valid capability"));
+        recipient
+            .validate()
+            .expect("recipient manifest should be valid");
+
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &sender, 120).expect("deploy sender");
+        apply_agent_deploy(&mut registry, &recipient, 120).expect("deploy recipient");
+
+        let queued = apply_agent_message_send(
+            &mut registry,
+            "ops_agent",
+            "worker_agent",
+            "ops.sync",
+            "rotate-key-42",
+        )
+        .expect("message send should succeed");
+        assert_eq!(queued.action, AgentApartmentAction::MessageEnqueued);
+        assert_eq!(queued.pending_message_count, 1);
+        assert_eq!(queued.to_apartment.as_deref(), Some("worker_agent"));
+        let message_id = queued.message_id.clone();
+
+        let recipient_runtime = registry
+            .apartments
+            .get("worker_agent")
+            .expect("recipient runtime exists");
+        assert_eq!(recipient_runtime.mailbox_queue.len(), 1);
+        assert_eq!(recipient_runtime.mailbox_queue[0].message_id, message_id);
+
+        let acked = apply_agent_message_ack(&mut registry, "worker_agent", &message_id)
+            .expect("message ack should succeed");
+        assert_eq!(acked.action, AgentApartmentAction::MessageAcknowledged);
+        assert_eq!(acked.pending_message_count, 0);
+        assert_eq!(acked.from_apartment.as_deref(), Some("ops_agent"));
+
+        let recipient_runtime = registry
+            .apartments
+            .get("worker_agent")
+            .expect("recipient runtime exists");
+        assert!(recipient_runtime.mailbox_queue.is_empty());
+        assert_eq!(registry.apartment_events.len(), 4);
+    }
+
+    #[test]
+    fn agent_mailbox_send_rejects_without_sender_capability() {
+        let sender = fixture_agent_apartment();
+        let mut recipient = fixture_agent_apartment();
+        recipient.apartment_name = "worker_agent".parse().expect("valid apartment name");
+        recipient
+            .policy_capabilities
+            .push("agent.mailbox.receive".parse().expect("valid capability"));
+        recipient
+            .validate()
+            .expect("recipient manifest should be valid");
+
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &sender, 120).expect("deploy sender");
+        apply_agent_deploy(&mut registry, &recipient, 120).expect("deploy recipient");
+
+        let err = apply_agent_message_send(
+            &mut registry,
+            "ops_agent",
+            "worker_agent",
+            "ops.sync",
+            "rotate-key-42",
+        )
+        .expect_err("send without sender capability should fail");
+        assert!(err.to_string().contains("agent.mailbox.send"));
+    }
+
+    #[test]
+    fn agent_autonomy_allow_and_run_flow_updates_budget_and_history() {
+        let mut manifest = fixture_agent_apartment();
+        manifest
+            .policy_capabilities
+            .push("agent.autonomy.run".parse().expect("valid capability"));
+        manifest.validate().expect("manifest should remain valid");
+
+        let mut registry = RegistryState::default();
+        apply_agent_deploy_with_budget(&mut registry, &manifest, 120, 1_000)
+            .expect("initial deploy");
+
+        let allow = apply_agent_artifact_allow(
+            &mut registry,
+            "ops_agent",
+            "hash:ABCD0123#01",
+            Some("hash:PROV0001#01"),
+        )
+        .expect("artifact allow should succeed");
+        assert_eq!(allow.action, AgentApartmentAction::ArtifactAllowed);
+        assert_eq!(allow.allowlist_count, 1);
+        assert_eq!(allow.budget_remaining_units, 1_000);
+
+        let run = apply_agent_autonomy_run(
+            &mut registry,
+            "ops_agent",
+            "hash:ABCD0123#01",
+            Some("hash:PROV0001#01"),
+            250,
+            "nightly-train-step-1",
+        )
+        .expect("autonomy run should succeed");
+        assert_eq!(run.action, AgentApartmentAction::AutonomyRunApproved);
+        assert_eq!(run.budget_units, Some(250));
+        assert_eq!(run.budget_remaining_units, 750);
+        assert!(run.run_id.is_some());
+
+        let runtime = registry
+            .apartments
+            .get("ops_agent")
+            .expect("runtime should exist");
+        assert_eq!(runtime.autonomy_budget_remaining_units, 750);
+        assert_eq!(runtime.artifact_allowlist.len(), 1);
+        assert_eq!(runtime.autonomy_run_history.len(), 1);
+        assert_eq!(
+            runtime.autonomy_run_history[0].run_label,
+            "nightly-train-step-1"
+        );
+    }
+
+    #[test]
+    fn agent_autonomy_run_rejects_without_allowlist_and_on_budget_overflow() {
+        let mut manifest = fixture_agent_apartment();
+        manifest
+            .policy_capabilities
+            .push("agent.autonomy.run".parse().expect("valid capability"));
+        manifest.validate().expect("manifest should remain valid");
+
+        let mut registry = RegistryState::default();
+        apply_agent_deploy_with_budget(&mut registry, &manifest, 120, 100).expect("initial deploy");
+
+        let missing_allowlist = apply_agent_autonomy_run(
+            &mut registry,
+            "ops_agent",
+            "hash:ABCD0123#01",
+            None,
+            10,
+            "no-allowlist",
+        )
+        .expect_err("run must fail without allowlist");
+        assert!(missing_allowlist.to_string().contains("not allowlisted"));
+
+        apply_agent_artifact_allow(&mut registry, "ops_agent", "hash:ABCD0123#01", None)
+            .expect("allowlist insert should succeed");
+
+        let budget_err = apply_agent_autonomy_run(
+            &mut registry,
+            "ops_agent",
+            "hash:ABCD0123#01",
+            None,
+            200,
+            "budget-overflow",
+        )
+        .expect_err("run should fail when budget exceeds remaining");
+        assert!(
+            budget_err
+                .to_string()
+                .contains("exceeds remaining autonomy budget")
+        );
     }
 }

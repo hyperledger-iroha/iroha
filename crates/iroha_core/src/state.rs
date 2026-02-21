@@ -8006,6 +8006,43 @@ impl DetachedStateTransactionDelta {
         Ok(false)
     }
 
+    /// Check whether `authority` may transfer `transfer.object()` under the current delta.
+    pub(crate) fn can_transfer_domain(
+        &self,
+        world: &impl WorldReadOnly,
+        authority: &AccountId,
+        transfer: &iroha_data_model::isi::Transfer<
+            iroha_data_model::account::Account,
+            iroha_data_model::domain::DomainId,
+            iroha_data_model::account::Account,
+        >,
+    ) -> Result<bool, ValidationFail> {
+        if transfer.source() == authority {
+            return Ok(true);
+        }
+
+        let source_domain_owner = match self.domain_owner_transfer.get(transfer.source().domain()) {
+            Some((_, to)) => to.clone(),
+            None => world
+                .domain(transfer.source().domain())
+                .map(|domain| domain.owned_by().clone())
+                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
+        };
+        if &source_domain_owner == authority {
+            return Ok(true);
+        }
+
+        let transferred_domain_owner = match self.domain_owner_transfer.get(transfer.object()) {
+            Some((_, to)) => to.clone(),
+            None => world
+                .domain(transfer.object())
+                .map(|domain| domain.owned_by().clone())
+                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
+        };
+
+        Ok(&transferred_domain_owner == authority)
+    }
+
     /// Record a parameter update to be applied at merge.
     pub fn set_parameter(&mut self, param: iroha_data_model::parameter::Parameter) {
         self.param_updates.push(param);
@@ -31053,6 +31090,94 @@ mod tests {
                 .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID)
                 .expect("permission check"),
             "domain owner must be allowed to modify account metadata"
+        );
+    }
+
+    #[test]
+    fn detached_can_transfer_domain_denies_non_owner() {
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let transferred_domain_id: DomainId = "foo".parse().expect("foo domain id");
+        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
+        let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
+        let alice_domain = Domain::new(ALICE_ID.domain().clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+
+        let world = World::with(
+            [alice_domain, users_domain, transferred_domain],
+            [alice_account, user1_account, user2_account],
+            [],
+        );
+        let view = world.view();
+        let transfer =
+            iroha_data_model::isi::Transfer::domain(user1, transferred_domain_id, user2.clone());
+        let delta = DetachedStateTransactionDelta::default();
+
+        assert!(
+            !delta
+                .can_transfer_domain(&view, &ALICE_ID, &transfer)
+                .expect("permission check"),
+            "authority that owns neither source account/domain nor transferred domain must be denied"
+        );
+    }
+
+    #[test]
+    fn detached_can_transfer_domain_considers_pending_domain_transfers() {
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let transferred_domain_id: DomainId = "foo".parse().expect("foo domain id");
+        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
+        let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
+        let alice_domain = Domain::new(ALICE_ID.domain().clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+
+        let world = World::with(
+            [
+                alice_domain,
+                users_domain.clone(),
+                transferred_domain.clone(),
+            ],
+            [alice_account, user1_account, user2_account],
+            [],
+        );
+        let view = world.view();
+        let transfer = iroha_data_model::isi::Transfer::domain(
+            user1.clone(),
+            transferred_domain_id.clone(),
+            user2,
+        );
+        let mut delta = DetachedStateTransactionDelta::default();
+
+        assert!(
+            !delta
+                .can_transfer_domain(&view, &ALICE_ID, &transfer)
+                .expect("permission check"),
+            "baseline should deny authority before pending owner updates"
+        );
+
+        delta.transfer_domain(users_domain_id.clone(), user1.clone(), ALICE_ID.clone());
+        assert!(
+            delta
+                .can_transfer_domain(&view, &ALICE_ID, &transfer)
+                .expect("permission check"),
+            "pending source-domain transfer should authorize subsequent transfer"
+        );
+
+        let mut delta = DetachedStateTransactionDelta::default();
+        delta.transfer_domain(transferred_domain_id.clone(), user1, ALICE_ID.clone());
+        assert!(
+            delta
+                .can_transfer_domain(&view, &ALICE_ID, &transfer)
+                .expect("permission check"),
+            "pending transferred-domain ownership should authorize subsequent transfer"
         );
     }
 

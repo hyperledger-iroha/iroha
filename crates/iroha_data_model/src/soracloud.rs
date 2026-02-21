@@ -1,9 +1,10 @@
 //! SoraCloud manifest schema for deterministic service hosting on Sora3.
 //!
-//! The initial SoraCloud release uses three canonical Norito payloads:
-//! [`SoraContainerManifestV1`], [`SoraServiceManifestV1`], and
-//! [`SoraStateBindingV1`]. Together they describe executable bundles,
-//! deployment/routing policy, and state mutation limits in a deterministic form
+//! The initial SoraCloud release uses canonical Norito payloads:
+//! [`SoraContainerManifestV1`], [`SoraServiceManifestV1`],
+//! [`SoraStateBindingV1`], and [`AgentApartmentManifestV1`]. Together they
+//! describe executable bundles, deployment/routing policy, state mutation
+//! limits, and persistent agent-policy envelopes in a deterministic form
 //! suitable for validator admission and audit trails.
 
 #![allow(clippy::module_name_repetitions)]
@@ -28,6 +29,8 @@ pub const SORA_SERVICE_MANIFEST_VERSION_V1: u16 = 1;
 pub const SORA_STATE_BINDING_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraDeploymentBundleV1`].
 pub const SORA_DEPLOYMENT_BUNDLE_VERSION_V1: u16 = 1;
+/// Schema version for [`AgentApartmentManifestV1`].
+pub const AGENT_APARTMENT_MANIFEST_VERSION_V1: u16 = 1;
 
 /// Validation errors returned by SoraCloud manifest helpers.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -65,6 +68,24 @@ pub enum SoraCloudManifestError {
     DuplicateStateBinding {
         /// Duplicate binding identifier.
         binding: Name,
+    },
+    /// Agent apartment manifests cannot define duplicate tool capabilities.
+    #[error("agent apartment manifest includes duplicate tool capability `{tool}`")]
+    DuplicateToolCapability {
+        /// Duplicate tool identifier.
+        tool: String,
+    },
+    /// Agent apartment manifests cannot define duplicate policy capabilities.
+    #[error("agent apartment manifest includes duplicate policy capability `{policy}`")]
+    DuplicatePolicyCapability {
+        /// Duplicate policy capability identifier.
+        policy: Name,
+    },
+    /// Agent apartment manifests cannot define duplicate spend-limit assets.
+    #[error("agent apartment manifest includes duplicate spend-limit asset `{asset}`")]
+    DuplicateSpendLimitAsset {
+        /// Duplicate spend-limit asset identifier.
+        asset: String,
     },
 }
 
@@ -535,6 +556,191 @@ impl SoraServiceManifestV1 {
     }
 }
 
+/// Upgrade mode for long-lived AI agent apartments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "upgrade_policy", content = "value"))]
+pub enum AgentUpgradePolicyV1 {
+    /// Apartments can only be upgraded through explicit governance actions.
+    #[default]
+    Governed,
+    /// Apartments can be upgraded automatically once checks pass.
+    Automatic,
+    /// Apartment revision is pinned and cannot be upgraded.
+    Pinned,
+}
+
+/// Tool-level execution cap for an agent apartment.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AgentToolCapabilityV1 {
+    /// Stable tool identifier.
+    pub tool: String,
+    /// Maximum invocations allowed per accounting epoch.
+    pub max_invocations_per_epoch: NonZeroU32,
+    /// Whether the tool may perform network egress.
+    pub allow_network: bool,
+    /// Whether the tool may write to local persistent files.
+    pub allow_filesystem_write: bool,
+}
+
+/// Spend guardrail for a specific asset under apartment policy.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AgentSpendLimitV1 {
+    /// Asset definition identifier (for example `xor#sora`).
+    pub asset_definition: String,
+    /// Maximum amount spendable per transaction, in nanos.
+    pub max_per_tx_nanos: NonZeroU64,
+    /// Maximum amount spendable per day, in nanos.
+    pub max_per_day_nanos: NonZeroU64,
+}
+
+/// Deterministic policy manifest for a persistent AI agent apartment.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AgentApartmentManifestV1 {
+    /// Schema version; must equal [`AGENT_APARTMENT_MANIFEST_VERSION_V1`].
+    pub schema_version: u16,
+    /// Logical apartment identifier.
+    pub apartment_name: Name,
+    /// Reference to the executable container manifest.
+    pub container: SoraContainerManifestRefV1,
+    /// Tool-level capability policy.
+    #[norito(default)]
+    pub tool_capabilities: Vec<AgentToolCapabilityV1>,
+    /// Additional high-level policy capability identifiers.
+    #[norito(default)]
+    pub policy_capabilities: Vec<Name>,
+    /// Wallet spend limits across allowed assets.
+    #[norito(default)]
+    pub spend_limits: Vec<AgentSpendLimitV1>,
+    /// Total state quota reserved for apartment memory.
+    pub state_quota_bytes: NonZeroU64,
+    /// Apartment-wide network egress policy.
+    pub network_egress: SoraNetworkPolicyV1,
+    /// Upgrade policy for apartment revisions.
+    pub upgrade_policy: AgentUpgradePolicyV1,
+}
+
+impl AgentApartmentManifestV1 {
+    /// Validate schema version and deterministic policy constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
+    /// policy fields violate deterministic constraints.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != AGENT_APARTMENT_MANIFEST_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "agent apartment manifest",
+                expected: AGENT_APARTMENT_MANIFEST_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+
+        if self.container.expected_schema_version != SORA_CONTAINER_MANIFEST_VERSION_V1 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "agent apartment manifest",
+                field: "container.expected_schema_version",
+                reason: format!(
+                    "must equal {SORA_CONTAINER_MANIFEST_VERSION_V1}, found {}",
+                    self.container.expected_schema_version
+                ),
+            });
+        }
+
+        let mut seen_tools = BTreeSet::new();
+        for tool_capability in &self.tool_capabilities {
+            let tool = tool_capability.tool.trim();
+            if tool.is_empty() {
+                return Err(SoraCloudManifestError::EmptyField {
+                    manifest: "agent apartment manifest",
+                    field: "tool_capabilities.tool",
+                });
+            }
+            if !seen_tools.insert(tool.to_owned()) {
+                return Err(SoraCloudManifestError::DuplicateToolCapability {
+                    tool: tool.to_owned(),
+                });
+            }
+        }
+
+        let mut seen_policies = BTreeSet::new();
+        for policy in &self.policy_capabilities {
+            if !seen_policies.insert(policy.clone()) {
+                return Err(SoraCloudManifestError::DuplicatePolicyCapability {
+                    policy: policy.clone(),
+                });
+            }
+        }
+
+        let mut seen_spend_assets = BTreeSet::new();
+        for limit in &self.spend_limits {
+            let asset = limit.asset_definition.trim();
+            if asset.is_empty() {
+                return Err(SoraCloudManifestError::EmptyField {
+                    manifest: "agent apartment manifest",
+                    field: "spend_limits.asset_definition",
+                });
+            }
+            if limit.max_per_tx_nanos > limit.max_per_day_nanos {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "agent apartment manifest",
+                    field: "spend_limits.max_per_tx_nanos",
+                    reason: "cannot exceed max_per_day_nanos".to_string(),
+                });
+            }
+            if !seen_spend_assets.insert(asset.to_owned()) {
+                return Err(SoraCloudManifestError::DuplicateSpendLimitAsset {
+                    asset: asset.to_owned(),
+                });
+            }
+        }
+
+        if let SoraNetworkPolicyV1::Allowlist(hosts) = &self.network_egress {
+            if hosts.is_empty() {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "agent apartment manifest",
+                    field: "network_egress",
+                    reason: "allowlist must include at least one host".to_string(),
+                });
+            }
+            let mut seen_hosts = BTreeSet::new();
+            for host in hosts {
+                let normalized = host.trim();
+                if normalized.is_empty() {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "agent apartment manifest",
+                        field: "network_egress",
+                        reason: "allowlist host entries must be non-empty".to_string(),
+                    });
+                }
+                if !seen_hosts.insert(normalized.to_owned()) {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "agent apartment manifest",
+                        field: "network_egress",
+                        reason: format!("duplicate allowlist host `{normalized}`"),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// Admission bundle coupling container + service manifests for deterministic checks.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -638,13 +844,15 @@ impl SoraDeploymentBundleV1 {
 /// Re-export commonly used SoraCloud schema types.
 pub mod prelude {
     pub use super::{
-        SORA_CONTAINER_MANIFEST_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-        SORA_SERVICE_MANIFEST_VERSION_V1, SORA_STATE_BINDING_VERSION_V1, SoraCapabilityPolicyV1,
-        SoraCloudManifestError, SoraContainerManifestRefV1, SoraContainerManifestV1,
-        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraLifecycleHooksV1, SoraNetworkPolicyV1,
-        SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-        SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
-        SoraStateScopeV1, SoraTlsModeV1,
+        AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentSpendLimitV1,
+        AgentToolCapabilityV1, AgentUpgradePolicyV1, SORA_CONTAINER_MANIFEST_VERSION_V1,
+        SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_SERVICE_MANIFEST_VERSION_V1,
+        SORA_STATE_BINDING_VERSION_V1, SoraCapabilityPolicyV1, SoraCloudManifestError,
+        SoraContainerManifestRefV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
+        SoraDeploymentBundleV1, SoraLifecycleHooksV1, SoraNetworkPolicyV1, SoraResourceLimitsV1,
+        SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceManifestV1,
+        SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1,
+        SoraTlsModeV1,
     };
 }
 
@@ -731,6 +939,46 @@ mod tests {
                 automatic_rollback_failures: NonZeroU32::new(2).expect("nonzero"),
             },
             state_bindings,
+        }
+    }
+
+    fn sample_agent_apartment_manifest() -> AgentApartmentManifestV1 {
+        AgentApartmentManifestV1 {
+            schema_version: AGENT_APARTMENT_MANIFEST_VERSION_V1,
+            apartment_name: "ops_agent".parse().expect("valid name"),
+            container: SoraContainerManifestRefV1 {
+                manifest_hash: sample_hash(41),
+                expected_schema_version: SORA_CONTAINER_MANIFEST_VERSION_V1,
+            },
+            tool_capabilities: vec![
+                AgentToolCapabilityV1 {
+                    tool: "soracloud.deploy".to_string(),
+                    max_invocations_per_epoch: NonZeroU32::new(128).expect("nonzero"),
+                    allow_network: true,
+                    allow_filesystem_write: false,
+                },
+                AgentToolCapabilityV1 {
+                    tool: "wallet.transfer".to_string(),
+                    max_invocations_per_epoch: NonZeroU32::new(32).expect("nonzero"),
+                    allow_network: false,
+                    allow_filesystem_write: false,
+                },
+            ],
+            policy_capabilities: vec![
+                "wallet.sign".parse().expect("valid name"),
+                "governance.audit".parse().expect("valid name"),
+            ],
+            spend_limits: vec![AgentSpendLimitV1 {
+                asset_definition: "xor#sora".to_string(),
+                max_per_tx_nanos: NonZeroU64::new(5_000_000).expect("nonzero"),
+                max_per_day_nanos: NonZeroU64::new(20_000_000).expect("nonzero"),
+            }],
+            state_quota_bytes: NonZeroU64::new(134_217_728).expect("nonzero"),
+            network_egress: SoraNetworkPolicyV1::Allowlist(vec![
+                "rpc.sora.internal".to_string(),
+                "torii.sora.internal".to_string(),
+            ]),
+            upgrade_policy: AgentUpgradePolicyV1::Governed,
         }
     }
 
@@ -883,6 +1131,49 @@ mod tests {
         assert!(
             bundle.validate_for_admission().is_ok(),
             "consistent deployment bundle must pass"
+        );
+    }
+
+    #[test]
+    fn agent_apartment_manifest_validate_rejects_duplicate_tool_capabilities() {
+        let mut manifest = sample_agent_apartment_manifest();
+        manifest.tool_capabilities.push(AgentToolCapabilityV1 {
+            tool: "soracloud.deploy".to_string(),
+            max_invocations_per_epoch: NonZeroU32::new(1).expect("nonzero"),
+            allow_network: false,
+            allow_filesystem_write: false,
+        });
+        let error = manifest
+            .validate()
+            .expect_err("duplicate tool capabilities must be rejected");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::DuplicateToolCapability { .. }
+        ));
+    }
+
+    #[test]
+    fn agent_apartment_manifest_validate_rejects_excessive_per_tx_limit() {
+        let mut manifest = sample_agent_apartment_manifest();
+        manifest.spend_limits[0].max_per_tx_nanos = NonZeroU64::new(50_000_000).expect("nonzero");
+        let error = manifest
+            .validate()
+            .expect_err("per-tx spend limit above daily limit must fail");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "spend_limits.max_per_tx_nanos",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn agent_apartment_manifest_validate_accepts_consistent_policy() {
+        let manifest = sample_agent_apartment_manifest();
+        assert!(
+            manifest.validate().is_ok(),
+            "valid agent apartment manifest must pass"
         );
     }
 }

@@ -7,6 +7,7 @@ deployment on Iroha 3:
 - `SoraServiceManifestV1`
 - `SoraStateBindingV1`
 - `SoraDeploymentBundleV1`
+- `AgentApartmentManifestV1`
 
 The Rust definitions live in `crates/iroha_data_model/src/soracloud.rs`.
 
@@ -25,6 +26,9 @@ These manifests are designed for the `IVM` + custom Sora Container Runtime
 - `SoraDeploymentBundleV1` couples container + service manifests and enforces
   deterministic admission checks (manifest-hash linkage, schema alignment, and
   capability/binding consistency).
+- `AgentApartmentManifestV1` captures persistent agent runtime policy:
+  tool caps, policy caps, spend limits, state quota, network egress, and
+  upgrade behavior.
 
 ## Versioning
 
@@ -32,6 +36,7 @@ These manifests are designed for the `IVM` + custom Sora Container Runtime
 - `SORA_SERVICE_MANIFEST_VERSION_V1 = 1`
 - `SORA_STATE_BINDING_VERSION_V1 = 1`
 - `SORA_DEPLOYMENT_BUNDLE_VERSION_V1 = 1`
+- `AGENT_APARTMENT_MANIFEST_VERSION_V1 = 1`
 
 Validation rejects unsupported versions with
 `SoraCloudManifestError::UnsupportedVersion`.
@@ -57,6 +62,13 @@ Validation rejects unsupported versions with
   - `service.container.expected_schema_version` must match the container schema.
   - Mutable state bindings require `container.capabilities.allow_state_writes=true`.
   - Public routes require `container.lifecycle.healthcheck_path`.
+- Agent apartment manifest:
+  - `container.expected_schema_version` must match container schema v1.
+  - tool capability names must be non-empty and unique.
+  - policy capability names must be unique.
+  - spend-limit assets must be non-empty and unique.
+  - `max_per_tx_nanos <= max_per_day_nanos` for each spend limit.
+  - allowlist network policy must include unique non-empty hosts.
 
 ## Canonical Fixtures
 
@@ -66,6 +78,7 @@ Canonical JSON fixtures are stored at:
 - `fixtures/soracloud/sora_service_manifest_v1.json`
 - `fixtures/soracloud/sora_state_binding_v1.json`
 - `fixtures/soracloud/sora_deployment_bundle_v1.json`
+- `fixtures/soracloud/agent_apartment_manifest_v1.json`
 
 Fixture/roundtrip tests:
 

@@ -50,7 +50,9 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry};
 use iroha_primitives::{json::Json, numeric::NumericSpec, time::TimeSource, unique_vec::UniqueVec};
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+use iroha_test_samples::{
+    ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+};
 #[cfg(test)]
 use norito::json::Value;
 use toml::Table;
@@ -361,6 +363,10 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     let wonderland_name: Name = "wonderland".parse().expect("wonderland domain");
     let rose_name: Name = "rose".parse().expect("rose asset name");
     let camomile_name: Name = "camomile".parse().expect("camomile asset name");
+    let garden_name: Name = "garden_of_live_flowers"
+        .parse()
+        .expect("garden_of_live_flowers domain");
+    let cabbage_name: Name = "cabbage".parse().expect("cabbage asset name");
     let alice_metadata = Metadata::default();
 
     builder = builder
@@ -369,13 +375,24 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .account(BOB_KEYPAIR.public_key().clone())
         .asset(rose_name, NumericSpec::default())
         .asset(camomile_name, NumericSpec::default())
+        .finish_domain()
+        .domain(garden_name)
+        .account(CARPENTER_KEYPAIR.public_key().clone())
+        .asset(cabbage_name, NumericSpec::default())
         .finish_domain();
 
     let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain id");
+    let garden_domain: DomainId = "garden_of_live_flowers"
+        .parse()
+        .expect("garden_of_live_flowers domain id");
     let rose_definition_id: AssetDefinitionId = "rose#wonderland".parse().expect("rose def");
     let camomile_definition_id: AssetDefinitionId =
         "camomile#wonderland".parse().expect("camomile def");
+    let cabbage_definition_id: AssetDefinitionId = "cabbage#garden_of_live_flowers"
+        .parse()
+        .expect("cabbage def");
     let rose_asset_id = AssetId::new(rose_definition_id.clone(), alice_id.clone());
+    let cabbage_asset_id = AssetId::new(cabbage_definition_id.clone(), alice_id.clone());
 
     builder = builder.append_instruction(Transfer::domain(
         genesis_id.clone(),
@@ -383,6 +400,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         alice_id.clone(),
     ));
     builder = builder.append_instruction(Mint::asset_numeric(13u32, rose_asset_id));
+    builder = builder.append_instruction(Mint::asset_numeric(44u32, cabbage_asset_id));
 
     builder = builder.next_transaction();
 
@@ -415,8 +433,20 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             alice_id.clone(),
         )),
         InstructionBox::from(Grant::account_permission(
+            CanRegisterAccount {
+                domain: garden_domain.clone(),
+            },
+            alice_id.clone(),
+        )),
+        InstructionBox::from(Grant::account_permission(
             CanRegisterAssetDefinition {
                 domain: wonderland_domain.clone(),
+            },
+            alice_id.clone(),
+        )),
+        InstructionBox::from(Grant::account_permission(
+            CanRegisterAssetDefinition {
+                domain: garden_domain.clone(),
             },
             alice_id.clone(),
         )),
@@ -459,6 +489,12 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         InstructionBox::from(Grant::account_permission(
             CanMintAssetWithDefinition {
                 asset_definition: camomile_definition_id.clone(),
+            },
+            alice_id.clone(),
+        )),
+        InstructionBox::from(Grant::account_permission(
+            CanMintAssetWithDefinition {
+                asset_definition: cabbage_definition_id.clone(),
             },
             alice_id.clone(),
         )),
@@ -1461,15 +1497,18 @@ mod tests {
     }
 
     #[test]
-    fn minimal_genesis_contains_wonderland_account() {
-        use iroha_data_model::{Identifiable, isi::RegisterBox, transaction::Executable};
+    fn minimal_genesis_contains_fixture_accounts() {
+        use iroha_data_model::{
+            Identifiable, domain::DomainId, isi::RegisterBox, transaction::Executable,
+        };
 
         init_instruction_registry();
 
-        fn assert_registers_alice(
+        fn assert_registers_fixture_accounts(
             topology: iroha_primitives::unique_vec::UniqueVec<PeerId>,
             pops: Vec<GenesisTopologyEntry>,
         ) {
+            let garden_domain: DomainId = "garden_of_live_flowers".parse().expect("garden domain");
             let (block, _, _, _) = build_minimal_genesis_unexecuted(
                 Vec::new(),
                 topology,
@@ -1477,6 +1516,7 @@ mod tests {
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             );
             let mut saw_alice = false;
+            let mut saw_carpenter = false;
             for tx in block.0.transactions_vec() {
                 if let Executable::Instructions(instrs) = tx.instructions() {
                     for instr in instrs {
@@ -1485,7 +1525,14 @@ mod tests {
                             && isi.object().id() == &*ALICE_ID
                         {
                             saw_alice = true;
-                            break;
+                            continue;
+                        }
+                        if let Some(RegisterBox::Account(isi)) =
+                            instr.as_any().downcast_ref::<RegisterBox>()
+                            && isi.object().id().domain() == &garden_domain
+                        {
+                            saw_carpenter = true;
+                            continue;
                         }
                     }
                 }
@@ -1494,10 +1541,14 @@ mod tests {
                 saw_alice,
                 "minimal genesis should register alice@wonderland"
             );
+            assert!(
+                saw_carpenter,
+                "minimal genesis should register carpenter@garden_of_live_flowers"
+            );
         }
 
         let empty_topology = iroha_primitives::unique_vec::UniqueVec::new();
-        assert_registers_alice(empty_topology, Vec::new());
+        assert_registers_fixture_accounts(empty_topology, Vec::new());
 
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
@@ -1506,7 +1557,7 @@ mod tests {
             PeerId::new(bls.public_key().clone()),
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
         );
-        assert_registers_alice(topology, vec![entry]);
+        assert_registers_fixture_accounts(topology, vec![entry]);
     }
 
     #[test]

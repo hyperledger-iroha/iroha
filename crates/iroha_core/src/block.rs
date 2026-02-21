@@ -7642,6 +7642,25 @@ pub(crate) mod valid {
                                     .map(|rm| rm.object.clone())
                             })
                     };
+                    let domain_transfer_target = |instruction: &InstructionBox| {
+                        instruction
+                            .as_any()
+                            .downcast_ref::<TransferBox>()
+                            .and_then(|transfer| match transfer {
+                                TransferBox::Domain(transfer) => Some(transfer.clone()),
+                                _ => None,
+                            })
+                            .or_else(|| {
+                                instruction
+                                    .as_any()
+                                    .downcast_ref::<iroha_data_model::isi::Transfer<
+                                        iroha_data_model::account::Account,
+                                        DomainId,
+                                        iroha_data_model::account::Account,
+                                    >>()
+                                    .cloned()
+                            })
+                    };
                     let requires_fee_postprocessing =
                         |tx: &iroha_data_model::transaction::SignedTransaction| {
                             if !state_block.pipeline.gas.accepted_assets.is_empty() {
@@ -7711,6 +7730,32 @@ pub(crate) mod valid {
                                                     TransactionRejectionReason::Validation(
                                                         iroha_data_model::ValidationFail::NotPermitted(
                                                             "Can't set value to the metadata of another account"
+                                                                .to_owned(),
+                                                        ),
+                                                    ),
+                                                );
+                                                break;
+                                            }
+                                            Err(err) => {
+                                                reject = Some(
+                                                    TransactionRejectionReason::Validation(err),
+                                                );
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if let Some(transfer) = domain_transfer_target(instr) {
+                                        match delta.can_transfer_domain(
+                                            &state_block.world,
+                                            &p.authority,
+                                            &transfer,
+                                        ) {
+                                            Ok(true) => {}
+                                            Ok(false) => {
+                                                reject = Some(
+                                                    TransactionRejectionReason::Validation(
+                                                        iroha_data_model::ValidationFail::NotPermitted(
+                                                            "Can't transfer domain of another account"
                                                                 .to_owned(),
                                                         ),
                                                     ),

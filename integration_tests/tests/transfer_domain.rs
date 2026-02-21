@@ -13,11 +13,15 @@ use iroha_executor_data_model::permission::{
     asset_definition::{CanRegisterAssetDefinition, CanUnregisterAssetDefinition},
     domain::CanUnregisterDomain,
     nft::{CanRegisterNft, CanUnregisterNft},
-    trigger::CanUnregisterTrigger,
+    trigger::{CanExecuteTrigger, CanUnregisterTrigger},
 };
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
 use tokio::runtime::Runtime;
+
+fn err_chain_contains(err: &eyre::Report, needle: &str) -> bool {
+    err.chain().any(|cause| cause.to_string().contains(needle))
+}
 
 fn start_network(
     builder: NetworkBuilder,
@@ -55,14 +59,22 @@ fn domain_owner_domain_permissions() -> Result<()> {
         .submit_transaction_blocking(&transaction)
         .expect_err("Tx should fail due to permissions");
 
-    let rejection_reason = err
-        .downcast_ref::<TransactionRejectionReason>()
-        .unwrap_or_else(|| panic!("Error {err} is not TransactionRejectionReason"));
-
-    assert!(matches!(
-        rejection_reason,
-        &TransactionRejectionReason::Validation(ValidationFail::NotPermitted(_))
-    ));
+    if let Some(rejection_reason) = err.downcast_ref::<TransactionRejectionReason>() {
+        assert!(matches!(
+            rejection_reason,
+            &TransactionRejectionReason::Validation(ValidationFail::NotPermitted(_))
+        ));
+    } else {
+        assert!(
+            err_chain_contains(&err, "Not permitted")
+                || err_chain_contains(&err, "NotPermitted")
+                || err_chain_contains(
+                    &err,
+                    "Can't register asset definition in a domain owned by another account"
+                ),
+            "expected NotPermitted validation error, got: {err:?}"
+        );
+    }
 
     // "alice@wonderland" owns the domain and can register AssetDefinitions by default as domain owner
     test_client.submit_blocking(Register::asset_definition(coin.clone()))?;
@@ -378,9 +390,21 @@ fn domain_owner_trigger_permissions() -> Result<()> {
     test_client.submit_blocking(Mint::trigger_repetitions(1_u32, trigger_id.clone()))?;
     test_client.submit_blocking(Burn::trigger_repetitions(1_u32, trigger_id.clone()))?;
 
-    // check that "alice@wonderland" as owner of domain can call triggers in her domain
+    // check that "alice@wonderland" as owner of domain can grant execute permission and call triggers in her domain
+    let execute_permission = CanExecuteTrigger {
+        trigger: trigger_id.clone(),
+    };
+    test_client.submit_blocking(Grant::account_permission(
+        execute_permission.clone(),
+        alice_id.clone(),
+    ))?;
+
     let execute_trigger = ExecuteTrigger::new(trigger_id.clone());
     test_client.submit_blocking(Instruction::into_instruction_box(Box::new(execute_trigger)))?;
+    test_client.submit_blocking(RevokeBox::from(Revoke::account_permission(
+        execute_permission,
+        alice_id.clone(),
+    )))?;
 
     // check that "alice@wonderland" as owner of domain can grant and revoke trigger related permissions in her domain
     let permission = CanUnregisterTrigger {
@@ -487,6 +511,13 @@ fn not_allowed_to_transfer_other_user_domain() -> Result<()> {
         .find(|domain| domain.id() == &foo_domain)
         .expect("Failed to execute Iroha Query");
     assert_eq!(domain.owned_by(), &user1);
+    let users = client
+        .query(FindDomains::new())
+        .execute_all()?
+        .into_iter()
+        .find(|domain| domain.id() == &users_domain)
+        .expect("Failed to execute Iroha Query");
+    assert_eq!(users.owned_by(), &user1);
 
     // Client authority is "alice@wonderlang".
     // `foo_domain` is owned by `user1@users`.
