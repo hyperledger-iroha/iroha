@@ -183,8 +183,7 @@ pub(super) fn spawn_commit_worker(
     let result_queue_cap = result_queue_cap.max(1);
     let (work_tx, work_rx) = mpsc::sync_channel::<CommitWork>(work_queue_cap);
     let (result_tx, result_rx) = mpsc::sync_channel::<CommitResult>(result_queue_cap);
-    let join_handle = std::thread::Builder::new()
-        .name("sumeragi-commit".to_owned())
+    let join_handle = crate::sumeragi::sumeragi_thread_builder("sumeragi-commit")
         .spawn(move || {
             while let Ok(work) = work_rx.recv() {
                 let id = work.id;
@@ -2199,15 +2198,19 @@ impl Actor {
             "finalizing pending block with commit topology"
         );
         if commit_topology.is_empty() {
-            warn!(
-                height = pending_height,
-                view = pending_view,
-                block = %block_hash,
-                "deferring finalize: empty commit roster"
+            let _ = self.handle_empty_commit_topology_recovery(
+                pending_height,
+                pending_view,
+                Some(block_hash),
+                self.queue.queued_len(),
+                now,
+                ProposalDeferWarningKind::EmptyCommitTopologyFinalize,
+                "finalize_pending_block",
             );
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
+        self.clear_consensus_recovery_for_round(pending_height, pending_view);
         let canonical_topology = super::network_topology::Topology::new(commit_topology.clone());
         let mut topology = canonical_topology.clone();
         if let Err(err) = self.leader_index_for(&mut topology, pending_height, pending_view) {
@@ -3270,7 +3273,13 @@ impl Actor {
                     targets = topology_peers.len(),
                     "sending block sync update to commit topology after emitting local precommit vote"
                 );
-            } else {
+            } else if self.allow_no_roster_fallback_or_fail_closed(
+                vote.height,
+                vote.view,
+                vote.block_hash,
+                ViewChangeCause::MissingPayload,
+                "local_precommit_no_roster",
+            ) {
                 self.broadcast_block_created_for_block_sync(
                     super::message::BlockCreated::from(&pending.block),
                     &topology_peers,
@@ -3282,6 +3291,13 @@ impl Actor {
                     signer = vote.signer,
                     targets = topology_peers.len(),
                     "sending BlockCreated payload to commit topology (no verifiable roster snapshot)"
+                );
+            } else {
+                iroha_logger::warn!(
+                    height = vote.height,
+                    view = vote.view,
+                    block = %vote.block_hash,
+                    "skipping BlockCreated fallback broadcast after no-roster fail-closed escalation"
                 );
             }
         } else {
@@ -4451,6 +4467,10 @@ impl Actor {
         update: super::message::BlockSyncUpdate,
         peers: &[PeerId],
     ) {
+        let height = update.block.header().height().get();
+        let view = update.block.header().view_change_index();
+        let fanout_peers =
+            self.transport_fanout_targets_for_round(peers, height, view, "block_sync_update");
         let online_peers = self
             .network
             .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
@@ -4464,7 +4484,7 @@ impl Actor {
         let targets = Self::block_sync_update_targets_for_peers(
             self.common_config.peer.id(),
             self.block_sync_gossip_limit,
-            peers,
+            &fanout_peers,
             &registered_peers,
             &trusted_peers,
             &online_peers,
@@ -4495,6 +4515,10 @@ impl Actor {
         created: super::message::BlockCreated,
         peers: &[PeerId],
     ) {
+        let height = created.block.header().height().get();
+        let view = created.block.header().view_change_index();
+        let fanout_peers =
+            self.transport_fanout_targets_for_round(peers, height, view, "block_created");
         let online_peers = self
             .network
             .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
@@ -4508,7 +4532,7 @@ impl Actor {
         let targets = Self::block_sync_update_targets_for_peers(
             self.common_config.peer.id(),
             self.block_sync_gossip_limit,
-            peers,
+            &fanout_peers,
             &registered_peers,
             &trusted_peers,
             &online_peers,
@@ -5139,6 +5163,10 @@ impl Actor {
         self.deferred_votes.remove(&block_hash);
         self.deferred_qcs
             .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+        self.deferred_missing_payload_qcs
+            .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+        self.quarantined_block_sync_qcs
+            .retain(|(_, hash, _, _, _), _| *hash != block_hash);
         let payload_keys: Vec<_> = self
             .subsystems
             .da_rbc
@@ -5387,6 +5415,10 @@ impl Actor {
         self.pending
             .missing_block_requests
             .retain(|_, request| request.height > height);
+        let now = Instant::now();
+        self.clear_missing_block_recovery_for_height(height, now);
+        self.clear_sidecar_mismatch_for_height(height);
+        self.prune_missing_block_recovery_state(now);
         self.refresh_p2p_topology();
         let commit_topology = self.effective_commit_topology();
         match self.refresh_commit_topology_state(&commit_topology) {
@@ -5846,7 +5878,11 @@ impl Actor {
         self.vote_log.clear();
         self.vote_validation_cache.clear();
         self.deferred_votes.clear();
+        self.consensus_recovery.clear();
         self.deferred_qcs.clear();
+        self.deferred_qc_roster_state.clear();
+        self.deferred_missing_payload_qcs.clear();
+        self.quarantined_block_sync_qcs.clear();
         self.vote_roster_cache.clear();
         self.qc_cache.clear();
         self.qc_signer_tally.clear();

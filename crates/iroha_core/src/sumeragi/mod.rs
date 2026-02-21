@@ -44,6 +44,40 @@ use crate::{
 const SUMERAGI_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
 
+/// Build a named Sumeragi thread with an explicit stack-size budget.
+///
+/// Consensus execution must not rely on platform default stack sizing because
+/// deep recovery and validation paths can exceed small default thread stacks.
+pub(crate) fn sumeragi_thread_builder(name: impl Into<String>) -> std::thread::Builder {
+    std::thread::Builder::new()
+        .name(name.into())
+        .stack_size(SUMERAGI_STACK_SIZE_BYTES)
+}
+
+#[cfg(test)]
+mod thread_builder_tests {
+    use std::sync::mpsc;
+
+    use super::sumeragi_thread_builder;
+
+    #[test]
+    fn sumeragi_thread_builder_applies_requested_thread_name() {
+        let (name_tx, name_rx) = mpsc::sync_channel::<String>(1);
+        let join = sumeragi_thread_builder("sumeragi-thread-builder-test")
+            .spawn(move || {
+                let thread_name = std::thread::current()
+                    .name()
+                    .expect("test thread name should be set")
+                    .to_owned();
+                let _ = name_tx.send(thread_name);
+            })
+            .expect("spawn test thread");
+        let observed = name_rx.recv().expect("thread name message");
+        join.join().expect("join test thread");
+        assert_eq!(observed, "sumeragi-thread-builder-test");
+    }
+}
+
 /// Build the initial validator topology from trusted peers.
 /// Enforces BLS-normal keys and, when configured with a complete `PoP` map, valid `PoP` entries.
 /// Observers are not included; this helper filters the validator set only.
@@ -9984,9 +10018,7 @@ impl SumeragiStartArgs {
         };
 
         let join_handle = tokio::task::spawn(spawn_os_thread_as_future(
-            std::thread::Builder::new()
-                .name("sumeragi".to_owned())
-                .stack_size(SUMERAGI_STACK_SIZE_BYTES),
+            sumeragi_thread_builder("sumeragi"),
             move || actor.run(),
         ));
 
@@ -11509,8 +11541,7 @@ where
     T: Send + 'static,
     F: FnMut(&mut A, T) -> Result<()> + Send + 'static,
 {
-    std::thread::Builder::new()
-        .name(name.to_owned())
+    sumeragi_thread_builder(name)
         .spawn(move || {
             loop {
                 if shutdown_signal.is_sent() {
@@ -11556,8 +11587,7 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
     wake_rx: mpsc::Receiver<()>,
     shutdown_signal: ShutdownSignal,
 ) -> std::thread::JoinHandle<()> {
-    std::thread::Builder::new()
-        .name("sumeragi-tick".to_owned())
+    sumeragi_thread_builder("sumeragi-tick")
         .spawn(move || {
             let mut last_tick = Instant::now();
             loop {

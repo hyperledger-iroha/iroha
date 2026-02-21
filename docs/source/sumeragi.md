@@ -373,6 +373,13 @@ commit_result_queue_cap = 1     # commit worker result queue capacity
 
 [sumeragi.recovery]
 missing_block_signer_fallback_attempts = 1 # fetch from certificate signers this many times, then try full topology
+view_change_backlog_extension_factor = 1.5 # extend quorum-reschedule grace only when backlog signals are active
+view_change_backlog_extension_cap_ms = 200 # max extra grace added by backlog extension logic
+deferred_qc_ttl_ms = 2000                  # missing-payload/deferred-QC TTL before forced fetch/escalation
+
+[network]
+deferred_send_ttl_ms = 1500                # drop deferred outbound frames after this age
+deferred_send_max_per_peer = 256           # cap deferred outbound frames retained per peer
 
 [sumeragi.gating]
 membership_mismatch_alert_threshold = 1   # consecutive mismatches before alert/fail-closed
@@ -443,6 +450,7 @@ Commit rules (scaffold wiring)
 - Availability votes: validators emit `AvailabilityVote` after proposal validation whenever DA is enabled and they have not already voted; vote emission does not wait for RBC delivery. This avoids circular waits between payload transport and voting. Collectors may aggregate availability evidence even when the payload is still missing locally; missing-block fetch runs in parallel so availability status updates once evidence is observed. Nodes continue to accept late availability votes for pending blocks even after a view change so DA quorums can still form, and in DA mode stale availability votes are recorded even if the payload has not been hydrated yet. If the collector target set is empty after filtering the local peer, the vote sender falls back to the commit topology to avoid a no-op broadcast.
 - Commit votes: nodes accept late commit votes even after a view change so commit certificates can still form; in DA mode stale commit votes are recorded even if the payload is not yet known, and in DA-off runs the same holds when a missing-block fetch is in flight so the certificate can be reconstructed after payload arrival. The local validator gossips a block-sync update (fanout‑capped) after emitting its commit vote to propagate cached votes.
 - Payload recovery: nodes that observe availability evidence (RBC `READY` quorum or availability votes) without the payload deterministically fetch it from the certificate signers for `sumeragi.recovery.missing_block_signer_fallback_attempts` attempts, then fall back to the full commit topology (and still fall back immediately when the signer set is empty). Payload hashes are verified before applying the block.
+- Empty commit-topology defers are bounded: proposer/finalize paths now use a staged recovery flow (refresh topology, targeted fetch, bounded wait, then deterministic view-change escalation) and suppress repeated identical defer logs within a cooldown window.
 - Availability timeout on idle views (NPoS/DA-only): pending blocks with `MissingLocalData` log and rebroadcast availability evidence after the availability timeout even if no fresh traffic arrives; while `MissingLocalData` is set, quorum reschedules are deferred until the availability timeout, and `ManifestGuard` remains advisory (warnings only). Permissioned/DA-off paths skip DA availability tracking but still benefit from the prevote-only fallback above.
 - Prepare-only fallback: if only a prepare certificate reaches quorum and no commit votes arrive by the quorum timeout, the actor requeues the block’s transactions, rebroadcasts the block + block-sync update + prepare certificate, resets a highest certificate reference that pointed at the stalled block, and triggers a view change so the next round can propose a fresh block without stalling (applies to both DA-off permissioned runs and DA-off NPoS smoke tests).
 - Commit vote lock: once any commit vote is observed at a height, proposal assembly for that height is deferred until the committed block resolves, and quorum reschedules skip requeueing that block’s transactions to avoid conflicting proposals.

@@ -636,6 +636,10 @@ mod tests {
                 idle_timeout: std::time::Duration::from_secs(5),
                 connect_startup_delay: defaults::network::CONNECT_STARTUP_DELAY,
                 dial_timeout: defaults::network::DIAL_TIMEOUT,
+                deferred_send_ttl: Duration::from_millis(
+                    defaults::network::DEFERRED_SEND_TTL_MS,
+                ),
+                deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
                 peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
                 peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
                 trust_decay_half_life: defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -1095,8 +1099,43 @@ mod tests {
                         iroha_config::parameters::defaults::sumeragi::COMMIT_RESULT_QUEUE_CAP,
                 },
                 recovery: iroha_config::parameters::actual::SumeragiRecovery {
+                    height_attempt_cap:
+                        iroha_config::parameters::defaults::sumeragi::RECOVERY_HEIGHT_ATTEMPT_CAP,
+                    height_window: std::time::Duration::from_millis(
+                        iroha_config::parameters::defaults::sumeragi::RECOVERY_HEIGHT_WINDOW_MS,
+                    ),
+                    hash_miss_cap_before_range_pull:
+                        iroha_config::parameters::defaults::sumeragi::RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL,
+                    no_roster_fallback_views: iroha_config::parameters::defaults::sumeragi::
+                        RECOVERY_NO_ROSTER_FALLBACK_VIEWS,
                     missing_block_signer_fallback_attempts: iroha_config::parameters::defaults::sumeragi::
                         MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+                    view_change_backlog_extension_factor:
+                        iroha_config::parameters::defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR,
+                    view_change_backlog_extension_cap: std::time::Duration::from_millis(
+                        iroha_config::parameters::defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS,
+                    ),
+                    deferred_qc_ttl: std::time::Duration::from_millis(
+                        iroha_config::parameters::defaults::sumeragi::DEFERRED_QC_TTL_MS,
+                    ),
+                    missing_block_height_attempt_cap:
+                        iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_HEIGHT_ATTEMPT_CAP,
+                    missing_block_height_ttl: std::time::Duration::from_millis(
+                        iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_HEIGHT_TTL_MS,
+                    ),
+                    sidecar_mismatch_retry_cap:
+                        iroha_config::parameters::defaults::sumeragi::SIDECAR_MISMATCH_RETRY_CAP,
+                    sidecar_mismatch_ttl: std::time::Duration::from_millis(
+                        iroha_config::parameters::defaults::sumeragi::SIDECAR_MISMATCH_TTL_MS,
+                    ),
+                    range_pull_escalation_after_hash_misses: iroha_config::parameters::defaults::
+                        sumeragi::RANGE_PULL_ESCALATION_AFTER_HASH_MISSES,
+                },
+                fanout: iroha_config::parameters::actual::SumeragiFanout {
+                    large_set_threshold:
+                        iroha_config::parameters::defaults::sumeragi::FANOUT_LARGE_SET_THRESHOLD,
+                    activity_lookback_blocks:
+                        iroha_config::parameters::defaults::sumeragi::FANOUT_ACTIVITY_LOOKBACK_BLOCKS,
                 },
                 gating: iroha_config::parameters::actual::SumeragiGating {
                     future_height_window: iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,

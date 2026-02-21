@@ -1024,6 +1024,8 @@ Transaction explorer detail alias (flat `hash` shortcut):
 }
 ```
 
+Nested `path.transaction_hash` is accepted as an alias for `path.hash`.
+
 Offline transfer bundle list alias (flat query fields):
 
 ```json
@@ -1262,6 +1264,8 @@ Instruction explorer detail alias (flat `hash` + `index` shortcuts):
   }
 }
 ```
+
+Nested `path.transaction_hash` is accepted as an alias for `path.hash`.
 
 `/transaction` expects Norito-encoded signed transaction bytes.
 Send binary payloads through `body_base64`:

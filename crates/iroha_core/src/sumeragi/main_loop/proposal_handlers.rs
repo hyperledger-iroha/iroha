@@ -669,9 +669,13 @@ impl Actor {
                 return Ok(());
             }
         }
-        let proposal_roster = self
-            .roster_from_commit_qc_history_roll_forward(height, Some(proposal.header.parent_hash))
-            .unwrap_or_else(|| self.effective_commit_topology());
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let proposal_roster = self.canonical_round_roster_with_mode(height, view, consensus_mode);
+        let proposal_roster = if proposal_roster.is_empty() {
+            self.effective_commit_topology()
+        } else {
+            proposal_roster
+        };
         if !proposal_roster.is_empty() {
             let mut topology = super::network_topology::Topology::new(proposal_roster);
             if let Ok(leader_index) = self.leader_index_for(&mut topology, height, view) {
@@ -2033,25 +2037,31 @@ impl Actor {
         // If votes or cached QCs already exist for this block, re-evaluate now that the payload is
         // present so late-arriving block payloads can still finalize with previously collected votes.
         let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-        let mut commit_topology = if self.vote_roster_cache.contains_key(&block_hash) {
-            Vec::new()
-        } else {
-            super::persisted_roster_for_block(
-                self.state.as_ref(),
-                &self.kura,
-                consensus_mode,
-                height,
-                block_hash,
-                Some(view),
-                &self.roster_validation_cache,
-                Some(&mut self.block_sync_roster_cache),
-            )
-            .map(|selection| {
-                self.cache_vote_roster(block_hash, height, view, selection.roster.clone());
-                selection.roster
-            })
-            .unwrap_or_default()
-        };
+        self.observe_sidecar_mismatch_for_height(height, block_hash, "proposal_payload_ready");
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let allow_hash_coupled_roster = height <= committed_height;
+        let allow_sidecar = !self.sidecar_quarantined_for_height(height);
+        let mut commit_topology =
+            if self.vote_roster_cache.contains_key(&block_hash) || !allow_hash_coupled_roster {
+                Vec::new()
+            } else {
+                super::persisted_roster_for_block(
+                    self.state.as_ref(),
+                    &self.kura,
+                    consensus_mode,
+                    height,
+                    block_hash,
+                    Some(view),
+                    &self.roster_validation_cache,
+                    Some(&mut self.block_sync_roster_cache),
+                    allow_sidecar,
+                )
+                .map(|selection| {
+                    self.cache_vote_roster(block_hash, height, view, selection.roster.clone());
+                    selection.roster
+                })
+                .unwrap_or_default()
+            };
         if commit_topology.is_empty() {
             commit_topology =
                 self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
@@ -2087,6 +2097,7 @@ impl Actor {
                 }
             }
             let _ = self.try_replay_deferred_qcs();
+            let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
         }
         let qc_replay_ms = u64::try_from(qc_replay_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.request_commit_pipeline();

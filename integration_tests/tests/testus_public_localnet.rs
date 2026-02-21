@@ -50,6 +50,7 @@ const PROCESS_DOWNTIME_SECS: u64 = 5;
 const JOINER_CATCHUP_TIMEOUT_SECS: u64 = 60;
 const RESTART_CATCHUP_TIMEOUT_SECS: u64 = 60;
 const INTERIM_CONVERGENCE_TIMEOUT_SECS: u64 = 45;
+const INTERIM_LAG_CHURN_BACKOFF_SECS: u64 = 30;
 const JOINER_STALL_LOG_EVERY: u64 = 5;
 const JOINER_PROGRESS_LOG_EVERY: u64 = 5;
 const LOCALNET_BLOCK_TIME_MS: u64 = 1_000;
@@ -135,8 +136,10 @@ struct SimulationSummary {
     tx_sent: u64,
     tx_submit_errors: u64,
     process_churn_cycles: u64,
+    process_churn_lagged_cycles: u64,
     membership_join_cycles: u64,
     membership_leave_cycles: u64,
+    membership_churn_lagged_cycles: u64,
     max_height_skew_observed: u64,
     view_changes_start: u64,
     view_changes_end: u64,
@@ -154,8 +157,10 @@ impl SimulationSummary {
             "tx_sent": (self.tx_sent),
             "tx_submit_errors": (self.tx_submit_errors),
             "process_churn_cycles": (self.process_churn_cycles),
+            "process_churn_lagged_cycles": (self.process_churn_lagged_cycles),
             "membership_join_cycles": (self.membership_join_cycles),
             "membership_leave_cycles": (self.membership_leave_cycles),
+            "membership_churn_lagged_cycles": (self.membership_churn_lagged_cycles),
             "max_height_skew_observed": (self.max_height_skew_observed),
             "view_changes_start": (self.view_changes_start),
             "view_changes_end": (self.view_changes_end),
@@ -381,8 +386,8 @@ async fn testus_localnet_joiner_register_unregister_behavior() -> Result<()> {
     let result: Result<()> = async {
         let mut harness = setup_testus_harness(&out_dir, "testus-membership").await?;
         let mut joiner_warning_state = JoinerCatchupWarningState::default();
-        membership_join_cycle(&mut harness, &mut joiner_warning_state).await?;
-        membership_leave_cycle(&mut harness).await?;
+        let _ = membership_join_cycle(&mut harness, &mut joiner_warning_state).await?;
+        let _ = membership_leave_cycle(&mut harness).await?;
         Ok(())
     }
     .await;
@@ -404,7 +409,8 @@ async fn testus_localnet_restart_catchup_behavior() -> Result<()> {
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
         let mut harness = setup_testus_harness(&out_dir, "testus-restart").await?;
-        process_churn_cycle(&mut harness, 0, Duration::from_secs(PROCESS_DOWNTIME_SECS)).await?;
+        let _ = process_churn_cycle(&mut harness, 0, Duration::from_secs(PROCESS_DOWNTIME_SECS))
+            .await?;
         Ok(())
     }
     .await;
@@ -454,8 +460,10 @@ async fn run_testus_simulation(
     let mut tx_sent = 0_u64;
     let mut tx_submit_errors = 0_u64;
     let mut process_churn_cycles = 0_u64;
+    let mut process_churn_lagged_cycles = 0_u64;
     let mut membership_join_cycles = 0_u64;
     let mut membership_leave_cycles = 0_u64;
+    let mut membership_churn_lagged_cycles = 0_u64;
     let mut max_height_skew_observed = 0_u64;
     let mut saturated_samples = 0_u64;
     let mut total_samples = 0_u64;
@@ -488,7 +496,7 @@ async fn run_testus_simulation(
 
         if modes.process_churn && allow_churn && now >= next_process_churn {
             let churn_start = Instant::now();
-            process_churn_cycle(harness, restart_idx, cfg.process_downtime).await?;
+            let lagged = process_churn_cycle(harness, restart_idx, cfg.process_downtime).await?;
             paused_for_churn = paused_for_churn.saturating_add(churn_start.elapsed());
             let statuses_after_churn = collect_statuses(&harness.validator_clients)?;
             let max_after_churn = max_height(&statuses_after_churn);
@@ -503,17 +511,27 @@ async fn run_testus_simulation(
             last_min_progress_at = Instant::now();
             restart_idx = next_process_churn_index(restart_idx, harness.validator_clients.len());
             process_churn_cycles = process_churn_cycles.saturating_add(1);
-            next_process_churn = Instant::now() + cfg.churn_interval;
+            if lagged {
+                process_churn_lagged_cycles = process_churn_lagged_cycles.saturating_add(1);
+                eprintln!(
+                    "process churn lagged; applying next-cycle backoff of {}s",
+                    INTERIM_LAG_CHURN_BACKOFF_SECS
+                );
+            }
+            next_process_churn = next_churn_deadline(Instant::now(), cfg.churn_interval, lagged);
             continue;
         }
 
         if modes.membership_churn && allow_churn && now >= next_membership_churn {
             let churn_start = Instant::now();
+            let lagged = if joiner_active {
+                membership_leave_cycle(harness).await?
+            } else {
+                membership_join_cycle(harness, &mut joiner_warning_state).await?
+            };
             if joiner_active {
-                membership_leave_cycle(harness).await?;
                 membership_leave_cycles = membership_leave_cycles.saturating_add(1);
             } else {
-                membership_join_cycle(harness, &mut joiner_warning_state).await?;
                 membership_join_cycles = membership_join_cycles.saturating_add(1);
             }
             paused_for_churn = paused_for_churn.saturating_add(churn_start.elapsed());
@@ -529,7 +547,14 @@ async fn run_testus_simulation(
             }
             last_min_progress_at = Instant::now();
             joiner_active = !joiner_active;
-            next_membership_churn = Instant::now() + cfg.churn_interval;
+            if lagged {
+                membership_churn_lagged_cycles = membership_churn_lagged_cycles.saturating_add(1);
+                eprintln!(
+                    "membership churn lagged; applying next-cycle backoff of {}s",
+                    INTERIM_LAG_CHURN_BACKOFF_SECS
+                );
+            }
+            next_membership_churn = next_churn_deadline(Instant::now(), cfg.churn_interval, lagged);
             continue;
         }
 
@@ -640,9 +665,12 @@ async fn run_testus_simulation(
 
     if joiner_active {
         let churn_start = Instant::now();
-        membership_leave_cycle(harness).await?;
+        let lagged = membership_leave_cycle(harness).await?;
         paused_for_churn = paused_for_churn.saturating_add(churn_start.elapsed());
         membership_leave_cycles = membership_leave_cycles.saturating_add(1);
+        if lagged {
+            membership_churn_lagged_cycles = membership_churn_lagged_cycles.saturating_add(1);
+        }
     }
 
     let elapsed = Instant::now().saturating_duration_since(start_time);
@@ -684,8 +712,10 @@ async fn run_testus_simulation(
         tx_sent,
         tx_submit_errors,
         process_churn_cycles,
+        process_churn_lagged_cycles,
         membership_join_cycles,
         membership_leave_cycles,
+        membership_churn_lagged_cycles,
         max_height_skew_observed,
         view_changes_start,
         view_changes_end,
@@ -700,11 +730,12 @@ async fn process_churn_cycle(
     harness: &mut TestusHarness,
     idx: usize,
     downtime: Duration,
-) -> Result<()> {
+) -> Result<bool> {
     ensure!(
         idx < harness.validator_clients.len(),
         "validator index out of bounds for process churn: {idx}"
     );
+    let mut lagged = false;
     let baseline = max_height(&collect_statuses(&harness.validator_clients)?);
     harness.localnet.stop_validator(idx)?;
     sleep(downtime).await;
@@ -719,6 +750,7 @@ async fn process_churn_cycle(
     )
     .await
     {
+        lagged = true;
         eprintln!(
             "validator restart catch-up lagged: baseline={baseline}, target={restart_target}, timeout={restart_catchup_timeout:?}, err={err:?}"
         );
@@ -732,11 +764,12 @@ async fn process_churn_cycle(
     )
     .await
     {
+        lagged = true;
         eprintln!(
             "validator restart convergence lagged: timeout={interim_convergence_timeout:?}, err={err:?}"
         );
     }
-    Ok(())
+    Ok(lagged)
 }
 
 fn validator_restart_catchup_target(baseline: u64) -> u64 {
@@ -746,7 +779,8 @@ fn validator_restart_catchup_target(baseline: u64) -> u64 {
 async fn membership_join_cycle(
     harness: &mut TestusHarness,
     joiner_warning_state: &mut JoinerCatchupWarningState,
-) -> Result<()> {
+) -> Result<bool> {
+    let mut lagged = false;
     let baseline =
         validator_max_height_with_retry(&harness.validator_clients, READY_TIMEOUT).await?;
     if !is_peer_present(&harness.primary_client, &harness.joiner.peer_id)? {
@@ -781,6 +815,7 @@ async fn membership_join_cycle(
                 }
             }
             JoinerCatchupAssessment::Stalled => {
+                lagged = true;
                 let stalled_count = joiner_warning_state.on_stalled();
                 if should_log_on_first_and_every_nth(stalled_count, JOINER_STALL_LOG_EVERY) {
                     eprintln!(
@@ -790,6 +825,7 @@ async fn membership_join_cycle(
             }
         },
         Err(err) => {
+            lagged = true;
             let stalled_count = joiner_warning_state.on_stalled();
             if should_log_on_first_and_every_nth(stalled_count, JOINER_STALL_LOG_EVERY) {
                 eprintln!(
@@ -808,9 +844,10 @@ async fn membership_join_cycle(
     )
     .await
     {
+        lagged = true;
         eprintln!("membership join convergence lagged: {err:?}");
     }
-    Ok(())
+    Ok(lagged)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -891,7 +928,8 @@ async fn wait_for_height_or_progress(
     }
 }
 
-async fn membership_leave_cycle(harness: &mut TestusHarness) -> Result<()> {
+async fn membership_leave_cycle(harness: &mut TestusHarness) -> Result<bool> {
+    let mut lagged = false;
     if is_peer_present(&harness.primary_client, &harness.joiner.peer_id)? {
         let unregister: InstructionBox = Unregister::peer(harness.joiner.peer_id.clone()).into();
         submit_instruction_with_retry(&harness.primary_client, &unregister, READY_TIMEOUT).await?;
@@ -904,6 +942,7 @@ async fn membership_leave_cycle(harness: &mut TestusHarness) -> Result<()> {
         )
         .await
         {
+            lagged = true;
             eprintln!(
                 "joiner unregister propagation lagged: timeout={leave_propagation_timeout:?}, err={err:?}"
             );
@@ -920,9 +959,10 @@ async fn membership_leave_cycle(harness: &mut TestusHarness) -> Result<()> {
     )
     .await
     {
+        lagged = true;
         eprintln!("membership leave convergence lagged: {err:?}");
     }
-    Ok(())
+    Ok(lagged)
 }
 
 async fn setup_testus_harness(out_dir: &Path, seed: &str) -> Result<TestusHarness> {
@@ -1509,6 +1549,14 @@ fn next_process_churn_index(current: usize, validator_count: usize) -> usize {
     next
 }
 
+fn next_churn_deadline(now: Instant, interval: Duration, lagged: bool) -> Instant {
+    let mut delay = interval;
+    if lagged {
+        delay = delay.saturating_add(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS));
+    }
+    now + delay
+}
+
 async fn validator_max_height_with_retry(clients: &[Client], timeout: Duration) -> Result<u64> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -1822,4 +1870,23 @@ fn process_churn_index_skips_primary_when_multiple_validators() {
 fn process_churn_index_handles_single_validator() {
     assert_eq!(first_process_churn_index(1), 0);
     assert_eq!(next_process_churn_index(0, 1), 0);
+}
+
+#[test]
+fn next_churn_deadline_uses_interval_without_lag() {
+    let now = Instant::now();
+    let interval = Duration::from_secs(30);
+    let deadline = next_churn_deadline(now, interval, false);
+    assert_eq!(deadline.duration_since(now), interval);
+}
+
+#[test]
+fn next_churn_deadline_adds_backoff_when_lagged() {
+    let now = Instant::now();
+    let interval = Duration::from_secs(30);
+    let deadline = next_churn_deadline(now, interval, true);
+    assert_eq!(
+        deadline.duration_since(now),
+        interval.saturating_add(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS))
+    );
 }

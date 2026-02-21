@@ -420,19 +420,29 @@ impl Actor {
                     || queue_depths.block_payload_rx > 0
                     || queue_depths.block_rx > 0
                     || queue_depths.consensus_rx > 0;
+                let backlog_extension_active = consensus_queue_backlog || rbc_session_incomplete;
                 let near_quorum_recent_progress_grace =
                     super::saturating_mul_duration(self.rebroadcast_cooldown(), 4)
                         .max(Duration::from_millis(500));
                 let zero_vote_backlog_grace =
                     super::saturating_mul_duration(self.rebroadcast_cooldown(), 8)
                         .max(Duration::from_secs(2));
-                let zero_vote_backlog_deadline = effective_quorum_timeout
+                let zero_vote_backlog_deadline_base = effective_quorum_timeout
                     .saturating_add(zero_vote_backlog_grace)
                     .max(availability_timeout);
+                let zero_vote_backlog_deadline = self.backlog_extended_view_change_timeout(
+                    zero_vote_backlog_deadline_base,
+                    backlog_extension_active,
+                );
                 let vote_backlog_grace =
                     super::saturating_mul_duration(self.rebroadcast_cooldown(), 8)
                         .max(Duration::from_secs(2));
-                let vote_backlog_deadline = availability_timeout.saturating_add(vote_backlog_grace);
+                let vote_backlog_deadline_base =
+                    availability_timeout.saturating_add(vote_backlog_grace);
+                let vote_backlog_deadline = self.backlog_extended_view_change_timeout(
+                    vote_backlog_deadline_base,
+                    backlog_extension_active,
+                );
                 if !has_votes
                     && consensus_queue_backlog
                     && progress_stall_age < zero_vote_backlog_deadline
@@ -445,6 +455,7 @@ impl Actor {
                         quorum_timeout_ms = effective_quorum_timeout.as_millis(),
                         availability_timeout_ms = availability_timeout.as_millis(),
                         zero_vote_backlog_grace_ms = zero_vote_backlog_grace.as_millis(),
+                        zero_vote_backlog_deadline_base_ms = zero_vote_backlog_deadline_base.as_millis(),
                         zero_vote_backlog_deadline_ms = zero_vote_backlog_deadline.as_millis(),
                         block_payload_rx_depth = queue_depths.block_payload_rx,
                         rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
@@ -484,6 +495,7 @@ impl Actor {
                         progress_stall_age_ms = progress_stall_age.as_millis(),
                         availability_timeout_ms = availability_timeout.as_millis(),
                         vote_backlog_grace_ms = vote_backlog_grace.as_millis(),
+                        vote_backlog_deadline_base_ms = vote_backlog_deadline_base.as_millis(),
                         vote_backlog_deadline_ms = vote_backlog_deadline.as_millis(),
                         block_payload_rx_depth = queue_depths.block_payload_rx,
                         rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
@@ -506,6 +518,7 @@ impl Actor {
                         progress_stall_age_ms = progress_stall_age.as_millis(),
                         availability_timeout_ms = availability_timeout.as_millis(),
                         vote_backlog_grace_ms = vote_backlog_grace.as_millis(),
+                        vote_backlog_deadline_base_ms = vote_backlog_deadline_base.as_millis(),
                         vote_backlog_deadline_ms = vote_backlog_deadline.as_millis(),
                         block_payload_rx_depth = queue_depths.block_payload_rx,
                         rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
@@ -1101,6 +1114,7 @@ impl Actor {
             true,
         );
         let mut block_sync = false;
+        let mut allow_blockcreated_fallback = true;
         if !drop_pending && !retransmit_targets.is_empty() {
             let mut update = block_sync_update_with_roster(
                 &pending.block,
@@ -1131,12 +1145,28 @@ impl Actor {
                     self.broadcast_block_sync_update(update, &retransmit_targets);
                     block_sync = true;
                 } else {
-                    debug!(
+                    allow_blockcreated_fallback = self.allow_no_roster_fallback_or_fail_closed(
                         height,
                         view,
-                        block = %block_hash,
-                        "skipping block sync update rebroadcast: no verifiable roster"
+                        block_hash,
+                        ViewChangeCause::MissingQc,
+                        "reschedule_rebroadcast_no_roster",
                     );
+                    if allow_blockcreated_fallback {
+                        debug!(
+                            height,
+                            view,
+                            block = %block_hash,
+                            "skipping block sync update rebroadcast: no verifiable roster"
+                        );
+                    } else {
+                        warn!(
+                            height,
+                            view,
+                            block = %block_hash,
+                            "no-roster fallback budget exhausted; parking block rebroadcast"
+                        );
+                    }
                 }
             } else {
                 debug!(
@@ -1152,6 +1182,8 @@ impl Actor {
         // Keep and rebroadcast the pending block so late payload requests can still succeed while
         // allowing a fresh proposal to be assembled from the requeued transactions.
         let block = if drop_pending {
+            false
+        } else if !allow_blockcreated_fallback {
             false
         } else if retransmit_targets.is_empty() {
             false

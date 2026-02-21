@@ -6,8 +6,8 @@ use iroha_data_model::{
         PetalStreamOptions, PetalStreamSampleGrid,
     },
     qr_stream::{
-        QrStreamAssembler, QrStreamDecodeResult, QrStreamEncoder, QrStreamEnvelope, QrStreamFrame,
-        QrStreamFrameKind, QrStreamOptions,
+        QrStreamAssembler, QrStreamAssemblerLimits, QrStreamDecodeResult, QrStreamEncoder,
+        QrStreamEnvelope, QrStreamFrame, QrStreamFrameKind, QrStreamOptions,
     },
 };
 use norito::json::{Map, Value};
@@ -15,6 +15,7 @@ use std::{
     fs,
     io::BufWriter,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use super::qr::QrPayloadKindArg;
@@ -27,6 +28,8 @@ pub enum PetalCommand {
     Decode(PetalDecodeArgs),
     /// Evaluate decode robustness under simulated distant/moving capture.
     EvalCapture(PetalEvalCaptureArgs),
+    /// Simulate live camera reading and decode frame-by-frame in real time.
+    SimulateRealtime(PetalSimulateRealtimeArgs),
     /// Score render styles with deterministic capture simulation and throughput metrics.
     ScoreStyles(PetalScoreStylesArgs),
 }
@@ -37,6 +40,7 @@ impl Run for PetalCommand {
             PetalCommand::Encode(args) => args.run(context),
             PetalCommand::Decode(args) => args.run(context),
             PetalCommand::EvalCapture(args) => args.run(context),
+            PetalCommand::SimulateRealtime(args) => args.run(context),
             PetalCommand::ScoreStyles(args) => args.run(context),
         }
     }
@@ -83,15 +87,34 @@ pub struct PetalEncodeArgs {
     /// Data channel used for data cells in rendered outputs.
     #[arg(long, value_enum, default_value = "binary")]
     pub channel: PetalDataChannel,
+    /// Katakana channel tuning preset used when grid/chunk are left at defaults.
+    #[arg(long, value_enum, default_value = "balanced")]
+    pub katakana_preset: PetalKatakanaPreset,
 }
 
 impl PetalEncodeArgs {
     fn run<C: RunContext>(self, _context: &mut C) -> Result<()> {
         let payload = fs::read(&self.input)
             .map_err(|err| eyre!("failed to read payload {}: {err}", self.input.display()))?;
+        let use_katakana_preset_defaults =
+            uses_katakana_preset_defaults(self.channel, self.chunk_size, self.grid_size);
+        let resolved_chunk_size = resolve_encode_chunk_size(
+            self.channel,
+            self.chunk_size,
+            self.grid_size,
+            self.katakana_preset,
+            use_katakana_preset_defaults,
+        );
+        let resolved_parity_group = resolve_encode_parity_group(
+            self.channel,
+            self.parity_group,
+            self.grid_size,
+            self.katakana_preset,
+            use_katakana_preset_defaults,
+        );
         let options = QrStreamOptions {
-            chunk_size: self.chunk_size,
-            parity_group: self.parity_group,
+            chunk_size: resolved_chunk_size,
+            parity_group: resolved_parity_group,
             payload_kind: self.payload_kind.into(),
             ..QrStreamOptions::default()
         };
@@ -105,7 +128,12 @@ impl PetalEncodeArgs {
         let max_len = encoded_frames.iter().map(Vec::len).max().unwrap_or(0);
         let resolved_grid_size = if self.grid_size == 0 {
             if self.channel == PetalDataChannel::KatakanaBase94 {
-                resolve_katakana_base94_grid_size(max_len, base_petal_options)?
+                let mode = if use_katakana_preset_defaults {
+                    katakana_grid_sizing_mode(self.katakana_preset)
+                } else {
+                    KatakanaGridSizingMode::CapacityFirst
+                };
+                resolve_katakana_base94_grid_size(max_len, base_petal_options, mode)?
             } else {
                 let dummy = vec![0u8; max_len];
                 let grid = PetalStreamEncoder::encode_grid(&dummy, base_petal_options)?;
@@ -247,11 +275,11 @@ impl PetalEncodeArgs {
         );
         manifest_map.insert(
             "chunk_size".to_string(),
-            Value::from(self.chunk_size as u64),
+            Value::from(resolved_chunk_size as u64),
         );
         manifest_map.insert(
             "parity_group".to_string(),
-            Value::from(self.parity_group as u64),
+            Value::from(resolved_parity_group as u64),
         );
         manifest_map.insert(
             "grid_size".to_string(),
@@ -266,6 +294,12 @@ impl PetalEncodeArgs {
             Value::from(petal_options.anchor_size as u64),
         );
         manifest_map.insert("channel".to_string(), Value::from(self.channel.label()));
+        if self.channel == PetalDataChannel::KatakanaBase94 {
+            manifest_map.insert(
+                "katakana_preset".to_string(),
+                Value::from(self.katakana_preset.label()),
+            );
+        }
         manifest_map.insert("render_style".to_string(), Value::from(self.style.label()));
         manifest_map.insert(
             "estimated_payload_bytes_per_second".to_string(),
@@ -447,6 +481,9 @@ pub struct PetalEvalCaptureArgs {
     /// Anchor size in cells.
     #[arg(long, default_value_t = 3)]
     pub anchor_size: u8,
+    /// Data channel used by rendered frames.
+    #[arg(long, value_enum, default_value = "binary")]
+    pub channel: PetalDataChannel,
     /// Capture perturbation profile.
     #[arg(long, value_enum, default_value = "default")]
     pub profile: PetalCaptureProfile,
@@ -501,12 +538,20 @@ impl PetalEvalCaptureArgs {
         };
         for entry in &entries {
             let image = load_png(entry.path())?;
-            let bytes = if resolved_grid_size == 0 {
-                let (grid_size, bytes) = decode_frame_auto(&image, base_options)?;
+            let bytes = if self.channel == PetalDataChannel::Binary {
+                if resolved_grid_size == 0 {
+                    let (grid_size, bytes) = decode_frame_auto(&image, base_options)?;
+                    resolved_grid_size = grid_size;
+                    bytes
+                } else {
+                    decode_frame_with_grid(&image, resolved_grid_size, base_options)?
+                }
+            } else if resolved_grid_size == 0 {
+                let (grid_size, bytes) = decode_katakana_base94_frame_auto(&image, base_options)?;
                 resolved_grid_size = grid_size;
                 bytes
             } else {
-                decode_frame_with_grid(&image, resolved_grid_size, base_options)?
+                decode_katakana_base94_frame_with_grid(&image, resolved_grid_size, base_options)?
             };
             images.push(image);
             expected_bytes.push(bytes);
@@ -534,12 +579,15 @@ impl PetalEvalCaptureArgs {
             &expected_bytes,
             resolved_grid_size,
             options,
+            self.channel,
             self.profile,
             self.seed,
             trials_per_frame,
+            Some(self.min_success_ratio),
         )?;
 
         let report = metrics.to_json(
+            self.channel,
             self.profile,
             resolved_grid_size,
             trials_per_frame,
@@ -562,6 +610,166 @@ impl PetalEvalCaptureArgs {
         if !metrics.stream_complete {
             return Err(eyre!(
                 "capture evaluation could not reconstruct complete stream ({} / {} chunks)",
+                metrics.stream_received_chunks,
+                metrics.stream_total_chunks
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PetalSimulateRealtimeArgs {
+    /// Directory containing rendered PNG frames.
+    #[arg(long, value_name = "DIR")]
+    pub input_dir: PathBuf,
+    /// Optional output file for the decoded payload.
+    #[arg(long, value_name = "FILE")]
+    pub output_payload: Option<PathBuf>,
+    /// Optional JSON report output path.
+    #[arg(long, value_name = "FILE")]
+    pub output_report: Option<PathBuf>,
+    /// Grid size in cells (0 to auto-detect from the first frame).
+    #[arg(long, default_value_t = 0)]
+    pub grid_size: u16,
+    /// Border thickness in cells.
+    #[arg(long, default_value_t = 1)]
+    pub border: u8,
+    /// Anchor size in cells.
+    #[arg(long, default_value_t = 3)]
+    pub anchor_size: u8,
+    /// Data channel used by rendered frames.
+    #[arg(long, value_enum, default_value = "binary")]
+    pub channel: PetalDataChannel,
+    /// Capture perturbation profile used to emulate a moving camera read.
+    #[arg(long, value_enum, default_value = "default")]
+    pub profile: PetalCaptureProfile,
+    /// Deterministic seed for capture perturbation sampling.
+    #[arg(long, default_value_t = 42)]
+    pub seed: u64,
+    /// Simulated camera frame rate used to compute timeline metrics.
+    #[arg(long, default_value_t = 24)]
+    pub simulate_fps: u16,
+    /// Optional cap on number of frames to process from the input directory.
+    #[arg(long)]
+    pub frame_limit: Option<usize>,
+    /// Number of playback loops to simulate over the same frame set.
+    #[arg(long, default_value_t = 1)]
+    pub realtime_loops: u16,
+    /// Disable capture perturbation and decode pristine frames only.
+    #[arg(long)]
+    pub disable_capture_perturbation: bool,
+    /// Allow incomplete stream reconstruction without returning an error.
+    #[arg(long)]
+    pub allow_incomplete: bool,
+}
+
+impl PetalSimulateRealtimeArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        if self.simulate_fps == 0 {
+            return Err(eyre!("simulate-fps must be > 0"));
+        }
+        if self.frame_limit == Some(0) {
+            return Err(eyre!("frame-limit must be > 0 when provided"));
+        }
+        if self.realtime_loops == 0 {
+            return Err(eyre!("realtime-loops must be > 0"));
+        }
+
+        let mut entries = fs::read_dir(&self.input_dir)
+            .map_err(|err| eyre!("failed to read {}: {err}", self.input_dir.display()))?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("png"))
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.file_name());
+        if let Some(limit) = self.frame_limit {
+            entries.truncate(limit);
+        }
+        if entries.is_empty() {
+            return Err(eyre!("no png frames found in {}", self.input_dir.display()));
+        }
+
+        let mut images = Vec::with_capacity(entries.len());
+        for entry in &entries {
+            images.push(load_png(entry.path())?);
+        }
+
+        let mut resolved_grid_size = self.grid_size;
+        let base_options = PetalStreamOptions {
+            grid_size: if self.grid_size == 0 {
+                0
+            } else {
+                self.grid_size
+            },
+            border: self.border,
+            anchor_size: self.anchor_size,
+        };
+        if resolved_grid_size == 0 {
+            let first = images
+                .first()
+                .ok_or_else(|| eyre!("no frames loaded for realtime simulation"))?;
+            resolved_grid_size = if self.channel == PetalDataChannel::Binary {
+                decode_frame_auto(first, base_options)?.0
+            } else {
+                decode_katakana_base94_frame_auto(first, base_options)?.0
+            };
+        }
+        if resolved_grid_size == 0 {
+            return Err(eyre!("failed to resolve grid size for realtime simulation"));
+        }
+
+        let options = PetalStreamOptions {
+            grid_size: resolved_grid_size,
+            border: self.border,
+            anchor_size: self.anchor_size,
+        };
+        let metrics = simulate_realtime_decode(
+            &images,
+            options,
+            self.channel,
+            self.profile,
+            self.seed,
+            self.simulate_fps,
+            usize::from(self.realtime_loops),
+            !self.disable_capture_perturbation,
+        )?;
+        if let Some(path) = self.output_payload {
+            let payload = metrics.payload.as_ref().ok_or_else(|| {
+                eyre!("realtime simulation did not reconstruct a complete payload")
+            })?;
+            fs::write(&path, payload.as_slice())
+                .map_err(|err| eyre!("failed to write {}: {err}", path.display()))?;
+        }
+
+        let report = metrics.to_json(
+            self.channel,
+            self.profile,
+            resolved_grid_size,
+            self.seed,
+            self.simulate_fps,
+            self.realtime_loops,
+            !self.disable_capture_perturbation,
+            self.allow_incomplete,
+        );
+        if let Some(path) = self.output_report {
+            let rendered = norito::json::to_string_pretty(&report)?;
+            fs::write(&path, format!("{rendered}\n"))
+                .map_err(|err| eyre!("failed to write report {}: {err}", path.display()))?;
+        }
+        context.print_data(&report)?;
+
+        if !self.allow_incomplete && !metrics.stream_complete {
+            return Err(eyre!(
+                "realtime simulation did not complete stream reconstruction ({} / {} chunks)",
                 metrics.stream_received_chunks,
                 metrics.stream_total_chunks
             ));
@@ -696,9 +904,11 @@ impl PetalScoreStylesArgs {
                 &encoded_frames,
                 resolved_grid_size,
                 petal_options,
+                PetalDataChannel::Binary,
                 self.profile,
                 self.seed,
                 trials_per_frame,
+                None,
             )?;
             let aesthetic_score = images
                 .first()
@@ -796,6 +1006,21 @@ impl PetalDataChannel {
         match self {
             Self::Binary => "binary",
             Self::KatakanaBase94 => "katakana-base94",
+        }
+    }
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PetalKatakanaPreset {
+    Balanced,
+    DistanceSafe,
+}
+
+impl PetalKatakanaPreset {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Balanced => "balanced",
+            Self::DistanceSafe => "distance-safe",
         }
     }
 }
@@ -1242,10 +1467,7 @@ fn render_sora_temple_frame(
     let phase = (frame_index % frame_count) as f64 / frame_count as f64;
     let data_cell_count = count_data_cells(grid.grid_size, options);
     let katakana_digits = if channel == PetalDataChannel::KatakanaBase94 {
-        frame_bytes.and_then(|bytes| {
-            katakana_base94_encode_digits(bytes, data_cell_count)
-                .ok()
-        })
+        frame_bytes.and_then(|bytes| katakana_base94_encode_digits(bytes, data_cell_count).ok())
     } else {
         None
     };
@@ -1268,20 +1490,20 @@ fn render_sora_temple_frame(
                 ^ stream_signature
                 ^ (u64::from(frame_index) << 11)
                 ^ (u64::from(bit as u8) << 3);
-            let (katakana_dense, kana_pattern, kana_symbol) = if role == RenderCellRole::Data {
+            let (katakana_dense, kana_pattern, kana_state) = if role == RenderCellRole::Data {
                 if let Some(digits) = katakana_digits.as_ref() {
                     let state = digits.get(katakana_cursor).copied().unwrap_or_default();
                     katakana_cursor += 1;
                     bit = state as usize >= IROHA_KATAKANA.len();
                     let kana_symbol = state as usize % IROHA_KATAKANA.len();
-                    (true, kana_symbol % SORA_KATAKANA_BITMAPS.len(), kana_symbol)
+                    (true, katakana_pattern_id(kana_symbol), state)
                 } else {
                     let kana_index = select_kana_index_for_bit(bit, &mut seed);
-                    (false, katakana_pattern_id(kana_index), kana_index)
+                    (false, katakana_pattern_id(kana_index), kana_index as u8)
                 }
             } else {
                 let kana_index = select_kana_index_for_bit(bit, &mut seed);
-                (false, katakana_pattern_id(kana_index), kana_index)
+                (false, katakana_pattern_id(kana_index), kana_index as u8)
             };
             cell_params.push(TempleCellParam {
                 bit,
@@ -1289,7 +1511,7 @@ fn render_sora_temple_frame(
                 logo_glyph,
                 katakana_dense,
                 kana_pattern,
-                kana_symbol,
+                kana_state,
             });
             cell_roles.push(role);
         }
@@ -1439,7 +1661,7 @@ struct TempleCellParam {
     logo_glyph: bool,
     katakana_dense: bool,
     kana_pattern: usize,
-    kana_symbol: usize,
+    kana_state: u8,
 }
 
 #[derive(Clone, Copy)]
@@ -1784,9 +2006,30 @@ fn blend_sora_data_tile(
     let inner_v = ((local_y - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
     if param.katakana_dense {
         blend_rgb(rgb, tile_bg, 1.0);
-        let bitmap = katakana_symbol_bitmap(param.kana_symbol, gx, gy);
+        if param.logo {
+            let logo_bg = if param.bit {
+                style_cfg.logo_dark_bg
+            } else {
+                style_cfg.logo_light_bg
+            };
+            blend_rgb(rgb, logo_bg, style_cfg.logo_tile_mix * 0.55);
+            blend_rgb(rgb, [0.91, 0.11, 0.18], 0.28);
+        }
+        if param.logo_glyph {
+            blend_rgb(rgb, [0.02, 0.02, 0.02], if param.bit { 0.34 } else { 0.16 });
+        }
+        let bitmap = katakana_symbol_bitmap(param.kana_pattern, gx, gy);
         if katakana_bitmap_hit(bitmap, inner_u, inner_v) {
             blend_rgb(rgb, glyph_fg, 1.0);
+        }
+        if let Some(bit_index) = katakana_signature_marker_index(inner_u, inner_v) {
+            let marker_on = param.kana_state & (1u8 << bit_index) != 0;
+            let marker_color = if marker_on {
+                [0.82, 0.82, 0.82]
+            } else {
+                [0.18, 0.18, 0.18]
+            };
+            blend_rgb(rgb, marker_color, 1.0);
         }
         return;
     }
@@ -1897,7 +2140,7 @@ fn blend_sora_data_tile(
     }
 
     let bitmap = if param.katakana_dense {
-        katakana_symbol_bitmap(param.kana_symbol, gx, gy)
+        katakana_symbol_bitmap(param.kana_pattern, gx, gy)
     } else {
         katakana_pattern_bitmap(param.kana_pattern, gx, gy)
     };
@@ -1948,49 +2191,22 @@ fn katakana_pattern_bitmap(pattern_id: usize, x: usize, y: usize) -> [u8; 8] {
     shift_katakana_bitmap(out, SORA_KATAKANA_SHIFT_X, SORA_KATAKANA_SHIFT_Y)
 }
 
-fn katakana_symbol_bitmap(symbol_index: usize, x: usize, y: usize) -> [u8; 8] {
-    let symbol_index = symbol_index % IROHA_KATAKANA.len();
-    // Keep the visual katakana form stable per-cell and encode symbol value via signature bits.
-    let pattern_id = (x.wrapping_mul(13) + y.wrapping_mul(7)) % SORA_KATAKANA_BITMAPS.len();
-    let mut bitmap = katakana_pattern_bitmap(pattern_id, x, y);
-    clear_katakana_symbol_signature_slots(&mut bitmap);
-    apply_katakana_symbol_signature(&mut bitmap, symbol_index as u8);
-    bitmap
+const KATAKANA_SYMBOL_SIGNATURE_MARKERS: [(i32, i32); 7] =
+    [(0, 0), (6, 0), (0, 6), (6, 6), (3, 0), (0, 3), (6, 3)];
+
+fn katakana_symbol_bitmap(pattern_id: usize, x: usize, y: usize) -> [u8; 8] {
+    katakana_pattern_bitmap(pattern_id, x, y)
 }
 
-fn clear_katakana_symbol_signature_slots(bitmap: &mut [u8; 8]) {
-    const MARKERS: [(i32, i32); 6] = [(1, 1), (6, 1), (1, 6), (6, 6), (3, 1), (4, 6)];
-    for &(cx, cy) in &MARKERS {
-        for dy in 0..=1 {
-            for dx in 0..=1 {
-                let x = cx + dx;
-                let y = cy + dy;
-                if !(0..8).contains(&x) || !(0..8).contains(&y) {
-                    continue;
-                }
-                bitmap[y as usize] &= !(1u8 << (7 - x as u32));
-            }
+fn katakana_signature_marker_index(u: f64, v: f64) -> Option<usize> {
+    let gx = (u * 8.0).floor() as i32;
+    let gy = (v * 8.0).floor() as i32;
+    for (index, &(mx, my)) in KATAKANA_SYMBOL_SIGNATURE_MARKERS.iter().enumerate() {
+        if gx >= mx && gx <= mx + 1 && gy >= my && gy <= my + 1 {
+            return Some(index);
         }
     }
-}
-
-fn apply_katakana_symbol_signature(bitmap: &mut [u8; 8], symbol_value: u8) {
-    const MARKERS: [(i32, i32); 6] = [(1, 1), (6, 1), (1, 6), (6, 6), (3, 1), (4, 6)];
-    for (bit_index, &(cx, cy)) in MARKERS.iter().enumerate() {
-        if symbol_value & (1u8 << bit_index) == 0 {
-            continue;
-        }
-        for dy in 0..=1 {
-            for dx in 0..=1 {
-                let x = cx + dx;
-                let y = cy + dy;
-                if !(0..8).contains(&x) || !(0..8).contains(&y) {
-                    continue;
-                }
-                bitmap[y as usize] |= 1u8 << (7 - x as u32);
-            }
-        }
-    }
+    None
 }
 
 fn shift_katakana_bitmap(bitmap: [u8; 8], shift_x: i32, shift_y: i32) -> [u8; 8] {
@@ -2444,7 +2660,9 @@ fn sample_katakana_cell_luma(
         return None;
     }
     let margin = if cell_size <= 6 { 0.05 } else { 0.035 };
-    sample_katakana_cell_luma_with_margin(image, cell_x, cell_y, cell_size, offset_x, offset_y, margin)
+    sample_katakana_cell_luma_with_margin(
+        image, cell_x, cell_y, cell_size, offset_x, offset_y, margin,
+    )
 }
 
 fn sample_katakana_cell_luma_dense(
@@ -2478,20 +2696,31 @@ fn sample_katakana_cell_luma_with_margin(
     }
 
     let mut luma = [0u16; 64];
+    const SUB_OFFSETS: [f64; 3] = [-0.22, 0.0, 0.22];
     for sy in 0..8usize {
         for sx in 0..8usize {
-            let u = (sx as f64 + 0.5) / 8.0;
-            let v = (sy as f64 + 0.5) / 8.0;
-            let fx = cell_x as f64 + margin + span * u;
-            let fy = cell_y as f64 + margin + span * v;
-            let px = (offset_x as f64 + fx * cell_size as f64).floor() as u32;
-            let py = (offset_y as f64 + fy * cell_size as f64).floor() as u32;
-            let px = px.min(width.saturating_sub(1));
-            let py = py.min(height.saturating_sub(1));
-            let pixel = image.get_pixel(px, py).0;
-            let value =
-                (77u32 * pixel[0] as u32 + 150u32 * pixel[1] as u32 + 29u32 * pixel[2] as u32) >> 8;
-            luma[sy * 8 + sx] = value as u16;
+            let mut sample_sum = 0u32;
+            let mut sample_count = 0u32;
+            for &oy in &SUB_OFFSETS {
+                for &ox in &SUB_OFFSETS {
+                    let u = ((sx as f64 + 0.5 + ox) / 8.0).clamp(0.0, 0.999_999);
+                    let v = ((sy as f64 + 0.5 + oy) / 8.0).clamp(0.0, 0.999_999);
+                    let fx = cell_x as f64 + margin + span * u;
+                    let fy = cell_y as f64 + margin + span * v;
+                    let px = (offset_x as f64 + fx * cell_size as f64).floor() as u32;
+                    let py = (offset_y as f64 + fy * cell_size as f64).floor() as u32;
+                    let px = px.min(width.saturating_sub(1));
+                    let py = py.min(height.saturating_sub(1));
+                    let pixel = image.get_pixel(px, py).0;
+                    let value = (77u32 * pixel[0] as u32
+                        + 150u32 * pixel[1] as u32
+                        + 29u32 * pixel[2] as u32)
+                        >> 8;
+                    sample_sum += value;
+                    sample_count += 1;
+                }
+            }
+            luma[sy * 8 + sx] = (sample_sum / sample_count.max(1)) as u16;
         }
     }
     Some(luma)
@@ -2504,57 +2733,41 @@ fn infer_katakana_cell_symbol(
     cell_size: u32,
     offset_x: u32,
     offset_y: u32,
-    bit: bool,
 ) -> Option<(usize, f64)> {
-    let luma = sample_katakana_cell_luma_dense(
-        image,
-        cell_x,
-        cell_y,
-        cell_size,
-        offset_x,
-        offset_y,
-    )?;
-    let mut total = 0u64;
-    for &sample in &luma {
-        total += u64::from(sample);
-    }
-    let avg = total as f64 / 64.0;
-    let signature = decode_katakana_symbol_signature(&luma, avg, bit);
+    let luma =
+        sample_katakana_cell_luma_dense(image, cell_x, cell_y, cell_size, offset_x, offset_y)?;
+    let signature = decode_katakana_symbol_signature(&luma);
     let mut best_symbol = 0usize;
     let mut best_dist = u32::MAX;
-    for symbol in 0..IROHA_KATAKANA.len() {
+    for symbol in 0..katakana_symbol_base() as usize {
         let dist = (signature ^ symbol as u8).count_ones();
         if dist < best_dist {
             best_dist = dist;
             best_symbol = symbol;
         }
     }
-    let confidence = (1.0 - best_dist as f64 / 6.0).clamp(0.0, 1.0);
+    let confidence = (1.0 - best_dist as f64 / 7.0).clamp(0.0, 1.0);
     Some((best_symbol, confidence))
 }
 
-fn decode_katakana_symbol_signature(luma: &[u16; 64], avg: f64, bit: bool) -> u8 {
-    const MARKERS: [(usize, usize); 6] = [(1, 1), (6, 1), (1, 6), (6, 6), (3, 1), (4, 6)];
+fn decode_katakana_symbol_signature(luma: &[u16; 64]) -> u8 {
+    const MARKER_ON_THRESHOLD: f64 = 128.0;
     let mut signature = 0u8;
-    for (bit_index, &(mx, my)) in MARKERS.iter().enumerate() {
-        let mut sum = 0u32;
-        let mut count = 0u32;
+    for (bit_index, &(mx, my)) in KATAKANA_SYMBOL_SIGNATURE_MARKERS.iter().enumerate() {
+        let marker_x = mx.max(0) as usize;
+        let marker_y = my.max(0) as usize;
+        let mut marker_sum = 0u32;
+        let mut marker_count = 0u32;
         for dy in 0..=1usize {
             for dx in 0..=1usize {
-                let x = (mx + dx).min(7);
-                let y = (my + dy).min(7);
-                sum += u32::from(luma[y * 8 + x]);
-                count += 1;
+                let x = (marker_x + dx).min(7);
+                let y = (marker_y + dy).min(7);
+                marker_sum += u32::from(luma[y * 8 + x]);
+                marker_count += 1;
             }
         }
-        let marker_avg = sum as f64 / count as f64;
-        let _ = avg;
-        let is_on = if bit {
-            marker_avg > 128.0
-        } else {
-            marker_avg < 128.0
-        };
-        if is_on {
+        let marker_avg = marker_sum as f64 / marker_count as f64;
+        if marker_avg >= MARKER_ON_THRESHOLD {
             signature |= 1u8 << bit_index;
         }
     }
@@ -2584,6 +2797,20 @@ fn decode_frame_with_grid(
     PetalStreamDecoder::decode_samples(&samples, options).map_err(|err| eyre!("{err}"))
 }
 
+fn decode_frame_with_grid_and_channel(
+    image: &image::RgbaImage,
+    grid_size: u16,
+    options: PetalStreamOptions,
+    channel: PetalDataChannel,
+) -> Result<Vec<u8>> {
+    match channel {
+        PetalDataChannel::Binary => decode_frame_with_grid(image, grid_size, options),
+        PetalDataChannel::KatakanaBase94 => {
+            decode_katakana_base94_frame_with_grid(image, grid_size, options)
+        }
+    }
+}
+
 fn decode_frame_auto(
     image: &image::RgbaImage,
     options: PetalStreamOptions,
@@ -2607,7 +2834,123 @@ fn katakana_symbol_base() -> u32 {
     (IROHA_KATAKANA.len() as u32) * 2
 }
 
-const KATAKANA_BASE94_REPETITION: usize = 3;
+const BINARY_DEFAULT_CHUNK_SIZE: u16 = 140;
+const KATAKANA_BALANCED_DEFAULT_CHUNK_SIZE: u16 = 176;
+const KATAKANA_DISTANCE_SAFE_DEFAULT_CHUNK_SIZE: u16 = 96;
+const KATAKANA_DISTANCE_SAFE_DEFAULT_PARITY_GROUP: u8 = 4;
+const KATAKANA_BALANCED_MIN_GRID_SIZE: u16 = 41;
+const KATAKANA_DISTANCE_SAFE_MIN_GRID_SIZE: u16 = 33;
+const KATAKANA_BASE94_REPETITION: usize = 5;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KatakanaGridSizingMode {
+    CapacityFirst,
+    Balanced,
+    DistanceSafe,
+}
+
+fn uses_katakana_preset_defaults(
+    channel: PetalDataChannel,
+    chunk_size: u16,
+    grid_size: u16,
+) -> bool {
+    channel == PetalDataChannel::KatakanaBase94
+        && grid_size == 0
+        && chunk_size == BINARY_DEFAULT_CHUNK_SIZE
+}
+
+fn resolve_encode_chunk_size(
+    channel: PetalDataChannel,
+    chunk_size: u16,
+    grid_size: u16,
+    preset: PetalKatakanaPreset,
+    use_katakana_preset_defaults: bool,
+) -> u16 {
+    if channel == PetalDataChannel::KatakanaBase94 && grid_size == 0 && use_katakana_preset_defaults
+    {
+        match preset {
+            PetalKatakanaPreset::Balanced => KATAKANA_BALANCED_DEFAULT_CHUNK_SIZE,
+            PetalKatakanaPreset::DistanceSafe => KATAKANA_DISTANCE_SAFE_DEFAULT_CHUNK_SIZE,
+        }
+    } else {
+        chunk_size
+    }
+}
+
+fn resolve_encode_parity_group(
+    channel: PetalDataChannel,
+    parity_group: u8,
+    grid_size: u16,
+    preset: PetalKatakanaPreset,
+    use_katakana_preset_defaults: bool,
+) -> u8 {
+    if channel == PetalDataChannel::KatakanaBase94
+        && grid_size == 0
+        && use_katakana_preset_defaults
+        && parity_group == 0
+        && preset == PetalKatakanaPreset::DistanceSafe
+    {
+        KATAKANA_DISTANCE_SAFE_DEFAULT_PARITY_GROUP
+    } else {
+        parity_group
+    }
+}
+
+fn katakana_grid_sizing_mode(preset: PetalKatakanaPreset) -> KatakanaGridSizingMode {
+    match preset {
+        PetalKatakanaPreset::Balanced => KatakanaGridSizingMode::Balanced,
+        PetalKatakanaPreset::DistanceSafe => KatakanaGridSizingMode::DistanceSafe,
+    }
+}
+
+fn katakana_grid_candidates(mode: KatakanaGridSizingMode) -> Vec<u16> {
+    let mut candidates = Vec::with_capacity(PETAL_STREAM_GRID_SIZES.len() + 1);
+    let min_grid = match mode {
+        KatakanaGridSizingMode::CapacityFirst => None,
+        KatakanaGridSizingMode::Balanced => Some(KATAKANA_BALANCED_MIN_GRID_SIZE),
+        KatakanaGridSizingMode::DistanceSafe => Some(KATAKANA_DISTANCE_SAFE_MIN_GRID_SIZE),
+    };
+    if let Some(min_grid) = min_grid {
+        candidates.push(min_grid);
+    }
+    for &candidate in PETAL_STREAM_GRID_SIZES {
+        if candidate == 0 {
+            continue;
+        }
+        if let Some(min_grid) = min_grid {
+            if candidate < min_grid {
+                continue;
+            }
+        }
+        candidates.push(candidate);
+    }
+    candidates.sort_unstable();
+    candidates.dedup();
+    if candidates.is_empty() {
+        for &candidate in PETAL_STREAM_GRID_SIZES {
+            if candidate != 0 {
+                candidates.push(candidate);
+            }
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+    }
+    candidates
+}
+
+fn katakana_decode_grid_candidates() -> Vec<u16> {
+    let mut candidates = Vec::with_capacity(PETAL_STREAM_GRID_SIZES.len() + 2);
+    candidates.push(KATAKANA_DISTANCE_SAFE_MIN_GRID_SIZE);
+    candidates.push(KATAKANA_BALANCED_MIN_GRID_SIZE);
+    for &candidate in PETAL_STREAM_GRID_SIZES {
+        if candidate != 0 {
+            candidates.push(candidate);
+        }
+    }
+    candidates.sort_unstable();
+    candidates.dedup();
+    candidates
+}
 
 fn katakana_usable_digit_capacity(data_cells: usize) -> usize {
     data_cells - (data_cells % 4)
@@ -2633,11 +2976,9 @@ fn katakana_base94_frame_capacity_bytes(grid_size: u16, options: PetalStreamOpti
 fn resolve_katakana_base94_grid_size(
     max_frame_len: usize,
     base_options: PetalStreamOptions,
+    mode: KatakanaGridSizingMode,
 ) -> Result<u16> {
-    for &candidate in PETAL_STREAM_GRID_SIZES {
-        if candidate == 0 {
-            continue;
-        }
+    for candidate in katakana_grid_candidates(mode) {
         let options = PetalStreamOptions {
             grid_size: candidate,
             ..base_options
@@ -2702,7 +3043,9 @@ fn katakana_base94_encode_digits(frame_bytes: &[u8], data_cells: usize) -> Resul
 fn katakana_base94_decode_digits(digits: &[u8]) -> Result<Vec<u8>> {
     let repeated_usable = katakana_usable_digit_capacity(digits.len());
     if repeated_usable < KATAKANA_BASE94_REPETITION {
-        return Err(eyre!("katakana-base94 decode requires at least one repeated digit"));
+        return Err(eyre!(
+            "katakana-base94 decode requires at least one repeated digit"
+        ));
     }
     let repeated_usable = repeated_usable - (repeated_usable % KATAKANA_BASE94_REPETITION);
     let base = katakana_symbol_base();
@@ -2730,7 +3073,9 @@ fn katakana_base94_decode_digits(digits: &[u8]) -> Result<Vec<u8>> {
 
     let usable_digits = katakana_usable_digit_capacity(collapsed.len());
     if usable_digits == 0 {
-        return Err(eyre!("katakana-base94 decode requires at least 4 collapsed digits"));
+        return Err(eyre!(
+            "katakana-base94 decode requires at least 4 collapsed digits"
+        ));
     }
     let mut packet = Vec::with_capacity((usable_digits / 4) * 3);
     for chunk in collapsed[..usable_digits].chunks_exact(4) {
@@ -2788,9 +3133,7 @@ fn extract_katakana_base94_digits_with_grid(
     if grid_size == 0 {
         return Err(eyre!("grid size must be > 0"));
     }
-    let sampled = sample_grid_from_rgba(image, grid_size, options)?;
-    let threshold = derive_anchor_threshold(&sampled.samples, grid_size, options)
-        .ok_or_else(|| eyre!("failed to derive anchor threshold for katakana decode"))?;
+    let _sampled = sample_grid_from_rgba(image, grid_size, options)?;
     let size = image.width().min(image.height());
     let cell_size = (size / grid_size as u32).max(1);
     let grid_pixels = grid_size as u32 * cell_size;
@@ -2803,19 +3146,14 @@ fn extract_katakana_base94_digits_with_grid(
             if render_cell_role(x, y, grid_size, options) != RenderCellRole::Data {
                 continue;
             }
-            let idx = y as usize * grid_size as usize + x as usize;
-            let bit = sampled.samples[idx] < threshold;
-            let (symbol, _confidence) = infer_katakana_cell_symbol(
-                image,
-                x,
-                y,
-                cell_size,
-                offset_x,
-                offset_y,
-                bit,
-            )
-            .ok_or_else(|| eyre!("failed to infer katakana symbol at cell ({x},{y})"))?;
-            let state = symbol + if bit { IROHA_KATAKANA.len() } else { 0 };
+            let (state, _confidence) =
+                infer_katakana_cell_symbol(image, x, y, cell_size, offset_x, offset_y)
+                    .ok_or_else(|| eyre!("failed to infer katakana symbol at cell ({x},{y})"))?;
+            if state >= katakana_symbol_base() as usize {
+                return Err(eyre!(
+                    "katakana symbol state out of range at cell ({x},{y}): {state}"
+                ));
+            }
             digits.push(state as u8);
         }
     }
@@ -2826,10 +3164,7 @@ fn decode_katakana_base94_frame_auto(
     image: &image::RgbaImage,
     options: PetalStreamOptions,
 ) -> Result<(u16, Vec<u8>)> {
-    for &candidate in PETAL_STREAM_GRID_SIZES {
-        if candidate == 0 {
-            continue;
-        }
+    for candidate in katakana_decode_grid_candidates() {
         if let Ok(bytes) = decode_katakana_base94_frame_with_grid(image, candidate, options) {
             return Ok((candidate, bytes));
         }
@@ -2868,6 +3203,7 @@ struct CaptureScenarioMetrics {
 struct CaptureEvalMetrics {
     frame_count: usize,
     frame_successes: usize,
+    planned_attempts: u64,
     attempts: u64,
     successes: u64,
     recovered_frames: usize,
@@ -2879,10 +3215,10 @@ struct CaptureEvalMetrics {
 
 impl CaptureEvalMetrics {
     fn success_ratio(&self) -> f64 {
-        if self.attempts == 0 {
+        if self.planned_attempts == 0 {
             return 0.0;
         }
-        self.successes as f64 / self.attempts as f64
+        self.successes as f64 / self.planned_attempts as f64
     }
 
     fn frame_success_ratio(&self) -> f64 {
@@ -2894,6 +3230,7 @@ impl CaptureEvalMetrics {
 
     fn to_json(
         &self,
+        channel: PetalDataChannel,
         profile: PetalCaptureProfile,
         grid_size: u16,
         trials_per_frame: u16,
@@ -2902,6 +3239,7 @@ impl CaptureEvalMetrics {
     ) -> Value {
         let mut map = Map::new();
         map.insert("version".to_string(), Value::from(1u64));
+        map.insert("channel".to_string(), Value::from(channel.label()));
         map.insert("profile".to_string(), Value::from(profile.label()));
         map.insert("seed".to_string(), Value::from(seed));
         map.insert("grid_size".to_string(), Value::from(grid_size as u64));
@@ -2926,10 +3264,18 @@ impl CaptureEvalMetrics {
             Value::from(self.frame_success_ratio()),
         );
         map.insert("attempts".to_string(), Value::from(self.attempts));
+        map.insert(
+            "planned_attempts".to_string(),
+            Value::from(self.planned_attempts),
+        );
         map.insert("successes".to_string(), Value::from(self.successes));
         map.insert(
             "success_ratio".to_string(),
             Value::from(self.success_ratio()),
+        );
+        map.insert(
+            "aborted_early".to_string(),
+            Value::from(self.attempts < self.planned_attempts),
         );
         map.insert(
             "recovered_frames".to_string(),
@@ -2962,6 +3308,124 @@ impl CaptureEvalMetrics {
             scenario_rows.push(Value::Object(scenario_map));
         }
         map.insert("scenarios".to_string(), Value::Array(scenario_rows));
+        Value::Object(map)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RealtimeFrameMetrics {
+    index: usize,
+    source_index: usize,
+    loop_index: usize,
+    scenario: &'static str,
+    decoded: bool,
+    ingested: bool,
+    decode_ms: f64,
+}
+
+#[derive(Clone, Debug)]
+struct RealtimeDecodeMetrics {
+    frame_count: usize,
+    decoded_frames: usize,
+    ingested_frames: usize,
+    stream_complete: bool,
+    stream_received_chunks: usize,
+    stream_total_chunks: usize,
+    simulated_duration_ms: u64,
+    wall_clock_ms: u64,
+    avg_decode_ms: f64,
+    payload: Option<Vec<u8>>,
+    frames: Vec<RealtimeFrameMetrics>,
+}
+
+impl RealtimeDecodeMetrics {
+    fn to_json(
+        &self,
+        channel: PetalDataChannel,
+        profile: PetalCaptureProfile,
+        grid_size: u16,
+        seed: u64,
+        simulate_fps: u16,
+        realtime_loops: u16,
+        capture_perturbation: bool,
+        allow_incomplete: bool,
+    ) -> Value {
+        let mut map = Map::new();
+        map.insert("version".to_string(), Value::from(1u64));
+        map.insert("mode".to_string(), Value::from("realtime-sim"));
+        map.insert("channel".to_string(), Value::from(channel.label()));
+        map.insert("profile".to_string(), Value::from(profile.label()));
+        map.insert("seed".to_string(), Value::from(seed));
+        map.insert("grid_size".to_string(), Value::from(grid_size as u64));
+        map.insert("simulate_fps".to_string(), Value::from(simulate_fps as u64));
+        map.insert(
+            "realtime_loops".to_string(),
+            Value::from(realtime_loops as u64),
+        );
+        map.insert(
+            "capture_perturbation".to_string(),
+            Value::from(capture_perturbation),
+        );
+        map.insert(
+            "allow_incomplete".to_string(),
+            Value::from(allow_incomplete),
+        );
+        map.insert(
+            "frame_count".to_string(),
+            Value::from(self.frame_count as u64),
+        );
+        map.insert(
+            "decoded_frames".to_string(),
+            Value::from(self.decoded_frames as u64),
+        );
+        map.insert(
+            "ingested_frames".to_string(),
+            Value::from(self.ingested_frames as u64),
+        );
+        map.insert(
+            "stream_complete".to_string(),
+            Value::from(self.stream_complete),
+        );
+        map.insert(
+            "stream_received_chunks".to_string(),
+            Value::from(self.stream_received_chunks as u64),
+        );
+        map.insert(
+            "stream_total_chunks".to_string(),
+            Value::from(self.stream_total_chunks as u64),
+        );
+        map.insert(
+            "simulated_duration_ms".to_string(),
+            Value::from(self.simulated_duration_ms),
+        );
+        map.insert("wall_clock_ms".to_string(), Value::from(self.wall_clock_ms));
+        map.insert("avg_decode_ms".to_string(), Value::from(self.avg_decode_ms));
+        map.insert(
+            "payload_length".to_string(),
+            Value::from(self.payload.as_ref().map_or(0usize, Vec::len) as u64),
+        );
+        let frame_rows = self
+            .frames
+            .iter()
+            .map(|frame| {
+                let mut frame_map = Map::new();
+                frame_map.insert("index".to_string(), Value::from(frame.index as u64));
+                frame_map.insert(
+                    "source_index".to_string(),
+                    Value::from(frame.source_index as u64),
+                );
+                frame_map.insert(
+                    "loop_index".to_string(),
+                    Value::from(frame.loop_index as u64),
+                );
+                frame_map.insert("scenario".to_string(), Value::from(frame.scenario));
+                frame_map.insert("decoded".to_string(), Value::from(frame.decoded));
+                frame_map.insert("ingested".to_string(), Value::from(frame.ingested));
+                frame_map.insert("decode_ms".to_string(), Value::from(frame.decode_ms));
+                Value::Object(frame_map)
+            })
+            .collect();
+        map.insert("frames".to_string(), Value::Array(frame_rows));
         Value::Object(map)
     }
 }
@@ -3307,14 +3771,162 @@ fn capture_scenarios(profile: PetalCaptureProfile) -> &'static [CaptureScenario]
     }
 }
 
+fn simulate_realtime_decode(
+    images: &[image::RgbaImage],
+    options: PetalStreamOptions,
+    channel: PetalDataChannel,
+    profile: PetalCaptureProfile,
+    seed: u64,
+    simulate_fps: u16,
+    realtime_loops: usize,
+    capture_perturbation: bool,
+) -> Result<RealtimeDecodeMetrics> {
+    if images.is_empty() {
+        return Err(eyre!("realtime simulation requires at least one frame"));
+    }
+    if options.grid_size == 0 {
+        return Err(eyre!("realtime simulation requires resolved grid size"));
+    }
+    if simulate_fps == 0 {
+        return Err(eyre!("simulate-fps must be > 0"));
+    }
+    if realtime_loops == 0 {
+        return Err(eyre!("realtime simulation requires at least one loop"));
+    }
+
+    let scenarios = capture_scenarios(profile);
+    if scenarios.is_empty() {
+        return Err(eyre!("capture profile has no scenarios"));
+    }
+
+    let search_radius = capture_alignment_search_radius(profile);
+    let frame_interval_ms = 1000u64 / u64::from(simulate_fps);
+    let total_frames = images.len().saturating_mul(realtime_loops);
+    let simulated_duration_ms =
+        frame_interval_ms.saturating_mul(total_frames.saturating_sub(1) as u64);
+
+    let wall_start = Instant::now();
+    let mut assembler_limits = QrStreamAssemblerLimits::default();
+    // Realtime simulation can spend much longer than live playback while doing
+    // heavy perturbation and alignment-search decoding. Keep assembly open.
+    assembler_limits.timeout = Duration::from_secs(60 * 60);
+    let mut assembler = QrStreamAssembler::new(assembler_limits);
+    let mut final_result: Option<QrStreamDecodeResult> = None;
+    let mut stream_id_lock: Option<[u8; 16]> = None;
+    let mut decoded_frames = 0usize;
+    let mut ingested_frames = 0usize;
+    let mut decode_ms_total = 0.0;
+    let mut frame_metrics = Vec::with_capacity(total_frames);
+
+    for frame_index in 0..total_frames {
+        let source_index = frame_index % images.len();
+        let loop_index = frame_index / images.len();
+        let image = &images[source_index];
+        let scenario = scenarios[frame_index % scenarios.len()];
+        let simulated = if capture_perturbation {
+            simulate_capture_frame(image, scenario, frame_index, loop_index, seed)
+        } else {
+            image.clone()
+        };
+
+        let decode_started = Instant::now();
+        let decoded = decode_frame_with_alignment_search(
+            &simulated,
+            options.grid_size,
+            options,
+            channel,
+            search_radius,
+            stream_id_lock,
+        );
+        let decode_ms = decode_started.elapsed().as_secs_f64() * 1_000.0;
+        decode_ms_total += decode_ms;
+
+        let mut decoded_ok = false;
+        let mut ingested = false;
+        if let Ok(bytes) = decoded {
+            decoded_ok = true;
+            decoded_frames += 1;
+            if let Ok(frame) = QrStreamFrame::decode(&bytes) {
+                let is_duplicate_header = frame.kind == QrStreamFrameKind::Header
+                    && stream_id_lock
+                        .map(|stream_id| frame.stream_id == stream_id)
+                        .unwrap_or(false);
+                if !is_duplicate_header {
+                    let stream_id_matches = stream_id_lock
+                        .map(|stream_id| frame.stream_id == stream_id)
+                        .unwrap_or(true);
+                    if stream_id_matches {
+                        let frame_kind = frame.kind;
+                        let frame_stream_id = frame.stream_id;
+                        if let Ok(result) = assembler.ingest_frame(frame) {
+                            ingested = true;
+                            ingested_frames += 1;
+                            final_result = Some(result);
+                            if frame_kind == QrStreamFrameKind::Header && stream_id_lock.is_none() {
+                                stream_id_lock = Some(frame_stream_id);
+                            }
+                        }
+                    }
+                } else {
+                    ingested = true;
+                }
+            }
+        }
+
+        frame_metrics.push(RealtimeFrameMetrics {
+            index: frame_index,
+            source_index,
+            loop_index,
+            scenario: scenario.name,
+            decoded: decoded_ok,
+            ingested,
+            decode_ms,
+        });
+    }
+
+    let wall_clock_ms = wall_start.elapsed().as_millis() as u64;
+    let avg_decode_ms = if images.is_empty() {
+        0.0
+    } else {
+        decode_ms_total / total_frames as f64
+    };
+    let (stream_complete, stream_received_chunks, stream_total_chunks, payload) =
+        if let Some(result) = final_result {
+            (
+                result.is_complete(),
+                result.received_chunks,
+                result.total_chunks,
+                result.payload,
+            )
+        } else {
+            (false, 0, 0, None)
+        };
+
+    Ok(RealtimeDecodeMetrics {
+        frame_count: total_frames,
+        decoded_frames,
+        ingested_frames,
+        stream_complete,
+        stream_received_chunks,
+        stream_total_chunks,
+        simulated_duration_ms,
+        wall_clock_ms,
+        avg_decode_ms,
+        payload,
+        frames: frame_metrics,
+    })
+}
+
 fn evaluate_capture_robustness(
     images: &[image::RgbaImage],
     expected_bytes: &[Vec<u8>],
     grid_size: u16,
     options: PetalStreamOptions,
+    channel: PetalDataChannel,
     profile: PetalCaptureProfile,
     seed: u64,
     trials_per_frame: u16,
+    fail_fast_min_success_ratio: Option<f64>,
 ) -> Result<CaptureEvalMetrics> {
     if images.len() != expected_bytes.len() {
         return Err(eyre!("frame/image length mismatch"));
@@ -3334,10 +3946,13 @@ fn evaluate_capture_robustness(
 
     let mut attempts = 0u64;
     let mut successes = 0u64;
+    let planned_attempts = images.len() as u64 * u64::from(trials_per_frame);
     let mut frame_successes = 0usize;
     let mut recovered = vec![None; images.len()];
     let search_radius = capture_alignment_search_radius(profile);
-    for (frame_index, (image, expected)) in images.iter().zip(expected_bytes.iter()).enumerate() {
+    'frames: for (frame_index, (image, expected)) in
+        images.iter().zip(expected_bytes.iter()).enumerate()
+    {
         let mut frame_ok = false;
         for trial in 0..trials_per_frame {
             let scenario_idx = (frame_index + usize::from(trial)) % scenarios.len();
@@ -3346,14 +3961,28 @@ fn evaluate_capture_robustness(
             attempts += 1;
             let simulated =
                 simulate_capture_frame(image, scenario, frame_index, usize::from(trial), seed);
-            let decoded =
-                decode_frame_with_alignment_search(&simulated, grid_size, options, search_radius);
+            let decoded = decode_frame_with_alignment_search(
+                &simulated,
+                grid_size,
+                options,
+                channel,
+                search_radius,
+                None,
+            );
             let ok = decoded.map(|bytes| bytes == *expected).unwrap_or(false);
             if ok {
                 successes += 1;
                 frame_ok = true;
                 scenario_metrics[scenario_idx].successes += 1;
                 recovered[frame_index] = Some(expected.clone());
+            }
+            if let Some(min_success_ratio) = fail_fast_min_success_ratio {
+                let remaining_attempts = planned_attempts.saturating_sub(attempts);
+                let best_possible_success_ratio =
+                    (successes + remaining_attempts) as f64 / planned_attempts as f64;
+                if best_possible_success_ratio + f64::EPSILON < min_success_ratio {
+                    break 'frames;
+                }
             }
         }
         if frame_ok {
@@ -3368,6 +3997,7 @@ fn evaluate_capture_robustness(
     Ok(CaptureEvalMetrics {
         frame_count: images.len(),
         frame_successes,
+        planned_attempts,
         attempts,
         successes,
         recovered_frames,
@@ -3389,9 +4019,13 @@ fn decode_frame_with_alignment_search(
     image: &image::RgbaImage,
     grid_size: u16,
     options: PetalStreamOptions,
+    channel: PetalDataChannel,
     search_radius: i32,
+    expected_stream_id: Option<[u8; 16]>,
 ) -> Result<Vec<u8>> {
-    if let Ok(bytes) = decode_frame_with_grid(image, grid_size, options) {
+    if let Ok(bytes) =
+        decode_stream_frame_candidate(image, grid_size, options, channel, expected_stream_id)
+    {
         return Ok(bytes);
     }
     for radius in 1..=search_radius.max(0) {
@@ -3401,13 +4035,37 @@ fn decode_frame_with_alignment_search(
                     continue;
                 }
                 let shifted = translate_image(image, dx, dy, image::Rgba([4, 1, 8, 0xFF]));
-                if let Ok(bytes) = decode_frame_with_grid(&shifted, grid_size, options) {
+                if let Ok(bytes) = decode_stream_frame_candidate(
+                    &shifted,
+                    grid_size,
+                    options,
+                    channel,
+                    expected_stream_id,
+                ) {
                     return Ok(bytes);
                 }
             }
         }
     }
     Err(eyre!("decode failed after alignment search"))
+}
+
+fn decode_stream_frame_candidate(
+    image: &image::RgbaImage,
+    grid_size: u16,
+    options: PetalStreamOptions,
+    channel: PetalDataChannel,
+    expected_stream_id: Option<[u8; 16]>,
+) -> Result<Vec<u8>> {
+    let bytes = decode_frame_with_grid_and_channel(image, grid_size, options, channel)?;
+    let frame = QrStreamFrame::decode(&bytes)
+        .map_err(|err| eyre!("decoded frame failed qr validation: {err}"))?;
+    if let Some(stream_id) = expected_stream_id {
+        if frame.stream_id != stream_id {
+            return Err(eyre!("decoded frame stream id mismatch"));
+        }
+    }
+    Ok(bytes)
 }
 
 fn reconstruct_stream_completion(recovered: &[Option<Vec<u8>>]) -> Result<(bool, usize, usize)> {
@@ -3736,7 +4394,7 @@ struct CellParam {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use std::{fs, path::Path};
     use tempfile::tempdir;
 
     fn sample_style_metrics(
@@ -3748,6 +4406,7 @@ mod tests {
         CaptureEvalMetrics {
             frame_count,
             frame_successes: frame_count,
+            planned_attempts: attempts,
             attempts,
             successes,
             recovered_frames: frame_count,
@@ -3760,6 +4419,85 @@ mod tests {
                 successes,
             }],
         }
+    }
+
+    fn workspace_root() -> &'static Path {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("workspace root")
+    }
+
+    fn fixture_aggregate_proof_payload() -> Vec<u8> {
+        let fixture = workspace_root().join("fixtures/offline_bundle/aggregate_proof_fixture.json");
+        fs::read(&fixture).expect("offline aggregate proof fixture should exist")
+    }
+
+    fn decode_stream_payload(frame_bytes: &[Vec<u8>]) -> Vec<u8> {
+        let mut assembler = QrStreamAssembler::default();
+        let mut result = None;
+        for bytes in frame_bytes {
+            let frame = QrStreamFrame::decode(bytes).expect("decode frame bytes");
+            result = Some(assembler.ingest_frame(frame).expect("ingest frame"));
+        }
+        let result = result.expect("stream decode result");
+        assert!(result.is_complete(), "decoded stream must be complete");
+        result.payload.expect("decoded payload")
+    }
+
+    fn render_katakana_stream(
+        payload: &[u8],
+        dimension: u32,
+        style: PetalRenderStyle,
+        chunk_size: u16,
+        mode: KatakanaGridSizingMode,
+    ) -> (Vec<image::RgbaImage>, Vec<Vec<u8>>, PetalStreamOptions) {
+        let stream_options = QrStreamOptions {
+            chunk_size,
+            parity_group: 0,
+            ..QrStreamOptions::default()
+        };
+        let (_envelope, frames) =
+            QrStreamEncoder::encode_frames(payload, stream_options).expect("encode stream");
+        let frame_bytes: Vec<Vec<u8>> = frames.iter().map(QrStreamFrame::encode).collect();
+        let max_len = frame_bytes.iter().map(Vec::len).max().unwrap_or_default();
+        let grid_size =
+            resolve_katakana_base94_grid_size(max_len, PetalStreamOptions::default(), mode)
+                .expect("resolve katakana grid");
+        let petal_options = PetalStreamOptions {
+            grid_size,
+            ..PetalStreamOptions::default()
+        };
+        let template_grid = PetalStreamEncoder::encode_grid(&[], petal_options).expect("grid");
+        let frame_count = frame_bytes.len().max(1) as u32;
+        let mut images = Vec::with_capacity(frame_bytes.len());
+        for (index, bytes) in frame_bytes.iter().enumerate() {
+            images.push(render_petal_frame_with_channel(
+                &template_grid,
+                dimension,
+                index as u32,
+                frame_count,
+                style,
+                petal_options,
+                PetalDataChannel::KatakanaBase94,
+                Some(bytes),
+            ));
+        }
+        (images, frame_bytes, petal_options)
+    }
+
+    fn render_katakana_balanced_stream(
+        payload: &[u8],
+        dimension: u32,
+        style: PetalRenderStyle,
+    ) -> (Vec<image::RgbaImage>, Vec<Vec<u8>>, PetalStreamOptions) {
+        render_katakana_stream(
+            payload,
+            dimension,
+            style,
+            KATAKANA_BALANCED_DEFAULT_CHUNK_SIZE,
+            KatakanaGridSizingMode::Balanced,
+        )
     }
 
     #[test]
@@ -3852,7 +4590,7 @@ mod tests {
     #[test]
     fn katakana_base94_symbol_codec_roundtrip() {
         let payload: Vec<u8> = (0u8..=127u8).collect();
-        let digits = katakana_base94_encode_digits(&payload, 768).expect("encode digits");
+        let digits = katakana_base94_encode_digits(&payload, 1024).expect("encode digits");
         let decoded = katakana_base94_decode_digits(&digits).expect("decode digits");
         assert_eq!(decoded, payload);
     }
@@ -3864,7 +4602,10 @@ mod tests {
             ..PetalStreamOptions::default()
         };
         let capacity = katakana_base94_frame_capacity_bytes(53, options);
-        assert!(capacity >= 600, "unexpected katakana-base94 capacity: {capacity}");
+        assert!(
+            capacity >= 320,
+            "unexpected katakana-base94 capacity: {capacity}"
+        );
     }
 
     #[test]
@@ -3937,6 +4678,250 @@ mod tests {
             "katakana-base94 symbol error rate too high: {error_rate:.4}; toggled_47={toggled_47}; expected_head={:?}; actual_head={:?}",
             &expected_digits[..expected_digits.len().min(12)],
             &actual_digits[..actual_digits.len().min(12)]
+        );
+    }
+
+    #[test]
+    fn katakana_balanced_defaults_resolve_expected_chunk_and_grid() {
+        assert!(uses_katakana_preset_defaults(
+            PetalDataChannel::KatakanaBase94,
+            BINARY_DEFAULT_CHUNK_SIZE,
+            0
+        ));
+        let resolved_chunk = resolve_encode_chunk_size(
+            PetalDataChannel::KatakanaBase94,
+            BINARY_DEFAULT_CHUNK_SIZE,
+            0,
+            PetalKatakanaPreset::Balanced,
+            true,
+        );
+        assert_eq!(resolved_chunk, KATAKANA_BALANCED_DEFAULT_CHUNK_SIZE);
+        let resolved_parity = resolve_encode_parity_group(
+            PetalDataChannel::KatakanaBase94,
+            0,
+            0,
+            PetalKatakanaPreset::Balanced,
+            true,
+        );
+        assert_eq!(resolved_parity, 0);
+
+        let payload = fixture_aggregate_proof_payload();
+        let stream_options = QrStreamOptions {
+            chunk_size: resolved_chunk,
+            parity_group: 0,
+            ..QrStreamOptions::default()
+        };
+        let (_envelope, frames) =
+            QrStreamEncoder::encode_frames(&payload, stream_options).expect("encode stream");
+        let max_len = frames
+            .iter()
+            .map(|frame| QrStreamFrame::encode(frame).len())
+            .max()
+            .unwrap_or_default();
+        let grid_size = resolve_katakana_base94_grid_size(
+            max_len,
+            PetalStreamOptions::default(),
+            KatakanaGridSizingMode::Balanced,
+        )
+        .expect("resolve grid");
+        assert_eq!(
+            grid_size, KATAKANA_BALANCED_MIN_GRID_SIZE,
+            "balanced preset should pick the 41-cell grid when capacity allows"
+        );
+    }
+
+    #[test]
+    fn katakana_distance_safe_defaults_resolve_expected_chunk_and_grid() {
+        assert!(uses_katakana_preset_defaults(
+            PetalDataChannel::KatakanaBase94,
+            BINARY_DEFAULT_CHUNK_SIZE,
+            0
+        ));
+        let resolved_chunk = resolve_encode_chunk_size(
+            PetalDataChannel::KatakanaBase94,
+            BINARY_DEFAULT_CHUNK_SIZE,
+            0,
+            PetalKatakanaPreset::DistanceSafe,
+            true,
+        );
+        assert_eq!(resolved_chunk, KATAKANA_DISTANCE_SAFE_DEFAULT_CHUNK_SIZE);
+        let resolved_parity = resolve_encode_parity_group(
+            PetalDataChannel::KatakanaBase94,
+            0,
+            0,
+            PetalKatakanaPreset::DistanceSafe,
+            true,
+        );
+        assert_eq!(resolved_parity, KATAKANA_DISTANCE_SAFE_DEFAULT_PARITY_GROUP);
+
+        let payload = fixture_aggregate_proof_payload();
+        let stream_options = QrStreamOptions {
+            chunk_size: resolved_chunk,
+            parity_group: 0,
+            ..QrStreamOptions::default()
+        };
+        let (_envelope, frames) =
+            QrStreamEncoder::encode_frames(&payload, stream_options).expect("encode stream");
+        let max_len = frames
+            .iter()
+            .map(|frame| QrStreamFrame::encode(frame).len())
+            .max()
+            .unwrap_or_default();
+        let grid_size = resolve_katakana_base94_grid_size(
+            max_len,
+            PetalStreamOptions::default(),
+            KatakanaGridSizingMode::DistanceSafe,
+        )
+        .expect("resolve grid");
+        assert_eq!(
+            grid_size, KATAKANA_DISTANCE_SAFE_MIN_GRID_SIZE,
+            "distance-safe preset should pick the 33-cell grid when capacity allows"
+        );
+    }
+
+    #[test]
+    fn katakana_balanced_frame_count_is_lower_than_binary_baseline() {
+        let payload = fixture_aggregate_proof_payload();
+        let binary_options = QrStreamOptions {
+            chunk_size: BINARY_DEFAULT_CHUNK_SIZE,
+            parity_group: 0,
+            ..QrStreamOptions::default()
+        };
+        let katakana_options = QrStreamOptions {
+            chunk_size: KATAKANA_BALANCED_DEFAULT_CHUNK_SIZE,
+            parity_group: 0,
+            ..QrStreamOptions::default()
+        };
+        let (_, binary_frames) =
+            QrStreamEncoder::encode_frames(&payload, binary_options).expect("binary encode");
+        let (_, katakana_frames) =
+            QrStreamEncoder::encode_frames(&payload, katakana_options).expect("katakana encode");
+        assert!(
+            katakana_frames.len() < binary_frames.len(),
+            "katakana balanced chunking should reduce frame count (binary={}, katakana={})",
+            binary_frames.len(),
+            katakana_frames.len()
+        );
+    }
+
+    #[test]
+    fn katakana_balanced_boxes_are_larger_than_high_density_grid() {
+        let balanced_cell_size = (1024u32 / u32::from(KATAKANA_BALANCED_MIN_GRID_SIZE)).max(1);
+        let dense_cell_size = (1024u32 / 47).max(1);
+        assert!(
+            balanced_cell_size > dense_cell_size,
+            "balanced cell size should exceed dense baseline (balanced={balanced_cell_size}, dense={dense_cell_size})"
+        );
+    }
+
+    #[test]
+    fn katakana_balanced_roundtrip_matches_real_fixture_payload() {
+        let payload = fixture_aggregate_proof_payload();
+        let (images, frame_bytes, petal_options) =
+            render_katakana_balanced_stream(&payload, 1024, PetalRenderStyle::SoraTempleCommand);
+        let mut decoded_frames = Vec::with_capacity(frame_bytes.len());
+        for image in &images {
+            decoded_frames.push(
+                decode_katakana_base94_frame_with_grid(
+                    image,
+                    petal_options.grid_size,
+                    petal_options,
+                )
+                .expect("decode katakana frame"),
+            );
+        }
+        let decoded_payload = decode_stream_payload(&decoded_frames);
+        assert_eq!(decoded_payload, payload);
+    }
+
+    #[test]
+    fn realtime_simulation_reconstructs_katakana_stream_without_capture_perturbation() {
+        let payload = b"petal-realtime-distance-safe-katakana";
+        let (images, _frame_bytes, petal_options) = render_katakana_stream(
+            payload,
+            640,
+            PetalRenderStyle::SoraTempleCommand,
+            KATAKANA_DISTANCE_SAFE_DEFAULT_CHUNK_SIZE,
+            KatakanaGridSizingMode::DistanceSafe,
+        );
+        let metrics = simulate_realtime_decode(
+            &images,
+            petal_options,
+            PetalDataChannel::KatakanaBase94,
+            PetalCaptureProfile::Default,
+            11,
+            24,
+            1,
+            false,
+        )
+        .expect("realtime simulation");
+        assert_eq!(metrics.frame_count, images.len());
+        assert_eq!(metrics.decoded_frames, images.len());
+        assert!(
+            metrics.stream_complete,
+            "stream should complete in realtime simulation"
+        );
+        assert_eq!(metrics.payload.expect("payload"), payload);
+    }
+
+    #[test]
+    fn realtime_simulation_supports_looped_playback_without_resetting_stream() {
+        let payload = b"petal-realtime-looped-distance-safe-katakana";
+        let (images, _frame_bytes, petal_options) = render_katakana_stream(
+            payload,
+            640,
+            PetalRenderStyle::SoraTempleCommand,
+            KATAKANA_DISTANCE_SAFE_DEFAULT_CHUNK_SIZE,
+            KatakanaGridSizingMode::DistanceSafe,
+        );
+        let loops = 2usize;
+        let metrics = simulate_realtime_decode(
+            &images,
+            petal_options,
+            PetalDataChannel::KatakanaBase94,
+            PetalCaptureProfile::Default,
+            13,
+            24,
+            loops,
+            false,
+        )
+        .expect("realtime simulation");
+        assert_eq!(metrics.frame_count, images.len() * loops);
+        assert_eq!(metrics.decoded_frames, images.len() * loops);
+        assert!(
+            metrics.stream_complete,
+            "stream should complete with looped realtime playback"
+        );
+        assert_eq!(metrics.payload.expect("payload"), payload);
+        let last = metrics.frames.last().expect("frame metrics");
+        assert_eq!(last.loop_index, loops - 1);
+        assert_eq!(last.source_index, images.len() - 1);
+    }
+
+    #[test]
+    fn katakana_balanced_capture_stress_passes_default_gate() {
+        let payload = fixture_aggregate_proof_payload();
+        let (images, frame_bytes, petal_options) =
+            render_katakana_balanced_stream(&payload, 768, PetalRenderStyle::SoraTempleCommand);
+        let sample_len = images.len().min(4);
+        let images = images[..sample_len].to_vec();
+        let frame_bytes = frame_bytes[..sample_len].to_vec();
+        let metrics = evaluate_capture_robustness(
+            &images,
+            &frame_bytes,
+            petal_options.grid_size,
+            petal_options,
+            PetalDataChannel::KatakanaBase94,
+            PetalCaptureProfile::Default,
+            42,
+            2,
+            None,
+        )
+        .expect("evaluate capture");
+        assert!(
+            metrics.success_ratio() >= 0.50,
+            "balanced katakana capture success ratio below gate: {:.3}",
+            metrics.success_ratio()
         );
     }
 
@@ -4101,9 +5086,11 @@ mod tests {
             &frame_bytes,
             resolved_grid_size,
             petal_options,
+            PetalDataChannel::Binary,
             PetalCaptureProfile::Default,
             1337,
             2,
+            None,
         )
         .expect("evaluate");
         assert_eq!(metrics.frame_count, frame_bytes.len());

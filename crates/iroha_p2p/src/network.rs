@@ -7,7 +7,7 @@
 #[cfg(feature = "quic")]
 use std::sync::OnceLock;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fmt::Debug,
     io,
     net::{IpAddr, ToSocketAddrs},
@@ -387,6 +387,14 @@ static DNS_RECONNECT_SUCCESSES: AtomicU64 = AtomicU64::new(0);
 static DNS_RESOLUTION_FAILURES: AtomicU64 = AtomicU64::new(0);
 /// Count of scheduled per-address backoffs.
 static BACKOFF_SCHEDULED: AtomicU64 = AtomicU64::new(0);
+/// Total deferred outbound frames enqueued while peer session was missing.
+static DEFERRED_SEND_ENQUEUED: AtomicU64 = AtomicU64::new(0);
+/// Total deferred outbound frames dropped due to TTL expiry, stale generation, or queue cap.
+static DEFERRED_SEND_DROPPED: AtomicU64 = AtomicU64::new(0);
+/// Total reconnect attempts triggered because outbound frames were deferred for missing sessions.
+static SESSION_RECONNECT_TOTAL: AtomicU64 = AtomicU64::new(0);
+/// Cumulative reconnect retry delay in milliseconds.
+static CONNECT_RETRY_MILLIS_TOTAL: AtomicU64 = AtomicU64::new(0);
 /// Count of inbound WS connections accepted via Torii.
 static WS_INBOUND_ACCEPTED: AtomicU64 = AtomicU64::new(0);
 /// Count of outbound WS connections successfully established.
@@ -564,6 +572,96 @@ fn peer_message_channel<T: Pload>(
     mpsc::Receiver<PeerMessage<WireMessage<T>>>,
 ) {
     mpsc::channel(cap.get())
+}
+
+#[derive(Clone, Debug)]
+struct DeferredPeerFrame<T: Pload> {
+    frame: RelayMessage<T>,
+    topic: message::Topic,
+    enqueued_at: tokio::time::Instant,
+    generation: Option<ConnectionId>,
+}
+
+#[derive(Debug)]
+struct DeferredPeerFrameQueue<T: Pload> {
+    by_peer: HashMap<PeerId, VecDeque<DeferredPeerFrame<T>>>,
+    max_per_peer: usize,
+    ttl: Duration,
+}
+
+impl<T: Pload> DeferredPeerFrameQueue<T> {
+    fn new(max_per_peer: usize, ttl: Duration) -> Self {
+        Self {
+            by_peer: HashMap::new(),
+            max_per_peer: max_per_peer.max(1),
+            ttl,
+        }
+    }
+
+    fn prune_expired(
+        entries: &mut VecDeque<DeferredPeerFrame<T>>,
+        now: tokio::time::Instant,
+        ttl: Duration,
+    ) -> usize {
+        if ttl.is_zero() {
+            let dropped = entries.len();
+            entries.clear();
+            return dropped;
+        }
+        let mut dropped = 0usize;
+        while entries
+            .front()
+            .is_some_and(|entry| now.saturating_duration_since(entry.enqueued_at) > ttl)
+        {
+            entries.pop_front();
+            dropped = dropped.saturating_add(1);
+        }
+        dropped
+    }
+
+    fn enqueue(
+        &mut self,
+        peer_id: PeerId,
+        frame: RelayMessage<T>,
+        topic: message::Topic,
+        generation: Option<ConnectionId>,
+        now: tokio::time::Instant,
+    ) -> (usize, usize) {
+        let entries = self.by_peer.entry(peer_id).or_default();
+        let expired = Self::prune_expired(entries, now, self.ttl);
+        let mut overflow = 0usize;
+        while entries.len() >= self.max_per_peer {
+            entries.pop_front();
+            overflow = overflow.saturating_add(1);
+        }
+        entries.push_back(DeferredPeerFrame {
+            frame,
+            topic,
+            enqueued_at: now,
+            generation,
+        });
+        (expired, overflow)
+    }
+
+    fn take_peer(
+        &mut self,
+        peer_id: &PeerId,
+        now: tokio::time::Instant,
+    ) -> (VecDeque<DeferredPeerFrame<T>>, usize) {
+        let Some(mut entries) = self.by_peer.remove(peer_id) else {
+            return (VecDeque::new(), 0);
+        };
+        let expired = Self::prune_expired(&mut entries, now, self.ttl);
+        (entries, expired)
+    }
+
+    fn restore_peer(&mut self, peer_id: PeerId, entries: VecDeque<DeferredPeerFrame<T>>) {
+        if entries.is_empty() {
+            self.by_peer.remove(&peer_id);
+            return;
+        }
+        self.by_peer.insert(peer_id, entries);
+    }
 }
 
 #[cfg(test)]
@@ -843,6 +941,28 @@ pub fn inc_dns_resolution_fail() {
 /// Returns the number of scheduled per-address backoffs.
 pub fn backoff_scheduled_count() -> u64 {
     BACKOFF_SCHEDULED.load(Ordering::Relaxed)
+}
+
+/// Returns total deferred outbound frames enqueued while peer session was missing.
+pub fn deferred_send_enqueued_count() -> u64 {
+    DEFERRED_SEND_ENQUEUED.load(Ordering::Relaxed)
+}
+
+/// Returns total deferred outbound frames dropped (TTL, stale generation, cap).
+pub fn deferred_send_dropped_count() -> u64 {
+    DEFERRED_SEND_DROPPED.load(Ordering::Relaxed)
+}
+
+/// Returns total reconnect attempts triggered because outbound frames were deferred.
+pub fn session_reconnect_total() -> u64 {
+    SESSION_RECONNECT_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Returns cumulative reconnect retry delay in seconds (rounded up from milliseconds).
+pub fn connect_retry_seconds_total() -> u64 {
+    CONNECT_RETRY_MILLIS_TOTAL
+        .load(Ordering::Relaxed)
+        .div_ceil(1_000)
 }
 
 /// Increment WS inbound accepted counter (called by Torii `/p2p`).
@@ -1773,6 +1893,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             idle_timeout,
             connect_startup_delay,
             dial_timeout,
+            deferred_send_ttl,
+            deferred_send_max_per_peer,
             peer_gossip_period,
             trust_gossip,
             quic_enabled,
@@ -2273,7 +2395,12 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             allow_nets: parse_cidrs(&allow_cidrs),
             deny_nets: parse_cidrs(&deny_cidrs),
             retry_backoff: HashMap::new(),
+            peer_session_generation: HashMap::new(),
             pending_connects: Vec::new(),
+            deferred_send_queue: DeferredPeerFrameQueue::new(
+                deferred_send_max_per_peer,
+                deferred_send_ttl,
+            ),
             happy_eyeballs_stagger: config_happy_eyeballs_stagger,
             addr_ipv6_first,
             last_active: HashMap::new(),
@@ -2904,6 +3031,11 @@ mod accept_stream_tests {
             idle_timeout: std::time::Duration::from_millis(200),
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+            deferred_send_ttl: std::time::Duration::from_millis(
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+            ),
+            deferred_send_max_per_peer:
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -3638,7 +3770,14 @@ mod accept_stream_tests {
             tcp_keepalive: None,
             connect_startup_delay_until: tokio::time::Instant::now(),
             retry_backoff: HashMap::new(),
+            peer_session_generation: HashMap::new(),
             pending_connects: Vec::new(),
+            deferred_send_queue: DeferredPeerFrameQueue::new(
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+                Duration::from_millis(
+                    iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+                ),
+            ),
             happy_eyeballs_stagger: Duration::from_millis(10),
             topology_update_interval:
                 iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
@@ -3978,7 +4117,14 @@ mod accept_stream_tests {
             allow_nets: Vec::new(),
             deny_nets: Vec::new(),
             retry_backoff: HashMap::new(),
+            peer_session_generation: HashMap::new(),
             pending_connects: Vec::new(),
+            deferred_send_queue: DeferredPeerFrameQueue::new(
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+                Duration::from_millis(
+                    iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+                ),
+            ),
             happy_eyeballs_stagger: Duration::from_millis(10),
             topology_update_interval:
                 iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
@@ -4181,7 +4327,14 @@ mod accept_stream_tests {
                 allow_nets: Vec::new(),
                 deny_nets: Vec::new(),
                 retry_backoff: HashMap::new(),
+                peer_session_generation: HashMap::new(),
                 pending_connects: Vec::new(),
+                deferred_send_queue: DeferredPeerFrameQueue::new(
+                    iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+                    Duration::from_millis(
+                        iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+                    ),
+                ),
                 happy_eyeballs_stagger: Duration::from_millis(10),
                 topology_update_interval:
                     iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
@@ -4399,7 +4552,14 @@ mod accept_stream_tests {
             allow_nets: Vec::new(),
             deny_nets: Vec::new(),
             retry_backoff: HashMap::new(),
+            peer_session_generation: HashMap::new(),
             pending_connects: Vec::new(),
+            deferred_send_queue: DeferredPeerFrameQueue::new(
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+                Duration::from_millis(
+                    iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+                ),
+            ),
             happy_eyeballs_stagger: Duration::from_millis(10),
             topology_update_interval:
                 iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
@@ -5187,8 +5347,12 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     /// Per-address exponential backoff schedule per peer: next allowed retry time and current base delay.
     /// Keyed by peer id, then by address string.
     retry_backoff: HashMap<PeerId, HashMap<String, (tokio::time::Instant, Duration)>>,
+    /// Last observed connection generation token per peer.
+    peer_session_generation: HashMap<PeerId, ConnectionId>,
     /// Pending scheduled connect attempts with staggers
     pending_connects: Vec<(tokio::time::Instant, Peer)>,
+    /// Deferred outbound frames queued while peer session is unavailable.
+    deferred_send_queue: DeferredPeerFrameQueue<T>,
     /// Stagger delay between parallel address attempts for the same peer
     happy_eyeballs_stagger: Duration,
     /// Prefer IPv6 addresses first when ordering parallel dials
@@ -5986,6 +6150,178 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         );
     }
 
+    fn current_generation_token(&self, peer_id: &PeerId) -> Option<ConnectionId> {
+        self.peers
+            .get(peer_id)
+            .map(|peer| peer.conn_id)
+            .or_else(|| self.peer_session_generation.get(peer_id).copied())
+    }
+
+    fn trigger_reconnect_for_peer(&mut self, peer_id: &PeerId) -> bool {
+        if !self.current_topology.contains(peer_id) {
+            return false;
+        }
+        if self.peers.contains_key(peer_id)
+            || self
+                .connecting_peers
+                .values()
+                .any(|peer| peer.id() == peer_id)
+        {
+            return false;
+        }
+        let now = tokio::time::Instant::now();
+        let Some(addr) = self
+            .current_peers_addresses
+            .iter()
+            .find_map(|(id, addr)| (id == peer_id).then_some(addr.clone()))
+        else {
+            return false;
+        };
+        if self.is_scheduled(peer_id, &addr) {
+            return false;
+        }
+        let peer = Peer::new(addr.clone(), peer_id.clone());
+        if self.ready_to_retry_addr(peer_id, &addr, now) {
+            self.connect_peer(&peer);
+        } else {
+            let when = self
+                .retry_backoff
+                .get(peer_id)
+                .and_then(|inner| inner.get(&addr.to_string()).map(|(when, _)| *when))
+                .unwrap_or_else(|| now + Duration::from_millis(50));
+            let when = apply_connect_startup_delay(when, self.connect_startup_delay_until);
+            self.pending_connects.push((when, peer));
+        }
+        SESSION_RECONNECT_TOTAL.fetch_add(1, Ordering::Relaxed);
+        true
+    }
+
+    fn defer_frame(
+        &mut self,
+        peer_id: &PeerId,
+        frame: RelayMessage<T>,
+        topic: message::Topic,
+        generation: Option<ConnectionId>,
+        trigger_reconnect: bool,
+        reason: &'static str,
+    ) -> bool {
+        let now = tokio::time::Instant::now();
+        let (expired, overflow) =
+            self.deferred_send_queue
+                .enqueue(peer_id.clone(), frame, topic, generation, now);
+        DEFERRED_SEND_ENQUEUED.fetch_add(1, Ordering::Relaxed);
+        let dropped = expired.saturating_add(overflow);
+        if dropped > 0 {
+            DEFERRED_SEND_DROPPED.fetch_add(dropped as u64, Ordering::Relaxed);
+        }
+        if trigger_reconnect {
+            let _ = self.trigger_reconnect_for_peer(peer_id);
+        }
+        debug!(
+            peer = %peer_id,
+            ?generation,
+            trigger_reconnect,
+            expired_dropped = expired,
+            overflow_dropped = overflow,
+            reason,
+            "deferred outbound frame while peer session unavailable"
+        );
+        true
+    }
+
+    fn flush_deferred_frames_for_peer(&mut self, peer_id: &PeerId) -> DeferredFlushOutcome {
+        let now = tokio::time::Instant::now();
+        let (mut queued, expired) = self.deferred_send_queue.take_peer(peer_id, now);
+        if expired > 0 {
+            DEFERRED_SEND_DROPPED.fetch_add(expired as u64, Ordering::Relaxed);
+        }
+        if queued.is_empty() {
+            return DeferredFlushOutcome::Flushed;
+        }
+        while let Some(entry) = queued.pop_front() {
+            let Some((conn_id, peer_addr, post_result)) = ({
+                self.peers.get(peer_id).map(|ref_peer| {
+                    if entry
+                        .generation
+                        .is_some_and(|generation| generation != ref_peer.conn_id)
+                    {
+                        return (
+                            ref_peer.conn_id,
+                            ref_peer.p2p_addr.clone(),
+                            DeferredPostResult::StaleGeneration,
+                        );
+                    }
+                    if !trust_gossip_allowed(
+                        entry.topic,
+                        ref_peer.trust_gossip && self.trust_gossip,
+                    ) {
+                        let reason = if self.trust_gossip {
+                            "peer_capability_off"
+                        } else {
+                            "local_capability_off"
+                        };
+                        Self::record_trust_gossip_skip(peer_id, TrustDirection::Outbound, reason);
+                        return (
+                            ref_peer.conn_id,
+                            ref_peer.p2p_addr.clone(),
+                            DeferredPostResult::CapabilitySkipped,
+                        );
+                    }
+                    (
+                        ref_peer.conn_id,
+                        ref_peer.p2p_addr.clone(),
+                        match ref_peer.handle.post(entry.frame) {
+                            Ok(()) => DeferredPostResult::Sent,
+                            Err(PostError::Closed) => DeferredPostResult::Closed,
+                            Err(PostError::Full) => DeferredPostResult::Full,
+                        },
+                    )
+                })
+            }) else {
+                self.deferred_send_queue
+                    .restore_peer(peer_id.clone(), queued);
+                return DeferredFlushOutcome::PeerMissing;
+            };
+
+            match post_result {
+                DeferredPostResult::Sent | DeferredPostResult::CapabilitySkipped => {}
+                DeferredPostResult::StaleGeneration => {
+                    DEFERRED_SEND_DROPPED.fetch_add(1, Ordering::Relaxed);
+                }
+                DeferredPostResult::Full => {
+                    DEFERRED_SEND_DROPPED.fetch_add(1, Ordering::Relaxed);
+                    self.deferred_send_queue
+                        .restore_peer(peer_id.clone(), queued);
+                    return DeferredFlushOutcome::Backpressured(conn_id);
+                }
+                DeferredPostResult::Closed => {
+                    DEFERRED_SEND_DROPPED.fetch_add(1, Ordering::Relaxed);
+                    let peer = Peer::new(peer_addr, peer_id.clone());
+                    iroha_logger::warn!(
+                        peer=%peer,
+                        "Peer channel closed while flushing deferred frames; dropping peer"
+                    );
+                    self.peers.remove(peer_id);
+                    Self::remove_online_peer(
+                        &self.online_peers_sender,
+                        &self.online_peer_capabilities_sender,
+                        peer_id,
+                    );
+                    self.incoming_active.remove(&conn_id);
+                    self.last_active.remove(peer_id);
+                    self.clear_low_buckets(peer_id);
+                    for deferred in &mut queued {
+                        deferred.generation = None;
+                    }
+                    self.deferred_send_queue
+                        .restore_peer(peer_id.clone(), queued);
+                    return DeferredFlushOutcome::PeerMissing;
+                }
+            }
+        }
+        DeferredFlushOutcome::Flushed
+    }
+
     fn send_frame_to_peer(
         &mut self,
         peer_id: &PeerId,
@@ -6006,18 +6342,59 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 "enqueueing block sync frame to peer"
             );
         }
-        let Some(ref_peer) = self.peers.get(peer_id) else {
+        let Some(_) = self.peers.get(peer_id) else {
             if peer_id.public_key() == self.key_pair.public_key() {
                 #[cfg(debug_assertions)]
                 iroha_logger::trace!("Not sending message to myself");
-            } else {
-                iroha_logger::warn!(
-                    peer=%peer_id,
-                    consensus=is_consensus,
-                    "Peer not found. Message not sent."
+                return false;
+            }
+            iroha_logger::warn!(
+                peer=%peer_id,
+                consensus=is_consensus,
+                "Peer not found; deferring outbound frame"
+            );
+            return self.defer_frame(
+                peer_id,
+                frame,
+                topic,
+                self.current_generation_token(peer_id),
+                true,
+                "peer session missing",
+            );
+        };
+        match self.flush_deferred_frames_for_peer(peer_id) {
+            DeferredFlushOutcome::Flushed => {}
+            DeferredFlushOutcome::PeerMissing => {
+                return self.defer_frame(
+                    peer_id,
+                    frame,
+                    topic,
+                    self.current_generation_token(peer_id),
+                    true,
+                    "peer session missing after deferred flush",
                 );
             }
-            return false;
+            DeferredFlushOutcome::Backpressured(conn_id) => {
+                return self.defer_frame(
+                    peer_id,
+                    frame,
+                    topic,
+                    Some(conn_id),
+                    false,
+                    "peer backpressured while flushing deferred frames",
+                );
+            }
+        }
+
+        let Some(ref_peer) = self.peers.get(peer_id) else {
+            return self.defer_frame(
+                peer_id,
+                frame,
+                topic,
+                self.current_generation_token(peer_id),
+                true,
+                "peer session disappeared before post",
+            );
         };
         if !trust_gossip_allowed(topic, ref_peer.trust_gossip && self.trust_gossip) {
             let reason = if self.trust_gossip {
@@ -6029,6 +6406,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             return false;
         }
         let (conn_id, p2p_addr) = (ref_peer.conn_id, ref_peer.p2p_addr.clone());
+        let retry_frame = frame.clone();
         let outcome = match ref_peer.handle.post(frame) {
             Ok(()) => {
                 if is_consensus {
@@ -6065,7 +6443,14 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         high=is_high,
                         "Per-peer post channel overflow; dropping message per policy"
                     );
-                    None
+                    return self.defer_frame(
+                        peer_id,
+                        retry_frame,
+                        topic,
+                        Some(conn_id),
+                        false,
+                        "peer post queue full",
+                    );
                 }
             }
         };
@@ -6079,7 +6464,14 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             self.incoming_active.remove(&conn_id);
             self.last_active.remove(peer_id);
             self.clear_low_buckets(peer_id);
-            return false;
+            return self.defer_frame(
+                peer_id,
+                retry_frame,
+                topic,
+                None,
+                true,
+                "peer disconnected while posting frame",
+            );
         }
         false
     }
@@ -6113,6 +6505,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         } else {
             rng.random_range(0..=upper_ms)
         };
+        CONNECT_RETRY_MILLIS_TOTAL.fetch_add(jitter_ms, Ordering::Relaxed);
         let when = now + Duration::from_millis(jitter_ms);
         self.retry_backoff
             .entry(id.clone())
@@ -6446,6 +6839,14 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             low: self.peer_message_low_sender.clone(),
         });
         self.peers.insert(peer.id().clone(), ref_peer);
+        self.peer_session_generation
+            .insert(peer.id().clone(), connection_id);
+        match self.flush_deferred_frames_for_peer(peer.id()) {
+            DeferredFlushOutcome::Flushed | DeferredFlushOutcome::Backpressured(_) => {}
+            DeferredFlushOutcome::PeerMissing => {
+                let _ = self.trigger_reconnect_for_peer(peer.id());
+            }
+        }
         if self.dns_refresh_interval.is_some() || self.dns_refresh_ttl.is_some() {
             if self.dns_pending_refresh.remove(peer.id()) {
                 DNS_RECONNECT_SUCCESSES.fetch_add(1, Ordering::Relaxed);
@@ -7343,6 +7744,13 @@ mod tests {
             .expect("queue depth test lock poisoned")
     }
 
+    fn deferred_send_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("deferred send test lock poisoned")
+    }
+
     #[allow(clippy::too_many_lines)]
     fn bare_network() -> Option<NetworkBase<DummyMsg, X25519Sha256, ChaCha20Poly1305>> {
         bare_network_with::<DummyMsg>()
@@ -7468,7 +7876,14 @@ mod tests {
             allow_nets: Vec::new(),
             deny_nets: Vec::new(),
             retry_backoff: HashMap::new(),
+            peer_session_generation: HashMap::new(),
             pending_connects: Vec::new(),
+            deferred_send_queue: DeferredPeerFrameQueue::new(
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+                Duration::from_millis(
+                    iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+                ),
+            ),
             happy_eyeballs_stagger: Duration::from_millis(10),
             addr_ipv6_first: false,
             last_active: HashMap::new(),
@@ -7650,6 +8065,253 @@ mod tests {
         assert!(
             network.pending_connects[0].0 >= delay_until,
             "rescheduled connect should honor startup delay"
+        );
+    }
+
+    #[test]
+    fn deferred_queue_preserves_order_and_generation_markers() {
+        let _guard = deferred_send_test_guard();
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let now = tokio::time::Instant::now();
+        let mut queue = DeferredPeerFrameQueue::<DummyMsg>::new(8, Duration::from_secs(1));
+
+        let frame_one = RelayMessage::new(
+            peer_id.clone(),
+            RelayTarget::Direct(peer_id.clone()),
+            DEFAULT_RELAY_TTL,
+            Priority::Low,
+            DummyMsg,
+        );
+        let frame_two = RelayMessage::new(
+            peer_id.clone(),
+            RelayTarget::Direct(peer_id.clone()),
+            DEFAULT_RELAY_TTL,
+            Priority::High,
+            DummyMsg,
+        );
+        let frame_three = RelayMessage::new(
+            peer_id.clone(),
+            RelayTarget::Direct(peer_id.clone()),
+            DEFAULT_RELAY_TTL,
+            Priority::Low,
+            DummyMsg,
+        );
+
+        let (expired_one, overflow_one) = queue.enqueue(
+            peer_id.clone(),
+            frame_one,
+            message::Topic::Other,
+            Some(11),
+            now,
+        );
+        let (expired_two, overflow_two) = queue.enqueue(
+            peer_id.clone(),
+            frame_two,
+            message::Topic::Other,
+            Some(12),
+            now + Duration::from_millis(1),
+        );
+        let (expired_three, overflow_three) = queue.enqueue(
+            peer_id.clone(),
+            frame_three,
+            message::Topic::Other,
+            None,
+            now + Duration::from_millis(2),
+        );
+        assert_eq!((expired_one, overflow_one), (0, 0));
+        assert_eq!((expired_two, overflow_two), (0, 0));
+        assert_eq!((expired_three, overflow_three), (0, 0));
+
+        let (queued, expired) = queue.take_peer(&peer_id, now + Duration::from_millis(3));
+        assert_eq!(expired, 0);
+        let observed_generations: Vec<Option<ConnectionId>> =
+            queued.iter().map(|entry| entry.generation).collect();
+        assert_eq!(observed_generations, vec![Some(11), Some(12), None]);
+    }
+
+    #[test]
+    fn deferred_queue_ttl_and_cap_drop_oldest_deterministically() {
+        let _guard = deferred_send_test_guard();
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let now = tokio::time::Instant::now();
+        let mut queue = DeferredPeerFrameQueue::<DummyMsg>::new(2, Duration::from_millis(5));
+
+        let mk_frame = || {
+            RelayMessage::new(
+                peer_id.clone(),
+                RelayTarget::Direct(peer_id.clone()),
+                DEFAULT_RELAY_TTL,
+                Priority::Low,
+                DummyMsg,
+            )
+        };
+
+        let (_, overflow_one) = queue.enqueue(
+            peer_id.clone(),
+            mk_frame(),
+            message::Topic::Other,
+            Some(1),
+            now,
+        );
+        let (_, overflow_two) = queue.enqueue(
+            peer_id.clone(),
+            mk_frame(),
+            message::Topic::Other,
+            Some(2),
+            now + Duration::from_millis(1),
+        );
+        let (_, overflow_three) = queue.enqueue(
+            peer_id.clone(),
+            mk_frame(),
+            message::Topic::Other,
+            Some(3),
+            now + Duration::from_millis(2),
+        );
+        assert_eq!(overflow_one, 0);
+        assert_eq!(overflow_two, 0);
+        assert_eq!(overflow_three, 1, "queue cap should evict oldest entry");
+
+        let (queued_before_ttl, expired_before_ttl) =
+            queue.take_peer(&peer_id, now + Duration::from_millis(3));
+        assert_eq!(expired_before_ttl, 0);
+        let kept_generations: Vec<Option<ConnectionId>> = queued_before_ttl
+            .iter()
+            .map(|entry| entry.generation)
+            .collect();
+        assert_eq!(kept_generations, vec![Some(2), Some(3)]);
+
+        let mut ttl_queue = DeferredPeerFrameQueue::<DummyMsg>::new(2, Duration::from_millis(5));
+        let _ = ttl_queue.enqueue(
+            peer_id.clone(),
+            mk_frame(),
+            message::Topic::Other,
+            Some(9),
+            now,
+        );
+        let (queued_after_ttl, expired_after_ttl) =
+            ttl_queue.take_peer(&peer_id, now + Duration::from_millis(20));
+        assert_eq!(queued_after_ttl.len(), 0);
+        assert_eq!(
+            expired_after_ttl, 1,
+            "expired entries should be dropped on flush"
+        );
+    }
+
+    #[test]
+    fn missing_session_defers_frame_and_schedules_reconnect() {
+        let _guard = deferred_send_test_guard();
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_addr = socket_addr!(127.0.0.1:45679);
+        network.current_topology.insert(peer_id.clone());
+        network
+            .current_peers_addresses
+            .push((peer_id.clone(), peer_addr.clone()));
+
+        let now = tokio::time::Instant::now();
+        network.retry_backoff.insert(
+            peer_id.clone(),
+            HashMap::from([(
+                peer_addr.to_string(),
+                (now + Duration::from_secs(1), Duration::from_millis(25)),
+            )]),
+        );
+
+        let deferred_before = deferred_send_enqueued_count();
+        let reconnect_before = session_reconnect_total();
+
+        let frame = RelayMessage::new(
+            network.self_id.clone(),
+            RelayTarget::Direct(peer_id.clone()),
+            DEFAULT_RELAY_TTL,
+            Priority::Low,
+            DummyMsg,
+        );
+        assert!(
+            network.send_frame_to_peer(&peer_id, frame, message::Topic::Other),
+            "frame should be deferred when peer session is missing"
+        );
+        assert_eq!(
+            network
+                .deferred_send_queue
+                .by_peer
+                .get(&peer_id)
+                .map(VecDeque::len),
+            Some(1),
+            "missing-session send should enqueue exactly one deferred frame"
+        );
+        assert!(
+            !network.pending_connects.is_empty() || !network.connecting_peers.is_empty(),
+            "missing-session defer should schedule reconnect work"
+        );
+        assert!(
+            deferred_send_enqueued_count() >= deferred_before.saturating_add(1),
+            "deferred send counter should increment"
+        );
+        assert!(
+            session_reconnect_total() >= reconnect_before.saturating_add(1),
+            "reconnect counter should increment"
+        );
+    }
+
+    #[test]
+    fn missing_session_deferred_burst_schedules_single_reconnect() {
+        let _guard = deferred_send_test_guard();
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_addr = socket_addr!(127.0.0.1:45680);
+        network.current_topology.insert(peer_id.clone());
+        network
+            .current_peers_addresses
+            .push((peer_id.clone(), peer_addr.clone()));
+
+        let now = tokio::time::Instant::now();
+        network.retry_backoff.insert(
+            peer_id.clone(),
+            HashMap::from([(
+                peer_addr.to_string(),
+                (now + Duration::from_secs(2), Duration::from_millis(50)),
+            )]),
+        );
+
+        let reconnect_before = session_reconnect_total();
+        for _ in 0..8 {
+            let frame = RelayMessage::new(
+                network.self_id.clone(),
+                RelayTarget::Direct(peer_id.clone()),
+                DEFAULT_RELAY_TTL,
+                Priority::High,
+                DummyMsg,
+            );
+            assert!(
+                network.send_frame_to_peer(&peer_id, frame, message::Topic::Consensus),
+                "missing-session send should defer outbound frame"
+            );
+        }
+
+        assert!(
+            network.pending_connects.len() <= 1,
+            "deferred burst should not schedule duplicate reconnect attempts"
+        );
+        assert!(
+            network
+                .connecting_peers
+                .values()
+                .filter(|peer| peer.id() == &peer_id)
+                .count()
+                <= 1,
+            "deferred burst should not spawn duplicate active reconnects"
+        );
+        assert_eq!(
+            session_reconnect_total(),
+            reconnect_before.saturating_add(1),
+            "deferred burst should trigger reconnect once per unsatisfied peer session"
         );
     }
 
@@ -8435,6 +9097,22 @@ impl TrustDirection {
             Self::Outbound => "send",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeferredFlushOutcome {
+    Flushed,
+    PeerMissing,
+    Backpressured(ConnectionId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeferredPostResult {
+    Sent,
+    Full,
+    Closed,
+    CapabilitySkipped,
+    StaleGeneration,
 }
 
 #[derive(Clone, Debug, Default)]

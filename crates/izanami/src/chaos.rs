@@ -3,13 +3,16 @@
 use std::{
     borrow::Cow,
     sync::{
-        Arc, OnceLock,
+        Arc, Mutex as StdMutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 
-use color_eyre::{Result, eyre::eyre};
+use color_eyre::{
+    Result,
+    eyre::{WrapErr, eyre},
+};
 use futures::FutureExt;
 use iroha::client::Client;
 use iroha_config::{kura::FsyncMode, parameters::actual::SumeragiNposTimeouts};
@@ -19,11 +22,7 @@ use iroha_data_model::{
 };
 use iroha_genesis::GenesisBlock;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
-use rand::{
-    RngCore, SeedableRng,
-    rngs::StdRng,
-    seq::{IndexedRandom, SliceRandom},
-};
+use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use tokio::{
     sync::{Notify, OwnedSemaphorePermit, Semaphore},
     task::{JoinHandle, JoinSet, spawn_blocking},
@@ -38,7 +37,7 @@ use crate::{
         self, CpuStressConfig, DiskSaturationConfig, FaultConfig, NetworkLatencyConfig,
         NetworkPartitionConfig,
     },
-    instructions::{self, PreparedChaos, TransactionPlan, WorkloadEngine},
+    instructions::{self, AccountRecord, PreparedChaos, TransactionPlan, WorkloadEngine},
 };
 
 const IZANAMI_BLOCK_PAYLOAD_QUEUE: i64 = 512;
@@ -79,6 +78,343 @@ const IZANAMI_VALIDATION_WORKER_THREADS: i64 = 0;
 const IZANAMI_VALIDATION_WORK_QUEUE_CAP: i64 = 0;
 const IZANAMI_VALIDATION_RESULT_QUEUE_CAP: i64 = 0;
 const IZANAMI_VALIDATION_PENDING_CAP: i64 = 8_192;
+const IZANAMI_INGRESS_MAX_ATTEMPTS: usize = 3;
+const IZANAMI_INGRESS_UNHEALTHY_FAILURE_THRESHOLD: u32 = 2;
+const IZANAMI_INGRESS_UNHEALTHY_COOLDOWN_MS: u64 = 5_000;
+const IZANAMI_INGRESS_REPROBE_INTERVAL_MS: u64 = 1_000;
+const IZANAMI_INGRESS_REQUEST_TIMEOUT_MS: u64 = 5_000;
+const IZANAMI_INGRESS_STATUS_TIMEOUT_MS: u64 = 20_000;
+const IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
+
+#[derive(Clone, Copy, Debug)]
+struct IngressEndpointPoolConfig {
+    max_attempts: usize,
+    unhealthy_failure_threshold: u32,
+    unhealthy_cooldown: Duration,
+    reprobe_interval: Duration,
+}
+
+impl Default for IngressEndpointPoolConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: IZANAMI_INGRESS_MAX_ATTEMPTS,
+            unhealthy_failure_threshold: IZANAMI_INGRESS_UNHEALTHY_FAILURE_THRESHOLD,
+            unhealthy_cooldown: Duration::from_millis(IZANAMI_INGRESS_UNHEALTHY_COOLDOWN_MS),
+            reprobe_interval: Duration::from_millis(IZANAMI_INGRESS_REPROBE_INTERVAL_MS),
+        }
+    }
+}
+
+#[derive(Default)]
+struct IngressStats {
+    failover_total: AtomicU64,
+    endpoint_unhealthy_total: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct IngressStatsSnapshot {
+    failover_total: u64,
+    endpoint_unhealthy_total: u64,
+}
+
+impl IngressStats {
+    fn record_failover(&self) {
+        self.failover_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_endpoint_unhealthy(&self) {
+        self.endpoint_unhealthy_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> IngressStatsSnapshot {
+        IngressStatsSnapshot {
+            failover_total: self.failover_total.load(Ordering::Relaxed),
+            endpoint_unhealthy_total: self.endpoint_unhealthy_total.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct EndpointHealthState {
+    consecutive_failures: u32,
+    unhealthy_until: Option<Instant>,
+    last_probe_at: Option<Instant>,
+}
+
+#[derive(Clone)]
+struct EndpointHealthPool {
+    labels: Arc<Vec<String>>,
+    state: Arc<StdMutex<Vec<EndpointHealthState>>>,
+    cursor: Arc<AtomicU64>,
+    config: IngressEndpointPoolConfig,
+    ingress_stats: Arc<IngressStats>,
+}
+
+impl EndpointHealthPool {
+    fn new(
+        labels: Vec<String>,
+        config: IngressEndpointPoolConfig,
+        ingress_stats: Arc<IngressStats>,
+    ) -> Self {
+        let len = labels.len();
+        Self {
+            labels: Arc::new(labels),
+            state: Arc::new(StdMutex::new(vec![EndpointHealthState::default(); len])),
+            cursor: Arc::new(AtomicU64::new(0)),
+            config,
+            ingress_stats,
+        }
+    }
+
+    fn run_with_failover<T, F>(&self, op_name: &'static str, operation: F) -> Result<T>
+    where
+        F: FnMut(usize, &str) -> Result<T>,
+    {
+        self.run_with_failover_at(op_name, Instant::now(), operation)
+    }
+
+    fn run_with_failover_at<T, F>(
+        &self,
+        op_name: &'static str,
+        now: Instant,
+        mut operation: F,
+    ) -> Result<T>
+    where
+        F: FnMut(usize, &str) -> Result<T>,
+    {
+        let attempt_order = self.attempt_order_at(now);
+        if attempt_order.is_empty() {
+            return Err(eyre!(
+                "no ingress endpoints available for operation `{op_name}`"
+            ));
+        }
+        let max_attempts = self.config.max_attempts.max(1).min(attempt_order.len());
+        let mut last_error = None;
+        let mut attempted = 0usize;
+        for (attempt_idx, endpoint_idx) in attempt_order.into_iter().take(max_attempts).enumerate()
+        {
+            if attempt_idx > 0 {
+                self.ingress_stats.record_failover();
+            }
+            let label = self
+                .labels
+                .get(endpoint_idx)
+                .map(String::as_str)
+                .unwrap_or("<unknown>");
+            attempted = attempted.saturating_add(1);
+            match operation(endpoint_idx, label) {
+                Ok(value) => {
+                    self.mark_success(endpoint_idx);
+                    return Ok(value);
+                }
+                Err(err) => {
+                    let retryable = is_ingress_failover_retryable(&err);
+                    let transitioned_unhealthy = self.mark_failure_at(endpoint_idx, now, retryable);
+                    if transitioned_unhealthy {
+                        self.ingress_stats.record_endpoint_unhealthy();
+                        warn!(
+                            target: "izanami::ingress",
+                            operation = op_name,
+                            endpoint = label,
+                            attempt = attempt_idx + 1,
+                            "marking ingress endpoint unhealthy"
+                        );
+                    }
+                    warn!(
+                        target: "izanami::ingress",
+                        ?err,
+                        operation = op_name,
+                        endpoint = label,
+                        attempt = attempt_idx + 1,
+                        retryable,
+                        "ingress endpoint request failed"
+                    );
+                    last_error = Some(err);
+                    if !retryable {
+                        break;
+                    }
+                }
+            }
+        }
+        match last_error {
+            Some(err) => Err(err).wrap_err_with(|| {
+                format!("ingress operation `{op_name}` failed after {attempted} attempt(s)")
+            }),
+            None => Err(eyre!(
+                "ingress operation `{op_name}` failed without making an endpoint attempt"
+            )),
+        }
+    }
+
+    fn attempt_order_at(&self, now: Instant) -> Vec<usize> {
+        let len = self.labels.len();
+        if len == 0 {
+            return Vec::new();
+        }
+        let base = self.cursor.fetch_add(1, Ordering::Relaxed);
+        let base_idx_u64 = base % u64::try_from(len).unwrap_or(1);
+        let base_idx = usize::try_from(base_idx_u64).unwrap_or(0);
+        let mut healthy = Vec::with_capacity(len);
+        let mut probes = Vec::new();
+        let mut forced_probe: Option<(usize, Instant)> = None;
+        let mut guard = self
+            .state
+            .lock()
+            .expect("endpoint health state mutex should not be poisoned");
+        for offset in 0..len {
+            let idx = (base_idx + offset) % len;
+            let state = &mut guard[idx];
+            let still_unhealthy = state.unhealthy_until.is_some_and(|until| now < until);
+            if !still_unhealthy {
+                state.unhealthy_until = None;
+                healthy.push(idx);
+                continue;
+            }
+            let probe_due = state.last_probe_at.is_none_or(|last| {
+                now.saturating_duration_since(last) >= self.config.reprobe_interval
+            });
+            if probe_due {
+                state.last_probe_at = Some(now);
+                probes.push(idx);
+            }
+            if let Some(unhealthy_until) = state.unhealthy_until {
+                let should_replace = forced_probe
+                    .map(|(_, current_until)| unhealthy_until < current_until)
+                    .unwrap_or(true);
+                if should_replace {
+                    forced_probe = Some((idx, unhealthy_until));
+                }
+            }
+        }
+        if healthy.is_empty() && probes.is_empty() {
+            if let Some((idx, _)) = forced_probe {
+                if let Some(state) = guard.get_mut(idx) {
+                    state.last_probe_at = Some(now);
+                }
+                probes.push(idx);
+            }
+        }
+        healthy.extend(probes);
+        healthy
+    }
+
+    fn mark_success(&self, endpoint_idx: usize) {
+        if let Ok(mut guard) = self.state.lock() {
+            if let Some(state) = guard.get_mut(endpoint_idx) {
+                state.consecutive_failures = 0;
+                state.unhealthy_until = None;
+            }
+        }
+    }
+
+    fn mark_failure_at(&self, endpoint_idx: usize, now: Instant, retryable: bool) -> bool {
+        let Ok(mut guard) = self.state.lock() else {
+            return false;
+        };
+        let Some(state) = guard.get_mut(endpoint_idx) else {
+            return false;
+        };
+        state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+        if !retryable || state.consecutive_failures < self.config.unhealthy_failure_threshold {
+            return false;
+        }
+        let was_unhealthy = state.unhealthy_until.is_some_and(|until| now < until);
+        state.unhealthy_until = Some(
+            now.checked_add(self.config.unhealthy_cooldown)
+                .unwrap_or(now),
+        );
+        !was_unhealthy
+    }
+
+    #[cfg(test)]
+    fn endpoint_state(&self, endpoint_idx: usize) -> EndpointHealthState {
+        self.state
+            .lock()
+            .expect("endpoint health state mutex should not be poisoned")
+            .get(endpoint_idx)
+            .copied()
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Clone)]
+struct IngressEndpoint {
+    peer: NetworkPeer,
+    label: String,
+}
+
+#[derive(Clone)]
+struct IngressEndpointPool {
+    endpoints: Arc<Vec<IngressEndpoint>>,
+    health: EndpointHealthPool,
+}
+
+impl IngressEndpointPool {
+    fn from_peers(
+        peers: &[NetworkPeer],
+        config: IngressEndpointPoolConfig,
+        ingress_stats: Arc<IngressStats>,
+    ) -> Self {
+        let mut endpoints: Vec<_> = peers
+            .iter()
+            .cloned()
+            .map(|peer| IngressEndpoint {
+                label: peer.torii_url(),
+                peer,
+            })
+            .collect();
+        endpoints.sort_by(|lhs, rhs| {
+            lhs.peer
+                .id()
+                .cmp(&rhs.peer.id())
+                .then_with(|| lhs.label.cmp(&rhs.label))
+        });
+        let labels = endpoints
+            .iter()
+            .map(|endpoint| endpoint.label.clone())
+            .collect();
+        let health = EndpointHealthPool::new(labels, config, ingress_stats);
+        Self {
+            endpoints: Arc::new(endpoints),
+            health,
+        }
+    }
+
+    fn run_with_failover<T, F>(&self, op_name: &'static str, mut operation: F) -> Result<T>
+    where
+        F: FnMut(&NetworkPeer) -> Result<T>,
+    {
+        let endpoints = Arc::clone(&self.endpoints);
+        self.health
+            .run_with_failover(op_name, move |endpoint_idx, _label| {
+                let endpoint = endpoints
+                    .get(endpoint_idx)
+                    .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
+                operation(&endpoint.peer)
+            })
+    }
+}
+
+fn is_ingress_failover_retryable(error: &color_eyre::Report) -> bool {
+    let message = format!("{error:#}").to_ascii_lowercase();
+    message.contains("timed out")
+        || message.contains("timeout")
+        || message.contains("connection refused")
+        || message.contains("connection reset")
+        || message.contains("broken pipe")
+        || contains_http_5xx_status(&message)
+}
+
+fn contains_http_5xx_status(message: &str) -> bool {
+    (500..=599).any(|status| {
+        let code = status.to_string();
+        message.contains(&format!("status code: {code}"))
+            || message.contains(&format!("status: {code}"))
+            || message.contains(&format!("http {code}"))
+            || message.contains(&format!(" {code} "))
+    })
+}
 
 #[derive(Clone, Copy, Debug)]
 struct NposTiming {
@@ -561,12 +897,23 @@ impl IzanamiRunner {
         );
         let genesis = Arc::new(self.network.genesis());
         let metrics = Arc::new(Metrics::default());
+        let ingress_stats = Arc::new(IngressStats::default());
+        let ingress_pool = Arc::new(IngressEndpointPool::from_peers(
+            &self.peers,
+            IngressEndpointPoolConfig::default(),
+            Arc::clone(&ingress_stats),
+        ));
         let submission_counter = Arc::new(AtomicU64::new(0));
 
         let faulty_handles =
             self.spawn_fault_tasks(&config_layers, &genesis, &run_control, &mut rng);
-        let load_handles =
-            self.spawn_load_supervisors(&metrics, &run_control, &mut rng, &submission_counter);
+        let load_handles = self.spawn_load_supervisors(
+            &metrics,
+            &ingress_pool,
+            &run_control,
+            &mut rng,
+            &submission_counter,
+        );
 
         let target_result = if let Some(target_blocks) = self.config.target_blocks {
             wait_for_target_blocks(
@@ -582,13 +929,14 @@ impl IzanamiRunner {
         };
 
         if let Err(err) = target_result {
+            warn!(
+                target: "izanami::progress",
+                ?err,
+                "target progress monitoring failed; stopping run"
+            );
             run_control.stop();
-            for handle in load_handles {
-                let _ = handle.await;
-            }
-            for handle in faulty_handles {
-                let _ = handle.await;
-            }
+            await_worker_shutdown(load_handles, "load").await;
+            await_worker_shutdown(faulty_handles, "fault").await;
             self.network.shutdown().await;
             return Err(err);
         }
@@ -597,22 +945,21 @@ impl IzanamiRunner {
             run_control.stop();
         }
 
-        for handle in load_handles {
-            let _ = handle.await;
-        }
-        for handle in faulty_handles {
-            let _ = handle.await;
-        }
+        await_worker_shutdown(load_handles, "load").await;
+        await_worker_shutdown(faulty_handles, "fault").await;
 
         self.network.shutdown().await;
 
         let snapshot = metrics.snapshot();
+        let ingress_snapshot = ingress_stats.snapshot();
         info!(
             target: "izanami::summary",
             successes = snapshot.successes,
             failures = snapshot.failures,
             expected_failures = snapshot.expected_failures,
             unexpected_successes = snapshot.unexpected_successes,
+            izanami_ingress_failover_total = ingress_snapshot.failover_total,
+            izanami_ingress_endpoint_unhealthy_total = ingress_snapshot.endpoint_unhealthy_total,
             "izanami run complete"
         );
         Ok(())
@@ -680,16 +1027,17 @@ impl IzanamiRunner {
     fn spawn_load_supervisors(
         &self,
         metrics: &Arc<Metrics>,
+        ingress_pool: &Arc<IngressEndpointPool>,
         run_control: &Arc<RunControl>,
         rng: &mut StdRng,
         submission_counter: &Arc<AtomicU64>,
     ) -> Vec<JoinHandle<()>> {
-        let peers = self.peers.clone();
         let workload = Arc::clone(&self.workload);
         let semaphore = Arc::new(Semaphore::new(self.config.max_inflight));
         let mut load_rng = rng.clone();
         let interval = Duration::from_secs_f64(1.0 / self.config.tps);
         let metrics = Arc::clone(metrics);
+        let ingress_pool = Arc::clone(ingress_pool);
         let run_control = Arc::clone(run_control);
         let stop_notify = run_control.stop_notifier();
         let deadline = run_control.deadline();
@@ -724,17 +1072,13 @@ impl IzanamiRunner {
                         continue;
                     }
                 };
-                let Some(peer) = peers.choose(&mut load_rng) else {
-                    drop(permit);
-                    break;
-                };
-                let peer = peer.clone();
                 let metrics = Arc::clone(&metrics);
+                let ingress_pool = Arc::clone(&ingress_pool);
                 let submission_counter = Arc::clone(&submission_counter);
                 let workload = Arc::clone(&workload);
                 submissions.spawn(async move {
                     submit_plan(
-                        &peer,
+                        &ingress_pool,
                         plan,
                         permit,
                         &metrics,
@@ -744,6 +1088,7 @@ impl IzanamiRunner {
                     .await;
                 });
             }
+            submissions.abort_all();
             while let Some(result) = submissions.join_next().await {
                 let _ = result;
             }
@@ -762,6 +1107,45 @@ fn drain_ready_submissions(submissions: &mut JoinSet<()>) {
     }
 }
 
+fn tune_ingress_client(mut client: Client) -> Client {
+    client.torii_request_timeout = Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS);
+    client.transaction_status_timeout = Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS);
+    client
+}
+
+async fn await_worker_shutdown(handles: Vec<JoinHandle<()>>, worker_kind: &'static str) {
+    await_worker_shutdown_with_timeout(
+        handles,
+        worker_kind,
+        Duration::from_secs(IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS),
+    )
+    .await;
+}
+
+async fn await_worker_shutdown_with_timeout(
+    handles: Vec<JoinHandle<()>>,
+    worker_kind: &'static str,
+    timeout: Duration,
+) {
+    for mut handle in handles {
+        match time::timeout(timeout, &mut handle).await {
+            Ok(result) => {
+                let _ = result;
+            }
+            Err(_) => {
+                warn!(
+                    target: "izanami::run",
+                    worker_kind,
+                    ?timeout,
+                    "worker shutdown timed out; aborting task"
+                );
+                handle.abort();
+                let _ = handle.await;
+            }
+        }
+    }
+}
+
 fn seeded_rng_from_seed(seed: Option<u64>) -> StdRng {
     seed.map_or_else(
         || {
@@ -772,7 +1156,7 @@ fn seeded_rng_from_seed(seed: Option<u64>) -> StdRng {
     )
 }
 
-fn min_peer_height(peers: &[NetworkPeer]) -> u64 {
+fn sampled_peer_heights(peers: &[NetworkPeer]) -> Vec<u64> {
     peers
         .iter()
         .map(|peer| {
@@ -780,8 +1164,25 @@ fn min_peer_height(peers: &[NetworkPeer]) -> u64 {
                 .map(|height| height.total)
                 .unwrap_or(0)
         })
-        .min()
-        .unwrap_or(0)
+        .collect()
+}
+
+fn tolerated_peer_failures(peer_count: usize) -> usize {
+    if peer_count < 4 {
+        0
+    } else {
+        peer_count.saturating_sub(1) / 3
+    }
+}
+
+fn quorum_min_height_from_samples(mut heights: Vec<u64>) -> u64 {
+    if heights.is_empty() {
+        return 0;
+    }
+    heights.sort_unstable();
+    let tolerated = tolerated_peer_failures(heights.len());
+    let index = tolerated.min(heights.len().saturating_sub(1));
+    heights[index]
 }
 
 struct ProgressState {
@@ -821,23 +1222,30 @@ async fn wait_for_target_blocks(
 ) -> Result<()> {
     let start = Instant::now();
     let mut progress = ProgressState::new(start);
+    let tolerated_failures = tolerated_peer_failures(peers.len());
     loop {
         if run_control.should_stop() {
             return Err(eyre!("izanami run stopped before target blocks reached"));
         }
         let now = Instant::now();
+        let heights = sampled_peer_heights(peers);
+        let strict_min_height = heights.iter().copied().min().unwrap_or(0);
+        let min_height = quorum_min_height_from_samples(heights);
         if now >= run_control.deadline() {
             return Err(eyre!(
-                "timed out before reaching target blocks (min height {}, target {})",
+                "timed out before reaching target blocks (quorum min height {}, strict min {}, target {}, tolerated_failures {})",
                 progress.last_height,
-                target_blocks
+                strict_min_height,
+                target_blocks,
+                tolerated_failures
             ));
         }
-        let min_height = min_peer_height(peers);
         if min_height >= target_blocks {
             info!(
                 target: "izanami::progress",
-                min_height,
+                quorum_min_height = min_height,
+                strict_min_height,
+                tolerated_failures,
                 target_blocks,
                 elapsed = ?now.duration_since(start),
                 "target block height reached"
@@ -847,16 +1255,20 @@ async fn wait_for_target_blocks(
         if progress.update(now, min_height) {
             info!(
                 target: "izanami::progress",
-                min_height,
+                quorum_min_height = min_height,
+                strict_min_height,
+                tolerated_failures,
                 target_blocks,
                 "block height advanced"
             );
         } else if progress.stalled(now, progress_timeout) {
             return Err(eyre!(
-                "no block height progress for {:?} (min height {}, target {})",
+                "no block height progress for {:?} (quorum min height {}, strict min {}, target {}, tolerated_failures {})",
                 progress_timeout,
                 min_height,
-                target_blocks
+                strict_min_height,
+                target_blocks,
+                tolerated_failures
             ));
         }
         let remaining = run_control
@@ -865,9 +1277,11 @@ async fn wait_for_target_blocks(
             .unwrap_or_default();
         if remaining.is_zero() {
             return Err(eyre!(
-                "timed out before reaching target blocks (min height {}, target {})",
+                "timed out before reaching target blocks (quorum min height {}, strict min {}, target {}, tolerated_failures {})",
                 min_height,
-                target_blocks
+                strict_min_height,
+                target_blocks,
+                tolerated_failures
             ));
         }
         time::sleep(progress_interval.min(remaining)).await;
@@ -956,14 +1370,14 @@ fn record_plan_skip(
 }
 
 async fn submit_plan(
-    peer: &NetworkPeer,
+    ingress_pool: &Arc<IngressEndpointPool>,
     plan: TransactionPlan,
     _permit: OwnedSemaphorePermit,
     metrics: &Arc<Metrics>,
     submission_counter: &Arc<AtomicU64>,
     workload: &Arc<WorkloadEngine>,
 ) {
-    let peer = peer.clone();
+    let ingress_pool = Arc::clone(ingress_pool);
     let signer = plan.signer.clone();
     let instructions = plan.instructions.clone();
     let plan_label = plan.label;
@@ -975,29 +1389,11 @@ async fn submit_plan(
     let mint_target = plan.mint_trigger_repetitions();
 
     if let Some((trigger_id, burn_amount)) = burn_target.clone() {
-        let peer_for_query = peer.clone();
-        let signer_for_query = signer.clone();
-        let trigger_id_for_query = trigger_id.clone();
-        let query_result = spawn_blocking(move || {
-            let client = peer_for_query.client_for(
-                &signer_for_query.id,
-                signer_for_query.key_pair.private_key().clone(),
-            );
-            query_trigger_repetitions(&client, &trigger_id_for_query)
-        })
-        .await;
-        let precheck = match query_result {
-            Ok(result) => evaluate_burn_precheck(result, burn_amount),
-            Err(err) => {
-                debug!(
-                    target: "izanami::workload",
-                    ?err,
-                    plan = plan_label,
-                    "trigger repetition query task failed"
-                );
-                BurnPrecheck::SkipQueryFailed
-            }
-        };
+        let precheck = evaluate_burn_precheck(
+            query_trigger_repetitions_with_failover(&ingress_pool, &signer, trigger_id.clone())
+                .await,
+            burn_amount,
+        );
         match precheck {
             BurnPrecheck::Proceed { on_chain } => {
                 workload
@@ -1042,29 +1438,10 @@ async fn submit_plan(
     }
 
     if let Some((trigger_id, _mint_amount)) = mint_target.clone() {
-        let peer_for_query = peer.clone();
-        let signer_for_query = signer.clone();
-        let trigger_id_for_query = trigger_id.clone();
-        let query_result = spawn_blocking(move || {
-            let client = peer_for_query.client_for(
-                &signer_for_query.id,
-                signer_for_query.key_pair.private_key().clone(),
-            );
-            query_trigger_repetitions(&client, &trigger_id_for_query)
-        })
-        .await;
-        let precheck = match query_result {
-            Ok(result) => evaluate_mint_precheck(result),
-            Err(err) => {
-                debug!(
-                    target: "izanami::workload",
-                    ?err,
-                    plan = plan_label,
-                    "trigger repetition query task failed"
-                );
-                MintPrecheck::SkipQueryFailed
-            }
-        };
+        let precheck = evaluate_mint_precheck(
+            query_trigger_repetitions_with_failover(&ingress_pool, &signer, trigger_id.clone())
+                .await,
+        );
         match precheck {
             MintPrecheck::Proceed { on_chain } => {
                 workload
@@ -1095,34 +1472,38 @@ async fn submit_plan(
         }
     }
 
-    let peer_for_post = peer.clone();
-    let signer_for_post = signer.clone();
+    let ingress_pool_for_submit = Arc::clone(&ingress_pool);
+    let signer_for_submit = signer.clone();
+    let instructions_for_submit = instructions.clone();
+    let submission_counter_for_submit = Arc::clone(&submission_counter);
     let succeeded = run_submission(plan_label, expect_success, metrics, move || {
-        let client = peer.client_for(&signer.id, signer.key_pair.private_key().clone());
-        let metadata = submission_metadata(&submission_counter);
-        client
-            .submit_all_blocking_with_metadata(instructions, metadata)
-            .map(|_| ())
+        ingress_pool_for_submit.run_with_failover("submit_all_blocking_with_metadata", |peer| {
+            let client = tune_ingress_client(peer.client_for(
+                &signer_for_submit.id,
+                signer_for_submit.key_pair.private_key().clone(),
+            ));
+            let metadata = submission_metadata(submission_counter_for_submit.as_ref());
+            client
+                .submit_all_blocking_with_metadata(instructions_for_submit.clone(), metadata)
+                .map(|_| ())
+        })
     })
     .await;
     if !succeeded {
         if let Some((trigger_id, _)) = mint_target {
-            let trigger_id_for_query = trigger_id.clone();
-            let query_result = spawn_blocking(move || {
-                let client = peer_for_post.client_for(
-                    &signer_for_post.id,
-                    signer_for_post.key_pair.private_key().clone(),
-                );
-                query_trigger_repetitions(&client, &trigger_id_for_query)
-            })
-            .await;
-            match query_result {
-                Ok(Ok(Some(on_chain))) if on_chain > 0 => {
+            match query_trigger_repetitions_with_failover(
+                &ingress_pool,
+                &signer,
+                trigger_id.clone(),
+            )
+            .await
+            {
+                Ok(Some(on_chain)) if on_chain > 0 => {
                     workload
                         .sync_trigger_repetitions(&trigger_id, Some(on_chain))
                         .await;
                 }
-                Ok(Ok(Some(_))) | Ok(Ok(None)) => {
+                Ok(Some(_)) | Ok(None) => {
                     workload.sync_trigger_repetitions(&trigger_id, None).await;
                 }
                 _ => {}
@@ -1130,6 +1511,28 @@ async fn submit_plan(
         }
     }
     workload.record_result(&plan, succeeded).await;
+}
+
+async fn query_trigger_repetitions_with_failover(
+    ingress_pool: &Arc<IngressEndpointPool>,
+    signer: &AccountRecord,
+    trigger_id: TriggerId,
+) -> Result<Option<u32>> {
+    let ingress_pool = Arc::clone(ingress_pool);
+    let signer = signer.clone();
+    match spawn_blocking(move || {
+        ingress_pool.run_with_failover("query_trigger_repetitions", |peer| {
+            let client = tune_ingress_client(
+                peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
+            );
+            query_trigger_repetitions(&client, &trigger_id)
+        })
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => Err(err.into()),
+    }
 }
 
 async fn run_submission<F>(
@@ -1743,6 +2146,166 @@ mod tests {
         assert_eq!(snapshot.unexpected_successes, 1);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn await_worker_shutdown_returns_for_completed_tasks() {
+        let handle = tokio::spawn(async {});
+        await_worker_shutdown_with_timeout(vec![handle], "test", Duration::from_millis(100)).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn await_worker_shutdown_aborts_hung_tasks() {
+        let handle = tokio::spawn(async {
+            loop {
+                time::sleep(Duration::from_secs(60)).await;
+            }
+        });
+
+        timeout(
+            Duration::from_secs(1),
+            await_worker_shutdown_with_timeout(vec![handle], "test", Duration::from_millis(10)),
+        )
+        .await
+        .expect("worker shutdown should return after aborting hung tasks");
+    }
+
+    #[test]
+    fn endpoint_pool_rotates_on_retryable_failure() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:1".to_string(),
+                "http://127.0.0.1:2".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 3,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(5),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            Arc::clone(&ingress_stats),
+        );
+        let now = Instant::now();
+        let mut attempts = Vec::new();
+        let result: Result<&'static str> = pool.run_with_failover_at("submit", now, |idx, _| {
+            attempts.push(idx);
+            if idx == 0 {
+                Err(eyre!("connection refused"))
+            } else {
+                Ok("ok")
+            }
+        });
+        assert_eq!(result.expect("alternate endpoint should succeed"), "ok");
+        assert_eq!(attempts, vec![0, 1]);
+        assert_eq!(
+            ingress_stats.snapshot(),
+            IngressStatsSnapshot {
+                failover_total: 1,
+                endpoint_unhealthy_total: 1
+            }
+        );
+    }
+
+    #[test]
+    fn endpoint_pool_query_confirmation_fails_over() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:11".to_string(),
+                "http://127.0.0.1:12".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 3,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(5),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            ingress_stats,
+        );
+        let now = Instant::now();
+        let mut attempts = Vec::new();
+        let result: Result<Option<u32>> =
+            pool.run_with_failover_at("query_confirmation", now, |idx, _| {
+                attempts.push(idx);
+                if idx == 0 {
+                    Err(eyre!("request timed out"))
+                } else {
+                    Ok(Some(9))
+                }
+            });
+        assert_eq!(
+            result.expect("query should fail over to alternate endpoint"),
+            Some(9)
+        );
+        assert_eq!(attempts, vec![0, 1]);
+    }
+
+    #[test]
+    fn endpoint_pool_respects_cooldown_then_reprobes() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:21".to_string(),
+                "http://127.0.0.1:22".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 3,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(10),
+                reprobe_interval: Duration::from_secs(2),
+            },
+            ingress_stats,
+        );
+        let start = Instant::now();
+        let first: Result<&'static str> = pool.run_with_failover_at("submit", start, |idx, _| {
+            if idx == 0 {
+                Err(eyre!("connection refused"))
+            } else {
+                Ok("ok")
+            }
+        });
+        assert_eq!(first.expect("second endpoint should succeed"), "ok");
+        assert!(
+            pool.endpoint_state(0).unhealthy_until.is_some(),
+            "first endpoint should enter cooldown after retryable failure"
+        );
+
+        let mut attempts_before_reprobe = Vec::new();
+        let second: Result<&'static str> =
+            pool.run_with_failover_at("submit", start + Duration::from_secs(1), |idx, _| {
+                attempts_before_reprobe.push(idx);
+                Ok("ok")
+            });
+        assert_eq!(
+            second.expect("healthy endpoint should continue serving"),
+            "ok"
+        );
+        assert_eq!(
+            attempts_before_reprobe,
+            vec![1],
+            "cooldown should suppress early reprobes"
+        );
+
+        let mut attempts_after_reprobe = Vec::new();
+        let third: Result<&'static str> =
+            pool.run_with_failover_at("submit", start + Duration::from_secs(3), |idx, _| {
+                attempts_after_reprobe.push(idx);
+                if idx == 1 {
+                    Err(eyre!("timed out"))
+                } else {
+                    Ok("recovered")
+                }
+            });
+        assert_eq!(
+            third.expect("pool should reprobe cooled endpoint and recover"),
+            "recovered"
+        );
+        assert_eq!(
+            attempts_after_reprobe,
+            vec![1, 0],
+            "reprobe should include the unhealthy endpoint after the interval"
+        );
+    }
+
     #[test]
     fn seeded_rng_is_deterministic_for_same_seed() {
         let mut rng_a = seeded_rng_from_seed(Some(777));
@@ -1789,6 +2352,30 @@ mod tests {
         assert!(state.update(start + Duration::from_secs(3), 2));
         assert!(!state.stalled(start + Duration::from_secs(6), Duration::from_secs(5)));
         assert!(state.stalled(start + Duration::from_secs(9), Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn tolerated_peer_failures_matches_bft_window() {
+        assert_eq!(tolerated_peer_failures(0), 0);
+        assert_eq!(tolerated_peer_failures(1), 0);
+        assert_eq!(tolerated_peer_failures(3), 0);
+        assert_eq!(tolerated_peer_failures(4), 1);
+        assert_eq!(tolerated_peer_failures(7), 2);
+    }
+
+    #[test]
+    fn quorum_min_height_ignores_single_straggler() {
+        assert_eq!(quorum_min_height_from_samples(vec![]), 0);
+        assert_eq!(
+            quorum_min_height_from_samples(vec![246, 316, 316, 316]),
+            316
+        );
+        assert_eq!(
+            quorum_min_height_from_samples(vec![0, 0, 316, 316]),
+            0,
+            "two failed peers should not be hidden for a 4-peer run"
+        );
+        assert_eq!(quorum_min_height_from_samples(vec![9, 10, 11]), 9);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

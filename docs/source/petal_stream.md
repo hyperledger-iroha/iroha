@@ -36,6 +36,14 @@ Frames are mapped into a square grid of `grid_size × grid_size` cells.
   largest frame so scanners do not have to rescale between frames. The reference
   encoder uses the canonical size ladder `33..69` in steps of 4 (see
   `PETAL_STREAM_GRID_SIZES`).
+- **Katakana presets:** when `--channel katakana-base94` is used and the operator
+  leaves both `--chunk-size` and `--grid-size` at defaults, the encoder applies
+  a deterministic preset selected by `--katakana-preset`:
+  - `balanced` (default): `chunk_size=176`, `grid_size>=41` with `41` preferred.
+  - `distance-safe`: `chunk_size=96`, `grid_size>=33` with `33` preferred for
+    larger per-cell boxes at longer camera distances. When `--parity-group` is not
+    forced, this preset also defaults to `parity_group=4` for stronger recovery in
+    camera-capture conditions.
 
 If the header + payload bits exceed capacity, the encoder must choose a larger grid size
 or fail.
@@ -77,15 +85,37 @@ pipelines do not collapse bit separation.
 iroha offline petal encode --input payload.bin --output ./petal_out --format gif --fps 24 --style sora-temple
 ```
 
+Katakana base94 balanced example:
+
+```bash
+iroha offline petal encode --input payload.bin --output ./petal_out --format png --channel katakana-base94 --style sora-temple-command --dimension 1024
+```
+
+Katakana base94 distance-safe example:
+
+```bash
+iroha offline petal encode --input payload.bin --output ./petal_out --format png --channel katakana-base94 --katakana-preset distance-safe --style sora-temple-command --dimension 1024
+```
+
 `eval-capture` example (distance/motion robustness gate):
 
 ```bash
-iroha offline petal eval-capture --input-dir ./petal_out/png --profile default --min-success-ratio 0.95 --output-report ./petal_out/capture_eval.json
+iroha offline petal eval-capture --input-dir ./petal_out/png --channel katakana-base94 --profile default --min-success-ratio 0.95 --output-report ./petal_out/capture_eval.json
 ```
 
 `eval-capture` applies deterministic perturbations (distance downscale, blur, motion blur,
 jitter, exposure/noise shifts), decodes each perturbed frame, and fails if the success ratio
 drops below the configured threshold.
+
+`simulate-realtime` example (frame-by-frame live-read simulation):
+
+```bash
+iroha offline petal simulate-realtime --input-dir ./petal_out/png --channel katakana-base94 --profile default --simulate-fps 24 --realtime-loops 3 --output-payload ./petal_out/realtime_decoded.bin --output-report ./petal_out/realtime_report.json
+```
+
+`simulate-realtime` replays rendered frames in order and now supports deterministic
+looped playback with `--realtime-loops <n>`, including `loop_index` and `source_index`
+per frame in the JSON report.
 
 `score-styles` example (repeatable style ranking report):
 

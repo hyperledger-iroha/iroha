@@ -3176,6 +3176,46 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_flat_hash()
 }
 
 #[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_path_transaction_hash_alias() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 106121,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.transactions.get",
+                "arguments": {
+                    "path": {
+                        "transaction_hash": "not-a-hash"
+                    }
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tool_is_error(&call),
+        "invalid nested transaction_hash alias should be marked as MCP tool error for transaction detail alias"
+    );
+    let structured = structured_content(&call);
+    assert!(
+        structured
+            .get("status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| status >= 400),
+        "expected invalid nested transaction_hash alias to be rejected by explorer detail alias"
+    );
+}
+
+#[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_instructions_list_accepts_flat_query_fields() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
@@ -3282,6 +3322,47 @@ async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_alias_short
             .and_then(Value::as_u64)
             .is_some_and(|status| status >= 400),
         "expected invalid transaction hash alias to be rejected by explorer detail alias"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_path_transaction_hash_alias() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1061511,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.instructions.get",
+                "arguments": {
+                    "path": {
+                        "transaction_hash": "not-a-hash",
+                        "index": 0
+                    }
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tool_is_error(&call),
+        "invalid nested transaction_hash alias should be marked as MCP tool error for instruction detail alias"
+    );
+    let structured = structured_content(&call);
+    assert!(
+        structured
+            .get("status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| status >= 400),
+        "expected invalid nested transaction_hash alias to be rejected by instruction detail alias"
     );
 }
 

@@ -186,7 +186,11 @@ impl Actor {
         self.vote_log.clear();
         self.vote_validation_cache.clear();
         self.deferred_votes.clear();
+        self.consensus_recovery.clear();
         self.deferred_qcs.clear();
+        self.deferred_qc_roster_state.clear();
+        self.deferred_missing_payload_qcs.clear();
+        self.quarantined_block_sync_qcs.clear();
         self.vote_roster_cache.clear();
         let now = Instant::now();
         let (effective_mode, pacemaker_block_time, pacemaker_timeouts) = {
@@ -207,6 +211,7 @@ impl Actor {
         };
         let (_, redundant_r) = self.collector_plan_params_for_mode(effective_mode);
         self.subsystems.propose.collector_redundant_limit = redundant_r.max(1);
+        self.no_roster_fallback_recovery.clear();
         self.pending.missing_block_requests.clear();
         self.subsystems.da_rbc.da.da_bundles.clear();
         self.subsystems.da_rbc.da.da_pin_bundles.clear();

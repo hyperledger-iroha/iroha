@@ -6623,6 +6623,38 @@ pub struct Metrics {
     pub sumeragi_missing_block_fetch_dwell_ms: Histogram,
     /// Sumeragi: number of peers targeted when requesting a missing block payload
     pub sumeragi_missing_block_fetch_targets: Histogram,
+    /// Block-sync QCs quarantined because local context was missing.
+    pub blocksync_qc_quarantine_total: IntCounter,
+    /// Quarantined block-sync QCs that were revalidated successfully.
+    pub blocksync_qc_revalidated_total: IntCounter,
+    /// Block-sync QCs dropped permanently after bounded revalidation.
+    pub blocksync_qc_final_drop_total: IntCounterVec,
+    /// QCs deferred due to missing payload.
+    pub qc_deferred_missing_payload_total: IntCounter,
+    /// Deferred QCs resolved after payload arrival.
+    pub qc_deferred_resolved_total: IntCounter,
+    /// Deferred QCs expired after bounded retries.
+    pub qc_deferred_expired_total: IntCounter,
+    /// Consensus deferrals caused by empty commit topology.
+    pub consensus_empty_commit_topology_defer_total: IntCounter,
+    /// Empty-topology recoveries escalated to forced view changes.
+    pub consensus_empty_commit_topology_escalation_total: IntCounter,
+    /// Recovery state-machine transitions labeled by state.
+    pub consensus_recovery_state_transitions_total: IntCounterVec,
+    /// Height-scoped missing-block recoveries escalated via deterministic hard cap.
+    pub consensus_missing_block_height_escalation_total: IntCounter,
+    /// Sidecar mismatches quarantined in fail-closed mode.
+    pub consensus_sidecar_quarantine_total: IntCounter,
+    /// Sidecar mismatches final-dropped after retry/TTL bounds.
+    pub consensus_sidecar_final_drop_total: IntCounter,
+    /// Range-pull escalation attempts triggered by dependency recovery.
+    pub blocksync_range_pull_escalation_total: IntCounter,
+    /// Successful range-pull recoveries.
+    pub blocksync_range_pull_success_total: IntCounter,
+    /// Range-pull recoveries that expired without progress.
+    pub blocksync_range_pull_failure_total: IntCounter,
+    /// Stuck-round duration observed while recovery waits for dependencies.
+    pub consensus_recovery_stuck_round_seconds: Histogram,
     /// Sumeragi DA availability: missing availability artifacts (labeled by reason)
     pub sumeragi_da_gate_block_total: IntCounterVec,
     /// Sumeragi DA availability: last recorded reason code (0=none,1=missing_local_data,3=manifest_missing,4=manifest_hash_mismatch,5=manifest_read_failed,6=manifest_spool_scan)
@@ -6827,6 +6859,14 @@ pub struct Metrics {
     pub p2p_dns_reconnect_success_total: GenericGauge<AtomicU64>,
     /// Number of scheduled per-address connect backoffs
     pub p2p_backoff_scheduled_total: GenericGauge<AtomicU64>,
+    /// Number of deferred outbound frames enqueued while peer sessions were unavailable.
+    pub p2p_deferred_send_enqueued_total: GenericGauge<AtomicU64>,
+    /// Number of deferred outbound frames dropped (expiry, overflow, stale generation).
+    pub p2p_deferred_send_dropped_total: GenericGauge<AtomicU64>,
+    /// Number of reconnect attempts triggered while deferring outbound frames.
+    pub p2p_session_reconnect_total: GenericGauge<AtomicU64>,
+    /// Cumulative reconnect retry delay (seconds, rounded up from milliseconds).
+    pub p2p_connect_retry_seconds: GenericGauge<AtomicU64>,
     /// Number of incoming connections rejected by per-IP throttle
     pub p2p_accept_throttled_total: GenericGauge<AtomicU64>,
     /// Number of accept throttle bucket evictions (idle/capacity).
@@ -9423,6 +9463,26 @@ impl Default for Metrics {
             "Number of per-address connect backoffs scheduled",
         )
         .expect("Infallible");
+        let p2p_deferred_send_enqueued_total = GenericGauge::new(
+            "p2p_deferred_send_enqueued_total",
+            "Number of deferred outbound frames enqueued while peer sessions were unavailable",
+        )
+        .expect("Infallible");
+        let p2p_deferred_send_dropped_total = GenericGauge::new(
+            "p2p_deferred_send_dropped_total",
+            "Number of deferred outbound frames dropped (expiry, overflow, stale generation)",
+        )
+        .expect("Infallible");
+        let p2p_session_reconnect_total = GenericGauge::new(
+            "p2p_session_reconnect_total",
+            "Number of reconnect attempts triggered while deferring outbound frames",
+        )
+        .expect("Infallible");
+        let p2p_connect_retry_seconds = GenericGauge::new(
+            "p2p_connect_retry_seconds",
+            "Cumulative reconnect retry delay in seconds (rounded up from milliseconds)",
+        )
+        .expect("Infallible");
         let p2p_accept_throttled_total = GenericGauge::new(
             "p2p_accept_throttled_total",
             "Number of incoming connections rejected by per-IP throttle",
@@ -9707,6 +9767,95 @@ impl Default for Metrics {
                 "Target peers selected when requesting a missing block payload",
             )
             .buckets(prometheus::exponential_buckets(1.0, 2.0, 6).expect("inputs are valid")),
+        )
+        .expect("Infallible");
+        let blocksync_qc_quarantine_total = IntCounter::new(
+            "blocksync_qc_quarantine_total",
+            "Block-sync QCs quarantined while missing context is unresolved (cumulative)",
+        )
+        .expect("Infallible");
+        let blocksync_qc_revalidated_total = IntCounter::new(
+            "blocksync_qc_revalidated_total",
+            "Quarantined block-sync QCs revalidated successfully (cumulative)",
+        )
+        .expect("Infallible");
+        let blocksync_qc_final_drop_total = IntCounterVec::new(
+            Opts::new(
+                "blocksync_qc_final_drop_total",
+                "Block-sync QCs dropped permanently after bounded quarantine (labeled by reason)",
+            ),
+            &["reason"],
+        )
+        .expect("Infallible");
+        let qc_deferred_missing_payload_total = IntCounter::new(
+            "qc_deferred_missing_payload_total",
+            "QCs deferred because payload was not available locally (cumulative)",
+        )
+        .expect("Infallible");
+        let qc_deferred_resolved_total = IntCounter::new(
+            "qc_deferred_resolved_total",
+            "Deferred QCs resolved after payload arrival (cumulative)",
+        )
+        .expect("Infallible");
+        let qc_deferred_expired_total = IntCounter::new(
+            "qc_deferred_expired_total",
+            "Deferred QCs expired after bounded retries/escalation (cumulative)",
+        )
+        .expect("Infallible");
+        let consensus_empty_commit_topology_defer_total = IntCounter::new(
+            "consensus_empty_commit_topology_defer_total",
+            "Consensus deferrals caused by empty commit topology (cumulative)",
+        )
+        .expect("Infallible");
+        let consensus_empty_commit_topology_escalation_total = IntCounter::new(
+            "consensus_empty_commit_topology_escalation_total",
+            "Empty-topology recoveries escalated to forced view changes (cumulative)",
+        )
+        .expect("Infallible");
+        let consensus_recovery_state_transitions_total = IntCounterVec::new(
+            Opts::new(
+                "consensus_recovery_state_transitions_total",
+                "Consensus recovery state transitions (labeled by state)",
+            ),
+            &["state"],
+        )
+        .expect("Infallible");
+        let consensus_missing_block_height_escalation_total = IntCounter::new(
+            "consensus_missing_block_height_escalation_total",
+            "Height-scoped missing-block recoveries escalated via deterministic hard cap (cumulative)",
+        )
+        .expect("Infallible");
+        let consensus_sidecar_quarantine_total = IntCounter::new(
+            "consensus_sidecar_quarantine_total",
+            "Sidecar mismatches quarantined in fail-closed mode (cumulative)",
+        )
+        .expect("Infallible");
+        let consensus_sidecar_final_drop_total = IntCounter::new(
+            "consensus_sidecar_final_drop_total",
+            "Sidecar mismatch entries final-dropped after retry/TTL bounds (cumulative)",
+        )
+        .expect("Infallible");
+        let blocksync_range_pull_escalation_total = IntCounter::new(
+            "blocksync_range_pull_escalation_total",
+            "Block-sync range-pull escalations requested by recovery logic (cumulative)",
+        )
+        .expect("Infallible");
+        let blocksync_range_pull_success_total = IntCounter::new(
+            "blocksync_range_pull_success_total",
+            "Block-sync range-pull recoveries that succeeded (cumulative)",
+        )
+        .expect("Infallible");
+        let blocksync_range_pull_failure_total = IntCounter::new(
+            "blocksync_range_pull_failure_total",
+            "Block-sync range-pull recoveries that expired without progress (cumulative)",
+        )
+        .expect("Infallible");
+        let consensus_recovery_stuck_round_seconds = Histogram::with_opts(
+            HistogramOpts::new(
+                "consensus_recovery_stuck_round_seconds",
+                "Observed seconds spent in empty-topology/missing-dependency recovery rounds",
+            )
+            .buckets(prometheus::exponential_buckets(0.1, 2.0, 10).expect("inputs are valid")),
         )
         .expect("Infallible");
         let sumeragi_da_gate_block_total = IntCounterVec::new(
@@ -13333,6 +13482,10 @@ impl Default for Metrics {
             p2p_dns_resolution_fail_total,
             p2p_dns_reconnect_success_total,
             p2p_backoff_scheduled_total,
+            p2p_deferred_send_enqueued_total,
+            p2p_deferred_send_dropped_total,
+            p2p_session_reconnect_total,
+            p2p_connect_retry_seconds,
             p2p_accept_throttled_total,
             p2p_accept_bucket_evictions_total,
             p2p_accept_buckets_current,
@@ -13418,6 +13571,22 @@ impl Default for Metrics {
             sumeragi_missing_block_fetch_target_total,
             sumeragi_missing_block_fetch_dwell_ms,
             sumeragi_missing_block_fetch_targets,
+            blocksync_qc_quarantine_total,
+            blocksync_qc_revalidated_total,
+            blocksync_qc_final_drop_total,
+            qc_deferred_missing_payload_total,
+            qc_deferred_resolved_total,
+            qc_deferred_expired_total,
+            consensus_empty_commit_topology_defer_total,
+            consensus_empty_commit_topology_escalation_total,
+            consensus_recovery_state_transitions_total,
+            consensus_missing_block_height_escalation_total,
+            consensus_sidecar_quarantine_total,
+            consensus_sidecar_final_drop_total,
+            blocksync_range_pull_escalation_total,
+            blocksync_range_pull_success_total,
+            blocksync_range_pull_failure_total,
+            consensus_recovery_stuck_round_seconds,
             sumeragi_da_gate_block_total,
             sumeragi_da_gate_last_reason,
             sumeragi_da_gate_last_satisfied,
@@ -13924,6 +14093,10 @@ impl Default for Metrics {
             p2p_dns_resolution_fail_total,
             p2p_dns_reconnect_success_total,
             p2p_backoff_scheduled_total,
+            p2p_deferred_send_enqueued_total,
+            p2p_deferred_send_dropped_total,
+            p2p_session_reconnect_total,
+            p2p_connect_retry_seconds,
             p2p_accept_throttled_total,
             p2p_accept_bucket_evictions_total,
             p2p_accept_buckets_current,
@@ -14043,6 +14216,22 @@ impl Default for Metrics {
             sumeragi_missing_block_fetch_target_total,
             sumeragi_missing_block_fetch_dwell_ms,
             sumeragi_missing_block_fetch_targets,
+            blocksync_qc_quarantine_total,
+            blocksync_qc_revalidated_total,
+            blocksync_qc_final_drop_total,
+            qc_deferred_missing_payload_total,
+            qc_deferred_resolved_total,
+            qc_deferred_expired_total,
+            consensus_empty_commit_topology_defer_total,
+            consensus_empty_commit_topology_escalation_total,
+            consensus_recovery_state_transitions_total,
+            consensus_missing_block_height_escalation_total,
+            consensus_sidecar_quarantine_total,
+            consensus_sidecar_final_drop_total,
+            blocksync_range_pull_escalation_total,
+            blocksync_range_pull_success_total,
+            blocksync_range_pull_failure_total,
+            consensus_recovery_stuck_round_seconds,
             sumeragi_da_gate_block_total,
             sumeragi_da_gate_last_reason,
             sumeragi_da_gate_last_satisfied,
