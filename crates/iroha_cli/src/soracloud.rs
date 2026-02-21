@@ -3,11 +3,13 @@
 //! These commands provide a deterministic local control-plane simulation for
 //! Soracloud manifests. They validate `SoraDeploymentBundleV1` admission rules
 //! and maintain a machine-readable registry/audit log file that can be used by
-//! scripts and CI checks.
+//! scripts and CI checks. `init` also supports Vue3 scaffolding templates for
+//! static sites and dynamic webapps.
 
 use std::{
     collections::BTreeMap,
     fs,
+    num::{NonZeroU16, NonZeroU64},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -18,8 +20,10 @@ use iroha::data_model::{
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
-        SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SoraContainerManifestV1, SoraDeploymentBundleV1,
-        SoraServiceManifestV1,
+        SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_STATE_BINDING_VERSION_V1, SoraContainerManifestV1,
+        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraNetworkPolicyV1, SoraRouteTargetV1,
+        SoraRouteVisibilityV1, SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
+        SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
     },
 };
 use iroha_crypto::{Hash, KeyPair, Signature};
@@ -84,9 +88,33 @@ pub struct InitArgs {
     /// Version string used in the scaffolded service manifest.
     #[arg(long, value_name = "VERSION", default_value = "0.1.0")]
     service_version: String,
+    /// Scaffolding template to generate in addition to control-plane manifests.
+    #[arg(long, value_enum, default_value_t = InitTemplate::Baseline)]
+    template: InitTemplate,
     /// Overwrite existing files in the output directory.
     #[arg(long)]
     overwrite: bool,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum InitTemplate {
+    /// Generate only Soracloud control-plane manifests.
+    #[default]
+    Baseline,
+    /// Generate a Vue3/Vite static SPA starter with SoraFS publish workflow.
+    Site,
+    /// Generate a Vue3 SPA + API starter with session/auth and chain-ID hooks.
+    Webapp,
+}
+
+impl InitTemplate {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Baseline => "baseline",
+            Self::Site => "site",
+            Self::Webapp => "webapp",
+        }
+    }
 }
 
 impl InitArgs {
@@ -106,12 +134,12 @@ impl InitArgs {
             return Err(eyre!("--service-version must not be empty"));
         }
 
-        let container = load_json::<SoraContainerManifestV1>(&workspace_fixture(
-            DEFAULT_CONTAINER_MANIFEST,
-        ))?;
-        let mut service = load_json::<SoraServiceManifestV1>(&workspace_fixture(
-            DEFAULT_SERVICE_MANIFEST,
-        ))?;
+        let mut container =
+            load_json::<SoraContainerManifestV1>(&workspace_fixture(DEFAULT_CONTAINER_MANIFEST))?;
+        let mut service =
+            load_json::<SoraServiceManifestV1>(&workspace_fixture(DEFAULT_SERVICE_MANIFEST))?;
+
+        apply_init_template_defaults(self.template, &service_name, &mut service, &mut container)?;
 
         service.service_name = service_name;
         service.service_version = self.service_version;
@@ -136,13 +164,21 @@ impl InitArgs {
         write_json(&container_path, &container)?;
         write_json(&service_path, &service)?;
         write_json(&registry_path, &RegistryState::default())?;
+        let template_artifacts = scaffold_init_template(
+            self.template,
+            &self.output_dir,
+            service.service_name.as_ref(),
+            self.overwrite,
+        )?;
 
         Ok(InitOutput {
+            template: self.template.as_str().to_owned(),
             container_manifest_path: container_path.to_string_lossy().into_owned(),
             service_manifest_path: service_path.to_string_lossy().into_owned(),
             registry_path: registry_path.to_string_lossy().into_owned(),
             container_manifest_hash: bundle.container_manifest_hash(),
             service_manifest_hash: bundle.service_manifest_hash(),
+            template_artifacts,
         })
     }
 }
@@ -357,8 +393,11 @@ impl RollbackArgs {
         }
 
         let mut registry = load_registry(&self.registry)?;
-        let output =
-            apply_rollback(&mut registry, &self.service_name, self.target_version.as_deref())?;
+        let output = apply_rollback(
+            &mut registry,
+            &self.service_name,
+            self.target_version.as_deref(),
+        )?;
         write_json(&self.registry, &registry)?;
         json::to_value(&output).wrap_err("failed to encode soracloud rollback output")
     }
@@ -439,11 +478,14 @@ struct RegistryAuditEvent {
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct InitOutput {
+    template: String,
     container_manifest_path: String,
     service_manifest_path: String,
     registry_path: String,
     container_manifest_hash: Hash,
     service_manifest_hash: Hash,
+    #[norito(default)]
+    template_artifacts: Vec<String>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -581,7 +623,10 @@ fn apply_mutation(
                 "service `{service_name}` not found; deploy it before upgrading"
             ));
         }
-        (MutationMode::Upgrade, true) => (SoracloudAction::Upgrade, entry.map(|e| e.current_version.clone())),
+        (MutationMode::Upgrade, true) => (
+            SoracloudAction::Upgrade,
+            entry.map(|e| e.current_version.clone()),
+        ),
     };
 
     let container_manifest_hash = bundle.container_manifest_hash();
@@ -603,7 +648,11 @@ fn apply_mutation(
         service_manifest_hash,
         container_manifest_hash,
         replicas: bundle.service.replicas.get(),
-        route_host: bundle.service.route.as_ref().map(|route| route.host.clone()),
+        route_host: bundle
+            .service
+            .route
+            .as_ref()
+            .map(|route| route.host.clone()),
         route_path_prefix: bundle
             .service
             .route
@@ -678,9 +727,7 @@ fn apply_rollback(
             .find(|revision| revision.service_version != entry.current_version)
             .cloned()
             .ok_or_else(|| {
-                eyre!(
-                    "service `{service_name}` has no previous revision to roll back to"
-                )
+                eyre!("service `{service_name}` has no previous revision to roll back to")
             })?
     };
 
@@ -742,7 +789,10 @@ fn load_registry(path: &Path) -> Result<RegistryState> {
     Ok(state)
 }
 
-fn signed_bundle_request(bundle: SoraDeploymentBundleV1, key_pair: &KeyPair) -> Result<SignedBundleRequest> {
+fn signed_bundle_request(
+    bundle: SoraDeploymentBundleV1,
+    key_pair: &KeyPair,
+) -> Result<SignedBundleRequest> {
     let payload =
         norito::to_bytes(&bundle).wrap_err("failed to encode deployment bundle for signing")?;
     let signature = Signature::new(key_pair.private_key(), &payload);
@@ -926,6 +976,680 @@ fn workspace_fixture(path: &str) -> PathBuf {
         .join(path)
 }
 
+fn apply_init_template_defaults(
+    template: InitTemplate,
+    service_name: &Name,
+    service: &mut SoraServiceManifestV1,
+    container: &mut SoraContainerManifestV1,
+) -> Result<()> {
+    let dns_label = normalized_service_label(service_name.as_ref());
+    let host = format!("{dns_label}.sora");
+    match template {
+        InitTemplate::Baseline => Ok(()),
+        InitTemplate::Site => {
+            container.runtime = SoraContainerRuntimeV1::NativeProcess;
+            container.bundle_path = "/bundles/site-static.car".to_owned();
+            container.entrypoint = "/usr/bin/sorafs-static-gateway".to_owned();
+            container.args = vec!["--root=/app/dist".to_owned(), "--port=8080".to_owned()];
+            container
+                .env
+                .insert("SORACLOUD_TEMPLATE".to_owned(), "site".to_owned());
+            container.capabilities.network =
+                SoraNetworkPolicyV1::Allowlist(vec!["torii.sora.internal".to_owned()]);
+            container.capabilities.allow_wallet_signing = false;
+            container.capabilities.allow_state_writes = false;
+            container.capabilities.allow_model_training = false;
+            container.lifecycle.healthcheck_path = Some("/healthz".to_owned());
+
+            service.route = Some(SoraRouteTargetV1 {
+                host,
+                path_prefix: "/".to_owned(),
+                service_port: NonZeroU16::new(8080).expect("nonzero literal"),
+                visibility: SoraRouteVisibilityV1::Public,
+                tls_mode: SoraTlsModeV1::Required,
+            });
+            service.replicas = NonZeroU16::new(2).expect("nonzero literal");
+            service.state_bindings.clear();
+            Ok(())
+        }
+        InitTemplate::Webapp => {
+            container.runtime = SoraContainerRuntimeV1::NativeProcess;
+            container.bundle_path = "/bundles/webapp-api.car".to_owned();
+            container.entrypoint = "/app/api/server.mjs".to_owned();
+            container.args = vec!["--port=8787".to_owned()];
+            container
+                .env
+                .insert("SORACLOUD_TEMPLATE".to_owned(), "webapp".to_owned());
+            container.env.insert(
+                "CHAIN_IDENTITY_ENDPOINT".to_owned(),
+                "http://127.0.0.1:8080".to_owned(),
+            );
+            container.capabilities.network = SoraNetworkPolicyV1::Allowlist(vec![
+                "torii.sora.internal".to_owned(),
+                "wallet.sora.internal".to_owned(),
+            ]);
+            container.capabilities.allow_wallet_signing = true;
+            container.capabilities.allow_state_writes = true;
+            container.capabilities.allow_model_training = false;
+            container.lifecycle.healthcheck_path = Some("/api/healthz".to_owned());
+
+            service.route = Some(SoraRouteTargetV1 {
+                host,
+                path_prefix: "/api".to_owned(),
+                service_port: NonZeroU16::new(8787).expect("nonzero literal"),
+                visibility: SoraRouteVisibilityV1::Public,
+                tls_mode: SoraTlsModeV1::Required,
+            });
+            service.state_bindings = vec![SoraStateBindingV1 {
+                schema_version: SORA_STATE_BINDING_VERSION_V1,
+                binding_name: "session_store"
+                    .parse()
+                    .expect("literal binding name is valid"),
+                scope: SoraStateScopeV1::ServiceState,
+                mutability: SoraStateMutabilityV1::ReadWrite,
+                encryption: SoraStateEncryptionV1::ClientCiphertext,
+                key_prefix: "/state/session".to_owned(),
+                max_item_bytes: NonZeroU64::new(4_096).expect("nonzero literal"),
+                max_total_bytes: NonZeroU64::new(262_144).expect("nonzero literal"),
+            }];
+            Ok(())
+        }
+    }
+}
+
+fn scaffold_init_template(
+    template: InitTemplate,
+    output_dir: &Path,
+    service_name: &str,
+    overwrite: bool,
+) -> Result<Vec<String>> {
+    match template {
+        InitTemplate::Baseline => Ok(Vec::new()),
+        InitTemplate::Site => scaffold_site_template(output_dir, service_name, overwrite),
+        InitTemplate::Webapp => scaffold_webapp_template(output_dir, service_name, overwrite),
+    }
+}
+
+fn scaffold_site_template(
+    output_dir: &Path,
+    service_name: &str,
+    overwrite: bool,
+) -> Result<Vec<String>> {
+    let project_dir = output_dir.join("site");
+    let package_name = normalized_service_label(service_name);
+    let dns_host = format!("{package_name}.sora");
+    let files = vec![
+        (
+            project_dir.join("package.json"),
+            site_package_json(&package_name),
+        ),
+        (
+            project_dir.join("tsconfig.json"),
+            site_tsconfig_json().to_owned(),
+        ),
+        (
+            project_dir.join("vite.config.ts"),
+            site_vite_config().to_owned(),
+        ),
+        (project_dir.join("index.html"), site_index_html().to_owned()),
+        (project_dir.join("src/main.ts"), site_main_ts().to_owned()),
+        (project_dir.join("src/App.vue"), site_app_vue(service_name)),
+        (
+            project_dir.join(".gitignore"),
+            "node_modules/\ndist/\n".to_owned(),
+        ),
+        (
+            project_dir.join("README.md"),
+            site_readme(service_name, &dns_host),
+        ),
+    ];
+    write_template_files(files, overwrite)
+}
+
+fn scaffold_webapp_template(
+    output_dir: &Path,
+    service_name: &str,
+    overwrite: bool,
+) -> Result<Vec<String>> {
+    let project_dir = output_dir.join("webapp");
+    let package_name = normalized_service_label(service_name);
+    let files = vec![
+        (
+            project_dir.join("package.json"),
+            webapp_root_package_json(&package_name),
+        ),
+        (
+            project_dir.join("frontend/package.json"),
+            webapp_frontend_package_json(&package_name),
+        ),
+        (
+            project_dir.join("frontend/tsconfig.json"),
+            site_tsconfig_json().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/vite.config.ts"),
+            webapp_frontend_vite_config().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/index.html"),
+            site_index_html().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/src/main.ts"),
+            site_main_ts().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/src/App.vue"),
+            webapp_frontend_app_vue(service_name),
+        ),
+        (
+            project_dir.join("api/server.mjs"),
+            webapp_api_server_mjs().to_owned(),
+        ),
+        (project_dir.join("README.md"), webapp_readme(service_name)),
+        (
+            project_dir.join(".gitignore"),
+            "node_modules/\nfrontend/node_modules/\nfrontend/dist/\n".to_owned(),
+        ),
+    ];
+    write_template_files(files, overwrite)
+}
+
+fn write_template_files(files: Vec<(PathBuf, String)>, overwrite: bool) -> Result<Vec<String>> {
+    let mut written = Vec::with_capacity(files.len());
+    for (path, body) in files {
+        write_template_file(&path, &body, overwrite)?;
+        written.push(path.to_string_lossy().into_owned());
+    }
+    Ok(written)
+}
+
+fn write_template_file(path: &Path, body: &str, overwrite: bool) -> Result<()> {
+    ensure_can_write(path, overwrite)?;
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).wrap_err_with(|| {
+            format!("failed to create template directory {}", parent.display())
+        })?;
+    }
+    fs::write(path, body)
+        .wrap_err_with(|| format!("failed to write template file {}", path.display()))
+}
+
+fn normalized_service_label(service_name: &str) -> String {
+    let mut out = String::new();
+    for ch in service_name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else if (ch == '-' || ch == '_') && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "sora-app".to_owned()
+    } else {
+        out
+    }
+}
+
+fn site_package_json(package_name: &str) -> String {
+    format!(
+        r#"{{
+  "name": "{package_name}-site",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {{
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }},
+  "dependencies": {{
+    "vue": "^3.5.0"
+  }},
+  "devDependencies": {{
+    "@vitejs/plugin-vue": "^5.2.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }}
+}}
+"#
+    )
+}
+
+fn webapp_root_package_json(package_name: &str) -> String {
+    format!(
+        r#"{{
+  "name": "{package_name}-webapp",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {{
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:api": "node api/server.mjs",
+    "build": "npm --prefix frontend run build",
+    "start": "node api/server.mjs"
+  }}
+}}
+"#
+    )
+}
+
+fn webapp_frontend_package_json(package_name: &str) -> String {
+    format!(
+        r#"{{
+  "name": "{package_name}-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {{
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }},
+  "dependencies": {{
+    "vue": "^3.5.0"
+  }},
+  "devDependencies": {{
+    "@vitejs/plugin-vue": "^5.2.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }}
+}}
+"#
+    )
+}
+
+fn site_tsconfig_json() -> &'static str {
+    r#"{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "strict": true,
+    "jsx": "preserve",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "lib": [
+      "ES2020",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "vite/client"
+    ]
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.vue"
+  ]
+}
+"#
+}
+
+fn site_vite_config() -> &'static str {
+    r#"import { defineConfig } from "vite";
+import vue from "@vitejs/plugin-vue";
+
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    host: "0.0.0.0",
+    port: 5173
+  }
+});
+"#
+}
+
+fn webapp_frontend_vite_config() -> &'static str {
+    r#"import { defineConfig } from "vite";
+import vue from "@vitejs/plugin-vue";
+
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    host: "0.0.0.0",
+    port: 5173,
+    proxy: {
+      "/api": "http://127.0.0.1:8787"
+    }
+  }
+});
+"#
+}
+
+fn site_index_html() -> &'static str {
+    r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SoraCloud App</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
+"#
+}
+
+fn site_main_ts() -> &'static str {
+    r##"import { createApp } from "vue";
+import App from "./App.vue";
+
+createApp(App).mount("#app");
+"##
+}
+
+fn site_app_vue(service_name: &str) -> String {
+    format!(
+        r#"<template>
+  <main class="shell">
+    <h1>{service_name}</h1>
+    <p>This Vue3 static site is ready for SoraFS packaging and SoraDNS binding.</p>
+  </main>
+</template>
+
+<style scoped>
+.shell {{
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  max-width: 720px;
+  margin: 4rem auto;
+  padding: 0 1.25rem;
+  color: #16324f;
+}}
+
+h1 {{
+  font-size: 2.25rem;
+  margin: 0 0 1rem;
+}}
+</style>
+"#
+    )
+}
+
+fn webapp_frontend_app_vue(service_name: &str) -> String {
+    format!(
+        r#"<template>
+  <main class="shell">
+    <h1>{service_name} Control Panel</h1>
+    <form @submit.prevent="login">
+      <label>
+        Account
+        <input v-model="account" placeholder="ih58..." />
+      </label>
+      <label>
+        Signature
+        <input v-model="signature" placeholder="hex signature" />
+      </label>
+      <button type="submit">Start Session</button>
+    </form>
+    <p v-if="session">{{{{ session }}}}</p>
+    <p v-if="error" class="error">{{{{ error }}}}</p>
+  </main>
+</template>
+
+<script setup lang="ts">
+import {{ ref }} from "vue";
+
+const account = ref("");
+const signature = ref("");
+const session = ref("");
+const error = ref("");
+
+async function login() {{
+  error.value = "";
+  const response = await fetch("/api/session", {{
+    method: "POST",
+    headers: {{ "content-type": "application/json" }},
+    body: JSON.stringify({{ account: account.value, signature: signature.value }})
+  }});
+  if (!response.ok) {{
+    error.value = await response.text();
+    return;
+  }}
+  const payload = await response.json();
+  session.value = `active for ${{payload.account}}`;
+}}
+</script>
+
+<style scoped>
+.shell {{
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  max-width: 720px;
+  margin: 4rem auto;
+  padding: 0 1.25rem;
+}}
+
+form {{
+  display: grid;
+  gap: 0.75rem;
+  margin: 1.5rem 0;
+}}
+
+input {{
+  width: 100%;
+  padding: 0.5rem;
+}}
+
+.error {{
+  color: #b42318;
+}}
+</style>
+"#
+    )
+}
+
+fn webapp_api_server_mjs() -> &'static str {
+    r#"import http from "node:http";
+import crypto from "node:crypto";
+
+const portArg = process.argv.find((value) => value.startsWith("--port="));
+const port = Number(portArg?.slice("--port=".length) ?? process.env.PORT ?? "8787");
+const sessionKey = process.env.SESSION_HMAC_KEY ?? "replace-me-with-a-random-key";
+
+function parseCookie(headerValue = "") {
+  const cookies = Object.create(null);
+  for (const entry of headerValue.split(";")) {
+    const [rawKey, rawValue] = entry.trim().split("=");
+    if (!rawKey || !rawValue) {
+      continue;
+    }
+    cookies[rawKey] = decodeURIComponent(rawValue);
+  }
+  return cookies;
+}
+
+function signSession(account) {
+  const mac = crypto.createHmac("sha256", sessionKey).update(account).digest("hex");
+  return `${account}.${mac}`;
+}
+
+function verifySession(token) {
+  const [account, mac] = token.split(".");
+  if (!account || !mac) {
+    return null;
+  }
+  const expected = crypto.createHmac("sha256", sessionKey).update(account).digest("hex");
+  const a = Buffer.from(mac, "hex");
+  const b = Buffer.from(expected, "hex");
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return null;
+  }
+  return account;
+}
+
+async function readJson(req) {
+  let body = "";
+  for await (const chunk of req) {
+    body += chunk.toString("utf8");
+  }
+  return JSON.parse(body);
+}
+
+async function verifyChainIdentity(account, signature) {
+  if (!account || !signature) {
+    return false;
+  }
+  // TODO: replace with deterministic Torii verification flow for signatures.
+  return true;
+}
+
+const server = http.createServer(async (req, res) => {
+  if (req.url === "/api/healthz") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/session") {
+    try {
+      const body = await readJson(req);
+      if (!(await verifyChainIdentity(body.account, body.signature))) {
+        res.writeHead(401, { "content-type": "text/plain" });
+        res.end("chain identity verification failed");
+        return;
+      }
+      const token = signSession(body.account);
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "set-cookie": `session=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax`
+      });
+      res.end(JSON.stringify({ account: body.account }));
+    } catch (error) {
+      res.writeHead(400, { "content-type": "text/plain" });
+      res.end(`invalid request: ${error.message}`);
+    }
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/api/me") {
+    const cookies = parseCookie(req.headers.cookie);
+    const account = cookies.session ? verifySession(cookies.session) : null;
+    if (!account) {
+      res.writeHead(401, { "content-type": "text/plain" });
+      res.end("no active session");
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ account }));
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/logout") {
+    res.writeHead(204, {
+      "set-cookie": "session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax"
+    });
+    res.end();
+    return;
+  }
+
+  res.writeHead(404, { "content-type": "text/plain" });
+  res.end("not found");
+});
+
+server.listen(port, "0.0.0.0", () => {
+  // eslint-disable-next-line no-console
+  console.log(`api listening on :${port}`);
+});
+"#
+}
+
+fn site_readme(service_name: &str, dns_host: &str) -> String {
+    format!(
+        r#"# {service_name} Static Site Template
+
+This template is generated by:
+
+```bash
+iroha app soracloud init --template site --service-name {service_name}
+```
+
+## Local dev
+
+```bash
+npm install
+npm run dev
+```
+
+## Build and package for SoraFS
+
+```bash
+npm run build
+iroha app sorafs toolkit pack ./dist \
+  --manifest-out ../sorafs/site_manifest.to \
+  --car-out ../sorafs/site_payload.car \
+  --json-out ../sorafs/site_pack_report.json
+```
+
+## Register and bind on SoraDNS
+
+`pin register` needs `chunk_digest_sha3_256` and governance alias proof material.
+
+```bash
+export CHUNK_DIGEST_HEX=<chunk_digest_sha3_256_hex>
+export CURRENT_EPOCH=<network_epoch>
+iroha app sorafs pin register \
+  --manifest ../sorafs/site_manifest.to \
+  --chunk-digest "$CHUNK_DIGEST_HEX" \
+  --submitted-epoch "$CURRENT_EPOCH" \
+  --alias-namespace soradns \
+  --alias-name {dns_host} \
+  --alias-proof ../sorafs/alias_proof.bin
+```
+"#
+    )
+}
+
+fn webapp_readme(service_name: &str) -> String {
+    format!(
+        r#"# {service_name} Webapp Template
+
+This template provides:
+
+- `frontend/` Vue3 SPA (Vite).
+- `api/server.mjs` deterministic HTTP API with signed-cookie sessions.
+- Soracloud manifests at the parent init directory (`container_manifest.json`, `service_manifest.json`).
+
+## Local dev
+
+```bash
+npm install
+npm --prefix frontend install
+npm run dev:api
+npm run dev:frontend
+```
+
+## Deploy API service on Soracloud
+
+```bash
+iroha app soracloud deploy \
+  --container ../container_manifest.json \
+  --service ../service_manifest.json \
+  --torii-url http://127.0.0.1:8080
+```
+
+## Publish frontend to SoraFS
+
+```bash
+npm run build
+iroha app sorafs toolkit pack ./frontend/dist \
+  --manifest-out ../sorafs/frontend_manifest.to \
+  --car-out ../sorafs/frontend_payload.car \
+  --json-out ../sorafs/frontend_pack_report.json
+```
+
+Update `api/server.mjs` `verifyChainIdentity` with your chain signature-verification policy before production use.
+"#
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1049,7 +1773,9 @@ mod tests {
         assert!(output.torii_endpoint.is_some());
         let payload = output.network_status.expect("network payload");
         assert_eq!(
-            payload.get("schema_version").and_then(norito::json::Value::as_u64),
+            payload
+                .get("schema_version")
+                .and_then(norito::json::Value::as_u64),
             Some(1)
         );
     }
@@ -1084,14 +1810,81 @@ mod tests {
     #[test]
     fn post_torii_mutation_rejects_invalid_url() {
         let payload = norito::json!({ "noop": true });
-        let err = post_torii_soracloud_mutation(
-            "not-a-url",
-            "v1/soracloud/deploy",
-            &payload,
-            None,
-            5,
-        )
-        .expect_err("invalid URL must fail");
+        let err =
+            post_torii_soracloud_mutation("not-a-url", "v1/soracloud/deploy", &payload, None, 5)
+                .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
+    }
+
+    #[test]
+    fn init_site_template_scaffolds_vue_and_sorafs_workflow() {
+        let dir = temp_dir("site_template");
+        let output = InitArgs {
+            output_dir: dir.clone(),
+            service_name: "docs_portal".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::Site,
+            overwrite: false,
+        }
+        .run()
+        .expect("site init should succeed");
+
+        assert_eq!(output.template, "site");
+        assert!(dir.join("site/package.json").exists());
+        assert!(dir.join("site/src/App.vue").exists());
+
+        let readme = fs::read_to_string(dir.join("site/README.md")).expect("read site readme");
+        assert!(readme.contains("iroha app sorafs toolkit pack"));
+        assert!(readme.contains("alias-namespace soradns"));
+
+        let container: SoraContainerManifestV1 =
+            load_json(&dir.join("container_manifest.json")).expect("container manifest");
+        assert_eq!(container.runtime, SoraContainerRuntimeV1::NativeProcess);
+        let service: SoraServiceManifestV1 =
+            load_json(&dir.join("service_manifest.json")).expect("service manifest");
+        assert_eq!(
+            service
+                .route
+                .as_ref()
+                .map(|route| route.path_prefix.as_str()),
+            Some("/")
+        );
+    }
+
+    #[test]
+    fn init_webapp_template_scaffolds_frontend_and_api() {
+        let dir = temp_dir("webapp_template");
+        let output = InitArgs {
+            output_dir: dir.clone(),
+            service_name: "agent_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::Webapp,
+            overwrite: false,
+        }
+        .run()
+        .expect("webapp init should succeed");
+
+        assert_eq!(output.template, "webapp");
+        assert!(dir.join("webapp/frontend/package.json").exists());
+        assert!(dir.join("webapp/api/server.mjs").exists());
+
+        let api = fs::read_to_string(dir.join("webapp/api/server.mjs")).expect("read api file");
+        assert!(api.contains("verifyChainIdentity"));
+
+        let service: SoraServiceManifestV1 =
+            load_json(&dir.join("service_manifest.json")).expect("service manifest");
+        assert_eq!(
+            service
+                .route
+                .as_ref()
+                .map(|route| route.path_prefix.as_str()),
+            Some("/api")
+        );
+        assert!(
+            service
+                .state_bindings
+                .iter()
+                .any(|binding| binding.key_prefix == "/state/session")
+        );
     }
 }

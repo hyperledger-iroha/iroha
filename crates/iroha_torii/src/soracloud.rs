@@ -5,7 +5,7 @@
 //! progress. Requests must carry signed payloads so admission can verify
 //! manifest provenance before mutating registry state.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use axum::{
     extract::State,
@@ -14,7 +14,11 @@ use axum::{
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    name::Name, smart_contract::manifest::ManifestProvenance, soracloud::SoraDeploymentBundleV1,
+    name::Name,
+    smart_contract::manifest::ManifestProvenance,
+    soracloud::{
+        SoraDeploymentBundleV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+    },
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use tokio::sync::RwLock;
@@ -31,6 +35,8 @@ pub(crate) enum SoracloudAction {
     Deploy,
     Upgrade,
     Rollback,
+    StateMutation,
+    Rollout,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +64,107 @@ pub(crate) struct SignedRollbackRequest {
     pub provenance: ManifestProvenance,
 }
 
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+)]
+#[norito(tag = "operation", content = "value")]
+pub(crate) enum StateMutationOperation {
+    Upsert,
+    Delete,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct StateMutationRequest {
+    pub service_name: String,
+    pub binding_name: String,
+    pub key: String,
+    pub operation: StateMutationOperation,
+    #[norito(default)]
+    pub value_size_bytes: Option<u64>,
+    pub encryption: SoraStateEncryptionV1,
+    pub governance_tx_hash: Hash,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedStateMutationRequest {
+    pub payload: StateMutationRequest,
+    pub provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+)]
+#[norito(tag = "stage", content = "value")]
+pub(crate) enum RolloutStage {
+    Canary,
+    Promoted,
+    RolledBack,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct RolloutAdvancePayload {
+    pub service_name: String,
+    pub rollout_handle: String,
+    pub healthy: bool,
+    #[norito(default)]
+    pub promote_to_percent: Option<u8>,
+    pub governance_tx_hash: Hash,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedRolloutAdvanceRequest {
+    pub payload: RolloutAdvancePayload,
+    pub provenance: ManifestProvenance,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct RolloutResponse {
+    pub action: SoracloudAction,
+    pub service_name: String,
+    pub rollout_handle: String,
+    pub stage: RolloutStage,
+    pub current_version: String,
+    pub traffic_percent: u8,
+    pub health_failures: u32,
+    pub max_health_failures: u32,
+    pub sequence: u64,
+    pub governance_tx_hash: Hash,
+    pub audit_event_count: u32,
+    pub signed_by: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct StateMutationResponse {
+    pub action: SoracloudAction,
+    pub service_name: String,
+    pub binding_name: String,
+    pub key: String,
+    pub operation: StateMutationOperation,
+    pub sequence: u64,
+    pub governance_tx_hash: Hash,
+    pub current_version: String,
+    pub binding_total_bytes: u64,
+    pub binding_key_count: u32,
+    pub audit_event_count: u32,
+    pub signed_by: String,
+}
+
 #[derive(Clone, Debug, Default, JsonDeserialize)]
 pub(crate) struct RegistryStatusQuery {
     #[norito(default)]
@@ -80,6 +187,15 @@ pub(crate) struct MutationResponse {
     pub revision_count: u32,
     pub audit_event_count: u32,
     pub signed_by: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub rollout_handle: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub rollout_stage: Option<RolloutStage>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub rollout_percent: Option<u8>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -100,6 +216,12 @@ pub(crate) struct ServiceStatusSnapshot {
     pub revision_count: u32,
     #[norito(default)]
     pub latest_revision: Option<RegistryServiceRevision>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub active_rollout: Option<RolloutRuntimeState>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub last_rollout: Option<RolloutRuntimeState>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -128,6 +250,12 @@ struct RegistryServiceEntry {
     current_version: String,
     #[norito(default)]
     revisions: Vec<RegistryServiceRevision>,
+    #[norito(default)]
+    binding_states: BTreeMap<String, BindingRuntimeState>,
+    #[norito(default)]
+    active_rollout: Option<RolloutRuntimeState>,
+    #[norito(default)]
+    last_rollout: Option<RolloutRuntimeState>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -145,6 +273,8 @@ pub(crate) struct RegistryServiceRevision {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub route_path_prefix: Option<String>,
     pub state_binding_count: u32,
+    #[norito(default)]
+    pub state_bindings: Vec<SoraStateBindingV1>,
     pub signed_by: String,
 }
 
@@ -159,7 +289,43 @@ pub(crate) struct RegistryAuditEvent {
     pub to_version: String,
     pub service_manifest_hash: Hash,
     pub container_manifest_hash: Hash,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub binding_name: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub state_key: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub governance_tx_hash: Option<Hash>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub rollout_handle: Option<String>,
     pub signed_by: String,
+}
+
+#[derive(Clone, Debug, Default, JsonSerialize, JsonDeserialize)]
+struct BindingRuntimeState {
+    total_bytes: u64,
+    #[norito(default)]
+    key_sizes: BTreeMap<String, u64>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct RolloutRuntimeState {
+    pub rollout_handle: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub baseline_version: Option<String>,
+    pub candidate_version: String,
+    pub canary_percent: u8,
+    pub traffic_percent: u8,
+    pub stage: RolloutStage,
+    pub health_failures: u32,
+    pub max_health_failures: u32,
+    pub health_window_secs: u32,
+    pub created_sequence: u64,
+    pub updated_sequence: u64,
 }
 
 #[derive(Debug, Default)]
@@ -184,6 +350,8 @@ impl Registry {
                 current_version: entry.current_version.clone(),
                 revision_count: u32::try_from(entry.revisions.len()).unwrap_or(u32::MAX),
                 latest_revision: entry.revisions.last().cloned(),
+                active_rollout: entry.active_rollout.clone(),
+                last_rollout: entry.last_rollout.clone(),
             });
         }
 
@@ -282,11 +450,15 @@ impl Registry {
                 route_host: target.route_host.clone(),
                 route_path_prefix: target.route_path_prefix.clone(),
                 state_binding_count: target.state_binding_count,
+                state_bindings: target.state_bindings.clone(),
                 signed_by: signer.clone(),
             };
 
             entry.current_version = target.service_version.clone();
+            sync_binding_states(entry, &target.state_bindings);
             entry.revisions.push(revision);
+            entry.active_rollout = None;
+            entry.last_rollout = None;
             let revision_count = u32::try_from(entry.revisions.len()).unwrap_or(u32::MAX);
             (previous_version, target, revision_count)
         };
@@ -299,6 +471,10 @@ impl Registry {
             to_version: target.service_version.clone(),
             service_manifest_hash: target.service_manifest_hash,
             container_manifest_hash: target.container_manifest_hash,
+            binding_name: None,
+            state_key: None,
+            governance_tx_hash: None,
+            rollout_handle: None,
             signed_by: signer.clone(),
         });
         state.next_sequence = state.next_sequence.saturating_add(1);
@@ -313,6 +489,179 @@ impl Registry {
             service_manifest_hash: target.service_manifest_hash,
             container_manifest_hash: target.container_manifest_hash,
             revision_count,
+            audit_event_count,
+            signed_by: signer,
+            rollout_handle: None,
+            rollout_stage: None,
+            rollout_percent: None,
+        })
+    }
+
+    pub(crate) async fn apply_state_mutation(
+        &self,
+        request: SignedStateMutationRequest,
+    ) -> Result<StateMutationResponse, SoracloudError> {
+        verify_state_mutation_signature(&request)?;
+
+        let service_name: Name =
+            request.payload.service_name.parse().map_err(|err| {
+                SoracloudError::bad_request(format!("invalid service_name: {err}"))
+            })?;
+        let binding_name: Name =
+            request.payload.binding_name.parse().map_err(|err| {
+                SoracloudError::bad_request(format!("invalid binding_name: {err}"))
+            })?;
+        if request.payload.key.trim().is_empty() {
+            return Err(SoracloudError::bad_request(
+                "state mutation key must not be empty",
+            ));
+        }
+
+        let service_name = service_name.to_string();
+        let binding_name = binding_name.to_string();
+        let signer = request.provenance.signer.to_string();
+        let operation = request.payload.operation;
+        let key = request.payload.key.clone();
+        let governance_tx_hash = request.payload.governance_tx_hash;
+
+        let mut state = self.state.write().await;
+        ensure_registry_schema(&state)?;
+
+        let sequence = state.next_sequence;
+        let (
+            current_version,
+            service_manifest_hash,
+            container_manifest_hash,
+            binding_total_bytes,
+            binding_key_count,
+        ) = {
+            let entry = state.services.get_mut(&service_name).ok_or_else(|| {
+                SoracloudError::not_found(format!(
+                    "service `{service_name}` not found in control-plane registry"
+                ))
+            })?;
+            let current_revision = entry.revisions.last().cloned().ok_or_else(|| {
+                SoracloudError::conflict(format!("service `{service_name}` has no active revision"))
+            })?;
+
+            let binding = current_revision
+                .state_bindings
+                .iter()
+                .find(|binding| binding.binding_name.as_ref() == binding_name.as_str())
+                .cloned()
+                .ok_or_else(|| {
+                    SoracloudError::not_found(format!(
+                        "binding `{binding_name}` is not declared for service `{service_name}`"
+                    ))
+                })?;
+
+            if request.payload.encryption != binding.encryption {
+                return Err(SoracloudError::conflict(format!(
+                    "binding `{binding_name}` requires {:?} encryption",
+                    binding.encryption
+                )));
+            }
+            if !key.starts_with(&binding.key_prefix) {
+                return Err(SoracloudError::conflict(format!(
+                    "key `{key}` is outside binding prefix `{}`",
+                    binding.key_prefix
+                )));
+            }
+
+            let runtime_state = entry
+                .binding_states
+                .entry(binding_name.clone())
+                .or_insert_with(BindingRuntimeState::default);
+            match operation {
+                StateMutationOperation::Upsert => {
+                    if binding.mutability == SoraStateMutabilityV1::ReadOnly {
+                        return Err(SoracloudError::conflict(format!(
+                            "binding `{binding_name}` is read-only"
+                        )));
+                    }
+                    let value_size = request.payload.value_size_bytes.ok_or_else(|| {
+                        SoracloudError::bad_request(
+                            "value_size_bytes is required for upsert mutations",
+                        )
+                    })?;
+                    if value_size > binding.max_item_bytes.get() {
+                        return Err(SoracloudError::conflict(format!(
+                            "value_size_bytes {value_size} exceeds binding max_item_bytes {}",
+                            binding.max_item_bytes
+                        )));
+                    }
+
+                    let existing_size = runtime_state.key_sizes.get(&key).copied().unwrap_or(0);
+                    if binding.mutability == SoraStateMutabilityV1::AppendOnly && existing_size > 0
+                    {
+                        return Err(SoracloudError::conflict(format!(
+                            "binding `{binding_name}` is append-only; key `{key}` already exists"
+                        )));
+                    }
+                    let tentative_total = runtime_state
+                        .total_bytes
+                        .saturating_sub(existing_size)
+                        .saturating_add(value_size);
+                    if tentative_total > binding.max_total_bytes.get() {
+                        return Err(SoracloudError::conflict(format!(
+                            "binding `{binding_name}` max_total_bytes {} would be exceeded",
+                            binding.max_total_bytes
+                        )));
+                    }
+
+                    runtime_state.total_bytes = tentative_total;
+                    runtime_state.key_sizes.insert(key.clone(), value_size);
+                }
+                StateMutationOperation::Delete => {
+                    if binding.mutability != SoraStateMutabilityV1::ReadWrite {
+                        return Err(SoracloudError::conflict(format!(
+                            "binding `{binding_name}` does not allow deletes"
+                        )));
+                    }
+                    if let Some(existing_size) = runtime_state.key_sizes.remove(&key) {
+                        runtime_state.total_bytes =
+                            runtime_state.total_bytes.saturating_sub(existing_size);
+                    }
+                }
+            }
+
+            (
+                entry.current_version.clone(),
+                current_revision.service_manifest_hash,
+                current_revision.container_manifest_hash,
+                runtime_state.total_bytes,
+                u32::try_from(runtime_state.key_sizes.len()).unwrap_or(u32::MAX),
+            )
+        };
+
+        state.audit_log.push(RegistryAuditEvent {
+            sequence,
+            action: SoracloudAction::StateMutation,
+            service_name: service_name.clone(),
+            from_version: None,
+            to_version: current_version.clone(),
+            service_manifest_hash,
+            container_manifest_hash,
+            binding_name: Some(binding_name.clone()),
+            state_key: Some(key.clone()),
+            governance_tx_hash: Some(governance_tx_hash),
+            rollout_handle: None,
+            signed_by: signer.clone(),
+        });
+        state.next_sequence = state.next_sequence.saturating_add(1);
+        let audit_event_count = u32::try_from(state.audit_log.len()).unwrap_or(u32::MAX);
+
+        Ok(StateMutationResponse {
+            action: SoracloudAction::StateMutation,
+            service_name,
+            binding_name,
+            key,
+            operation,
+            sequence,
+            governance_tx_hash,
+            current_version,
+            binding_total_bytes,
+            binding_key_count,
             audit_event_count,
             signed_by: signer,
         })
@@ -385,6 +734,7 @@ impl Registry {
                 .map(|route| route.path_prefix.clone()),
             state_binding_count: u32::try_from(request.bundle.service.state_bindings.len())
                 .unwrap_or(u32::MAX),
+            state_bindings: request.bundle.service.state_bindings.clone(),
             signed_by: signer.clone(),
         };
 
@@ -395,8 +745,10 @@ impl Registry {
                 .or_insert_with(|| RegistryServiceEntry {
                     current_version: service_version.clone(),
                     revisions: Vec::new(),
+                    binding_states: BTreeMap::new(),
                 });
             entry.current_version = service_version.clone();
+            sync_binding_states(entry, &request.bundle.service.state_bindings);
             entry.revisions.push(revision);
             u32::try_from(entry.revisions.len()).unwrap_or(u32::MAX)
         };
@@ -409,6 +761,9 @@ impl Registry {
             to_version: service_version.clone(),
             service_manifest_hash,
             container_manifest_hash,
+            binding_name: None,
+            state_key: None,
+            governance_tx_hash: None,
             signed_by: signer.clone(),
         });
         state.next_sequence = state.next_sequence.saturating_add(1);
@@ -518,6 +873,19 @@ impl IntoResponse for SoracloudError {
     }
 }
 
+fn sync_binding_states(entry: &mut RegistryServiceEntry, bindings: &[SoraStateBindingV1]) {
+    let active_bindings = bindings
+        .iter()
+        .map(|binding| binding.binding_name.to_string())
+        .collect::<BTreeSet<_>>();
+    entry
+        .binding_states
+        .retain(|name, _| active_bindings.contains(name));
+    for name in active_bindings {
+        entry.binding_states.entry(name).or_default();
+    }
+}
+
 fn ensure_registry_schema(state: &RegistryState) -> Result<(), SoracloudError> {
     if state.schema_version != REGISTRY_SCHEMA_VERSION {
         return Err(SoracloudError::internal(format!(
@@ -552,6 +920,22 @@ fn verify_rollback_signature(request: &SignedRollbackRequest) -> Result<(), Sora
         .verify(&request.provenance.signer, &payload)
         .map_err(|_| {
             SoracloudError::unauthorized("rollback provenance signature verification failed")
+        })?;
+    Ok(())
+}
+
+fn verify_state_mutation_signature(
+    request: &SignedStateMutationRequest,
+) -> Result<(), SoracloudError> {
+    let payload = norito::to_bytes(&request.payload).map_err(|err| {
+        SoracloudError::internal(format!("failed to encode state mutation payload: {err}"))
+    })?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized("state mutation provenance signature verification failed")
         })?;
     Ok(())
 }
@@ -596,6 +980,21 @@ pub(crate) async fn handle_rollback(
     }
 
     match app.soracloud_registry.apply_rollback(request).await {
+        Ok(response) => JsonBody(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_state_mutation(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedStateMutationRequest>,
+) -> Response {
+    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/state/mutate").await {
+        return err.into_response();
+    }
+
+    match app.soracloud_registry.apply_state_mutation(request).await {
         Ok(response) => JsonBody(response).into_response(),
         Err(err) => err.into_response(),
     }
@@ -705,6 +1104,21 @@ mod tests {
         }
     }
 
+    fn signed_state_mutation_request(
+        payload: StateMutationRequest,
+        key_pair: &KeyPair,
+    ) -> SignedStateMutationRequest {
+        let encoded = norito::to_bytes(&payload).expect("encode state mutation payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedStateMutationRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
     #[tokio::test]
     async fn deploy_upgrade_rollback_workflow_updates_registry_and_audit_log() {
         let registry = Registry::default();
@@ -755,5 +1169,118 @@ mod tests {
             .await
             .expect_err("invalid signature must fail");
         assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
+    }
+
+    #[tokio::test]
+    async fn state_mutation_tracks_binding_usage_for_current_revision() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+        registry
+            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
+            .await
+            .expect("deploy");
+
+        let first = signed_state_mutation_request(
+            StateMutationRequest {
+                service_name: "web_portal".to_string(),
+                binding_name: "session_store".to_string(),
+                key: "/state/session/user-1".to_string(),
+                operation: StateMutationOperation::Upsert,
+                value_size_bytes: Some(128),
+                encryption: SoraStateEncryptionV1::ClientCiphertext,
+                governance_tx_hash: Hash::new(b"governance-tx-1"),
+            },
+            &key_pair,
+        );
+        let first_result = registry
+            .apply_state_mutation(first)
+            .await
+            .expect("first upsert");
+        assert_eq!(first_result.binding_total_bytes, 128);
+        assert_eq!(first_result.binding_key_count, 1);
+        assert_eq!(first_result.audit_event_count, 2);
+
+        let second = signed_state_mutation_request(
+            StateMutationRequest {
+                service_name: "web_portal".to_string(),
+                binding_name: "session_store".to_string(),
+                key: "/state/session/user-1".to_string(),
+                operation: StateMutationOperation::Upsert,
+                value_size_bytes: Some(64),
+                encryption: SoraStateEncryptionV1::ClientCiphertext,
+                governance_tx_hash: Hash::new(b"governance-tx-2"),
+            },
+            &key_pair,
+        );
+        let second_result = registry
+            .apply_state_mutation(second)
+            .await
+            .expect("overwrite upsert");
+        assert_eq!(second_result.binding_total_bytes, 64);
+        assert_eq!(second_result.binding_key_count, 1);
+        assert_eq!(second_result.audit_event_count, 3);
+    }
+
+    #[tokio::test]
+    async fn state_mutation_enforces_append_only_and_prefix_rules() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+        registry
+            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
+            .await
+            .expect("deploy");
+
+        let first = signed_state_mutation_request(
+            StateMutationRequest {
+                service_name: "web_portal".to_string(),
+                binding_name: "patient_records".to_string(),
+                key: "/state/health/patient-1".to_string(),
+                operation: StateMutationOperation::Upsert,
+                value_size_bytes: Some(256),
+                encryption: SoraStateEncryptionV1::FheCiphertext,
+                governance_tx_hash: Hash::new(b"governance-tx-3"),
+            },
+            &key_pair,
+        );
+        registry
+            .apply_state_mutation(first)
+            .await
+            .expect("append-only first write");
+
+        let overwrite = signed_state_mutation_request(
+            StateMutationRequest {
+                service_name: "web_portal".to_string(),
+                binding_name: "patient_records".to_string(),
+                key: "/state/health/patient-1".to_string(),
+                operation: StateMutationOperation::Upsert,
+                value_size_bytes: Some(512),
+                encryption: SoraStateEncryptionV1::FheCiphertext,
+                governance_tx_hash: Hash::new(b"governance-tx-4"),
+            },
+            &key_pair,
+        );
+        let overwrite_err = registry
+            .apply_state_mutation(overwrite)
+            .await
+            .expect_err("append-only overwrite must fail");
+        assert_eq!(overwrite_err.kind, SoracloudErrorKind::Conflict);
+
+        let wrong_prefix = signed_state_mutation_request(
+            StateMutationRequest {
+                service_name: "web_portal".to_string(),
+                binding_name: "session_store".to_string(),
+                key: "/state/other/key".to_string(),
+                operation: StateMutationOperation::Upsert,
+                value_size_bytes: Some(32),
+                encryption: SoraStateEncryptionV1::ClientCiphertext,
+                governance_tx_hash: Hash::new(b"governance-tx-5"),
+            },
+            &key_pair,
+        );
+        let prefix_err = registry
+            .apply_state_mutation(wrong_prefix)
+            .await
+            .expect_err("wrong prefix must fail");
+        assert_eq!(prefix_err.kind, SoracloudErrorKind::Conflict);
     }
 }

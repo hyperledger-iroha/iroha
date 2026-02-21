@@ -11,6 +11,10 @@
 - `iroha app soracloud init`
   - scaffolds `container_manifest.json`, `service_manifest.json`, and
     `registry.json`.
+  - supports developer templates:
+    - `--template baseline` (manifests only, default)
+    - `--template site` (Vue3/Vite static SPA + SoraFS/SoraDNS workflow files)
+    - `--template webapp` (Vue3 SPA + API starter with session/auth + chain-ID hooks)
 - `iroha app soracloud deploy`
   - validates a deployment bundle and registers a new service revision.
   - when `--torii-url` is supplied, signs the bundle payload with the
@@ -92,3 +96,48 @@ The CLI output includes `source: "torii_control_plane"` and embeds
 - `resource_pressure`
 - `failed_admissions`
 - `control_plane` (registry/audit snapshot)
+
+## Vue3 Templates
+
+Generate a static site starter:
+
+```bash
+iroha app soracloud init \
+  --template site \
+  --service-name docs_portal \
+  --output-dir .soracloud-docs
+```
+
+Generate a dynamic webapp starter:
+
+```bash
+iroha app soracloud init \
+  --template webapp \
+  --service-name agent_console \
+  --output-dir .soracloud-agent
+```
+
+Both templates keep IVM/SCR assumptions (no WASM runtime dependency) and emit
+deterministic starter artifacts that can be versioned in CI:
+
+- `site/` or `webapp/` source tree (Vue3 + API files);
+- canonical Soracloud manifests (`container_manifest.json`, `service_manifest.json`);
+- `registry.json` for local control-plane simulation.
+
+## Deterministic state-binding guardrail API
+
+Torii now exposes a signed control-plane mutation path:
+
+- `POST /v1/soracloud/state/mutate`
+
+This endpoint is intended for SCR-hosted services to request canonical state
+mutations under declared `state_bindings` and enforces:
+
+- binding existence for the active service revision;
+- key-prefix confinement (`binding.key_prefix`);
+- mutability policy (`ReadOnly`, `AppendOnly`, `ReadWrite`);
+- encryption-policy match (`request.encryption == binding.encryption`);
+- `max_item_bytes` and `max_total_bytes` quota limits.
+
+Each accepted mutation appends an audit event carrying signer identity and
+`governance_tx_hash` linkage for deterministic policy review.
