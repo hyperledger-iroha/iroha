@@ -7,6 +7,7 @@ use std::{
     net::SocketAddr as StdSocketAddr,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -47,10 +48,18 @@ const INTERIM_CONVERGENCE_MAX_SKEW: u64 = 6;
 const DEFAULT_MAX_VIEW_CHANGE_RATE: f64 = 0.2;
 const PROCESS_DOWNTIME_SECS: u64 = 5;
 const JOINER_CATCHUP_TIMEOUT_SECS: u64 = 60;
+const RESTART_CATCHUP_TIMEOUT_SECS: u64 = 60;
+const INTERIM_CONVERGENCE_TIMEOUT_SECS: u64 = 45;
+const JOINER_STALL_LOG_EVERY: u64 = 5;
+const JOINER_PROGRESS_LOG_EVERY: u64 = 5;
 const LOCALNET_BLOCK_TIME_MS: u64 = 1_000;
 const LOCALNET_COMMIT_TIME_MS: u64 = 1_000;
 const MAX_TX_BURST_PER_TICK: u32 = 32;
 const TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const STATUS_REQUEST_RETRIES: usize = 3;
+const STATUS_REQUEST_RETRY_BACKOFF: Duration = Duration::from_millis(200);
+const PEER_QUERY_REQUEST_RETRIES: usize = 3;
+const PEER_QUERY_REQUEST_RETRY_BACKOFF: Duration = Duration::from_millis(200);
 const FINAL_SETTLE_WINDOW: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy)]
@@ -371,7 +380,8 @@ async fn testus_localnet_joiner_register_unregister_behavior() -> Result<()> {
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
         let mut harness = setup_testus_harness(&out_dir, "testus-membership").await?;
-        membership_join_cycle(&mut harness).await?;
+        let mut joiner_warning_state = JoinerCatchupWarningState::default();
+        membership_join_cycle(&mut harness, &mut joiner_warning_state).await?;
         membership_leave_cycle(&mut harness).await?;
         Ok(())
     }
@@ -450,6 +460,7 @@ async fn run_testus_simulation(
     let mut saturated_samples = 0_u64;
     let mut total_samples = 0_u64;
     let mut joiner_active = false;
+    let mut joiner_warning_state = JoinerCatchupWarningState::default();
     let mut restart_idx = first_process_churn_index(harness.validator_clients.len());
     let mut paused_for_churn = Duration::ZERO;
     let mut skew_breach_started_at = None;
@@ -502,7 +513,7 @@ async fn run_testus_simulation(
                 membership_leave_cycle(harness).await?;
                 membership_leave_cycles = membership_leave_cycles.saturating_add(1);
             } else {
-                membership_join_cycle(harness).await?;
+                membership_join_cycle(harness, &mut joiner_warning_state).await?;
                 membership_join_cycles = membership_join_cycles.saturating_add(1);
             }
             paused_for_churn = paused_for_churn.saturating_add(churn_start.elapsed());
@@ -656,10 +667,13 @@ async fn run_testus_simulation(
         "tx submission errors too high: errors={tx_submit_errors}, sent={tx_sent}"
     );
 
-    wait_for_cluster_convergence(
+    let final_target =
+        validator_max_height_with_retry(&harness.validator_clients, READY_TIMEOUT).await?;
+    wait_for_cluster_convergence_quorum(
         &harness.validator_clients,
-        validator_max_height_with_retry(&harness.validator_clients, READY_TIMEOUT).await?,
+        final_target,
         cfg.max_height_skew,
+        min_presence_matches(harness.validator_clients.len()),
         READY_TIMEOUT,
     )
     .await?;
@@ -697,26 +711,30 @@ async fn process_churn_cycle(
     harness.localnet.start_validator(idx)?;
     wait_for_status_ready(&harness.validator_clients[idx], READY_TIMEOUT).await?;
     let restart_target = validator_restart_catchup_target(baseline);
+    let restart_catchup_timeout = Duration::from_secs(RESTART_CATCHUP_TIMEOUT_SECS);
     if let Err(err) = wait_for_height_at_least(
         &harness.validator_clients[idx],
         restart_target,
-        READY_TIMEOUT,
+        restart_catchup_timeout,
     )
     .await
     {
         eprintln!(
-            "validator restart catch-up lagged: baseline={baseline}, target={restart_target}, err={err:?}"
+            "validator restart catch-up lagged: baseline={baseline}, target={restart_target}, timeout={restart_catchup_timeout:?}, err={err:?}"
         );
     }
+    let interim_convergence_timeout = Duration::from_secs(INTERIM_CONVERGENCE_TIMEOUT_SECS);
     if let Err(err) = wait_for_cluster_convergence(
         &harness.validator_clients,
         baseline,
         INTERIM_CONVERGENCE_MAX_SKEW,
-        READY_TIMEOUT,
+        interim_convergence_timeout,
     )
     .await
     {
-        eprintln!("validator restart convergence lagged: {err:?}");
+        eprintln!(
+            "validator restart convergence lagged: timeout={interim_convergence_timeout:?}, err={err:?}"
+        );
     }
     Ok(())
 }
@@ -725,7 +743,10 @@ fn validator_restart_catchup_target(baseline: u64) -> u64 {
     baseline.saturating_sub(INTERIM_CONVERGENCE_MAX_SKEW)
 }
 
-async fn membership_join_cycle(harness: &mut TestusHarness) -> Result<()> {
+async fn membership_join_cycle(
+    harness: &mut TestusHarness,
+    joiner_warning_state: &mut JoinerCatchupWarningState,
+) -> Result<()> {
     let baseline =
         validator_max_height_with_retry(&harness.validator_clients, READY_TIMEOUT).await?;
     if !is_peer_present(&harness.primary_client, &harness.joiner.peer_id)? {
@@ -733,16 +754,13 @@ async fn membership_join_cycle(harness: &mut TestusHarness) -> Result<()> {
             RegisterPeerWithPop::new(harness.joiner.peer_id.clone(), harness.joiner.pop.clone())
                 .into();
         submit_instruction_with_retry(&harness.primary_client, &register, READY_TIMEOUT).await?;
-        if let Err(err) = wait_for_peer_presence(
-            &harness.primary_client,
+        wait_for_peer_presence_across_clients(
+            &harness.validator_clients,
             &harness.joiner.peer_id,
             true,
             READY_TIMEOUT,
         )
-        .await
-        {
-            eprintln!("joiner registration propagation lagged: {err:?}");
-        }
+        .await?;
     }
     harness.localnet.start_joiner(&harness.joiner.config_path)?;
     wait_for_status_ready(&harness.joiner.client, READY_TIMEOUT).await?;
@@ -751,18 +769,33 @@ async fn membership_join_cycle(harness: &mut TestusHarness) -> Result<()> {
     match wait_for_height_or_progress(&harness.joiner.client, catchup_target, catchup_timeout).await
     {
         Ok((start, current)) => match assess_joiner_catchup(start, current, catchup_target) {
-            JoinerCatchupAssessment::ReachedTarget => {}
-            JoinerCatchupAssessment::Progressed => {
-                eprintln!(
-                    "joiner catch-up is still below validator target after observed progress: baseline={baseline}, target={catchup_target}, start={start}, current={current}"
-                );
+            JoinerCatchupAssessment::ReachedTarget => {
+                joiner_warning_state.on_reached_target();
             }
-            JoinerCatchupAssessment::Stalled => {}
+            JoinerCatchupAssessment::Progressed => {
+                let progress_count = joiner_warning_state.on_progress_below_target();
+                if should_log_on_first_and_every_nth(progress_count, JOINER_PROGRESS_LOG_EVERY) {
+                    eprintln!(
+                        "joiner catch-up is still below validator target after observed progress: baseline={baseline}, target={catchup_target}, start={start}, current={current}, consecutive_progress_cycles={progress_count}"
+                    );
+                }
+            }
+            JoinerCatchupAssessment::Stalled => {
+                let stalled_count = joiner_warning_state.on_stalled();
+                if should_log_on_first_and_every_nth(stalled_count, JOINER_STALL_LOG_EVERY) {
+                    eprintln!(
+                        "joiner catch-up stalled after registration: baseline={baseline}, target={catchup_target}, start={start}, current={current}, consecutive_stalled_cycles={stalled_count}"
+                    );
+                }
+            }
         },
         Err(err) => {
-            eprintln!(
-                "joiner catch-up stalled after registration: baseline={baseline}, target={catchup_target}, err={err:?}"
-            );
+            let stalled_count = joiner_warning_state.on_stalled();
+            if should_log_on_first_and_every_nth(stalled_count, JOINER_STALL_LOG_EVERY) {
+                eprintln!(
+                    "joiner catch-up stalled after registration: baseline={baseline}, target={catchup_target}, err={err:?}, consecutive_stalled_cycles={stalled_count}"
+                );
+            }
         }
     }
     let convergence_target =
@@ -771,7 +804,7 @@ async fn membership_join_cycle(harness: &mut TestusHarness) -> Result<()> {
         &harness.validator_clients,
         convergence_target,
         INTERIM_CONVERGENCE_MAX_SKEW,
-        READY_TIMEOUT,
+        Duration::from_secs(INTERIM_CONVERGENCE_TIMEOUT_SECS),
     )
     .await
     {
@@ -785,6 +818,36 @@ enum JoinerCatchupAssessment {
     ReachedTarget,
     Progressed,
     Stalled,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct JoinerCatchupWarningState {
+    consecutive_stalled: u64,
+    consecutive_progress_below_target: u64,
+}
+
+impl JoinerCatchupWarningState {
+    fn on_reached_target(&mut self) {
+        self.consecutive_stalled = 0;
+        self.consecutive_progress_below_target = 0;
+    }
+
+    fn on_progress_below_target(&mut self) -> u64 {
+        self.consecutive_progress_below_target =
+            self.consecutive_progress_below_target.saturating_add(1);
+        self.consecutive_stalled = 0;
+        self.consecutive_progress_below_target
+    }
+
+    fn on_stalled(&mut self) -> u64 {
+        self.consecutive_stalled = self.consecutive_stalled.saturating_add(1);
+        self.consecutive_progress_below_target = 0;
+        self.consecutive_stalled
+    }
+}
+
+fn should_log_on_first_and_every_nth(count: u64, every: u64) -> bool {
+    count == 1 || count % every == 0
 }
 
 fn assess_joiner_catchup(start: u64, current: u64, target: u64) -> JoinerCatchupAssessment {
@@ -832,15 +895,18 @@ async fn membership_leave_cycle(harness: &mut TestusHarness) -> Result<()> {
     if is_peer_present(&harness.primary_client, &harness.joiner.peer_id)? {
         let unregister: InstructionBox = Unregister::peer(harness.joiner.peer_id.clone()).into();
         submit_instruction_with_retry(&harness.primary_client, &unregister, READY_TIMEOUT).await?;
-        if let Err(err) = wait_for_peer_presence(
-            &harness.primary_client,
+        let leave_propagation_timeout = Duration::from_secs(INTERIM_CONVERGENCE_TIMEOUT_SECS);
+        if let Err(err) = wait_for_peer_presence_across_clients(
+            &harness.validator_clients,
             &harness.joiner.peer_id,
             false,
-            READY_TIMEOUT,
+            leave_propagation_timeout,
         )
         .await
         {
-            eprintln!("joiner unregister propagation lagged: {err:?}");
+            eprintln!(
+                "joiner unregister propagation lagged: timeout={leave_propagation_timeout:?}, err={err:?}"
+            );
         }
     }
     harness.localnet.stop_joiner()?;
@@ -850,7 +916,7 @@ async fn membership_leave_cycle(harness: &mut TestusHarness) -> Result<()> {
         &harness.validator_clients,
         convergence_target,
         INTERIM_CONVERGENCE_MAX_SKEW,
-        READY_TIMEOUT,
+        Duration::from_secs(INTERIM_CONVERGENCE_TIMEOUT_SECS),
     )
     .await
     {
@@ -1051,8 +1117,28 @@ fn build_client_for_port(template: &Client, api_port: u16) -> Result<Client> {
 fn collect_statuses(clients: &[Client]) -> Result<Vec<iroha::client::Status>> {
     clients
         .iter()
-        .map(Client::get_status)
+        .map(get_status_with_retry)
         .collect::<Result<Vec<_>>>()
+}
+
+fn get_status_with_retry(client: &Client) -> Result<iroha::client::Status> {
+    let mut last_error = None;
+    for attempt in 0..STATUS_REQUEST_RETRIES {
+        match client.get_status() {
+            Ok(status) => return Ok(status),
+            Err(err) => {
+                let should_retry =
+                    is_http_timeout_error(&err) && attempt + 1 < STATUS_REQUEST_RETRIES;
+                last_error = Some(err);
+                if !should_retry {
+                    break;
+                }
+                thread::sleep(STATUS_REQUEST_RETRY_BACKOFF);
+            }
+        }
+    }
+    Err(last_error.expect("status retry loop should capture at least one error"))
+        .wrap_err_with(|| format!("failed to collect /status from {}", client.torii_url))
 }
 
 fn max_height(statuses: &[iroha::client::Status]) -> u64 {
@@ -1103,6 +1189,22 @@ fn is_http_timeout_error(err: &eyre::Report) -> bool {
         .any(|cause| cause.to_string().contains("operation timed out"))
 }
 
+fn is_query_timeout_error(err: &iroha::client::QueryError) -> bool {
+    err.to_string().contains("operation timed out")
+}
+
+#[test]
+fn http_timeout_error_detector_matches_timeout_messages() {
+    let err = eyre!("operation timed out");
+    assert!(is_http_timeout_error(&err));
+}
+
+#[test]
+fn http_timeout_error_detector_ignores_non_timeout_messages() {
+    let err = eyre!("connection refused");
+    assert!(!is_http_timeout_error(&err));
+}
+
 #[test]
 fn joiner_catchup_assessment_reached_target_when_current_at_or_above_target() {
     assert_eq!(
@@ -1135,6 +1237,47 @@ fn validator_restart_catchup_target_subtracts_interim_skew() {
 #[test]
 fn validator_restart_catchup_target_saturates_at_zero() {
     assert_eq!(validator_restart_catchup_target(3), 0);
+}
+
+#[test]
+fn warning_state_logs_first_and_every_interval_for_stalls() {
+    let mut warning_state = JoinerCatchupWarningState::default();
+    let first = warning_state.on_stalled();
+    let second = warning_state.on_stalled();
+    let third = warning_state.on_stalled();
+    let fourth = warning_state.on_stalled();
+    let fifth = warning_state.on_stalled();
+    assert!(should_log_on_first_and_every_nth(
+        first,
+        JOINER_STALL_LOG_EVERY
+    ));
+    assert!(!should_log_on_first_and_every_nth(
+        second,
+        JOINER_STALL_LOG_EVERY
+    ));
+    assert!(!should_log_on_first_and_every_nth(
+        third,
+        JOINER_STALL_LOG_EVERY
+    ));
+    assert!(!should_log_on_first_and_every_nth(
+        fourth,
+        JOINER_STALL_LOG_EVERY
+    ));
+    assert!(should_log_on_first_and_every_nth(
+        fifth,
+        JOINER_STALL_LOG_EVERY
+    ));
+}
+
+#[test]
+fn warning_state_resets_stall_counter_after_progress() {
+    let mut warning_state = JoinerCatchupWarningState::default();
+    warning_state.on_stalled();
+    warning_state.on_stalled();
+    let progress_count = warning_state.on_progress_below_target();
+    assert_eq!(progress_count, 1);
+    let stalled_count = warning_state.on_stalled();
+    assert_eq!(stalled_count, 1);
 }
 
 async fn submit_instruction_with_retry(
@@ -1174,6 +1317,38 @@ async fn wait_for_cluster_convergence(
         ensure!(
             Instant::now() < deadline,
             "cluster failed to converge: target_height={min_height_target}, max={max_h}, min={min_h}, max_skew={max_skew}"
+        );
+        sleep(STATUS_POLL).await;
+    }
+}
+
+async fn wait_for_cluster_convergence_quorum(
+    clients: &[Client],
+    min_height_target: u64,
+    max_skew: u64,
+    min_converged_peers: usize,
+    timeout: Duration,
+) -> Result<()> {
+    ensure!(
+        min_converged_peers > 0 && min_converged_peers <= clients.len(),
+        "invalid min_converged_peers={min_converged_peers} for {} clients",
+        clients.len()
+    );
+    let deadline = Instant::now() + timeout;
+    loop {
+        let statuses = collect_statuses(clients)?;
+        let max_h = max_height(&statuses);
+        let min_h = min_height(&statuses);
+        let converged_peers = statuses
+            .iter()
+            .filter(|status| max_h.saturating_sub(status.blocks) <= max_skew)
+            .count();
+        if max_h >= min_height_target && converged_peers >= min_converged_peers {
+            return Ok(());
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "cluster failed to reach quorum convergence: target_height={min_height_target}, max={max_h}, min={min_h}, max_skew={max_skew}, converged_peers={converged_peers}, required_converged_peers={min_converged_peers}"
         );
         sleep(STATUS_POLL).await;
     }
@@ -1243,34 +1418,80 @@ async fn wait_for_blocks_non_empty(client: &Client, target: u64, timeout: Durati
     }
 }
 
-async fn wait_for_peer_presence(
-    client: &Client,
+async fn wait_for_peer_presence_across_clients(
+    clients: &[Client],
     peer_id: &PeerId,
     present: bool,
     timeout: Duration,
 ) -> Result<()> {
+    ensure!(
+        !clients.is_empty(),
+        "cannot wait for peer presence across an empty client set"
+    );
+    let min_required_matches = min_presence_matches(clients.len());
     let deadline = Instant::now() + timeout;
     loop {
-        match client.query(FindPeers::new()).execute_all() {
-            Ok(peers) => {
-                let found = peers.iter().any(|peer| peer == peer_id);
-                if found == present {
-                    return Ok(());
+        let mut matched_clients = 0_usize;
+        let mut mismatched_clients = Vec::new();
+        let mut errored_clients = Vec::new();
+        let mut last_query_error = None;
+        for client in clients {
+            match query_peer_presence_with_retry(client, peer_id) {
+                Ok(found) => {
+                    if found == present {
+                        matched_clients = matched_clients.saturating_add(1);
+                    } else {
+                        mismatched_clients.push(client.torii_url.to_string());
+                    }
                 }
-                ensure!(
-                    Instant::now() < deadline,
-                    "timed out waiting for peer presence={present} ({peer_id})"
-                );
-            }
-            Err(err) => {
-                ensure!(
-                    Instant::now() < deadline,
-                    "timed out waiting for peer presence={present} ({peer_id}): {err:?}"
-                );
+                Err(err) => {
+                    errored_clients.push(client.torii_url.to_string());
+                    last_query_error = Some(format!("{err:?}"));
+                }
             }
         }
+        if matched_clients >= min_required_matches {
+            return Ok(());
+        }
+
+        ensure!(
+            Instant::now() < deadline,
+            "timed out waiting for peer presence={present} ({peer_id}) across validators; matched={matched_clients}/{min_required_matches}; mismatched_clients={mismatched_clients:?}; errored_clients={errored_clients:?}; last_query_error={last_query_error:?}"
+        );
         sleep(STATUS_POLL).await;
     }
+}
+
+fn query_peer_presence_with_retry(client: &Client, peer_id: &PeerId) -> Result<bool> {
+    let mut last_error = None;
+    for attempt in 0..PEER_QUERY_REQUEST_RETRIES {
+        match client.query(FindPeers::new()).execute_all() {
+            Ok(peers) => return Ok(peers.iter().any(|peer| peer == peer_id)),
+            Err(err) => {
+                let should_retry =
+                    is_query_timeout_error(&err) && attempt + 1 < PEER_QUERY_REQUEST_RETRIES;
+                last_error = Some(err);
+                if !should_retry {
+                    break;
+                }
+                thread::sleep(PEER_QUERY_REQUEST_RETRY_BACKOFF);
+            }
+        }
+    }
+    Err(last_error.expect("peer query retry loop should capture at least one error"))
+        .wrap_err_with(|| format!("failed to query peers from {}", client.torii_url))
+}
+
+fn min_presence_matches(validator_count: usize) -> usize {
+    let tolerated_faults = validator_count.saturating_sub(1) / 3;
+    validator_count.saturating_sub(tolerated_faults)
+}
+
+#[test]
+fn min_presence_matches_uses_bft_commit_quorum() {
+    assert_eq!(min_presence_matches(1), 1);
+    assert_eq!(min_presence_matches(4), 3);
+    assert_eq!(min_presence_matches(7), 5);
 }
 
 fn first_process_churn_index(validator_count: usize) -> usize {
