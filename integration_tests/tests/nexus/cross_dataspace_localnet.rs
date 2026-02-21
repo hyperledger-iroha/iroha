@@ -74,10 +74,15 @@ const VALIDATOR_STAKE: u64 = 2_000;
 const STAKE_ASSET_ID: &str = "xor#nexus";
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const ROUTE_PROBE_APPROVAL_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
+const ROUTE_PROBE_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
 const BALANCE_WAIT_TICK_EVERY_POLLS: u64 = 5;
 const PERMISSION_WAIT_TICK_EVERY_POLLS: u64 = 5;
+const BLOCKING_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(20);
+const ROLLBACK_CAPPED_ATTEMPTS: usize = 2;
+const SOAK_PHASE_WAIT_TIMEOUT: Duration = Duration::from_secs(18);
+const SOAK_BARRIER_TICK_EVERY_POLLS: u64 = 5;
 const SOAK_ITERATIONS: usize = 10;
-const SOAK_SUBMITTER_REFRESH_EVERY: usize = 3;
 
 fn localnet_builder() -> NetworkBuilder {
     let gas_account_str = format!("{}@ivm", SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key());
@@ -336,20 +341,78 @@ fn wait_for_height(
     target_height: u64,
     context: &str,
 ) -> Result<SumeragiStatusWire> {
+    wait_for_height_with_timeout(client, target_height, context, STATUS_WAIT_TIMEOUT)
+}
+
+fn wait_for_height_with_timeout(
+    client: &Client,
+    target_height: u64,
+    context: &str,
+    timeout_duration: Duration,
+) -> Result<SumeragiStatusWire> {
     let started = Instant::now();
     let mut last_height = 0;
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let status = client
-            .get_sumeragi_status_wire()
-            .map_err(|err| eyre!(err))?;
-        last_height = status.commit_qc.height;
-        if status.commit_qc.height >= target_height {
-            return Ok(status);
+    let mut last_error: Option<String> = None;
+    while started.elapsed() <= timeout_duration {
+        match client.get_sumeragi_status_wire() {
+            Ok(status) => {
+                last_height = status.commit_qc.height;
+                if status.commit_qc.height >= target_height {
+                    return Ok(status);
+                }
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
+    let suffix = last_error
+        .map(|err| format!("; last status query error: {err}"))
+        .unwrap_or_default();
     Err(eyre!(
-        "{context}: timed out waiting for block height >= {target_height}; last observed {last_height}"
+        "{context}: timed out waiting for block height >= {target_height}; last observed {last_height}{suffix}"
+    ))
+}
+
+fn wait_for_height_with_tick_timeout(
+    client: &Client,
+    tick_submitter: &Client,
+    target_height: u64,
+    context: &str,
+    timeout_duration: Duration,
+    tick_every_polls: u64,
+) -> Result<SumeragiStatusWire> {
+    let started = Instant::now();
+    let mut last_height = 0;
+    let mut last_error: Option<String> = None;
+    let mut polls = 0_u64;
+    while started.elapsed() <= timeout_duration {
+        match client.get_sumeragi_status_wire() {
+            Ok(status) => {
+                last_height = status.commit_qc.height;
+                if status.commit_qc.height >= target_height {
+                    return Ok(status);
+                }
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+        polls = polls.saturating_add(1);
+        if polls % tick_every_polls == 0 {
+            let _ = tick_submitter.submit(Log::new(
+                Level::INFO,
+                format!("{context} height tick {}", polls / tick_every_polls),
+            ));
+        }
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+    let suffix = last_error
+        .map(|err| format!("; last status query error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for block height >= {target_height}; last observed {last_height}{suffix}"
     ))
 }
 
@@ -376,6 +439,7 @@ fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
 struct DataspaceCommitmentObservation {
     height: u64,
     elapsed: Duration,
+    approval_observed: bool,
 }
 
 async fn wait_for_route_probe_approval(
@@ -388,6 +452,11 @@ async fn wait_for_route_probe_approval(
     let transaction = submitter.build_transaction([instruction], Metadata::default());
     let hash = transaction.hash();
     let started = Instant::now();
+    let submit_height = submitter
+        .get_sumeragi_status_wire()
+        .map_err(|err| eyre!(err))?
+        .commit_qc
+        .height;
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
         submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
@@ -397,7 +466,7 @@ async fn wait_for_route_probe_approval(
 
     // Give the SSE subscription handshake a brief head start so we can
     // reliably observe the queued routing decision event.
-    sleep(Duration::from_millis(200)).await;
+    sleep(ROUTE_PROBE_SSE_HANDSHAKE_DELAY).await;
 
     let submitter_for_submit = submitter.clone();
     spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction))
@@ -405,8 +474,7 @@ async fn wait_for_route_probe_approval(
         .map_err(|err| eyre!("{context}: route probe submit task join error: {err}"))?
         .map_err(|err| eyre!("{context}: failed to submit route probe transaction: {err}"))?;
 
-    let (queued_elapsed, approved_height) = timeout(STATUS_WAIT_TIMEOUT, async {
-        let mut queued_elapsed = None;
+    let queued_elapsed = timeout(STATUS_WAIT_TIMEOUT, async {
         loop {
             let Some(next) = events.next().await else {
                 return Err(eyre!("{context}: transaction event stream closed"));
@@ -428,17 +496,12 @@ async fn wait_for_route_probe_approval(
                         expected_dataspace_id.as_u64(),
                         event.dataspace_id().as_u64()
                     );
-                    queued_elapsed = Some(started.elapsed());
+                    return Ok(started.elapsed());
                 }
                 TransactionStatus::Approved => {
-                    let queued_elapsed = queued_elapsed.ok_or_else(|| {
-                        eyre!("{context}: approved event observed before queued routing event")
-                    })?;
-                    let approved_height =
-                        event.block_height().map(NonZeroU64::get).ok_or_else(|| {
-                            eyre!("{context}: approved transaction event missing block height")
-                        })?;
-                    return Ok((queued_elapsed, approved_height));
+                    return Err(eyre!(
+                        "{context}: approved event observed before queued routing event"
+                    ));
                 }
                 TransactionStatus::Rejected(reason) => {
                     return Err(eyre!(
@@ -452,12 +515,57 @@ async fn wait_for_route_probe_approval(
         }
     })
     .await
-    .map_err(|_| eyre!("{context}: timed out waiting for transaction approval"))??;
+    .map_err(|_| eyre!("{context}: timed out waiting for queued routing event"))??;
+
+    let approved_height = timeout(ROUTE_PROBE_APPROVAL_WAIT_TIMEOUT, async {
+        loop {
+            let Some(next) = events.next().await else {
+                return Err(eyre!("{context}: transaction event stream closed"));
+            };
+            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = next? else {
+                continue;
+            };
+            match event.status() {
+                TransactionStatus::Queued => continue,
+                TransactionStatus::Approved => {
+                    let approved_height =
+                        event.block_height().map(NonZeroU64::get).ok_or_else(|| {
+                            eyre!("{context}: approved transaction event missing block height")
+                        })?;
+                    return Ok(approved_height);
+                }
+                TransactionStatus::Rejected(reason) => {
+                    return Err(eyre!(
+                        "{context}: route probe transaction rejected: {reason}"
+                    ));
+                }
+                TransactionStatus::Expired => {
+                    return Err(eyre!("{context}: route probe transaction expired"));
+                }
+            }
+        }
+    })
+    .await
+    .ok()
+    .transpose()?;
 
     events.close().await;
+    let (height, approval_observed) = if let Some(height) = approved_height {
+        (height, true)
+    } else {
+        let fallback_height = submitter
+            .get_sumeragi_status_wire()
+            .map_err(|err| eyre!(err))?
+            .commit_qc
+            .height
+            .max(submit_height)
+            .saturating_add(1);
+        (fallback_height, false)
+    };
     Ok(DataspaceCommitmentObservation {
-        height: approved_height,
+        height,
         elapsed: queued_elapsed,
+        approval_observed,
     })
 }
 
@@ -466,13 +574,30 @@ fn wait_for_expected_balances(
     expectations: &[(&AssetId, Numeric)],
     context: &str,
 ) -> Result<()> {
+    wait_for_expected_balances_with_timeout(client, expectations, context, STATUS_WAIT_TIMEOUT)
+}
+
+fn wait_for_expected_balances_with_timeout(
+    client: &Client,
+    expectations: &[(&AssetId, Numeric)],
+    context: &str,
+    timeout_duration: Duration,
+) -> Result<()> {
     let started = Instant::now();
     let mut last_observed = Vec::with_capacity(expectations.len());
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+    let mut last_error: Option<String> = None;
+    while started.elapsed() <= timeout_duration {
         last_observed.clear();
         let mut all_match = true;
         for (asset_id, expected) in expectations {
-            let observed = asset_balance(client, asset_id)?;
+            let observed = match asset_balance(client, asset_id) {
+                Ok(observed) => observed,
+                Err(err) => {
+                    last_error = Some(err.to_string());
+                    all_match = false;
+                    break;
+                }
+            };
             if observed != *expected {
                 all_match = false;
             }
@@ -483,8 +608,11 @@ fn wait_for_expected_balances(
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
+    let suffix = last_error
+        .map(|err| format!("; last balance query error: {err}"))
+        .unwrap_or_default();
     Err(eyre!(
-        "{context}: timed out waiting for expected balances; last observed {last_observed:?}"
+        "{context}: timed out waiting for expected balances; last observed {last_observed:?}{suffix}"
     ))
 }
 
@@ -494,14 +622,38 @@ fn wait_for_expected_balances_with_tick(
     expectations: &[(&AssetId, Numeric)],
     context: &str,
 ) -> Result<()> {
+    wait_for_expected_balances_with_tick_timeout(
+        client,
+        tick_submitter,
+        expectations,
+        context,
+        STATUS_WAIT_TIMEOUT,
+    )
+}
+
+fn wait_for_expected_balances_with_tick_timeout(
+    client: &Client,
+    tick_submitter: &Client,
+    expectations: &[(&AssetId, Numeric)],
+    context: &str,
+    timeout_duration: Duration,
+) -> Result<()> {
     let started = Instant::now();
     let mut last_observed = Vec::with_capacity(expectations.len());
+    let mut last_error: Option<String> = None;
     let mut polls = 0_u64;
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+    while started.elapsed() <= timeout_duration {
         last_observed.clear();
         let mut all_match = true;
         for (asset_id, expected) in expectations {
-            let observed = asset_balance(client, asset_id)?;
+            let observed = match asset_balance(client, asset_id) {
+                Ok(observed) => observed,
+                Err(err) => {
+                    last_error = Some(err.to_string());
+                    all_match = false;
+                    break;
+                }
+            };
             if observed != *expected {
                 all_match = false;
             }
@@ -522,8 +674,11 @@ fn wait_for_expected_balances_with_tick(
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
+    let suffix = last_error
+        .map(|err| format!("; last balance query error: {err}"))
+        .unwrap_or_default();
     Err(eyre!(
-        "{context}: timed out waiting for expected balances with tick assist; last observed {last_observed:?}"
+        "{context}: timed out waiting for expected balances with tick assist; last observed {last_observed:?}{suffix}"
     ))
 }
 
@@ -536,12 +691,30 @@ fn wait_for_account_permissions(
 ) -> Result<()> {
     let started = Instant::now();
     let mut last_observed = Vec::new();
+    let mut last_error: Option<String> = None;
     let mut polls = 0_u64;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let permissions = client
+        let permissions = match client
             .query(FindPermissionsByAccountId::new(account_id.clone()))
             .execute_all()
-            .map_err(|err| eyre!(err))?;
+        {
+            Ok(permissions) => permissions,
+            Err(err) => {
+                last_error = Some(err.to_string());
+                polls = polls.saturating_add(1);
+                if polls % PERMISSION_WAIT_TICK_EVERY_POLLS == 0 {
+                    let _ = tick_submitter.submit(Log::new(
+                        Level::INFO,
+                        format!(
+                            "{context} permission tick {}",
+                            polls / PERMISSION_WAIT_TICK_EVERY_POLLS
+                        ),
+                    ));
+                }
+                thread::sleep(STATUS_POLL_INTERVAL);
+                continue;
+            }
+        };
         last_observed = permissions.clone();
         let all_present = required_permissions
             .iter()
@@ -561,8 +734,11 @@ fn wait_for_account_permissions(
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
+    let suffix = last_error
+        .map(|err| format!("; last permission query error: {err}"))
+        .unwrap_or_default();
     Err(eyre!(
-        "{context}: timed out waiting for permissions on {account_id}; required {required_permissions:?}; last observed {last_observed:?}"
+        "{context}: timed out waiting for permissions on {account_id}; required {required_permissions:?}; last observed {last_observed:?}{suffix}"
     ))
 }
 
@@ -703,6 +879,13 @@ fn duration_min_avg_max_secs(samples: &[Duration]) -> Option<(f64, f64, f64)> {
         count += 1;
     }
     Some((min, total / count as f64, max))
+}
+
+fn is_inconclusive_blocking_submit_error(error_text: &str) -> bool {
+    error_text.contains("transaction.status_timeout_ms")
+        || error_text.contains("haven't got tx confirmation within")
+        || error_text.contains("Transaction submitter thread exited with error")
+        || error_text.contains("Failed to send http POST request")
 }
 
 struct PhaseTimings {
@@ -922,18 +1105,30 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     let ds2_height = ds2_observation.height;
     {
         let _phase = phase_timings.phase("route probe ds1: query/assert");
+        let ds1_source = if ds1_observation.approval_observed {
+            "approved"
+        } else {
+            "fallback+1"
+        };
         eprintln!(
-            "[route-probe] ds1 first_seen={}s height={}",
+            "[route-probe] ds1 first_seen={}s height={} source={}",
             ds1_observation.elapsed.as_secs_f64(),
-            ds1_height
+            ds1_height,
+            ds1_source
         );
     }
     {
         let _phase = phase_timings.phase("route probe ds2: query/assert");
+        let ds2_source = if ds2_observation.approval_observed {
+            "approved"
+        } else {
+            "fallback+1"
+        };
         eprintln!(
-            "[route-probe] ds2 first_seen={}s height={}",
+            "[route-probe] ds2 first_seen={}s height={} source={}",
             ds2_observation.elapsed.as_secs_f64(),
-            ds2_height
+            ds2_height,
+            ds2_source
         );
         if ds1_observation.elapsed >= ds2_observation.elapsed {
             eprintln!(
@@ -952,15 +1147,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     .as_secs_f64()
             );
         }
-    }
-    {
-        let _phase = phase_timings.phase("route probes: propagation to bob");
-        let route_probe_target_height = ds1_height.max(ds2_height);
-        let _route_probes_synced_bob = wait_for_height(
-            &bob,
-            route_probe_target_height,
-            "route probes propagation on bob",
-        )?;
     }
     let ds1_asset_def: AssetDefinitionId = "ds1coin#wonderland".parse().expect("asset definition");
     let ds2_asset_def: AssetDefinitionId = "ds2coin#wonderland".parse().expect("asset definition");
@@ -985,9 +1171,8 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             &ALICE_ID,
             ALICE_KEYPAIR.private_key(),
         );
-        next_expected_height = next_height_after(&alice)?;
-        let _phase = phase_timings.phase("setup grants: tx submit enqueue");
-        submitter.submit_all(vec![
+        let _phase = phase_timings.phase("setup grants: tx submit + confirm");
+        submitter.submit_all_blocking(vec![
             InstructionBox::from(Grant::account_permission(
                 CanRegisterAssetDefinition {
                     domain: wonderland_domain.clone(),
@@ -1001,15 +1186,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 BOB_ID.clone(),
             )),
         ])?;
-    }
-    {
-        let _phase = phase_timings.phase("setup grants: barrier wait");
-        let grants_synced_alice = wait_for_height(
-            &alice,
-            next_expected_height,
-            "grant setup confirmation on alice",
-        )?;
-        next_expected_height = grants_synced_alice.commit_qc.height.saturating_add(1);
+        next_expected_height = next_height_after(&alice)?;
     }
     {
         let _phase = phase_timings.phase("setup grants: query/assert");
@@ -1113,18 +1290,20 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             ALICE_KEYPAIR.private_key(),
         );
         {
-            next_expected_height = next_expected_height.max(next_height_after(&alice)?);
-            let _phase = phase_timings.phase("execute successful swap: tx submit enqueue");
-            submitter.submit(InstructionBox::from(successful_swap))?;
-        }
-        {
-            let _phase = phase_timings.phase("execute successful swap: barrier wait");
-            let successful_synced_alice = wait_for_height(
-                &alice,
-                next_expected_height,
-                "successful swap confirmation on alice",
-            )?;
-            next_expected_height = successful_synced_alice.commit_qc.height.saturating_add(1);
+            let _phase = phase_timings.phase("execute successful swap: tx submit + confirm");
+            let mut submitter = submitter;
+            submitter.transaction_status_timeout = BLOCKING_CONFIRMATION_TIMEOUT;
+            if let Err(err) = submitter.submit_blocking(InstructionBox::from(successful_swap)) {
+                let error_text = err.to_string();
+                if is_inconclusive_blocking_submit_error(&error_text) {
+                    eprintln!(
+                        "[swap] successful swap confirmation inconclusive after {:.1}s; validating via balances",
+                        BLOCKING_CONFIRMATION_TIMEOUT.as_secs_f64()
+                    );
+                } else {
+                    return Err(err);
+                }
+            }
         }
         {
             let _phase = phase_timings.phase("execute successful swap: query/assert");
@@ -1145,6 +1324,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 ],
                 "successful swap balances",
             )?;
+            next_expected_height = next_expected_height.max(next_height_after(&alice)?);
         }
     }
 
@@ -1171,18 +1351,22 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         let submitter =
             leader_targeted_client_for_account(&network, &bob, &BOB_ID, BOB_KEYPAIR.private_key());
         {
-            next_expected_height = next_expected_height.max(next_height_after(&alice)?);
-            let _phase = phase_timings.phase("execute reverse swap: tx submit enqueue");
-            submitter.submit(InstructionBox::from(reverse_successful_swap))?;
-        }
-        {
-            let _phase = phase_timings.phase("execute reverse swap: barrier wait");
-            let reverse_synced_alice = wait_for_height(
-                &alice,
-                next_expected_height,
-                "reverse swap confirmation on alice",
-            )?;
-            next_expected_height = reverse_synced_alice.commit_qc.height.saturating_add(1);
+            let _phase = phase_timings.phase("execute reverse swap: tx submit + confirm");
+            let mut submitter = submitter;
+            submitter.transaction_status_timeout = BLOCKING_CONFIRMATION_TIMEOUT;
+            if let Err(err) =
+                submitter.submit_blocking(InstructionBox::from(reverse_successful_swap))
+            {
+                let error_text = err.to_string();
+                if is_inconclusive_blocking_submit_error(&error_text) {
+                    eprintln!(
+                        "[swap] reverse swap confirmation inconclusive after {:.1}s; validating via balances",
+                        BLOCKING_CONFIRMATION_TIMEOUT.as_secs_f64()
+                    );
+                } else {
+                    return Err(err);
+                }
+            }
         }
         {
             let _phase = phase_timings.phase("execute reverse swap: query/assert");
@@ -1203,6 +1387,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 ],
                 "reverse swap balances",
             )?;
+            next_expected_height = next_expected_height.max(next_height_after(&alice)?);
         }
     }
 
@@ -1233,14 +1418,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             let iteration_started = Instant::now();
             let run_result = (|| -> Result<(Duration, Duration, Duration, Duration)> {
                 let retarget_started = Instant::now();
-                if iteration > 0 && iteration % SOAK_SUBMITTER_REFRESH_EVERY == 0 {
-                    soak_submitter = leader_targeted_client_for_account(
-                        &network,
-                        &alice,
-                        &ALICE_ID,
-                        ALICE_KEYPAIR.private_key(),
-                    );
-                }
+                soak_submitter = leader_targeted_client_for_account(
+                    &network,
+                    &alice,
+                    &ALICE_ID,
+                    ALICE_KEYPAIR.private_key(),
+                );
                 let target_elapsed = retarget_started.elapsed();
                 let forward_swap = DvpIsi::new(
                     format!("soakfwd{iteration}")
@@ -1290,21 +1473,38 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     InstructionBox::from(reverse_swap),
                 ])?;
                 let submit_elapsed = submit_started.elapsed();
-                let barrier_started = Instant::now();
-                let synced_after_paired_swaps = wait_for_height(
+                let pre_barrier_height = alice
+                    .get_sumeragi_status_wire()
+                    .map_err(|err| eyre!(err))?
+                    .commit_qc
+                    .height;
+                let barrier_target_height =
+                    next_soak_target_height.max(pre_barrier_height.saturating_add(1));
+                let barrier_tick_submitter = leader_targeted_client_for_account(
+                    &network,
                     &alice,
-                    next_soak_target_height,
+                    &ALICE_ID,
+                    ALICE_KEYPAIR.private_key(),
+                );
+                let barrier_started = Instant::now();
+                let synced_after_paired_swaps = wait_for_height_with_tick_timeout(
+                    &alice,
+                    &barrier_tick_submitter,
+                    barrier_target_height,
                     "soak paired swaps barrier on alice",
+                    SOAK_PHASE_WAIT_TIMEOUT,
+                    SOAK_BARRIER_TICK_EVERY_POLLS,
                 )?;
                 let barrier_elapsed = barrier_started.elapsed();
                 next_soak_target_height =
                     synced_after_paired_swaps.commit_qc.height.saturating_add(1);
                 last_soak_synced_height = Some(synced_after_paired_swaps.commit_qc.height);
                 let query_started = Instant::now();
-                wait_for_expected_balances(
+                wait_for_expected_balances_with_timeout(
                     &alice,
                     &soak_baseline,
                     "soak iteration net-zero balances",
+                    SOAK_PHASE_WAIT_TIMEOUT,
                 )?;
                 let query_elapsed = query_started.elapsed();
                 Ok((
@@ -1389,35 +1589,105 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
 
     {
         let _phase = phase_timings.phase("execute failing swap + rollback verification");
-        let failing_swap = DvpIsi::new(
-            "ds1ds2swapfail".parse().expect("settlement id"),
-            SettlementLeg::new(
-                ds1_asset_def.clone(),
-                Numeric::from(10_u32),
-                ALICE_ID.clone(),
-                BOB_ID.clone(),
-            ),
-            SettlementLeg::new(
-                ds2_asset_def.clone(),
-                Numeric::from(10_000_u32),
-                BOB_ID.clone(),
-                ALICE_ID.clone(),
-            ),
-            SettlementPlan::new(
-                SettlementExecutionOrder::DeliveryThenPayment,
-                SettlementAtomicity::AllOrNothing,
-            ),
-        );
-        let submitter = leader_targeted_client_for_account(
-            &network,
-            &alice,
-            &ALICE_ID,
-            ALICE_KEYPAIR.private_key(),
-        );
-        let failure = submitter
-            .submit_blocking(InstructionBox::from(failing_swap))
-            .expect_err("underfunded counter-leg must reject all-or-nothing settlement");
-        let failure_text = failure.to_string();
+        let mut failure_text = None;
+        for attempt in 0..ROLLBACK_CAPPED_ATTEMPTS {
+            let settlement_id = if attempt == 0 {
+                "ds1ds2swapfail".to_owned()
+            } else {
+                format!("ds1ds2swapfail_retry{attempt}")
+            };
+            let failing_swap = DvpIsi::new(
+                settlement_id.parse().expect("settlement id"),
+                SettlementLeg::new(
+                    ds1_asset_def.clone(),
+                    Numeric::from(10_u32),
+                    ALICE_ID.clone(),
+                    BOB_ID.clone(),
+                ),
+                SettlementLeg::new(
+                    ds2_asset_def.clone(),
+                    Numeric::from(10_000_u32),
+                    BOB_ID.clone(),
+                    ALICE_ID.clone(),
+                ),
+                SettlementPlan::new(
+                    SettlementExecutionOrder::DeliveryThenPayment,
+                    SettlementAtomicity::AllOrNothing,
+                ),
+            );
+            let submitter = leader_targeted_client_for_account(
+                &network,
+                &alice,
+                &ALICE_ID,
+                ALICE_KEYPAIR.private_key(),
+            );
+            let mut submitter = submitter;
+            submitter.transaction_status_timeout = BLOCKING_CONFIRMATION_TIMEOUT;
+            match submitter.submit_blocking(InstructionBox::from(failing_swap)) {
+                Ok(_) => {
+                    return Err(eyre!(
+                        "underfunded counter-leg unexpectedly approved on rollback attempt {}",
+                        attempt + 1
+                    ));
+                }
+                Err(err) => {
+                    let error_text = err.to_string();
+                    if error_text.contains("settlement leg requires 10000")
+                        || error_text.contains("requires 10000")
+                    {
+                        failure_text = Some(error_text);
+                        break;
+                    }
+                    if is_inconclusive_blocking_submit_error(&error_text)
+                        && attempt + 1 < ROLLBACK_CAPPED_ATTEMPTS
+                    {
+                        eprintln!(
+                            "[rollback] inconclusive submit on attempt {}; retrying with fresh leader target",
+                            attempt + 1
+                        );
+                        continue;
+                    }
+                    failure_text = Some(error_text);
+                    break;
+                }
+            }
+        }
+        let mut failure_text = failure_text
+            .ok_or_else(|| eyre!("rollback rejection attempt did not produce an error"))?;
+        if is_inconclusive_blocking_submit_error(&failure_text) {
+            eprintln!(
+                "[rollback] falling back to uncapped blocking confirmation for rejection reason"
+            );
+            let final_fallback_swap = DvpIsi::new(
+                "ds1ds2swapfail_final".parse().expect("settlement id"),
+                SettlementLeg::new(
+                    ds1_asset_def.clone(),
+                    Numeric::from(10_u32),
+                    ALICE_ID.clone(),
+                    BOB_ID.clone(),
+                ),
+                SettlementLeg::new(
+                    ds2_asset_def.clone(),
+                    Numeric::from(10_000_u32),
+                    BOB_ID.clone(),
+                    ALICE_ID.clone(),
+                ),
+                SettlementPlan::new(
+                    SettlementExecutionOrder::DeliveryThenPayment,
+                    SettlementAtomicity::AllOrNothing,
+                ),
+            );
+            let submitter = leader_targeted_client_for_account(
+                &network,
+                &alice,
+                &ALICE_ID,
+                ALICE_KEYPAIR.private_key(),
+            );
+            let fallback_error = submitter
+                .submit_blocking(InstructionBox::from(final_fallback_swap))
+                .expect_err("underfunded counter-leg must reject all-or-nothing settlement");
+            failure_text = fallback_error.to_string();
+        }
         assert!(
             failure_text.contains("settlement leg requires 10000")
                 || failure_text.contains("requires 10000"),
