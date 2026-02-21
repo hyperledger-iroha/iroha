@@ -792,6 +792,12 @@ mod tests {
                     RECOVERY_NO_ROSTER_FALLBACK_VIEWS,
                 missing_block_signer_fallback_attempts:
                     iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+                missing_block_retry_backoff_multiplier: iroha_config::parameters::defaults::
+                    sumeragi::RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER,
+                missing_block_retry_backoff_cap: Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::
+                        RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS,
+                ),
                 view_change_backlog_extension_factor:
                     iroha_config::parameters::defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR,
                 view_change_backlog_extension_cap: Duration::from_millis(

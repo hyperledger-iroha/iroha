@@ -2546,6 +2546,10 @@ pub mod sumeragi {
     /// Default number of missing-block fetch attempts before falling back to the full topology.
     /// A value of 0 disables signer preference.
     pub const MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: u32 = 1;
+    /// Multiplier applied per retry attempt for missing-block fetch backoff (>=1).
+    pub const RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER: u32 = 2;
+    /// Ceiling for missing-block fetch retry backoff (milliseconds).
+    pub const RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS: u64 = 5_000;
     /// Backlog-aware multiplier applied to quorum-reschedule grace windows.
     pub const VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR: f64 = 1.5;
     /// Maximum additional quorum-reschedule grace window under backlog (milliseconds).

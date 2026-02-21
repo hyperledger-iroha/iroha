@@ -1332,6 +1332,12 @@ fn test_sumeragi_config() -> SumeragiConfig {
                 iroha_config::parameters::defaults::sumeragi::RECOVERY_NO_ROSTER_FALLBACK_VIEWS,
             missing_block_signer_fallback_attempts:
                 iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+            missing_block_retry_backoff_multiplier: iroha_config::parameters::defaults::sumeragi::
+                RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER,
+            missing_block_retry_backoff_cap: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::
+                    RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS,
+            ),
             view_change_backlog_extension_factor:
                 iroha_config::parameters::defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR,
             view_change_backlog_extension_cap: Duration::from_millis(
@@ -32920,6 +32926,74 @@ async fn retry_missing_block_requests_relaxes_aggressive_retry_window_after_firs
         stats.retry_window,
         actor.rebroadcast_cooldown(),
         "retry loop should relax aggressive floor after the first attempt"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retry_missing_block_requests_applies_configured_backoff_before_retrying() {
+    let mut config = test_sumeragi_config();
+    config.recovery.missing_block_retry_backoff_multiplier = 3;
+    config.recovery.missing_block_retry_backoff_cap = Duration::from_secs(5);
+    let mut harness = test_actor_harness_with_config(4, config, None).await;
+    let actor = &mut harness.actor;
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0;
+    let now = Instant::now();
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB1; Hash::LENGTH]));
+    if actor.block_payload_available_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB2; Hash::LENGTH]));
+    }
+
+    let retry_window = actor.rebroadcast_cooldown() + Duration::from_millis(5);
+    let last_requested = now - retry_window - Duration::from_millis(50);
+    let effective_retry_window = retry_window.saturating_mul(3);
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: Some(Duration::from_secs(1)),
+            first_seen: last_requested,
+            last_requested,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    let progressed = actor.retry_missing_block_requests(now, None);
+    assert!(!progressed, "effective backoff window should delay retry");
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("request entry retained");
+    assert_eq!(
+        stats.attempts, 1,
+        "attempt counter must not increase during backoff"
+    );
+    assert_eq!(
+        stats.last_requested, last_requested,
+        "backoff should keep last_requested unchanged"
+    );
+
+    let retry_at = last_requested + effective_retry_window + Duration::from_millis(10);
+    let _ = actor.retry_missing_block_requests(retry_at, None);
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("request entry retained");
+    assert!(
+        stats.last_requested >= retry_at,
+        "retry state should advance once effective backoff expires"
     );
 
     harness.shutdown.send();

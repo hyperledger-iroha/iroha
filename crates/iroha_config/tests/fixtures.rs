@@ -1099,6 +1099,8 @@ fn minimal_config_snapshot() {
                     hash_miss_cap_before_range_pull: 3,
                     no_roster_fallback_views: 1,
                     missing_block_signer_fallback_attempts: 1,
+                    missing_block_retry_backoff_multiplier: 2,
+                    missing_block_retry_backoff_cap: 5s,
                     view_change_backlog_extension_factor: 1.5,
                     view_change_backlog_extension_cap: 200ms,
                     deferred_qc_ttl: 2s,

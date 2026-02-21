@@ -642,13 +642,15 @@ async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
     assert_eq!(before_balance, Numeric::from(300_u32));
 
     let denied_shield_tx = tx_builder_client.build_transaction_from_items(
-        vec![InstructionBox::from(iroha_data_model::isi::zk::Shield::new(
-            asset_def.clone(),
-            source.clone(),
-            200_u128,
-            marker(11),
-            ConfidentialEncryptedPayload::default(),
-        ))],
+        vec![InstructionBox::from(
+            iroha_data_model::isi::zk::Shield::new(
+                asset_def.clone(),
+                source.clone(),
+                200_u128,
+                marker(11),
+                ConfidentialEncryptedPayload::default(),
+            ),
+        )],
         iroha_data_model::metadata::Metadata::default(),
     );
 

@@ -162,6 +162,26 @@ impl Actor {
         retry_window.max(widened)
     }
 
+    fn missing_block_retry_window_with_backoff(
+        &self,
+        base_retry_window: Duration,
+        attempts: u32,
+    ) -> Duration {
+        if base_retry_window == Duration::ZERO {
+            return base_retry_window;
+        }
+
+        let multiplier = self.recovery_missing_block_retry_backoff_multiplier();
+        let cap = self
+            .recovery_missing_block_retry_backoff_cap()
+            .max(base_retry_window);
+        if attempts == 0 || multiplier <= 1 {
+            return base_retry_window.min(cap);
+        }
+
+        super::saturating_mul_duration(base_retry_window, multiplier).min(cap)
+    }
+
     fn maybe_validate_pending_for_commit_qc(
         &mut self,
         qc: &crate::sumeragi::consensus::Qc,
@@ -1177,6 +1197,8 @@ impl Actor {
             {
                 stats.retry_window = retry_window;
             }
+            let effective_retry_window =
+                self.missing_block_retry_window_with_backoff(retry_window, stats_snapshot.attempts);
             let mut view_change_window = self
                 .pending
                 .missing_block_requests
@@ -1195,37 +1217,49 @@ impl Actor {
                 view_change_window = Some(self.recovery_deferred_qc_ttl());
             }
             let decision = if let Some(ref topology) = topology {
-                let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
-                super::plan_missing_block_fetch(
-                    &mut self.pending.missing_block_requests,
-                    block_hash,
-                    stats_snapshot.height,
-                    stats_snapshot.view,
-                    stats_snapshot.phase,
-                    stats_snapshot.priority,
-                    &signers,
-                    topology,
-                    now,
-                    retry_window,
-                    view_change_window,
-                    signer_fallback_attempts,
-                )
-            } else {
-                let retry_due = super::touch_missing_block_request(
-                    &mut self.pending.missing_block_requests,
-                    block_hash,
-                    stats_snapshot.height,
-                    stats_snapshot.view,
-                    stats_snapshot.phase,
-                    stats_snapshot.priority,
-                    now,
-                    retry_window,
-                    view_change_window,
-                );
-                if retry_due {
-                    MissingBlockFetchDecision::NoTargets
-                } else {
+                let since_last_request =
+                    now.saturating_duration_since(stats_snapshot.last_requested);
+                if since_last_request < effective_retry_window {
                     MissingBlockFetchDecision::Backoff
+                } else {
+                    let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
+                    super::plan_missing_block_fetch(
+                        &mut self.pending.missing_block_requests,
+                        block_hash,
+                        stats_snapshot.height,
+                        stats_snapshot.view,
+                        stats_snapshot.phase,
+                        stats_snapshot.priority,
+                        &signers,
+                        topology,
+                        now,
+                        retry_window,
+                        view_change_window,
+                        signer_fallback_attempts,
+                    )
+                }
+            } else {
+                let since_last_request =
+                    now.saturating_duration_since(stats_snapshot.last_requested);
+                if since_last_request < effective_retry_window {
+                    MissingBlockFetchDecision::Backoff
+                } else {
+                    let retry_due = super::touch_missing_block_request(
+                        &mut self.pending.missing_block_requests,
+                        block_hash,
+                        stats_snapshot.height,
+                        stats_snapshot.view,
+                        stats_snapshot.phase,
+                        stats_snapshot.priority,
+                        now,
+                        retry_window,
+                        view_change_window,
+                    );
+                    if retry_due {
+                        MissingBlockFetchDecision::NoTargets
+                    } else {
+                        MissingBlockFetchDecision::Backoff
+                    }
                 }
             };
             if defer_view_change {
@@ -1249,12 +1283,18 @@ impl Actor {
                 .try_into()
                 .unwrap_or(u64::MAX);
             let retry_window_ms = retry_window.as_millis();
+            let effective_retry_window_ms = effective_retry_window.as_millis();
             let targets_len = match &decision {
                 MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
                 _ => 0,
             };
 
-            self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+            self.note_missing_block_fetch_metrics(
+                &decision,
+                effective_retry_window,
+                targets_len,
+                dwell,
+            );
             super::status::record_missing_block_fetch(targets_len, dwell_ms);
 
             match &decision {
@@ -1276,7 +1316,8 @@ impl Actor {
                         block = ?block_hash,
                         targets = ?targets,
                         target_kind = target_kind.label(),
-                        retry_window_ms,
+                        retry_window_ms = effective_retry_window_ms,
+                        base_retry_window_ms = retry_window_ms,
                         dwell_ms,
                         since_last_ms,
                         attempts,
@@ -1290,7 +1331,8 @@ impl Actor {
                         view = stats_snapshot.view,
                         phase = ?stats_snapshot.phase,
                         block = ?block_hash,
-                        retry_window_ms,
+                        retry_window_ms = effective_retry_window_ms,
+                        base_retry_window_ms = retry_window_ms,
                         dwell_ms,
                         since_last_ms,
                         attempts,
@@ -1303,7 +1345,8 @@ impl Actor {
                         view = stats_snapshot.view,
                         phase = ?stats_snapshot.phase,
                         block = ?block_hash,
-                        retry_window_ms,
+                        retry_window_ms = effective_retry_window_ms,
+                        base_retry_window_ms = retry_window_ms,
                         dwell_ms,
                         since_last_ms,
                         attempts,
