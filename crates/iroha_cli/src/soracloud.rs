@@ -20,10 +20,11 @@ use iroha::data_model::{
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
-        SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_STATE_BINDING_VERSION_V1, SoraContainerManifestV1,
-        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraNetworkPolicyV1, SoraRouteTargetV1,
-        SoraRouteVisibilityV1, SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
-        SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
+        AgentApartmentManifestV1, AgentUpgradePolicyV1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        SORA_STATE_BINDING_VERSION_V1, SoraContainerManifestV1, SoraContainerRuntimeV1,
+        SoraDeploymentBundleV1, SoraNetworkPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+        SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+        SoraStateScopeV1, SoraTlsModeV1,
     },
 };
 use iroha_crypto::{Hash, KeyPair, Signature};
@@ -37,8 +38,15 @@ use crate::{Run, RunContext};
 
 const DEFAULT_CONTAINER_MANIFEST: &str = "fixtures/soracloud/sora_container_manifest_v1.json";
 const DEFAULT_SERVICE_MANIFEST: &str = "fixtures/soracloud/sora_service_manifest_v1.json";
+const DEFAULT_AGENT_APARTMENT_MANIFEST: &str =
+    "fixtures/soracloud/agent_apartment_manifest_v1.json";
 const DEFAULT_REGISTRY_PATH: &str = ".soracloud/registry.json";
 const REGISTRY_SCHEMA_VERSION: u16 = 1;
+const AGENT_WALLET_DAY_TICKS: u64 = 10_000;
+const AGENT_MAILBOX_MAX_PAYLOAD_BYTES: usize = 8 * 1024;
+const AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS: u64 = 10_000;
+const AGENT_AUTONOMY_MAX_LABEL_BYTES: usize = 256;
+const AGENT_AUTONOMY_MAX_HASH_BYTES: usize = 256;
 
 /// Soracloud local control-plane commands.
 #[derive(clap::Subcommand, Debug)]
@@ -55,6 +63,32 @@ pub enum Command {
     Rollback(RollbackArgs),
     /// Advance or fail a rollout step using health-gated canary controls.
     Rollout(RolloutArgs),
+    /// Register a persistent AI apartment manifest into local scheduler state.
+    AgentDeploy(AgentDeployArgs),
+    /// Renew an apartment lease in local scheduler state.
+    AgentLeaseRenew(AgentLeaseRenewArgs),
+    /// Request deterministic apartment restart in local scheduler state.
+    AgentRestart(AgentRestartArgs),
+    /// Show local apartment scheduler status.
+    AgentStatus(AgentStatusArgs),
+    /// Submit an apartment wallet spend request under policy guardrails.
+    AgentWalletSpend(AgentWalletSpendArgs),
+    /// Approve a pending apartment wallet spend request.
+    AgentWalletApprove(AgentWalletApproveArgs),
+    /// Revoke an apartment policy capability.
+    AgentPolicyRevoke(AgentPolicyRevokeArgs),
+    /// Send a deterministic mailbox message between apartments.
+    AgentMessageSend(AgentMessageSendArgs),
+    /// Acknowledge (consume) a mailbox message from an apartment queue.
+    AgentMessageAck(AgentMessageAckArgs),
+    /// Inspect mailbox queue state for an apartment.
+    AgentMailboxStatus(AgentMailboxStatusArgs),
+    /// Add an artifact hash (and optional provenance hash) to autonomy allowlist.
+    AgentArtifactAllow(AgentArtifactAllowArgs),
+    /// Approve an autonomous run under allowlist/provenance/budget guardrails.
+    AgentAutonomyRun(AgentAutonomyRunArgs),
+    /// Show autonomous-run policy state for an apartment.
+    AgentAutonomyStatus(AgentAutonomyStatusArgs),
 }
 
 impl Run for Command {
@@ -78,6 +112,19 @@ impl Run for Command {
                 let output = args.run(&context.config().key_pair)?;
                 context.print_data(&output)
             }
+            Command::AgentDeploy(args) => context.print_data(&args.run()?),
+            Command::AgentLeaseRenew(args) => context.print_data(&args.run()?),
+            Command::AgentRestart(args) => context.print_data(&args.run()?),
+            Command::AgentStatus(args) => context.print_data(&args.run()?),
+            Command::AgentWalletSpend(args) => context.print_data(&args.run()?),
+            Command::AgentWalletApprove(args) => context.print_data(&args.run()?),
+            Command::AgentPolicyRevoke(args) => context.print_data(&args.run()?),
+            Command::AgentMessageSend(args) => context.print_data(&args.run()?),
+            Command::AgentMessageAck(args) => context.print_data(&args.run()?),
+            Command::AgentMailboxStatus(args) => context.print_data(&args.run()?),
+            Command::AgentArtifactAllow(args) => context.print_data(&args.run()?),
+            Command::AgentAutonomyRun(args) => context.print_data(&args.run()?),
+            Command::AgentAutonomyStatus(args) => context.print_data(&args.run()?),
         }
     }
 }
@@ -476,6 +523,442 @@ impl RolloutArgs {
     }
 }
 
+/// Arguments for `app soracloud agent-deploy`.
+#[derive(clap::Args, Debug)]
+pub struct AgentDeployArgs {
+    /// Path to an `AgentApartmentManifestV1` JSON document.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_AGENT_APARTMENT_MANIFEST)]
+    manifest: PathBuf,
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Lease length, measured in deterministic control-plane sequence ticks.
+    #[arg(long, value_name = "TICKS", default_value_t = 120)]
+    lease_ticks: u64,
+    /// Initial autonomy execution budget units.
+    #[arg(long, value_name = "UNITS", default_value_t = AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS)]
+    autonomy_budget_units: u64,
+}
+
+impl AgentDeployArgs {
+    fn run(self) -> Result<AgentMutationOutput> {
+        if self.lease_ticks == 0 {
+            return Err(eyre!("--lease-ticks must be greater than zero"));
+        }
+        if self.autonomy_budget_units == 0 {
+            return Err(eyre!("--autonomy-budget-units must be greater than zero"));
+        }
+        let manifest: AgentApartmentManifestV1 = load_json(&self.manifest)?;
+        manifest.validate()?;
+
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_agent_deploy_with_budget(
+            &mut registry,
+            &manifest,
+            self.lease_ticks,
+            self.autonomy_budget_units,
+        )?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-lease-renew`.
+#[derive(clap::Args, Debug)]
+pub struct AgentLeaseRenewArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name to renew.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Lease extension ticks.
+    #[arg(long, value_name = "TICKS", default_value_t = 120)]
+    lease_ticks: u64,
+}
+
+impl AgentLeaseRenewArgs {
+    fn run(self) -> Result<AgentMutationOutput> {
+        if self.lease_ticks == 0 {
+            return Err(eyre!("--lease-ticks must be greater than zero"));
+        }
+        let mut registry = load_registry(&self.registry)?;
+        let output =
+            apply_agent_lease_renew(&mut registry, &self.apartment_name, self.lease_ticks)?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-restart`.
+#[derive(clap::Args, Debug)]
+pub struct AgentRestartArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name to restart.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Human-readable reason captured in scheduler events.
+    #[arg(long, value_name = "TEXT")]
+    reason: String,
+}
+
+impl AgentRestartArgs {
+    fn run(self) -> Result<AgentMutationOutput> {
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_agent_restart(&mut registry, &self.apartment_name, &self.reason)?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-status`.
+#[derive(clap::Args, Debug)]
+pub struct AgentStatusArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Optional apartment name filter.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: Option<String>,
+}
+
+impl AgentStatusArgs {
+    fn run(self) -> Result<AgentStatusOutput> {
+        let registry = load_registry(&self.registry)?;
+        let mut apartments = Vec::new();
+        for (apartment_name, entry) in &registry.apartments {
+            if self
+                .apartment_name
+                .as_ref()
+                .is_some_and(|needle| needle != apartment_name)
+            {
+                continue;
+            }
+            apartments.push(AgentApartmentStatusEntry::from_state(
+                apartment_name,
+                entry,
+                registry.next_sequence,
+            ));
+        }
+        Ok(AgentStatusOutput {
+            schema_version: registry.schema_version,
+            apartment_count: u32::try_from(apartments.len()).unwrap_or(u32::MAX),
+            event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+            apartments,
+        })
+    }
+}
+
+/// Arguments for `app soracloud agent-wallet-spend`.
+#[derive(clap::Args, Debug)]
+pub struct AgentWalletSpendArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name issuing the spend request.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Asset definition identifier (`definition#domain`).
+    #[arg(long, value_name = "ASSET")]
+    asset_definition: String,
+    /// Spend amount in nanos.
+    #[arg(long, value_name = "NANOS")]
+    amount_nanos: u64,
+}
+
+impl AgentWalletSpendArgs {
+    fn run(self) -> Result<AgentWalletMutationOutput> {
+        if self.amount_nanos == 0 {
+            return Err(eyre!("--amount-nanos must be greater than zero"));
+        }
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_agent_wallet_spend(
+            &mut registry,
+            &self.apartment_name,
+            &self.asset_definition,
+            self.amount_nanos,
+        )?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-wallet-approve`.
+#[derive(clap::Args, Debug)]
+pub struct AgentWalletApproveArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name owning the request.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Wallet request identifier emitted by `agent-wallet-spend`.
+    #[arg(long, value_name = "REQUEST")]
+    request_id: String,
+}
+
+impl AgentWalletApproveArgs {
+    fn run(self) -> Result<AgentWalletMutationOutput> {
+        let mut registry = load_registry(&self.registry)?;
+        let output =
+            apply_agent_wallet_approve(&mut registry, &self.apartment_name, &self.request_id)?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-policy-revoke`.
+#[derive(clap::Args, Debug)]
+pub struct AgentPolicyRevokeArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name whose policy should be updated.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Capability identifier to revoke (for example `wallet.sign`).
+    #[arg(long, value_name = "CAPABILITY")]
+    capability: String,
+    /// Optional reason included in audit events.
+    #[arg(long, value_name = "TEXT")]
+    reason: Option<String>,
+}
+
+impl AgentPolicyRevokeArgs {
+    fn run(self) -> Result<AgentWalletMutationOutput> {
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_agent_policy_revoke(
+            &mut registry,
+            &self.apartment_name,
+            &self.capability,
+            self.reason.as_deref(),
+        )?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-message-send`.
+#[derive(clap::Args, Debug)]
+pub struct AgentMessageSendArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Sender apartment name.
+    #[arg(long, value_name = "NAME")]
+    from_apartment: String,
+    /// Recipient apartment name.
+    #[arg(long, value_name = "NAME")]
+    to_apartment: String,
+    /// Logical mailbox channel.
+    #[arg(long, value_name = "CHANNEL", default_value = "default")]
+    channel: String,
+    /// Message payload (UTF-8 text).
+    #[arg(long, value_name = "TEXT")]
+    payload: String,
+}
+
+impl AgentMessageSendArgs {
+    fn run(self) -> Result<AgentMailboxMutationOutput> {
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_agent_message_send(
+            &mut registry,
+            &self.from_apartment,
+            &self.to_apartment,
+            &self.channel,
+            &self.payload,
+        )?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-message-ack`.
+#[derive(clap::Args, Debug)]
+pub struct AgentMessageAckArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name consuming the message.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Message identifier emitted by `agent-message-send`.
+    #[arg(long, value_name = "MESSAGE")]
+    message_id: String,
+}
+
+impl AgentMessageAckArgs {
+    fn run(self) -> Result<AgentMailboxMutationOutput> {
+        let mut registry = load_registry(&self.registry)?;
+        let output =
+            apply_agent_message_ack(&mut registry, &self.apartment_name, &self.message_id)?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-mailbox-status`.
+#[derive(clap::Args, Debug)]
+pub struct AgentMailboxStatusArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name to inspect.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+}
+
+impl AgentMailboxStatusArgs {
+    fn run(self) -> Result<AgentMailboxStatusOutput> {
+        let registry = load_registry(&self.registry)?;
+        let apartment_name = self.apartment_name.trim();
+        if apartment_name.is_empty() {
+            return Err(eyre!("--apartment-name must not be empty"));
+        }
+        let runtime = registry
+            .apartments
+            .get(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        let messages = runtime
+            .mailbox_queue
+            .iter()
+            .map(AgentMailboxMessageEntry::from_message)
+            .collect::<Vec<_>>();
+        Ok(AgentMailboxStatusOutput {
+            schema_version: registry.schema_version,
+            apartment_name: apartment_name.to_owned(),
+            status: runtime_status_for_sequence(runtime, registry.next_sequence),
+            pending_message_count: u32::try_from(messages.len()).unwrap_or(u32::MAX),
+            event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+            messages,
+        })
+    }
+}
+
+/// Arguments for `app soracloud agent-artifact-allow`.
+#[derive(clap::Args, Debug)]
+pub struct AgentArtifactAllowArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name whose allowlist should be updated.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Artifact hash identifier.
+    #[arg(long, value_name = "HASH")]
+    artifact_hash: String,
+    /// Optional provenance hash required for this artifact.
+    #[arg(long, value_name = "HASH")]
+    provenance_hash: Option<String>,
+}
+
+impl AgentArtifactAllowArgs {
+    fn run(self) -> Result<AgentAutonomyMutationOutput> {
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_agent_artifact_allow(
+            &mut registry,
+            &self.apartment_name,
+            &self.artifact_hash,
+            self.provenance_hash.as_deref(),
+        )?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-autonomy-run`.
+#[derive(clap::Args, Debug)]
+pub struct AgentAutonomyRunArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name requesting autonomous execution.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+    /// Artifact hash identifier.
+    #[arg(long, value_name = "HASH")]
+    artifact_hash: String,
+    /// Optional provenance hash for this run request.
+    #[arg(long, value_name = "HASH")]
+    provenance_hash: Option<String>,
+    /// Budget units requested for this run.
+    #[arg(long, value_name = "UNITS")]
+    budget_units: u64,
+    /// Human-readable run label.
+    #[arg(long, value_name = "LABEL")]
+    run_label: String,
+}
+
+impl AgentAutonomyRunArgs {
+    fn run(self) -> Result<AgentAutonomyMutationOutput> {
+        if self.budget_units == 0 {
+            return Err(eyre!("--budget-units must be greater than zero"));
+        }
+        let mut registry = load_registry(&self.registry)?;
+        let output = apply_agent_autonomy_run(
+            &mut registry,
+            &self.apartment_name,
+            &self.artifact_hash,
+            self.provenance_hash.as_deref(),
+            self.budget_units,
+            &self.run_label,
+        )?;
+        write_json(&self.registry, &registry)?;
+        Ok(output)
+    }
+}
+
+/// Arguments for `app soracloud agent-autonomy-status`.
+#[derive(clap::Args, Debug)]
+pub struct AgentAutonomyStatusArgs {
+    /// Registry state JSON path.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_REGISTRY_PATH)]
+    registry: PathBuf,
+    /// Apartment name to inspect.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: String,
+}
+
+impl AgentAutonomyStatusArgs {
+    fn run(self) -> Result<AgentAutonomyStatusOutput> {
+        let registry = load_registry(&self.registry)?;
+        let apartment_name = self.apartment_name.trim();
+        if apartment_name.is_empty() {
+            return Err(eyre!("--apartment-name must not be empty"));
+        }
+        let runtime = registry
+            .apartments
+            .get(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        let allowlist = runtime
+            .artifact_allowlist
+            .values()
+            .map(AgentAutonomyAllowlistEntry::from_rule)
+            .collect::<Vec<_>>();
+        let recent_runs = runtime
+            .autonomy_run_history
+            .iter()
+            .rev()
+            .take(20)
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(AgentAutonomyStatusOutput {
+            schema_version: registry.schema_version,
+            apartment_name: apartment_name.to_owned(),
+            status: runtime_status_for_sequence(runtime, registry.next_sequence),
+            budget_ceiling_units: runtime.autonomy_budget_ceiling_units,
+            budget_remaining_units: runtime.autonomy_budget_remaining_units,
+            allowlist_count: u32::try_from(runtime.artifact_allowlist.len()).unwrap_or(u32::MAX),
+            run_count: u32::try_from(runtime.autonomy_run_history.len()).unwrap_or(u32::MAX),
+            event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+            allowlist,
+            recent_runs,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MutationMode {
     Deploy,
@@ -512,6 +995,13 @@ enum RolloutStage {
     RolledBack,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(tag = "status", content = "value")]
+enum AgentRuntimeStatus {
+    Running,
+    LeaseExpired,
+}
+
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct RolloutRuntimeState {
     rollout_handle: String,
@@ -537,6 +1027,10 @@ struct RegistryState {
     services: BTreeMap<String, RegistryServiceEntry>,
     #[norito(default)]
     audit_log: Vec<RegistryAuditEvent>,
+    #[norito(default)]
+    apartments: BTreeMap<String, AgentApartmentRuntimeState>,
+    #[norito(default)]
+    apartment_events: Vec<AgentApartmentEvent>,
 }
 
 impl Default for RegistryState {
@@ -546,6 +1040,8 @@ impl Default for RegistryState {
             next_sequence: 1,
             services: BTreeMap::new(),
             audit_log: Vec::new(),
+            apartments: BTreeMap::new(),
+            apartment_events: Vec::new(),
         }
     }
 }
@@ -598,6 +1094,154 @@ struct RegistryAuditEvent {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     rollout_handle: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(tag = "action", content = "value")]
+enum AgentApartmentAction {
+    Deploy,
+    LeaseRenew,
+    Restart,
+    WalletSpendRequested,
+    WalletSpendApproved,
+    PolicyRevoked,
+    MessageEnqueued,
+    MessageAcknowledged,
+    ArtifactAllowed,
+    AutonomyRunApproved,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentWalletSpendRequest {
+    request_id: String,
+    asset_definition: String,
+    amount_nanos: u64,
+    created_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentWalletDailySpendEntry {
+    asset_definition: String,
+    day_bucket: u64,
+    spent_nanos: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentMailboxMessage {
+    message_id: String,
+    from_apartment: String,
+    channel: String,
+    payload: String,
+    payload_hash: Hash,
+    enqueued_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentArtifactAllowRule {
+    artifact_hash: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    provenance_hash: Option<String>,
+    added_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentAutonomyRunRecord {
+    run_id: String,
+    artifact_hash: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    provenance_hash: Option<String>,
+    budget_units: u64,
+    run_label: String,
+    approved_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentApartmentRuntimeState {
+    manifest: AgentApartmentManifestV1,
+    manifest_hash: Hash,
+    status: AgentRuntimeStatus,
+    deployed_sequence: u64,
+    lease_started_sequence: u64,
+    lease_expires_sequence: u64,
+    last_renewed_sequence: u64,
+    restart_count: u32,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    last_restart_sequence: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    last_restart_reason: Option<String>,
+    #[norito(default)]
+    revoked_policy_capabilities: Vec<String>,
+    #[norito(default)]
+    pending_wallet_requests: BTreeMap<String, AgentWalletSpendRequest>,
+    #[norito(default)]
+    wallet_daily_spend: BTreeMap<String, AgentWalletDailySpendEntry>,
+    #[norito(default)]
+    mailbox_queue: Vec<AgentMailboxMessage>,
+    #[norito(default)]
+    autonomy_budget_ceiling_units: u64,
+    #[norito(default)]
+    autonomy_budget_remaining_units: u64,
+    #[norito(default)]
+    artifact_allowlist: BTreeMap<String, AgentArtifactAllowRule>,
+    #[norito(default)]
+    autonomy_run_history: Vec<AgentAutonomyRunRecord>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentApartmentEvent {
+    sequence: u64,
+    action: AgentApartmentAction,
+    apartment_name: String,
+    status: AgentRuntimeStatus,
+    lease_expires_sequence: u64,
+    manifest_hash: Hash,
+    restart_count: u32,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    asset_definition: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    amount_nanos: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    capability: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    from_apartment: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    to_apartment: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    channel: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    payload_hash: Option<Hash>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    artifact_hash: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    provenance_hash: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    run_label: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    budget_units: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    budget_remaining_units: Option<u64>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -687,6 +1331,260 @@ struct ServiceStatusOutput {
     last_rollout: Option<RolloutRuntimeState>,
 }
 
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentMutationOutput {
+    action: AgentApartmentAction,
+    apartment_name: String,
+    sequence: u64,
+    manifest_hash: Hash,
+    status: AgentRuntimeStatus,
+    lease_expires_sequence: u64,
+    lease_remaining_ticks: u64,
+    restart_count: u32,
+    revoked_policy_capability_count: u32,
+    pending_wallet_request_count: u32,
+    event_count: u32,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    asset_definition: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    amount_nanos: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    day_bucket: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    day_spent_nanos: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    capability: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentWalletMutationOutput {
+    action: AgentApartmentAction,
+    apartment_name: String,
+    sequence: u64,
+    manifest_hash: Hash,
+    status: AgentRuntimeStatus,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    asset_definition: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    amount_nanos: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    day_bucket: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    day_spent_nanos: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    capability: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    pending_request_count: u32,
+    revoked_policy_capability_count: u32,
+    event_count: u32,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentMailboxMutationOutput {
+    action: AgentApartmentAction,
+    apartment_name: String,
+    sequence: u64,
+    message_id: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    from_apartment: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    to_apartment: Option<String>,
+    channel: String,
+    payload_hash: Hash,
+    status: AgentRuntimeStatus,
+    pending_message_count: u32,
+    event_count: u32,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentMailboxStatusOutput {
+    schema_version: u16,
+    apartment_name: String,
+    status: AgentRuntimeStatus,
+    pending_message_count: u32,
+    event_count: u32,
+    messages: Vec<AgentMailboxMessageEntry>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentMailboxMessageEntry {
+    message_id: String,
+    from_apartment: String,
+    channel: String,
+    payload: String,
+    payload_hash: Hash,
+    enqueued_sequence: u64,
+}
+
+impl AgentMailboxMessageEntry {
+    fn from_message(message: &AgentMailboxMessage) -> Self {
+        Self {
+            message_id: message.message_id.clone(),
+            from_apartment: message.from_apartment.clone(),
+            channel: message.channel.clone(),
+            payload: message.payload.clone(),
+            payload_hash: message.payload_hash,
+            enqueued_sequence: message.enqueued_sequence,
+        }
+    }
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentAutonomyMutationOutput {
+    action: AgentApartmentAction,
+    apartment_name: String,
+    sequence: u64,
+    artifact_hash: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    provenance_hash: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    run_id: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    run_label: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    budget_units: Option<u64>,
+    status: AgentRuntimeStatus,
+    budget_remaining_units: u64,
+    allowlist_count: u32,
+    run_count: u32,
+    event_count: u32,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentAutonomyStatusOutput {
+    schema_version: u16,
+    apartment_name: String,
+    status: AgentRuntimeStatus,
+    budget_ceiling_units: u64,
+    budget_remaining_units: u64,
+    allowlist_count: u32,
+    run_count: u32,
+    event_count: u32,
+    allowlist: Vec<AgentAutonomyAllowlistEntry>,
+    recent_runs: Vec<AgentAutonomyRunRecord>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentAutonomyAllowlistEntry {
+    artifact_hash: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    provenance_hash: Option<String>,
+    added_sequence: u64,
+}
+
+impl AgentAutonomyAllowlistEntry {
+    fn from_rule(rule: &AgentArtifactAllowRule) -> Self {
+        Self {
+            artifact_hash: rule.artifact_hash.clone(),
+            provenance_hash: rule.provenance_hash.clone(),
+            added_sequence: rule.added_sequence,
+        }
+    }
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentStatusOutput {
+    schema_version: u16,
+    apartment_count: u32,
+    event_count: u32,
+    apartments: Vec<AgentApartmentStatusEntry>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentApartmentStatusEntry {
+    apartment_name: String,
+    manifest_hash: Hash,
+    status: AgentRuntimeStatus,
+    lease_started_sequence: u64,
+    lease_expires_sequence: u64,
+    lease_remaining_ticks: u64,
+    restart_count: u32,
+    state_quota_bytes: u64,
+    tool_capability_count: u32,
+    policy_capability_count: u32,
+    revoked_policy_capability_count: u32,
+    pending_wallet_request_count: u32,
+    pending_mailbox_message_count: u32,
+    autonomy_budget_ceiling_units: u64,
+    autonomy_budget_remaining_units: u64,
+    artifact_allowlist_count: u32,
+    autonomy_run_count: u32,
+    spend_limit_count: u32,
+    upgrade_policy: AgentUpgradePolicyV1,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    last_restart_sequence: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    last_restart_reason: Option<String>,
+}
+
+impl AgentApartmentStatusEntry {
+    fn from_state(
+        apartment_name: &str,
+        state: &AgentApartmentRuntimeState,
+        current_sequence: u64,
+    ) -> Self {
+        Self {
+            apartment_name: apartment_name.to_owned(),
+            manifest_hash: state.manifest_hash,
+            status: runtime_status_for_sequence(state, current_sequence),
+            lease_started_sequence: state.lease_started_sequence,
+            lease_expires_sequence: state.lease_expires_sequence,
+            lease_remaining_ticks: lease_remaining_ticks(state, current_sequence),
+            restart_count: state.restart_count,
+            state_quota_bytes: state.manifest.state_quota_bytes.get(),
+            tool_capability_count: u32::try_from(state.manifest.tool_capabilities.len())
+                .unwrap_or(u32::MAX),
+            policy_capability_count: u32::try_from(state.manifest.policy_capabilities.len())
+                .unwrap_or(u32::MAX),
+            revoked_policy_capability_count: u32::try_from(state.revoked_policy_capabilities.len())
+                .unwrap_or(u32::MAX),
+            pending_wallet_request_count: u32::try_from(state.pending_wallet_requests.len())
+                .unwrap_or(u32::MAX),
+            pending_mailbox_message_count: u32::try_from(state.mailbox_queue.len())
+                .unwrap_or(u32::MAX),
+            autonomy_budget_ceiling_units: state.autonomy_budget_ceiling_units,
+            autonomy_budget_remaining_units: state.autonomy_budget_remaining_units,
+            artifact_allowlist_count: u32::try_from(state.artifact_allowlist.len())
+                .unwrap_or(u32::MAX),
+            autonomy_run_count: u32::try_from(state.autonomy_run_history.len()).unwrap_or(u32::MAX),
+            spend_limit_count: u32::try_from(state.manifest.spend_limits.len()).unwrap_or(u32::MAX),
+            upgrade_policy: state.manifest.upgrade_policy,
+            last_restart_sequence: state.last_restart_sequence,
+            last_restart_reason: state.last_restart_reason.clone(),
+        }
+    }
+}
+
 impl ServiceStatusOutput {
     fn from_entry(service_name: &str, entry: &RegistryServiceEntry) -> Self {
         Self {
@@ -765,7 +1663,7 @@ struct SignedRollbackRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-struct RolloutPayload {
+struct RolloutAdvancePayload {
     service_name: String,
     rollout_handle: String,
     healthy: bool,
@@ -775,8 +1673,8 @@ struct RolloutPayload {
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedRolloutRequest {
-    payload: RolloutPayload,
+struct SignedRolloutAdvanceRequest {
+    payload: RolloutAdvancePayload,
     provenance: ManifestProvenance,
 }
 
@@ -1209,6 +2107,1232 @@ fn apply_rollout(
     Ok(response)
 }
 
+#[cfg(test)]
+fn apply_agent_deploy(
+    registry: &mut RegistryState,
+    manifest: &AgentApartmentManifestV1,
+    lease_ticks: u64,
+) -> Result<AgentMutationOutput> {
+    apply_agent_deploy_with_budget(
+        registry,
+        manifest,
+        lease_ticks,
+        AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS,
+    )
+}
+
+fn apply_agent_deploy_with_budget(
+    registry: &mut RegistryState,
+    manifest: &AgentApartmentManifestV1,
+    lease_ticks: u64,
+    autonomy_budget_units: u64,
+) -> Result<AgentMutationOutput> {
+    ensure_registry_schema(registry)?;
+    manifest.validate()?;
+    if lease_ticks == 0 {
+        return Err(eyre!("--lease-ticks must be greater than zero"));
+    }
+    if autonomy_budget_units == 0 {
+        return Err(eyre!("autonomy budget units must be greater than zero"));
+    }
+
+    let apartment_name = manifest.apartment_name.to_string();
+    validate_apartment_name(&apartment_name)?;
+    if registry.apartments.contains_key(&apartment_name) {
+        return Err(eyre!(
+            "apartment `{apartment_name}` already registered; use lease-renew/restart for lifecycle actions"
+        ));
+    }
+
+    let sequence = registry.next_sequence;
+    let manifest_hash = Hash::new(Encode::encode(manifest));
+    let runtime_state = AgentApartmentRuntimeState {
+        manifest: manifest.clone(),
+        manifest_hash,
+        status: AgentRuntimeStatus::Running,
+        deployed_sequence: sequence,
+        lease_started_sequence: sequence,
+        lease_expires_sequence: sequence.saturating_add(lease_ticks),
+        last_renewed_sequence: sequence,
+        restart_count: 0,
+        last_restart_sequence: None,
+        last_restart_reason: None,
+        revoked_policy_capabilities: Vec::new(),
+        pending_wallet_requests: BTreeMap::new(),
+        wallet_daily_spend: BTreeMap::new(),
+        mailbox_queue: Vec::new(),
+        autonomy_budget_ceiling_units: autonomy_budget_units,
+        autonomy_budget_remaining_units: autonomy_budget_units,
+        artifact_allowlist: BTreeMap::new(),
+        autonomy_run_history: Vec::new(),
+    };
+    let output = AgentMutationOutput {
+        action: AgentApartmentAction::Deploy,
+        apartment_name: apartment_name.clone(),
+        sequence,
+        manifest_hash,
+        status: runtime_status_for_sequence(&runtime_state, sequence.saturating_add(1)),
+        lease_expires_sequence: runtime_state.lease_expires_sequence,
+        lease_remaining_ticks: lease_remaining_ticks(&runtime_state, sequence.saturating_add(1)),
+        restart_count: runtime_state.restart_count,
+        revoked_policy_capability_count: 0,
+        pending_wallet_request_count: 0,
+        event_count: 0,
+        reason: None,
+        request_id: None,
+        asset_definition: None,
+        amount_nanos: None,
+        day_bucket: None,
+        day_spent_nanos: None,
+        capability: None,
+    };
+    registry
+        .apartments
+        .insert(apartment_name.clone(), runtime_state);
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::Deploy,
+        apartment_name,
+        status: AgentRuntimeStatus::Running,
+        lease_expires_sequence: output.lease_expires_sequence,
+        manifest_hash,
+        restart_count: output.restart_count,
+        reason: None,
+        request_id: None,
+        asset_definition: None,
+        amount_nanos: None,
+        capability: None,
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_lease_renew(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    lease_ticks: u64,
+) -> Result<AgentMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    if lease_ticks == 0 {
+        return Err(eyre!("--lease-ticks must be greater than zero"));
+    }
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let entry = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        let base = entry.lease_expires_sequence.max(sequence);
+        entry.lease_expires_sequence = base.saturating_add(lease_ticks);
+        entry.last_renewed_sequence = sequence;
+        entry.status = AgentRuntimeStatus::Running;
+        AgentMutationOutput {
+            action: AgentApartmentAction::LeaseRenew,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            manifest_hash: entry.manifest_hash,
+            status: runtime_status_for_sequence(entry, sequence.saturating_add(1)),
+            lease_expires_sequence: entry.lease_expires_sequence,
+            lease_remaining_ticks: lease_remaining_ticks(entry, sequence.saturating_add(1)),
+            restart_count: entry.restart_count,
+            revoked_policy_capability_count: revoked_policy_capability_count(entry),
+            pending_wallet_request_count: pending_wallet_request_count(entry),
+            event_count: 0,
+            reason: None,
+            request_id: None,
+            asset_definition: None,
+            amount_nanos: None,
+            day_bucket: None,
+            day_spent_nanos: None,
+            capability: None,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::LeaseRenew,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: output.lease_expires_sequence,
+        manifest_hash: output.manifest_hash,
+        restart_count: output.restart_count,
+        reason: None,
+        request_id: None,
+        asset_definition: None,
+        amount_nanos: None,
+        capability: None,
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_restart(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    reason: &str,
+) -> Result<AgentMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(eyre!("--reason must not be empty"));
+    }
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let entry = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        if runtime_status_for_sequence(entry, sequence) == AgentRuntimeStatus::LeaseExpired {
+            return Err(eyre!(
+                "apartment `{apartment_name}` lease expired at sequence {}; renew before restart",
+                entry.lease_expires_sequence
+            ));
+        }
+
+        entry.status = AgentRuntimeStatus::Running;
+        entry.restart_count = entry.restart_count.saturating_add(1);
+        entry.last_restart_sequence = Some(sequence);
+        entry.last_restart_reason = Some(reason.to_owned());
+        AgentMutationOutput {
+            action: AgentApartmentAction::Restart,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            manifest_hash: entry.manifest_hash,
+            status: runtime_status_for_sequence(entry, sequence.saturating_add(1)),
+            lease_expires_sequence: entry.lease_expires_sequence,
+            lease_remaining_ticks: lease_remaining_ticks(entry, sequence.saturating_add(1)),
+            restart_count: entry.restart_count,
+            revoked_policy_capability_count: revoked_policy_capability_count(entry),
+            pending_wallet_request_count: pending_wallet_request_count(entry),
+            event_count: 0,
+            reason: Some(reason.to_owned()),
+            request_id: None,
+            asset_definition: None,
+            amount_nanos: None,
+            day_bucket: None,
+            day_spent_nanos: None,
+            capability: None,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::Restart,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: output.lease_expires_sequence,
+        manifest_hash: output.manifest_hash,
+        restart_count: output.restart_count,
+        reason: Some(reason.to_owned()),
+        request_id: None,
+        asset_definition: None,
+        amount_nanos: None,
+        capability: None,
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_wallet_spend(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    asset_definition: &str,
+    amount_nanos: u64,
+) -> Result<AgentWalletMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    let asset_definition = asset_definition.trim();
+    if asset_definition.is_empty() {
+        return Err(eyre!("--asset-definition must not be empty"));
+    }
+    if amount_nanos == 0 {
+        return Err(eyre!("--amount-nanos must be greater than zero"));
+    }
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let entry = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        if runtime_status_for_sequence(entry, sequence) == AgentRuntimeStatus::LeaseExpired {
+            return Err(eyre!(
+                "apartment `{apartment_name}` lease expired at sequence {}; renew before wallet actions",
+                entry.lease_expires_sequence
+            ));
+        }
+        if !policy_capability_active(entry, "wallet.sign") {
+            return Err(eyre!(
+                "apartment `{apartment_name}` does not have active `wallet.sign` capability"
+            ));
+        }
+        let spend_limit = entry
+            .manifest
+            .spend_limits
+            .iter()
+            .find(|limit| limit.asset_definition == asset_definition)
+            .ok_or_else(|| {
+                eyre!(
+                    "apartment `{apartment_name}` has no spend limit configured for asset `{asset_definition}`"
+                )
+            })?;
+        if amount_nanos > spend_limit.max_per_tx_nanos.get() {
+            return Err(eyre!(
+                "requested amount {} exceeds max_per_tx_nanos {} for asset `{asset_definition}`",
+                amount_nanos,
+                spend_limit.max_per_tx_nanos.get()
+            ));
+        }
+
+        let day_bucket = wallet_day_bucket(sequence);
+        let current_day_spent = wallet_day_spent(entry, asset_definition, day_bucket);
+        let projected_day_spent = current_day_spent
+            .checked_add(amount_nanos)
+            .ok_or_else(|| eyre!("wallet daily spend overflow for apartment `{apartment_name}`"))?;
+        if projected_day_spent > spend_limit.max_per_day_nanos.get() {
+            return Err(eyre!(
+                "projected daily spend {} exceeds max_per_day_nanos {} for asset `{asset_definition}`",
+                projected_day_spent,
+                spend_limit.max_per_day_nanos.get()
+            ));
+        }
+
+        let request_id = format!("{apartment_name}:wallet:{sequence}");
+        let action = if policy_capability_active(entry, "wallet.auto_approve") {
+            wallet_record_spend(entry, asset_definition, day_bucket, projected_day_spent);
+            AgentApartmentAction::WalletSpendApproved
+        } else {
+            entry.pending_wallet_requests.insert(
+                request_id.clone(),
+                AgentWalletSpendRequest {
+                    request_id: request_id.clone(),
+                    asset_definition: asset_definition.to_owned(),
+                    amount_nanos,
+                    created_sequence: sequence,
+                },
+            );
+            AgentApartmentAction::WalletSpendRequested
+        };
+
+        let day_spent_nanos = wallet_day_spent(entry, asset_definition, day_bucket);
+        AgentWalletMutationOutput {
+            action,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            manifest_hash: entry.manifest_hash,
+            status: runtime_status_for_sequence(entry, sequence.saturating_add(1)),
+            request_id: Some(request_id),
+            asset_definition: Some(asset_definition.to_owned()),
+            amount_nanos: Some(amount_nanos),
+            day_bucket: Some(day_bucket),
+            day_spent_nanos: Some(day_spent_nanos),
+            capability: None,
+            reason: None,
+            pending_request_count: pending_wallet_request_count(entry),
+            revoked_policy_capability_count: revoked_policy_capability_count(entry),
+            event_count: 0,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: output.action,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.lease_expires_sequence)
+            .unwrap_or(sequence),
+        manifest_hash: output.manifest_hash,
+        restart_count: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.restart_count)
+            .unwrap_or(0),
+        reason: None,
+        request_id: output.request_id.clone(),
+        asset_definition: output.asset_definition.clone(),
+        amount_nanos: output.amount_nanos,
+        capability: None,
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentWalletMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_wallet_approve(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    request_id: &str,
+) -> Result<AgentWalletMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    let request_id = request_id.trim();
+    if request_id.is_empty() {
+        return Err(eyre!("--request-id must not be empty"));
+    }
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let entry = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        if runtime_status_for_sequence(entry, sequence) == AgentRuntimeStatus::LeaseExpired {
+            return Err(eyre!(
+                "apartment `{apartment_name}` lease expired at sequence {}; renew before wallet actions",
+                entry.lease_expires_sequence
+            ));
+        }
+        if !policy_capability_active(entry, "wallet.sign") {
+            return Err(eyre!(
+                "apartment `{apartment_name}` does not have active `wallet.sign` capability"
+            ));
+        }
+
+        let request = entry
+            .pending_wallet_requests
+            .remove(request_id)
+            .ok_or_else(|| {
+                eyre!("wallet request `{request_id}` not found for apartment `{apartment_name}`")
+            })?;
+
+        let spend_limit = entry
+            .manifest
+            .spend_limits
+            .iter()
+            .find(|limit| limit.asset_definition == request.asset_definition)
+            .ok_or_else(|| {
+                eyre!(
+                    "apartment `{apartment_name}` has no spend limit configured for asset `{}`",
+                    request.asset_definition
+                )
+            })?;
+        let day_bucket = wallet_day_bucket(sequence);
+        let current_day_spent = wallet_day_spent(entry, &request.asset_definition, day_bucket);
+        let projected_day_spent = current_day_spent
+            .checked_add(request.amount_nanos)
+            .ok_or_else(|| eyre!("wallet daily spend overflow for apartment `{apartment_name}`"))?;
+        if projected_day_spent > spend_limit.max_per_day_nanos.get() {
+            return Err(eyre!(
+                "projected daily spend {} exceeds max_per_day_nanos {} for asset `{}`",
+                projected_day_spent,
+                spend_limit.max_per_day_nanos.get(),
+                request.asset_definition
+            ));
+        }
+        wallet_record_spend(
+            entry,
+            &request.asset_definition,
+            day_bucket,
+            projected_day_spent,
+        );
+        AgentWalletMutationOutput {
+            action: AgentApartmentAction::WalletSpendApproved,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            manifest_hash: entry.manifest_hash,
+            status: runtime_status_for_sequence(entry, sequence.saturating_add(1)),
+            request_id: Some(request.request_id),
+            asset_definition: Some(request.asset_definition),
+            amount_nanos: Some(request.amount_nanos),
+            day_bucket: Some(day_bucket),
+            day_spent_nanos: Some(projected_day_spent),
+            capability: None,
+            reason: None,
+            pending_request_count: pending_wallet_request_count(entry),
+            revoked_policy_capability_count: revoked_policy_capability_count(entry),
+            event_count: 0,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::WalletSpendApproved,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.lease_expires_sequence)
+            .unwrap_or(sequence),
+        manifest_hash: output.manifest_hash,
+        restart_count: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.restart_count)
+            .unwrap_or(0),
+        reason: None,
+        request_id: output.request_id.clone(),
+        asset_definition: output.asset_definition.clone(),
+        amount_nanos: output.amount_nanos,
+        capability: None,
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentWalletMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_policy_revoke(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    capability: &str,
+    reason: Option<&str>,
+) -> Result<AgentWalletMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    let capability = capability.trim();
+    if capability.is_empty() {
+        return Err(eyre!("--capability must not be empty"));
+    }
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let entry = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        let capability_present = entry
+            .manifest
+            .policy_capabilities
+            .iter()
+            .any(|candidate| candidate.as_ref() == capability);
+        if !capability_present {
+            return Err(eyre!(
+                "apartment `{apartment_name}` does not declare policy capability `{capability}`"
+            ));
+        }
+        if entry
+            .revoked_policy_capabilities
+            .iter()
+            .any(|candidate| candidate == capability)
+        {
+            return Err(eyre!(
+                "policy capability `{capability}` already revoked for apartment `{apartment_name}`"
+            ));
+        }
+        entry
+            .revoked_policy_capabilities
+            .push(capability.to_owned());
+        entry.revoked_policy_capabilities.sort();
+        AgentWalletMutationOutput {
+            action: AgentApartmentAction::PolicyRevoked,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            manifest_hash: entry.manifest_hash,
+            status: runtime_status_for_sequence(entry, sequence.saturating_add(1)),
+            request_id: None,
+            asset_definition: None,
+            amount_nanos: None,
+            day_bucket: None,
+            day_spent_nanos: None,
+            capability: Some(capability.to_owned()),
+            reason: reason.map(str::to_owned),
+            pending_request_count: pending_wallet_request_count(entry),
+            revoked_policy_capability_count: revoked_policy_capability_count(entry),
+            event_count: 0,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::PolicyRevoked,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.lease_expires_sequence)
+            .unwrap_or(sequence),
+        manifest_hash: output.manifest_hash,
+        restart_count: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.restart_count)
+            .unwrap_or(0),
+        reason: output.reason.clone(),
+        request_id: None,
+        asset_definition: None,
+        amount_nanos: None,
+        capability: output.capability.clone(),
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentWalletMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_message_send(
+    registry: &mut RegistryState,
+    from_apartment: &str,
+    to_apartment: &str,
+    channel: &str,
+    payload: &str,
+) -> Result<AgentMailboxMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(from_apartment)?;
+    validate_apartment_name(to_apartment)?;
+    let channel = channel.trim();
+    if channel.is_empty() {
+        return Err(eyre!("--channel must not be empty"));
+    }
+    let payload = payload.trim();
+    if payload.is_empty() {
+        return Err(eyre!("--payload must not be empty"));
+    }
+    if payload.len() > AGENT_MAILBOX_MAX_PAYLOAD_BYTES {
+        return Err(eyre!(
+            "--payload exceeds max mailbox payload bytes ({AGENT_MAILBOX_MAX_PAYLOAD_BYTES})"
+        ));
+    }
+
+    let sequence = registry.next_sequence;
+    let sender = registry
+        .apartments
+        .get(from_apartment)
+        .ok_or_else(|| eyre!("apartment `{from_apartment}` not found in registry"))?;
+    if runtime_status_for_sequence(sender, sequence) == AgentRuntimeStatus::LeaseExpired {
+        return Err(eyre!(
+            "sender apartment `{from_apartment}` lease expired at sequence {}; renew before messaging",
+            sender.lease_expires_sequence
+        ));
+    }
+    if !policy_capability_active(sender, "agent.mailbox.send") {
+        return Err(eyre!(
+            "apartment `{from_apartment}` does not have active `agent.mailbox.send` capability"
+        ));
+    }
+
+    let recipient_snapshot = registry
+        .apartments
+        .get(to_apartment)
+        .ok_or_else(|| eyre!("apartment `{to_apartment}` not found in registry"))?;
+    if runtime_status_for_sequence(recipient_snapshot, sequence) == AgentRuntimeStatus::LeaseExpired
+    {
+        return Err(eyre!(
+            "recipient apartment `{to_apartment}` lease expired at sequence {}; renew before messaging",
+            recipient_snapshot.lease_expires_sequence
+        ));
+    }
+    if !policy_capability_active(recipient_snapshot, "agent.mailbox.receive") {
+        return Err(eyre!(
+            "apartment `{to_apartment}` does not have active `agent.mailbox.receive` capability"
+        ));
+    }
+
+    let message_id = format!("{to_apartment}:mail:{sequence}");
+    let payload_hash = Hash::new(payload.as_bytes());
+    let output = {
+        let recipient = registry
+            .apartments
+            .get_mut(to_apartment)
+            .ok_or_else(|| eyre!("apartment `{to_apartment}` not found in registry"))?;
+        recipient.mailbox_queue.push(AgentMailboxMessage {
+            message_id: message_id.clone(),
+            from_apartment: from_apartment.to_owned(),
+            channel: channel.to_owned(),
+            payload: payload.to_owned(),
+            payload_hash,
+            enqueued_sequence: sequence,
+        });
+        AgentMailboxMutationOutput {
+            action: AgentApartmentAction::MessageEnqueued,
+            apartment_name: to_apartment.to_owned(),
+            sequence,
+            message_id: message_id.clone(),
+            from_apartment: Some(from_apartment.to_owned()),
+            to_apartment: Some(to_apartment.to_owned()),
+            channel: channel.to_owned(),
+            payload_hash,
+            status: runtime_status_for_sequence(recipient, sequence.saturating_add(1)),
+            pending_message_count: pending_mailbox_message_count(recipient),
+            event_count: 0,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::MessageEnqueued,
+        apartment_name: to_apartment.to_owned(),
+        status: output.status,
+        lease_expires_sequence: registry
+            .apartments
+            .get(to_apartment)
+            .map(|entry| entry.lease_expires_sequence)
+            .unwrap_or(sequence),
+        manifest_hash: registry
+            .apartments
+            .get(to_apartment)
+            .map(|entry| entry.manifest_hash)
+            .unwrap_or(payload_hash),
+        restart_count: registry
+            .apartments
+            .get(to_apartment)
+            .map(|entry| entry.restart_count)
+            .unwrap_or(0),
+        reason: None,
+        request_id: Some(message_id),
+        asset_definition: None,
+        amount_nanos: None,
+        capability: None,
+        from_apartment: Some(from_apartment.to_owned()),
+        to_apartment: Some(to_apartment.to_owned()),
+        channel: Some(channel.to_owned()),
+        payload_hash: Some(payload_hash),
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentMailboxMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_message_ack(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    message_id: &str,
+) -> Result<AgentMailboxMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    let message_id = message_id.trim();
+    if message_id.is_empty() {
+        return Err(eyre!("--message-id must not be empty"));
+    }
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let recipient = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        if runtime_status_for_sequence(recipient, sequence) == AgentRuntimeStatus::LeaseExpired {
+            return Err(eyre!(
+                "apartment `{apartment_name}` lease expired at sequence {}; renew before mailbox actions",
+                recipient.lease_expires_sequence
+            ));
+        }
+        if !policy_capability_active(recipient, "agent.mailbox.receive") {
+            return Err(eyre!(
+                "apartment `{apartment_name}` does not have active `agent.mailbox.receive` capability"
+            ));
+        }
+        let index = recipient
+            .mailbox_queue
+            .iter()
+            .position(|message| message.message_id == message_id)
+            .ok_or_else(|| {
+                eyre!("mailbox message `{message_id}` not found for apartment `{apartment_name}`")
+            })?;
+        let message = recipient.mailbox_queue.remove(index);
+        AgentMailboxMutationOutput {
+            action: AgentApartmentAction::MessageAcknowledged,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            message_id: message.message_id,
+            from_apartment: Some(message.from_apartment),
+            to_apartment: Some(apartment_name.to_owned()),
+            channel: message.channel,
+            payload_hash: message.payload_hash,
+            status: runtime_status_for_sequence(recipient, sequence.saturating_add(1)),
+            pending_message_count: pending_mailbox_message_count(recipient),
+            event_count: 0,
+        }
+    };
+
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::MessageAcknowledged,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.lease_expires_sequence)
+            .unwrap_or(sequence),
+        manifest_hash: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.manifest_hash)
+            .unwrap_or(output.payload_hash),
+        restart_count: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.restart_count)
+            .unwrap_or(0),
+        reason: None,
+        request_id: Some(output.message_id.clone()),
+        asset_definition: None,
+        amount_nanos: None,
+        capability: None,
+        from_apartment: output.from_apartment.clone(),
+        to_apartment: Some(apartment_name.to_owned()),
+        channel: Some(output.channel.clone()),
+        payload_hash: Some(output.payload_hash),
+        artifact_hash: None,
+        provenance_hash: None,
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: None,
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentMailboxMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_artifact_allow(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    artifact_hash: &str,
+    provenance_hash: Option<&str>,
+) -> Result<AgentAutonomyMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    let artifact_hash = artifact_hash.trim();
+    validate_hash_like_value("--artifact-hash", artifact_hash)?;
+    let provenance_hash = normalize_optional_hash_like_value("--provenance-hash", provenance_hash)?;
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let entry = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        if runtime_status_for_sequence(entry, sequence) == AgentRuntimeStatus::LeaseExpired {
+            return Err(eyre!(
+                "apartment `{apartment_name}` lease expired at sequence {}; renew before autonomy actions",
+                entry.lease_expires_sequence
+            ));
+        }
+        if !(policy_capability_active(entry, "governance.audit")
+            || policy_capability_active(entry, "agent.autonomy.allow"))
+        {
+            return Err(eyre!(
+                "apartment `{apartment_name}` does not have active `governance.audit` or `agent.autonomy.allow` capability"
+            ));
+        }
+        if entry
+            .artifact_allowlist
+            .get(artifact_hash)
+            .is_some_and(|rule| rule.provenance_hash == provenance_hash)
+        {
+            return Err(eyre!(
+                "artifact `{artifact_hash}` already allowlisted for apartment `{apartment_name}` with the same provenance rule"
+            ));
+        }
+        entry.artifact_allowlist.insert(
+            artifact_hash.to_owned(),
+            AgentArtifactAllowRule {
+                artifact_hash: artifact_hash.to_owned(),
+                provenance_hash: provenance_hash.clone(),
+                added_sequence: sequence,
+            },
+        );
+
+        AgentAutonomyMutationOutput {
+            action: AgentApartmentAction::ArtifactAllowed,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            artifact_hash: artifact_hash.to_owned(),
+            provenance_hash: provenance_hash.clone(),
+            run_id: None,
+            run_label: None,
+            budget_units: None,
+            status: runtime_status_for_sequence(entry, sequence.saturating_add(1)),
+            budget_remaining_units: entry.autonomy_budget_remaining_units,
+            allowlist_count: u32::try_from(entry.artifact_allowlist.len()).unwrap_or(u32::MAX),
+            run_count: u32::try_from(entry.autonomy_run_history.len()).unwrap_or(u32::MAX),
+            event_count: 0,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::ArtifactAllowed,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.lease_expires_sequence)
+            .unwrap_or(sequence),
+        manifest_hash: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.manifest_hash)
+            .unwrap_or(Hash::new(artifact_hash.as_bytes())),
+        restart_count: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.restart_count)
+            .unwrap_or(0),
+        reason: None,
+        request_id: None,
+        asset_definition: None,
+        amount_nanos: None,
+        capability: None,
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: Some(output.artifact_hash.clone()),
+        provenance_hash: output.provenance_hash.clone(),
+        run_label: None,
+        budget_units: None,
+        budget_remaining_units: Some(output.budget_remaining_units),
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentAutonomyMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn apply_agent_autonomy_run(
+    registry: &mut RegistryState,
+    apartment_name: &str,
+    artifact_hash: &str,
+    provenance_hash: Option<&str>,
+    budget_units: u64,
+    run_label: &str,
+) -> Result<AgentAutonomyMutationOutput> {
+    ensure_registry_schema(registry)?;
+    validate_apartment_name(apartment_name)?;
+    if budget_units == 0 {
+        return Err(eyre!("--budget-units must be greater than zero"));
+    }
+    let artifact_hash = artifact_hash.trim();
+    validate_hash_like_value("--artifact-hash", artifact_hash)?;
+    let provenance_hash = normalize_optional_hash_like_value("--provenance-hash", provenance_hash)?;
+    let run_label = run_label.trim();
+    if run_label.is_empty() {
+        return Err(eyre!("--run-label must not be empty"));
+    }
+    if run_label.len() > AGENT_AUTONOMY_MAX_LABEL_BYTES {
+        return Err(eyre!(
+            "--run-label exceeds max bytes ({AGENT_AUTONOMY_MAX_LABEL_BYTES})"
+        ));
+    }
+    if run_label.chars().any(|ch| ch.is_control()) {
+        return Err(eyre!("--run-label must not contain control characters"));
+    }
+
+    let sequence = registry.next_sequence;
+    let output = {
+        let entry = registry
+            .apartments
+            .get_mut(apartment_name)
+            .ok_or_else(|| eyre!("apartment `{apartment_name}` not found in registry"))?;
+        if runtime_status_for_sequence(entry, sequence) == AgentRuntimeStatus::LeaseExpired {
+            return Err(eyre!(
+                "apartment `{apartment_name}` lease expired at sequence {}; renew before autonomy actions",
+                entry.lease_expires_sequence
+            ));
+        }
+        if !policy_capability_active(entry, "agent.autonomy.run") {
+            return Err(eyre!(
+                "apartment `{apartment_name}` does not have active `agent.autonomy.run` capability"
+            ));
+        }
+        let allow_rule = entry.artifact_allowlist.get(artifact_hash).ok_or_else(|| {
+            eyre!("artifact `{artifact_hash}` is not allowlisted for apartment `{apartment_name}`")
+        })?;
+        if let Some(expected_provenance) = allow_rule.provenance_hash.as_deref() {
+            let provided_provenance = provenance_hash.as_deref().ok_or_else(|| {
+                eyre!(
+                    "artifact `{artifact_hash}` requires --provenance-hash `{expected_provenance}`"
+                )
+            })?;
+            if provided_provenance != expected_provenance {
+                return Err(eyre!(
+                    "artifact `{artifact_hash}` provenance mismatch: expected `{expected_provenance}`, got `{provided_provenance}`"
+                ));
+            }
+        }
+        if budget_units > entry.autonomy_budget_remaining_units {
+            return Err(eyre!(
+                "requested budget {} exceeds remaining autonomy budget {} for apartment `{apartment_name}`",
+                budget_units,
+                entry.autonomy_budget_remaining_units
+            ));
+        }
+
+        entry.autonomy_budget_remaining_units = entry
+            .autonomy_budget_remaining_units
+            .saturating_sub(budget_units);
+        let run_id = format!("{apartment_name}:autonomy:{sequence}");
+        entry.autonomy_run_history.push(AgentAutonomyRunRecord {
+            run_id: run_id.clone(),
+            artifact_hash: artifact_hash.to_owned(),
+            provenance_hash: provenance_hash.clone(),
+            budget_units,
+            run_label: run_label.to_owned(),
+            approved_sequence: sequence,
+        });
+
+        AgentAutonomyMutationOutput {
+            action: AgentApartmentAction::AutonomyRunApproved,
+            apartment_name: apartment_name.to_owned(),
+            sequence,
+            artifact_hash: artifact_hash.to_owned(),
+            provenance_hash: provenance_hash.clone(),
+            run_id: Some(run_id),
+            run_label: Some(run_label.to_owned()),
+            budget_units: Some(budget_units),
+            status: runtime_status_for_sequence(entry, sequence.saturating_add(1)),
+            budget_remaining_units: entry.autonomy_budget_remaining_units,
+            allowlist_count: u32::try_from(entry.artifact_allowlist.len()).unwrap_or(u32::MAX),
+            run_count: u32::try_from(entry.autonomy_run_history.len()).unwrap_or(u32::MAX),
+            event_count: 0,
+        }
+    };
+    registry.apartment_events.push(AgentApartmentEvent {
+        sequence,
+        action: AgentApartmentAction::AutonomyRunApproved,
+        apartment_name: apartment_name.to_owned(),
+        status: output.status,
+        lease_expires_sequence: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.lease_expires_sequence)
+            .unwrap_or(sequence),
+        manifest_hash: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.manifest_hash)
+            .unwrap_or(Hash::new(artifact_hash.as_bytes())),
+        restart_count: registry
+            .apartments
+            .get(apartment_name)
+            .map(|entry| entry.restart_count)
+            .unwrap_or(0),
+        reason: None,
+        request_id: output.run_id.clone(),
+        asset_definition: None,
+        amount_nanos: None,
+        capability: None,
+        from_apartment: None,
+        to_apartment: None,
+        channel: None,
+        payload_hash: None,
+        artifact_hash: Some(output.artifact_hash.clone()),
+        provenance_hash: output.provenance_hash.clone(),
+        run_label: output.run_label.clone(),
+        budget_units: output.budget_units,
+        budget_remaining_units: Some(output.budget_remaining_units),
+    });
+    registry.next_sequence = registry.next_sequence.saturating_add(1);
+
+    Ok(AgentAutonomyMutationOutput {
+        event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
+        ..output
+    })
+}
+
+fn policy_capability_active(state: &AgentApartmentRuntimeState, capability: &str) -> bool {
+    let declared = state
+        .manifest
+        .policy_capabilities
+        .iter()
+        .any(|candidate| candidate.as_ref() == capability);
+    let revoked = state
+        .revoked_policy_capabilities
+        .iter()
+        .any(|candidate| candidate == capability);
+    declared && !revoked
+}
+
+fn wallet_day_bucket(sequence: u64) -> u64 {
+    sequence / AGENT_WALLET_DAY_TICKS
+}
+
+fn wallet_day_key(asset_definition: &str, day_bucket: u64) -> String {
+    format!("{asset_definition}:{day_bucket}")
+}
+
+fn wallet_day_spent(
+    state: &AgentApartmentRuntimeState,
+    asset_definition: &str,
+    day_bucket: u64,
+) -> u64 {
+    state
+        .wallet_daily_spend
+        .get(&wallet_day_key(asset_definition, day_bucket))
+        .map(|entry| entry.spent_nanos)
+        .unwrap_or(0)
+}
+
+fn wallet_record_spend(
+    state: &mut AgentApartmentRuntimeState,
+    asset_definition: &str,
+    day_bucket: u64,
+    spent_nanos: u64,
+) {
+    let key = wallet_day_key(asset_definition, day_bucket);
+    state.wallet_daily_spend.insert(
+        key,
+        AgentWalletDailySpendEntry {
+            asset_definition: asset_definition.to_owned(),
+            day_bucket,
+            spent_nanos,
+        },
+    );
+}
+
+fn revoked_policy_capability_count(state: &AgentApartmentRuntimeState) -> u32 {
+    u32::try_from(state.revoked_policy_capabilities.len()).unwrap_or(u32::MAX)
+}
+
+fn pending_wallet_request_count(state: &AgentApartmentRuntimeState) -> u32 {
+    u32::try_from(state.pending_wallet_requests.len()).unwrap_or(u32::MAX)
+}
+
+fn pending_mailbox_message_count(state: &AgentApartmentRuntimeState) -> u32 {
+    u32::try_from(state.mailbox_queue.len()).unwrap_or(u32::MAX)
+}
+
+fn validate_hash_like_value(flag_name: &str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        return Err(eyre!("{flag_name} must not be empty"));
+    }
+    if value.len() > AGENT_AUTONOMY_MAX_HASH_BYTES {
+        return Err(eyre!(
+            "{flag_name} exceeds max bytes ({AGENT_AUTONOMY_MAX_HASH_BYTES})"
+        ));
+    }
+    if value.chars().any(|ch| ch.is_ascii_whitespace()) {
+        return Err(eyre!("{flag_name} must not contain whitespace"));
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | '-' | '_' | '.' | '#'))
+    {
+        return Err(eyre!(
+            "{flag_name} must use only ASCII letters, digits, or [: - _ . #]"
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_optional_hash_like_value(
+    flag_name: &str,
+    value: Option<&str>,
+) -> Result<Option<String>> {
+    match value {
+        Some(raw) => {
+            let normalized = raw.trim();
+            validate_hash_like_value(flag_name, normalized)?;
+            Ok(Some(normalized.to_owned()))
+        }
+        None => Ok(None),
+    }
+}
+
+fn validate_apartment_name(apartment_name: &str) -> Result<()> {
+    if apartment_name.trim().is_empty() {
+        return Err(eyre!("--apartment-name must not be empty"));
+    }
+    Ok(())
+}
+
+fn runtime_status_for_sequence(
+    state: &AgentApartmentRuntimeState,
+    current_sequence: u64,
+) -> AgentRuntimeStatus {
+    if current_sequence >= state.lease_expires_sequence {
+        AgentRuntimeStatus::LeaseExpired
+    } else {
+        state.status
+    }
+}
+
+fn lease_remaining_ticks(state: &AgentApartmentRuntimeState, current_sequence: u64) -> u64 {
+    state
+        .lease_expires_sequence
+        .saturating_sub(current_sequence)
+}
+
 fn ensure_registry_schema(registry: &RegistryState) -> Result<()> {
     if registry.schema_version != REGISTRY_SCHEMA_VERSION {
         return Err(eyre!(
@@ -1261,8 +3385,8 @@ fn signed_rollback_request(
         service_name: service_name.to_string(),
         target_version: target_version.map(ToOwned::to_owned),
     };
-    let encoded =
-        norito::to_bytes(&payload).wrap_err("failed to encode rollback payload for signing")?;
+    let encoded = encode_rollback_signature_payload(&payload)
+        .wrap_err("failed to encode rollback payload for signing")?;
     let signature = Signature::new(key_pair.private_key(), &encoded);
     Ok(SignedRollbackRequest {
         payload,
@@ -1273,6 +3397,14 @@ fn signed_rollback_request(
     })
 }
 
+fn encode_rollback_signature_payload(payload: &RollbackPayload) -> Result<Vec<u8>> {
+    norito::to_bytes(&(
+        payload.service_name.as_str(),
+        payload.target_version.as_deref(),
+    ))
+    .wrap_err("failed to encode rollback signature payload tuple")
+}
+
 fn signed_rollout_request(
     service_name: &str,
     rollout_handle: &str,
@@ -1280,7 +3412,7 @@ fn signed_rollout_request(
     promote_to_percent: Option<u8>,
     governance_tx_hash: Hash,
     key_pair: &KeyPair,
-) -> Result<SignedRolloutRequest> {
+) -> Result<SignedRolloutAdvanceRequest> {
     if service_name.trim().is_empty() {
         return Err(eyre!("--service-name must not be empty"));
     }
@@ -1290,23 +3422,34 @@ fn signed_rollout_request(
     if promote_to_percent.is_some_and(|value| value > 100) {
         return Err(eyre!("--promote-to-percent must be within 0..=100"));
     }
-    let payload = RolloutPayload {
+    let payload = RolloutAdvancePayload {
         service_name: service_name.to_string(),
         rollout_handle: rollout_handle.to_string(),
         healthy,
         promote_to_percent,
         governance_tx_hash,
     };
-    let encoded =
-        norito::to_bytes(&payload).wrap_err("failed to encode rollout payload for signing")?;
+    let encoded = encode_rollout_signature_payload(&payload)
+        .wrap_err("failed to encode rollout payload for signing")?;
     let signature = Signature::new(key_pair.private_key(), &encoded);
-    Ok(SignedRolloutRequest {
+    Ok(SignedRolloutAdvanceRequest {
         payload,
         provenance: ManifestProvenance {
             signer: key_pair.public_key().clone(),
             signature,
         },
     })
+}
+
+fn encode_rollout_signature_payload(payload: &RolloutAdvancePayload) -> Result<Vec<u8>> {
+    norito::to_bytes(&(
+        payload.service_name.as_str(),
+        payload.rollout_handle.as_str(),
+        payload.healthy,
+        payload.promote_to_percent,
+        payload.governance_tx_hash,
+    ))
+    .wrap_err("failed to encode rollout signature payload tuple")
 }
 
 fn post_torii_soracloud_mutation<T>(
@@ -2153,6 +4296,11 @@ mod tests {
         load_json(&workspace_fixture(DEFAULT_SERVICE_MANIFEST)).expect("service fixture")
     }
 
+    fn fixture_agent_apartment() -> AgentApartmentManifestV1 {
+        load_json(&workspace_fixture(DEFAULT_AGENT_APARTMENT_MANIFEST))
+            .expect("agent apartment fixture")
+    }
+
     #[test]
     fn deploy_upgrade_rollback_workflow_updates_registry() {
         let dir = temp_dir("workflow");
@@ -2430,6 +4578,19 @@ mod tests {
     }
 
     #[test]
+    fn signed_rollback_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_rollback_request("web_portal", None, &key_pair)
+            .expect("signed rollback request");
+        let payload = encode_rollback_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
     fn signed_rollout_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
         let request = signed_rollout_request(
@@ -2441,7 +4602,7 @@ mod tests {
             &key_pair,
         )
         .expect("signed rollout request");
-        let payload = norito::to_bytes(&request.payload).expect("encode payload");
+        let payload = encode_rollout_signature_payload(&request.payload).expect("encode payload");
         request
             .provenance
             .signature
@@ -2527,6 +4688,312 @@ mod tests {
                 .state_bindings
                 .iter()
                 .any(|binding| binding.key_prefix == "/state/session")
+        );
+    }
+
+    #[test]
+    fn agent_apartment_scheduler_deploy_renew_restart_updates_registry() {
+        let manifest = fixture_agent_apartment();
+        let apartment_name = manifest.apartment_name.to_string();
+        let mut registry = RegistryState::default();
+
+        let deployed =
+            apply_agent_deploy(&mut registry, &manifest, 10).expect("agent deploy should succeed");
+        assert_eq!(deployed.action, AgentApartmentAction::Deploy);
+        assert_eq!(deployed.apartment_name, apartment_name);
+        assert_eq!(deployed.status, AgentRuntimeStatus::Running);
+
+        let renewed = apply_agent_lease_renew(&mut registry, "ops_agent", 5)
+            .expect("lease renewal should succeed");
+        assert_eq!(renewed.action, AgentApartmentAction::LeaseRenew);
+        assert_eq!(renewed.status, AgentRuntimeStatus::Running);
+
+        let restarted = apply_agent_restart(&mut registry, "ops_agent", "policy refresh")
+            .expect("restart should succeed");
+        assert_eq!(restarted.action, AgentApartmentAction::Restart);
+        assert_eq!(restarted.restart_count, 1);
+        assert_eq!(restarted.reason.as_deref(), Some("policy refresh"));
+        assert_eq!(registry.apartment_events.len(), 3);
+
+        let runtime = registry
+            .apartments
+            .get("ops_agent")
+            .expect("runtime should exist");
+        assert_eq!(runtime.restart_count, 1);
+        assert_eq!(
+            runtime.last_restart_reason.as_deref(),
+            Some("policy refresh")
+        );
+    }
+
+    #[test]
+    fn agent_apartment_deploy_rejects_duplicate_name() {
+        let manifest = fixture_agent_apartment();
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &manifest, 10).expect("initial deploy");
+        let err = apply_agent_deploy(&mut registry, &manifest, 10)
+            .expect_err("duplicate deploy must fail");
+        assert!(err.to_string().contains("already registered"));
+    }
+
+    #[test]
+    fn agent_apartment_restart_rejects_expired_lease() {
+        let manifest = fixture_agent_apartment();
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &manifest, 1).expect("initial deploy");
+        let err = apply_agent_restart(&mut registry, "ops_agent", "manual recover")
+            .expect_err("restart after lease expiry must fail");
+        assert!(err.to_string().contains("lease expired"));
+    }
+
+    #[test]
+    fn agent_apartment_status_entry_reports_lease_expiry() {
+        let manifest = fixture_agent_apartment();
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &manifest, 1).expect("initial deploy");
+        let runtime = registry
+            .apartments
+            .get("ops_agent")
+            .expect("runtime should exist");
+        let status =
+            AgentApartmentStatusEntry::from_state("ops_agent", runtime, registry.next_sequence);
+        assert_eq!(status.status, AgentRuntimeStatus::LeaseExpired);
+        assert_eq!(status.lease_remaining_ticks, 0);
+    }
+
+    #[test]
+    fn agent_wallet_spend_requests_then_approves_under_policy() {
+        let manifest = fixture_agent_apartment();
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &manifest, 120).expect("initial deploy");
+
+        let request = apply_agent_wallet_spend(&mut registry, "ops_agent", "xor#sora", 1_000_000)
+            .expect("wallet spend request should succeed");
+        assert_eq!(request.action, AgentApartmentAction::WalletSpendRequested);
+        assert_eq!(request.pending_request_count, 1);
+        let request_id = request.request_id.clone().expect("request id");
+
+        let approved = apply_agent_wallet_approve(&mut registry, "ops_agent", &request_id)
+            .expect("approval should succeed");
+        assert_eq!(approved.action, AgentApartmentAction::WalletSpendApproved);
+        assert_eq!(approved.pending_request_count, 0);
+        assert_eq!(approved.day_spent_nanos, Some(1_000_000));
+    }
+
+    #[test]
+    fn agent_wallet_auto_approve_applies_daily_spend() {
+        let mut manifest = fixture_agent_apartment();
+        manifest.policy_capabilities.push(
+            "wallet.auto_approve"
+                .parse()
+                .expect("valid capability name"),
+        );
+        manifest.validate().expect("manifest should remain valid");
+
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &manifest, 120).expect("initial deploy");
+
+        let approved = apply_agent_wallet_spend(&mut registry, "ops_agent", "usd#bank", 2_000_000)
+            .expect("auto approval should succeed");
+        assert_eq!(approved.action, AgentApartmentAction::WalletSpendApproved);
+        assert_eq!(approved.pending_request_count, 0);
+        assert_eq!(approved.day_spent_nanos, Some(2_000_000));
+    }
+
+    #[test]
+    fn agent_wallet_spend_rejects_when_wallet_sign_revoked() {
+        let manifest = fixture_agent_apartment();
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &manifest, 120).expect("initial deploy");
+        apply_agent_policy_revoke(&mut registry, "ops_agent", "wallet.sign", Some("rotated"))
+            .expect("revoke should succeed");
+
+        let err = apply_agent_wallet_spend(&mut registry, "ops_agent", "xor#sora", 1_000_000)
+            .expect_err("wallet spend should be rejected");
+        assert!(err.to_string().contains("wallet.sign"));
+    }
+
+    #[test]
+    fn agent_wallet_spend_rejects_amount_above_per_tx_limit() {
+        let manifest = fixture_agent_apartment();
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &manifest, 120).expect("initial deploy");
+
+        let err = apply_agent_wallet_spend(&mut registry, "ops_agent", "xor#sora", 6_000_000)
+            .expect_err("request should exceed per-tx limit");
+        assert!(err.to_string().contains("max_per_tx_nanos"));
+    }
+
+    #[test]
+    fn agent_mailbox_send_and_ack_flow_updates_queue_and_events() {
+        let mut sender = fixture_agent_apartment();
+        sender
+            .policy_capabilities
+            .push("agent.mailbox.send".parse().expect("valid capability"));
+        sender.validate().expect("sender manifest should be valid");
+
+        let mut recipient = fixture_agent_apartment();
+        recipient.apartment_name = "worker_agent".parse().expect("valid apartment name");
+        recipient
+            .policy_capabilities
+            .push("agent.mailbox.receive".parse().expect("valid capability"));
+        recipient
+            .validate()
+            .expect("recipient manifest should be valid");
+
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &sender, 120).expect("deploy sender");
+        apply_agent_deploy(&mut registry, &recipient, 120).expect("deploy recipient");
+
+        let queued = apply_agent_message_send(
+            &mut registry,
+            "ops_agent",
+            "worker_agent",
+            "ops.sync",
+            "rotate-key-42",
+        )
+        .expect("message send should succeed");
+        assert_eq!(queued.action, AgentApartmentAction::MessageEnqueued);
+        assert_eq!(queued.pending_message_count, 1);
+        assert_eq!(queued.to_apartment.as_deref(), Some("worker_agent"));
+        let message_id = queued.message_id.clone();
+
+        let recipient_runtime = registry
+            .apartments
+            .get("worker_agent")
+            .expect("recipient runtime exists");
+        assert_eq!(recipient_runtime.mailbox_queue.len(), 1);
+        assert_eq!(recipient_runtime.mailbox_queue[0].message_id, message_id);
+
+        let acked = apply_agent_message_ack(&mut registry, "worker_agent", &message_id)
+            .expect("message ack should succeed");
+        assert_eq!(acked.action, AgentApartmentAction::MessageAcknowledged);
+        assert_eq!(acked.pending_message_count, 0);
+        assert_eq!(acked.from_apartment.as_deref(), Some("ops_agent"));
+
+        let recipient_runtime = registry
+            .apartments
+            .get("worker_agent")
+            .expect("recipient runtime exists");
+        assert!(recipient_runtime.mailbox_queue.is_empty());
+        assert_eq!(registry.apartment_events.len(), 4);
+    }
+
+    #[test]
+    fn agent_mailbox_send_rejects_without_sender_capability() {
+        let sender = fixture_agent_apartment();
+        let mut recipient = fixture_agent_apartment();
+        recipient.apartment_name = "worker_agent".parse().expect("valid apartment name");
+        recipient
+            .policy_capabilities
+            .push("agent.mailbox.receive".parse().expect("valid capability"));
+        recipient
+            .validate()
+            .expect("recipient manifest should be valid");
+
+        let mut registry = RegistryState::default();
+        apply_agent_deploy(&mut registry, &sender, 120).expect("deploy sender");
+        apply_agent_deploy(&mut registry, &recipient, 120).expect("deploy recipient");
+
+        let err = apply_agent_message_send(
+            &mut registry,
+            "ops_agent",
+            "worker_agent",
+            "ops.sync",
+            "rotate-key-42",
+        )
+        .expect_err("send without sender capability should fail");
+        assert!(err.to_string().contains("agent.mailbox.send"));
+    }
+
+    #[test]
+    fn agent_autonomy_allow_and_run_flow_updates_budget_and_history() {
+        let mut manifest = fixture_agent_apartment();
+        manifest
+            .policy_capabilities
+            .push("agent.autonomy.run".parse().expect("valid capability"));
+        manifest.validate().expect("manifest should remain valid");
+
+        let mut registry = RegistryState::default();
+        apply_agent_deploy_with_budget(&mut registry, &manifest, 120, 1_000)
+            .expect("initial deploy");
+
+        let allow = apply_agent_artifact_allow(
+            &mut registry,
+            "ops_agent",
+            "hash:ABCD0123#01",
+            Some("hash:PROV0001#01"),
+        )
+        .expect("artifact allow should succeed");
+        assert_eq!(allow.action, AgentApartmentAction::ArtifactAllowed);
+        assert_eq!(allow.allowlist_count, 1);
+        assert_eq!(allow.budget_remaining_units, 1_000);
+
+        let run = apply_agent_autonomy_run(
+            &mut registry,
+            "ops_agent",
+            "hash:ABCD0123#01",
+            Some("hash:PROV0001#01"),
+            250,
+            "nightly-train-step-1",
+        )
+        .expect("autonomy run should succeed");
+        assert_eq!(run.action, AgentApartmentAction::AutonomyRunApproved);
+        assert_eq!(run.budget_units, Some(250));
+        assert_eq!(run.budget_remaining_units, 750);
+        assert!(run.run_id.is_some());
+
+        let runtime = registry
+            .apartments
+            .get("ops_agent")
+            .expect("runtime should exist");
+        assert_eq!(runtime.autonomy_budget_remaining_units, 750);
+        assert_eq!(runtime.artifact_allowlist.len(), 1);
+        assert_eq!(runtime.autonomy_run_history.len(), 1);
+        assert_eq!(
+            runtime.autonomy_run_history[0].run_label,
+            "nightly-train-step-1"
+        );
+    }
+
+    #[test]
+    fn agent_autonomy_run_rejects_without_allowlist_and_on_budget_overflow() {
+        let mut manifest = fixture_agent_apartment();
+        manifest
+            .policy_capabilities
+            .push("agent.autonomy.run".parse().expect("valid capability"));
+        manifest.validate().expect("manifest should remain valid");
+
+        let mut registry = RegistryState::default();
+        apply_agent_deploy_with_budget(&mut registry, &manifest, 120, 100).expect("initial deploy");
+
+        let missing_allowlist = apply_agent_autonomy_run(
+            &mut registry,
+            "ops_agent",
+            "hash:ABCD0123#01",
+            None,
+            10,
+            "no-allowlist",
+        )
+        .expect_err("run must fail without allowlist");
+        assert!(missing_allowlist.to_string().contains("not allowlisted"));
+
+        apply_agent_artifact_allow(&mut registry, "ops_agent", "hash:ABCD0123#01", None)
+            .expect("allowlist insert should succeed");
+
+        let budget_err = apply_agent_autonomy_run(
+            &mut registry,
+            "ops_agent",
+            "hash:ABCD0123#01",
+            None,
+            200,
+            "budget-overflow",
+        )
+        .expect_err("run should fail when budget exceeds remaining");
+        assert!(
+            budget_err
+                .to_string()
+                .contains("exceeds remaining autonomy budget")
         );
     }
 }
