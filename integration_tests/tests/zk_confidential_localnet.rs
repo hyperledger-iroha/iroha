@@ -642,13 +642,15 @@ async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
     assert_eq!(before_balance, Numeric::from(300_u32));
 
     let denied_shield_tx = tx_builder_client.build_transaction_from_items(
-        vec![InstructionBox::from(iroha_data_model::isi::zk::Shield::new(
-            asset_def.clone(),
-            source.clone(),
-            200_u128,
-            marker(11),
-            ConfidentialEncryptedPayload::default(),
-        ))],
+        vec![InstructionBox::from(
+            iroha_data_model::isi::zk::Shield::new(
+                asset_def.clone(),
+                source.clone(),
+                200_u128,
+                marker(11),
+                ConfidentialEncryptedPayload::default(),
+            ),
+        )],
         iroha_data_model::metadata::Metadata::default(),
     );
 
@@ -685,6 +687,134 @@ async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
 
     let after_balance = numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
     assert_eq!(after_balance, Numeric::from(300_u32));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_config_layer(|layer| {
+            layer.write(["confidential", "enabled"], true);
+        });
+
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(confidential_unshield_rejected_with_stale_root_hint),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    network.ensure_blocks(1).await?;
+
+    let tx_builder_client = network.client();
+    let source = tx_builder_client.account.clone();
+
+    let mut peer_clients = network
+        .peers()
+        .iter()
+        .map(NetworkPeer::client)
+        .collect::<Vec<_>>();
+    if peer_clients.is_empty() {
+        peer_clients.push(tx_builder_client.clone());
+    }
+
+    let asset_def: AssetDefinitionId = "zkstaleroot#wonderland".parse().unwrap();
+    let mut non_empty_target = 1_u64;
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Mint::asset_numeric(400_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            iroha_data_model::isi::zk::RegisterZkAsset::new(
+                asset_def.clone(),
+                iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+                true,
+                true,
+                None,
+                None,
+                None,
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "prepare stale-root zk asset",
+    )
+    .await?;
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            iroha_data_model::isi::zk::Shield::new(
+                asset_def.clone(),
+                source.clone(),
+                250_u128,
+                marker(41),
+                ConfidentialEncryptedPayload::default(),
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "shield before stale-root unshield failed",
+    )
+    .await?;
+
+    let before_balance = numeric_balance_any(
+        &peer_clients,
+        AssetId::new(asset_def.clone(), source.clone()),
+    )?;
+    assert_eq!(before_balance, Numeric::from(150_u32));
+
+    let stale_root_unshield_tx = tx_builder_client.build_transaction_from_items(
+        vec![InstructionBox::from(
+            iroha_data_model::isi::zk::Unshield::new(
+                asset_def.clone(),
+                source.clone(),
+                100_u128,
+                vec![marker(42)],
+                debug_ok_attachment(),
+                Some(marker(77)),
+            ),
+        )],
+        iroha_data_model::metadata::Metadata::default(),
+    );
+
+    let submit_result = submit_transaction_on_any_peer(
+        &peer_clients,
+        &stale_root_unshield_tx,
+        "stale-root unshield unexpectedly accepted",
+    );
+    if let Err(err) = submit_result {
+        assert!(
+            err.chain().any(|cause| {
+                let text = cause.to_string().to_lowercase();
+                text.contains("root") || text.contains("stale") || text.contains("unknown")
+            }),
+            "expected stale-root rejection signal, got: {err:?}"
+        );
+    }
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![Log::new(Level::INFO, "post stale-root unshield barrier".to_owned()).into()],
+        &mut non_empty_target,
+        "post stale-root unshield barrier failed",
+    )
+    .await?;
+
+    let after_balance = numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
+    assert_eq!(after_balance, Numeric::from(150_u32));
 
     Ok(())
 }
