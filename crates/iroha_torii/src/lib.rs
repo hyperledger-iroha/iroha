@@ -14525,6 +14525,7 @@ impl Torii {
                 .route("/v1/soracloud/deploy", post(soracloud::handle_deploy))
                 .route("/v1/soracloud/upgrade", post(soracloud::handle_upgrade))
                 .route("/v1/soracloud/rollback", post(soracloud::handle_rollback))
+                .route("/v1/soracloud/rollout", post(soracloud::handle_rollout))
                 .route(
                     "/v1/soracloud/state/mutate",
                     post(soracloud::handle_state_mutation),

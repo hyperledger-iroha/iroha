@@ -32,6 +32,13 @@
     audit event.
   - when `--torii-url` is supplied, signs rollback payload metadata and calls
     `POST /v1/soracloud/rollback`.
+- `iroha app soracloud rollout`
+  - advances or fails a rollout step for an active canary handle.
+  - accepts health signals (`--health healthy|unhealthy`) and optional
+    traffic promotion (`--promote-to-percent`).
+  - records/forwards `--governance-tx-hash` for deterministic audit linkage.
+  - when `--torii-url` is supplied, signs rollout metadata and calls
+    `POST /v1/soracloud/rollout`.
 
 ## Deterministic admission checks
 
@@ -48,7 +55,11 @@ before mutating state, including:
 The default registry path is `.soracloud/registry.json`. The state keeps:
 
 - `services`: per-service current version and revision history;
-- `audit_log`: append-only deploy/upgrade/rollback records with sequence ids.
+- `services[].active_rollout`/`services[].last_rollout`: rollout runtime state
+  (handle, stage, canary traffic, health failures, policy limits);
+- `audit_log`: append-only deploy/upgrade/rollback/rollout records with
+  sequence ids, optional rollout handles, and optional governance tx hash
+  references.
 
 ## Network-backed mode
 
@@ -75,6 +86,18 @@ iroha app soracloud upgrade \
 ```bash
 iroha app soracloud rollback \
   --service-name web_portal \
+  --torii-url http://127.0.0.1:8080 \
+  --api-token <token-if-required> \
+  --timeout-secs 10
+```
+
+```bash
+iroha app soracloud rollout \
+  --service-name web_portal \
+  --rollout-handle web_portal:rollout:2 \
+  --health healthy \
+  --promote-to-percent 100 \
+  --governance-tx-hash <tx_hash> \
   --torii-url http://127.0.0.1:8080 \
   --api-token <token-if-required> \
   --timeout-secs 10

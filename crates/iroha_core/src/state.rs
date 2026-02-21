@@ -15495,9 +15495,10 @@ impl State {
     ///
     /// # Errors
     /// Returns a [`LaneLifecycleError`] when the lifecycle plan is invalid or fails to apply.
-    pub fn apply_lane_lifecycle(
+    fn apply_lane_lifecycle_with_options(
         &self,
         plan: &iroha_data_model::nexus::LaneLifecyclePlan,
+        refresh_axt_policies: bool,
     ) -> core::result::Result<(), LaneLifecycleError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         let retired_lanes = {
@@ -15568,7 +15569,9 @@ impl State {
             retired_lanes
         };
         let _ = retired_lanes;
-        let _ = self.refresh_axt_policies_from_directory();
+        if refresh_axt_policies {
+            let _ = self.refresh_axt_policies_from_directory();
+        }
         #[cfg(feature = "telemetry")]
         {
             let nexus = self.nexus_snapshot();
@@ -15589,6 +15592,17 @@ impl State {
             }
         }
         Ok(())
+    }
+
+    /// Apply a lane lifecycle plan and refresh dependent AXT policy caches.
+    ///
+    /// # Errors
+    /// Returns a [`LaneLifecycleError`] when the lifecycle plan is invalid or cannot be applied.
+    pub fn apply_lane_lifecycle(
+        &self,
+        plan: &iroha_data_model::nexus::LaneLifecyclePlan,
+    ) -> core::result::Result<(), LaneLifecycleError> {
+        self.apply_lane_lifecycle_with_options(plan, true)
     }
 
     /// Apply a lane lifecycle plan while holding the shared view lock.
@@ -17986,7 +18000,11 @@ impl<'state> StateBlock<'state> {
                 additions: vec![lane],
                 retire: Vec::new(),
             };
-            if self.state_ref.apply_lane_lifecycle(&plan).is_ok() {
+            if self
+                .state_ref
+                .apply_lane_lifecycle_with_options(&plan, false)
+                .is_ok()
+            {
                 self.record_autoscale_transition_height(block_height);
                 self.nexus = self.state_ref.nexus_snapshot();
                 info!(
@@ -18015,7 +18033,11 @@ impl<'state> StateBlock<'state> {
                 additions: Vec::new(),
                 retire: vec![retire_lane_id],
             };
-            if self.state_ref.apply_lane_lifecycle(&plan).is_ok() {
+            if self
+                .state_ref
+                .apply_lane_lifecycle_with_options(&plan, false)
+                .is_ok()
+            {
                 self.record_autoscale_transition_height(block_height);
                 self.nexus = self.state_ref.nexus_snapshot();
                 info!(

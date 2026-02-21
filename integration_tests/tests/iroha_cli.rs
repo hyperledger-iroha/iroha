@@ -402,6 +402,66 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
             .and_then(Value::as_str),
         Some("1.1.0")
     );
+    let rollout_handle = upgrade_payload
+        .get("rollout_handle")
+        .and_then(Value::as_str)
+        .expect("upgrade should return rollout_handle");
+    assert_eq!(
+        upgrade_payload
+            .get("rollout_stage")
+            .and_then(Value::as_object)
+            .and_then(|stage| stage.get("stage"))
+            .and_then(Value::as_str),
+        Some("Canary")
+    );
+
+    let rollout = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("rollout")
+        .arg("--service-name")
+        .arg(service_v1.service_name.to_string())
+        .arg("--rollout-handle")
+        .arg(rollout_handle)
+        .arg("--promote-to-percent")
+        .arg("100")
+        .arg("--governance-tx-hash")
+        .arg(Hash::new(b"cli-live-rollout-promote").to_string())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        rollout.status.success(),
+        "rollout failed with status {} and stderr: {}",
+        rollout.status,
+        String::from_utf8_lossy(&rollout.stderr)
+    );
+
+    let rollout_payload: Value =
+        json::from_slice(&rollout.stdout).expect("CLI should emit rollout JSON payload");
+    assert_eq!(
+        rollout_payload
+            .get("current_version")
+            .and_then(Value::as_str),
+        Some("1.1.0")
+    );
+    assert_eq!(
+        rollout_payload
+            .get("stage")
+            .and_then(Value::as_object)
+            .and_then(|stage| stage.get("stage"))
+            .and_then(Value::as_str),
+        Some("Promoted")
+    );
+    assert_eq!(
+        rollout_payload
+            .get("traffic_percent")
+            .and_then(Value::as_u64),
+        Some(100)
+    );
 
     let rollback = tokio::process::Command::new(program())
         .current_dir(dir.path())
@@ -466,7 +526,7 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         control_plane
             .get("audit_event_count")
             .and_then(Value::as_u64),
-        Some(3)
+        Some(4)
     );
     let services = control_plane
         .get("services")
