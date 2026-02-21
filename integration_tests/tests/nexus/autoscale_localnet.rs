@@ -273,11 +273,17 @@ fn wait_for_contracted_lanes_with_heartbeat(
 #[test]
 fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
     let context = stringify!(nexus_autoscale_expands_and_contracts_lanes_in_localnet);
+    let test_started = Instant::now();
+    let startup_started = Instant::now();
     let Some((network, _rt)) =
         sandbox::start_network_blocking_or_skip(autoscale_localnet_builder(), context)?
     else {
         return Ok(());
     };
+    eprintln!(
+        "[autoscale-localnet] network startup: {:.3}s",
+        startup_started.elapsed().as_secs_f64()
+    );
 
     ensure!(
         network.peers().len() == TOTAL_PEERS,
@@ -285,21 +291,33 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
         network.peers().len()
     );
 
+    let baseline_started = Instant::now();
     wait_for_storage_lane_count(
         &network,
         INITIAL_PROVISIONED_LANES,
         SCALE_OUT_WAIT_TIMEOUT,
         "baseline lane count",
     )?;
+    eprintln!(
+        "[autoscale-localnet] baseline lane count wait: {:.3}s",
+        baseline_started.elapsed().as_secs_f64()
+    );
 
     let submitters: Vec<Client> = network
         .peers()
         .iter()
         .map(peer_client_with_timeout)
         .collect();
+    let load_started = Instant::now();
     submit_load_round_robin(&submitters, LOAD_TX_COUNT)?;
+    eprintln!(
+        "[autoscale-localnet] load submission ({} tx): {:.3}s",
+        LOAD_TX_COUNT,
+        load_started.elapsed().as_secs_f64()
+    );
 
     let expansion_probe_client = peer_client_with_timeout(network.peer());
+    let expansion_started = Instant::now();
     wait_for_storage_lane_count_with_heartbeat(
         &network,
         &expansion_probe_client,
@@ -309,8 +327,13 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
         "autoscale-expand-probe",
         EXPANSION_PROBE_INTERVAL,
     )?;
+    eprintln!(
+        "[autoscale-localnet] expansion wait: {:.3}s",
+        expansion_started.elapsed().as_secs_f64()
+    );
 
     let heartbeat_client = peer_client_with_timeout(network.peer());
+    let contraction_started = Instant::now();
     wait_for_contracted_lanes_with_heartbeat(
         &network,
         &heartbeat_client,
@@ -319,6 +342,14 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
         "autoscale-heartbeat",
         CONTRACTION_HEARTBEAT_INTERVAL,
     )?;
+    eprintln!(
+        "[autoscale-localnet] contraction wait: {:.3}s",
+        contraction_started.elapsed().as_secs_f64()
+    );
+    eprintln!(
+        "[autoscale-localnet] total runtime: {:.3}s",
+        test_started.elapsed().as_secs_f64()
+    );
 
     Ok(())
 }
