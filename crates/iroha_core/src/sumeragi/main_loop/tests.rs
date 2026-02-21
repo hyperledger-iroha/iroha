@@ -47002,7 +47002,7 @@ async fn pacemaker_updates_highest_qc_status_from_new_view() {
         [0; Hash::LENGTH],
     )));
 
-harness.shutdown.send();
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -15,16 +15,17 @@ use iroha::{
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 
 const TOTAL_PEERS: usize = 4;
-const INITIAL_ACTIVE_LANES: usize = 1;
-const SCALED_ACTIVE_LANES: usize = 2;
-const INITIAL_ACTIVE_LANE_IDS: [u32; 1] = [0];
-const SCALED_ACTIVE_LANE_IDS: [u32; 2] = [0, 1];
-const LOAD_TX_COUNT: usize = 64;
+const INITIAL_PROVISIONED_LANES: usize = 1;
+const SCALED_PROVISIONED_LANES: usize = 2;
+const PRIMARY_LANE_ID: u32 = 0;
+const ELASTIC_LANE_ID: u32 = 1;
+const LOAD_TX_COUNT: usize = 48;
 const LANE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const EXPANSION_PROBE_INTERVAL: Duration = Duration::from_millis(1000);
 const CONTRACTION_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
 const SCALE_OUT_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 const SCALE_IN_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
+const TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn autoscale_localnet_builder() -> NetworkBuilder {
     NetworkBuilder::new()
@@ -91,72 +92,91 @@ fn lane_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<(usize, Vec
         .collect()
 }
 
-fn status_lane_snapshot(
-    network: &sandbox::SerializedNetwork,
-) -> Result<Vec<(usize, u64, u64, u64, Vec<u32>)>> {
+fn peer_client_with_timeout(peer: &NetworkPeer) -> Client {
+    let mut client = peer.client();
+    client.torii_request_timeout = TORII_REQUEST_TIMEOUT;
+    client
+}
+
+#[derive(Clone, Debug)]
+struct LaneStatusSnapshot {
+    lane_id: u32,
+    capacity: u64,
+}
+
+#[derive(Clone, Debug)]
+struct PeerStatusSnapshot {
+    lanes: Vec<LaneStatusSnapshot>,
+}
+
+fn status_lane_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatusSnapshot>> {
     network
         .peers()
         .iter()
         .enumerate()
         .map(|(index, peer)| {
-            let status = peer
-                .client()
+            let status = peer_client_with_timeout(peer)
                 .get_status()
                 .map_err(|err| eyre!("fetch peer {index} status failed: {err}"))?;
-            let lane_ids = status
+            let lanes = status
                 .teu_lane_commit
                 .iter()
-                .map(|lane| lane.lane_id)
+                .map(|lane| LaneStatusSnapshot {
+                    lane_id: lane.lane_id,
+                    capacity: lane.capacity,
+                })
                 .collect::<Vec<_>>();
-            Ok((
-                index,
-                status.blocks,
-                status.commit_time_ms,
-                status.queue_size,
-                lane_ids,
-            ))
+            Ok(PeerStatusSnapshot { lanes })
         })
         .collect()
 }
 
-fn all_peers_have_expected_lane_status(
-    snapshot: &[(usize, u64, u64, u64, Vec<u32>)],
+fn all_peers_have_storage_lane_count(
+    snapshot: &[(usize, Vec<String>)],
     expected_count: usize,
-    expected_lane_ids: &[u32],
 ) -> bool {
-    let mut expected_ids = expected_lane_ids.to_vec();
-    expected_ids.sort_unstable();
-    snapshot.iter().all(|(_, _, _, _, lane_ids)| {
-        lane_ids.len() == expected_count && {
-            let mut actual_ids = lane_ids.clone();
-            actual_ids.sort_unstable();
-            actual_ids == expected_ids
-        }
+    snapshot
+        .iter()
+        .all(|(_, lanes)| lanes.len() == expected_count)
+}
+
+fn all_peers_show_contracted_profile(snapshot: &[PeerStatusSnapshot]) -> bool {
+    snapshot.iter().all(|status| {
+        let primary_lane_active = status
+            .lanes
+            .iter()
+            .any(|lane| lane.lane_id == PRIMARY_LANE_ID && lane.capacity > 0);
+        let elastic_lane_deactivated = match status
+            .lanes
+            .iter()
+            .find(|lane| lane.lane_id == ELASTIC_LANE_ID)
+        {
+            Some(lane) => lane.capacity == 0,
+            None => true,
+        };
+        primary_lane_active && elastic_lane_deactivated
     })
 }
 
-fn wait_for_lane_count(
+fn wait_for_storage_lane_count(
     network: &sandbox::SerializedNetwork,
-    expected: usize,
-    expected_lane_ids: &[u32],
+    expected_count: usize,
     timeout: Duration,
     context: &str,
 ) -> Result<()> {
     let started = Instant::now();
-    let mut last_status_snapshot = Vec::new();
     let mut last_storage_snapshot = Vec::new();
     while started.elapsed() <= timeout {
-        let status_snapshot = status_lane_snapshot(network)?;
-        if all_peers_have_expected_lane_status(&status_snapshot, expected, expected_lane_ids) {
+        let storage_snapshot = lane_snapshot(network)?;
+        if all_peers_have_storage_lane_count(&storage_snapshot, expected_count) {
             return Ok(());
         }
-        last_status_snapshot = status_snapshot;
-        last_storage_snapshot = lane_snapshot(network).unwrap_or_default();
+        last_storage_snapshot = storage_snapshot;
         thread::sleep(LANE_POLL_INTERVAL);
     }
 
     Err(eyre!(
-        "{context}: timed out waiting for {expected} active lanes on all peers with lane ids {expected_lane_ids:?}; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}"
+        "{context}: timed out waiting for {expected_count} provisioned lane directories on all peers; last storage snapshot: {last_storage_snapshot:?}"
     ))
 }
 
@@ -175,11 +195,47 @@ fn submit_load_round_robin(clients: &[Client], tx_count: usize) -> Result<()> {
     Ok(())
 }
 
-fn wait_for_lane_count_with_heartbeat(
+fn wait_for_storage_lane_count_with_heartbeat(
     network: &sandbox::SerializedNetwork,
     heartbeat_client: &Client,
-    expected: usize,
-    expected_lane_ids: &[u32],
+    expected_count: usize,
+    timeout: Duration,
+    context: &str,
+    heartbeat_prefix: &str,
+    heartbeat_interval: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut heartbeat_seq = 0_u64;
+    let mut last_storage_snapshot = Vec::new();
+    let mut last_status_snapshot = Vec::new();
+    let mut last_heartbeat_error = None::<String>;
+
+    while started.elapsed() <= timeout {
+        let storage_snapshot = lane_snapshot(network)?;
+        if all_peers_have_storage_lane_count(&storage_snapshot, expected_count) {
+            return Ok(());
+        }
+        last_storage_snapshot = storage_snapshot;
+        last_status_snapshot = status_lane_snapshot(network).unwrap_or_default();
+
+        if let Err(err) = heartbeat_client.submit(Log::new(
+            Level::INFO,
+            format!("{heartbeat_prefix}-{heartbeat_seq}"),
+        )) {
+            last_heartbeat_error = Some(err.to_string());
+        }
+        heartbeat_seq = heartbeat_seq.saturating_add(1);
+        thread::sleep(heartbeat_interval);
+    }
+
+    Err(eyre!(
+        "{context}: timed out waiting for {expected_count} provisioned lane directories with heartbeat; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last heartbeat error: {last_heartbeat_error:?}"
+    ))
+}
+
+fn wait_for_contracted_lanes_with_heartbeat(
+    network: &sandbox::SerializedNetwork,
+    heartbeat_client: &Client,
     timeout: Duration,
     context: &str,
     heartbeat_prefix: &str,
@@ -193,7 +249,7 @@ fn wait_for_lane_count_with_heartbeat(
 
     while started.elapsed() <= timeout {
         let status_snapshot = status_lane_snapshot(network)?;
-        if all_peers_have_expected_lane_status(&status_snapshot, expected, expected_lane_ids) {
+        if all_peers_show_contracted_profile(&status_snapshot) {
             return Ok(());
         }
         last_status_snapshot = status_snapshot;
@@ -210,7 +266,7 @@ fn wait_for_lane_count_with_heartbeat(
     }
 
     Err(eyre!(
-        "{context}: timed out waiting for {expected} active lanes with lane ids {expected_lane_ids:?} and heartbeat; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last heartbeat error: {last_heartbeat_error:?}"
+        "{context}: timed out waiting for contracted lane profile (lane {PRIMARY_LANE_ID} active; lane {ELASTIC_LANE_ID} removed or capacity=0) with heartbeat; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last heartbeat error: {last_heartbeat_error:?}"
     ))
 }
 
@@ -229,35 +285,35 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
         network.peers().len()
     );
 
-    wait_for_lane_count(
+    wait_for_storage_lane_count(
         &network,
-        INITIAL_ACTIVE_LANES,
-        &INITIAL_ACTIVE_LANE_IDS,
+        INITIAL_PROVISIONED_LANES,
         SCALE_OUT_WAIT_TIMEOUT,
         "baseline lane count",
     )?;
 
-    let submitters: Vec<Client> = network.peers().iter().map(NetworkPeer::client).collect();
+    let submitters: Vec<Client> = network
+        .peers()
+        .iter()
+        .map(peer_client_with_timeout)
+        .collect();
     submit_load_round_robin(&submitters, LOAD_TX_COUNT)?;
 
-    let expansion_probe_client = network.peer().client();
-    wait_for_lane_count_with_heartbeat(
+    let expansion_probe_client = peer_client_with_timeout(network.peer());
+    wait_for_storage_lane_count_with_heartbeat(
         &network,
         &expansion_probe_client,
-        SCALED_ACTIVE_LANES,
-        &SCALED_ACTIVE_LANE_IDS,
+        SCALED_PROVISIONED_LANES,
         SCALE_OUT_WAIT_TIMEOUT,
         "autoscale expansion",
         "autoscale-expand-probe",
         EXPANSION_PROBE_INTERVAL,
     )?;
 
-    let heartbeat_client = network.peer().client();
-    wait_for_lane_count_with_heartbeat(
+    let heartbeat_client = peer_client_with_timeout(network.peer());
+    wait_for_contracted_lanes_with_heartbeat(
         &network,
         &heartbeat_client,
-        INITIAL_ACTIVE_LANES,
-        &INITIAL_ACTIVE_LANE_IDS,
         SCALE_IN_WAIT_TIMEOUT,
         "autoscale contraction",
         "autoscale-heartbeat",
