@@ -2568,6 +2568,14 @@ pub mod sumeragi {
     pub const RECOVERY_HEIGHT_WINDOW_MS: u64 = 2_000;
     /// Hash-miss threshold before escalating dependency recovery to range pull.
     pub const RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: u32 = 3;
+    /// Deterministic wait window before rotating after a missing-QC recovery attempt (milliseconds).
+    pub const RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: u64 = 1_200;
+    /// Maximum forced self-proposal attempts allowed for a single (height, view).
+    pub const RECOVERY_MAX_FORCED_PROPOSAL_ATTEMPTS_PER_VIEW: u32 = 1;
+    /// Number of deterministic no-roster topology refresh retries allowed per view.
+    pub const RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW: u32 = 1;
+    /// Rotate immediately when the missing-QC reacquire window is exhausted.
+    pub const RECOVERY_ROTATE_AFTER_REACQUIRE_EXHAUSTED: bool = true;
     /// Number of views where no-roster fallback broadcasts remain allowed.
     pub const RECOVERY_NO_ROSTER_FALLBACK_VIEWS: u32 = 1;
     /// Sidecar mismatch retries before final-drop and canonical-only rebuild.

@@ -1106,8 +1106,21 @@ mod tests {
                     ),
                     hash_miss_cap_before_range_pull:
                         iroha_config::parameters::defaults::sumeragi::RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL,
+                    missing_qc_reacquire_window: std::time::Duration::from_millis(
+                        iroha_config::parameters::defaults::sumeragi::
+                            RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS,
+                    ),
+                    max_forced_proposal_attempts_per_view:
+                        iroha_config::parameters::defaults::sumeragi::
+                            RECOVERY_MAX_FORCED_PROPOSAL_ATTEMPTS_PER_VIEW,
                     no_roster_fallback_views: iroha_config::parameters::defaults::sumeragi::
                         RECOVERY_NO_ROSTER_FALLBACK_VIEWS,
+                    no_roster_refresh_retry_per_view:
+                        iroha_config::parameters::defaults::sumeragi::
+                            RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW,
+                    rotate_after_reacquire_exhausted:
+                        iroha_config::parameters::defaults::sumeragi::
+                            RECOVERY_ROTATE_AFTER_REACQUIRE_EXHAUSTED,
                     missing_block_signer_fallback_attempts: iroha_config::parameters::defaults::sumeragi::
                         MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
                     missing_block_retry_backoff_multiplier: iroha_config::parameters::defaults::

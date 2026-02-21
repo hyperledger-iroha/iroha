@@ -358,10 +358,21 @@ fn should_share_unknown_prev_hash(
 fn unknown_prev_fallback_start_height(
     kura: &Kura,
     latest_hash: Option<HashOf<BlockHeader>>,
-) -> Option<NonZeroUsize> {
-    latest_hash
+) -> (NonZeroUsize, bool) {
+    let local_tip_height = kura.blocks_count();
+    let local_window = 64usize;
+    let local_fallback_start = local_tip_height
+        .saturating_sub(local_window.saturating_sub(1))
+        .max(1);
+    let local_fallback_start =
+        NonZeroUsize::new(local_fallback_start).unwrap_or(nonzero_ext::nonzero!(1_usize));
+    match latest_hash
         .and_then(|hash| kura.get_block_height_by_hash(hash))
         .and_then(|height| height.checked_add(1))
+    {
+        Some(known_height) => (known_height, false),
+        None => (local_fallback_start, true),
+    }
 }
 
 /// [`BlockSynchronizer`] actor handle.
@@ -678,16 +689,34 @@ mod unknown_prev_hash_tests {
         kura.store_block(Arc::new(block2))
             .expect("store second block");
 
-        let start_height = unknown_prev_fallback_start_height(&kura, Some(block1.hash()))
-            .expect("fallback start height should be derived from known latest hash");
+        let (start_height, requested_latest) =
+            unknown_prev_fallback_start_height(&kura, Some(block1.hash()));
+        assert!(!requested_latest);
         assert_eq!(start_height.get(), 2);
     }
 
     #[test]
-    fn unknown_prev_fallback_none_when_latest_hash_unknown() {
+    fn unknown_prev_fallback_anchor_selects_deterministic_start_height() {
         let kura = Kura::blank_kura_for_testing();
+        let keypair = KeyPair::random();
+        let mut prev = None;
+        for height in 1_u64..=70_u64 {
+            let parent = prev;
+            let block: SignedBlock =
+                ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                    header.set_height(NonZeroU64::new(height).expect("non-zero height"));
+                    header.set_prev_block_hash(parent);
+                })
+                .into();
+            prev = Some(block.hash());
+            kura.store_block(Arc::new(block))
+                .expect("store deterministic local window block");
+        }
         let unknown_hash = hash(0xEE);
-        assert!(unknown_prev_fallback_start_height(&kura, Some(unknown_hash)).is_none());
+        let (start_height, requested_latest) =
+            unknown_prev_fallback_start_height(&kura, Some(unknown_hash));
+        assert!(requested_latest);
+        assert_eq!(start_height.get(), 7);
     }
 }
 
@@ -3621,11 +3650,12 @@ pub mod message {
                                 now_height,
                             );
                             if share_unknown_prev {
-                                let fallback_start_height = unknown_prev_fallback_start_height(
-                                    &block_sync.kura,
-                                    *latest_hash,
-                                );
-                                if fallback_start_height.is_none() {
+                                let (fallback_start_height, should_request_latest) =
+                                    unknown_prev_fallback_start_height(
+                                        &block_sync.kura,
+                                        *latest_hash,
+                                    );
+                                if should_request_latest {
                                     block_sync
                                         .request_latest_blocks_from_peer(peer_id.clone())
                                         .await;
@@ -3636,14 +3666,10 @@ pub mod message {
                                     requester = %peer_id,
                                     block = %hash,
                                     requested_latest,
-                                    fallback_start_height = ?fallback_start_height.map(NonZeroUsize::get),
+                                    fallback_start_height = fallback_start_height.get(),
                                     "Block hash not found; sharing from fallback anchor"
                                 );
-                                if let Some(fallback_start_height) = fallback_start_height {
-                                    fallback_start_height
-                                } else {
-                                    nonzero_ext::nonzero!(1_usize)
-                                }
+                                fallback_start_height
                             } else {
                                 debug!(
                                     peer = %block_sync.peer,
