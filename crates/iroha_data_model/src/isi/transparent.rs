@@ -855,6 +855,28 @@ impl From<super::governance::PersistCouncilForEpoch> for super::InstructionBox {
     }
 }
 
+// Allow direct conversion for governance citizenship and service instructions
+#[cfg(feature = "governance")]
+impl From<super::governance::RecordCitizenServiceOutcome> for super::InstructionBox {
+    fn from(instruction: super::governance::RecordCitizenServiceOutcome) -> Self {
+        super::Instruction::into_instruction_box(Box::new(instruction))
+    }
+}
+
+#[cfg(feature = "governance")]
+impl From<super::governance::RegisterCitizen> for super::InstructionBox {
+    fn from(instruction: super::governance::RegisterCitizen) -> Self {
+        super::Instruction::into_instruction_box(Box::new(instruction))
+    }
+}
+
+#[cfg(feature = "governance")]
+impl From<super::governance::UnregisterCitizen> for super::InstructionBox {
+    fn from(instruction: super::governance::UnregisterCitizen) -> Self {
+        super::Instruction::into_instruction_box(Box::new(instruction))
+    }
+}
+
 // Convenience accessor to avoid re-decoding `Parameter` in executors
 impl SetParameter {
     /// Borrow the underlying `Parameter` value

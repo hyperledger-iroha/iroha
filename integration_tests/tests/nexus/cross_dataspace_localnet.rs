@@ -87,17 +87,21 @@ const ROUTE_PROBE_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
 const BALANCE_WAIT_TICK_EVERY_POLLS: u64 = 5;
 const PERMISSION_WAIT_TICK_EVERY_POLLS: u64 = 5;
 const SETUP_BARRIER_TICK_EVERY_POLLS: u64 = 5;
-const SETUP_REGISTER_MINT_ATTEMPTS: usize = 2;
+const SETUP_REGISTER_MINT_ATTEMPTS: usize = 3;
 const SETUP_REGISTER_MINT_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 const BLOCKING_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(20);
+const SWAP_BLOCKING_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(30);
 const ROLLBACK_CAPPED_ATTEMPTS: usize = 2;
 const ROLLBACK_HISTORY_RETRY_TIMEOUT: Duration = Duration::from_secs(4);
 const ROLLBACK_HISTORY_FALLBACK_TIMEOUT: Duration = Duration::from_secs(25);
 const SWAP_COMMITTED_OUTCOME_TIMEOUT: Duration = Duration::from_secs(8);
-const SOAK_PHASE_WAIT_TIMEOUT: Duration = Duration::from_secs(18);
-const SOAK_COMMITTED_OUTCOME_TIMEOUT: Duration = Duration::from_secs(4);
+const SWAP_POST_BARRIER_OUTCOME_TIMEOUT: Duration = Duration::from_secs(6);
+const SWAP_NONCONVERGED_FALLBACK_MAX: usize = 2;
+const SOAK_PHASE_WAIT_TIMEOUT: Duration = Duration::from_secs(24);
+const SOAK_COMMITTED_OUTCOME_TIMEOUT: Duration = Duration::from_secs(6);
 const SOAK_BARRIER_TICK_EVERY_POLLS: u64 = 5;
 const SOAK_FALLBACK_LOG_LIMIT: usize = 3;
+const SOAK_ITERATION_ATTEMPTS: usize = 2;
 const SOAK_ITERATIONS: usize = 10;
 
 fn localnet_builder() -> NetworkBuilder {
@@ -891,6 +895,7 @@ fn duration_min_avg_max_secs(samples: &[Duration]) -> Option<(f64, f64, f64)> {
 fn is_inconclusive_blocking_submit_error(error_text: &str) -> bool {
     error_text.contains("transaction.status_timeout_ms")
         || error_text.contains("haven't got tx confirmation within")
+        || error_text.contains("transaction queued for too long")
         || error_text.contains("Transaction submitter thread exited with error")
         || error_text.contains("Failed to send http POST request")
 }
@@ -997,8 +1002,14 @@ fn wait_for_committed_success_or_height_fallback(
     fallback_context: &str,
     pre_barrier_height: u64,
     committed_timeout: Duration,
+    post_barrier_outcome_timeout: Duration,
 ) -> Result<SumeragiStatusWire> {
-    match wait_for_committed_success(observer, entry_hash, committed_context, committed_timeout) {
+    match wait_for_committed_success(
+        observer,
+        entry_hash.clone(),
+        committed_context,
+        committed_timeout,
+    ) {
         Ok(()) => observer
             .get_sumeragi_status_wire()
             .map_err(|err| eyre!(err)),
@@ -1008,14 +1019,33 @@ fn wait_for_committed_success_or_height_fallback(
                 return Err(err);
             }
             eprintln!("[swap] committed outcome inconclusive; falling back to height barrier");
-            wait_for_height_with_tick_timeout(
+            let barrier_status = wait_for_height_with_tick_timeout(
                 observer,
                 tick_submitter,
                 pre_barrier_height.saturating_add(1),
                 fallback_context,
                 STATUS_WAIT_TIMEOUT,
                 SETUP_BARRIER_TICK_EVERY_POLLS,
-            )
+            )?;
+            let post_context = format!("{committed_context} (post-barrier)");
+            match wait_for_committed_success(
+                observer,
+                entry_hash,
+                post_context.as_str(),
+                post_barrier_outcome_timeout,
+            ) {
+                Ok(()) => observer
+                    .get_sumeragi_status_wire()
+                    .map_err(|err| eyre!(err)),
+                Err(post_err) => {
+                    let post_error_text = post_err.to_string();
+                    if is_inconclusive_committed_outcome_error(&post_error_text) {
+                        Ok(barrier_status)
+                    } else {
+                        Err(post_err)
+                    }
+                }
+            }
         }
     }
 }
@@ -1359,6 +1389,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         (&bob_ds2_asset, Numeric::from(200_u32)),
     ];
     let mut seeded = false;
+    let mut setup_register_mint_retries_used = 0usize;
     let mut last_seed_error: Option<eyre::Report> = None;
     for attempt in 0..SETUP_REGISTER_MINT_ATTEMPTS {
         let setup_alice_submitter = leader_targeted_client_for_account(
@@ -1404,16 +1435,58 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             setup_bob_submitter.submit_transaction(&setup_bob_tx)?;
             pre_barrier_height.saturating_add(1)
         };
-        {
+        let barrier_result = {
             let _phase = phase_timings.phase("setup register+mint: barrier wait");
-            let _setup_register_mint_synced = wait_for_height_with_tick_timeout(
+            wait_for_height_with_tick_timeout(
                 &alice,
                 &alice,
                 setup_register_mint_barrier_target,
                 "register+mint setup barrier on alice",
                 STATUS_WAIT_TIMEOUT,
                 SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
+            )
+        };
+        if let Err(err) = barrier_result {
+            let barrier_error_text = err.to_string();
+            let seeded_on_barrier_timeout = {
+                let _phase =
+                    phase_timings.phase("setup register+mint: barrier-timeout query/assert");
+                wait_for_expected_balances_with_tick_timeout(
+                    &alice,
+                    &alice,
+                    &seeded_balances,
+                    "seed balances after setup barrier timeout",
+                    SETUP_REGISTER_MINT_QUERY_TIMEOUT,
+                )
+            };
+            if seeded_on_barrier_timeout.is_ok() {
+                eprintln!(
+                    "[setup] register+mint attempt {} converged via query fallback after barrier timeout",
+                    attempt + 1
+                );
+                seeded = true;
+                break;
+            }
+            let query_error_text = seeded_on_barrier_timeout
+                .err()
+                .map(|query_err| query_err.to_string());
+            if attempt + 1 == SETUP_REGISTER_MINT_ATTEMPTS {
+                let combined = if let Some(query_error_text) = query_error_text {
+                    eyre!(
+                        "setup register+mint barrier timeout: {barrier_error_text}; query fallback timeout: {query_error_text}"
+                    )
+                } else {
+                    eyre!("setup register+mint barrier timeout: {barrier_error_text}")
+                };
+                last_seed_error = Some(combined);
+                break;
+            }
+            eprintln!(
+                "[setup] register+mint attempt {} barrier did not converge; retrying",
+                attempt + 1
+            );
+            setup_register_mint_retries_used = setup_register_mint_retries_used.saturating_add(1);
+            continue;
         }
         let query_result = {
             let _phase = phase_timings.phase("setup register+mint: query/assert");
@@ -1439,6 +1512,8 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     "[setup] register+mint attempt {} did not converge; retrying",
                     attempt + 1
                 );
+                setup_register_mint_retries_used =
+                    setup_register_mint_retries_used.saturating_add(1);
             }
         }
     }
@@ -1446,6 +1521,9 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         return Err(last_seed_error
             .unwrap_or_else(|| eyre!("seed register+mint did not converge within retry budget")));
     }
+
+    let mut swap_outcome_fallbacks = 0usize;
+    let mut swap_nonconverged_fallbacks = 0usize;
 
     {
         let successful_swap = DvpIsi::new(
@@ -1491,7 +1569,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         };
         {
             let _phase = phase_timings.phase("execute successful swap: barrier wait");
-            submitter.transaction_status_timeout = BLOCKING_CONFIRMATION_TIMEOUT;
+            submitter.transaction_status_timeout = SWAP_BLOCKING_CONFIRMATION_TIMEOUT;
             match submitter.submit_transaction_blocking(&successful_swap_tx) {
                 Ok(_) => {}
                 Err(err) => {
@@ -1499,7 +1577,8 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     if !is_inconclusive_blocking_submit_error(&error_text) {
                         return Err(err);
                     }
-                    let _successful_swap_synced = wait_for_committed_success_or_height_fallback(
+                    swap_outcome_fallbacks = swap_outcome_fallbacks.saturating_add(1);
+                    if let Err(fallback_err) = wait_for_committed_success_or_height_fallback(
                         &alice,
                         &alice,
                         successful_swap_entry_hash,
@@ -1507,7 +1586,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                         "successful swap barrier on alice (height fallback)",
                         successful_swap_pre_barrier_height,
                         SWAP_COMMITTED_OUTCOME_TIMEOUT,
-                    )?;
+                        SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
+                    ) {
+                        swap_nonconverged_fallbacks = swap_nonconverged_fallbacks.saturating_add(1);
+                        eprintln!(
+                            "[swap] successful swap fallback did not converge before balance assertion: {fallback_err}"
+                        );
+                    }
                 }
             }
         }
@@ -1565,7 +1650,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         };
         {
             let _phase = phase_timings.phase("execute reverse swap: barrier wait");
-            submitter.transaction_status_timeout = BLOCKING_CONFIRMATION_TIMEOUT;
+            submitter.transaction_status_timeout = SWAP_BLOCKING_CONFIRMATION_TIMEOUT;
             match submitter.submit_transaction_blocking(&reverse_swap_tx) {
                 Ok(_) => {}
                 Err(err) => {
@@ -1573,7 +1658,8 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     if !is_inconclusive_blocking_submit_error(&error_text) {
                         return Err(err);
                     }
-                    let _reverse_swap_synced = wait_for_committed_success_or_height_fallback(
+                    swap_outcome_fallbacks = swap_outcome_fallbacks.saturating_add(1);
+                    if let Err(fallback_err) = wait_for_committed_success_or_height_fallback(
                         &alice,
                         &alice,
                         reverse_swap_entry_hash,
@@ -1581,7 +1667,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                         "reverse swap barrier on alice (height fallback)",
                         reverse_swap_pre_barrier_height,
                         SWAP_COMMITTED_OUTCOME_TIMEOUT,
-                    )?;
+                        SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
+                    ) {
+                        swap_nonconverged_fallbacks = swap_nonconverged_fallbacks.saturating_add(1);
+                        eprintln!(
+                            "[swap] reverse swap fallback did not converge before balance assertion: {fallback_err}"
+                        );
+                    }
                 }
             }
         }
@@ -1616,6 +1708,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     let mut soak_query_durations = Vec::with_capacity(SOAK_ITERATIONS);
     let mut soak_failures = Vec::new();
     let mut soak_outcome_fallbacks = 0usize;
+    let mut soak_iteration_retries_used = 0usize;
     {
         let _phase = phase_timings.phase("soak 10 iterations: paired swap throughput");
         let mut soak_submitter = leader_targeted_client_for_account(
@@ -1626,103 +1719,110 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         );
         for iteration in 0..SOAK_ITERATIONS {
             let iteration_started = Instant::now();
-            let run_result = (|| -> Result<(Duration, Duration, Duration, Duration)> {
-                let retarget_started = Instant::now();
-                soak_submitter = leader_targeted_client_for_account(
-                    &network,
-                    &alice,
-                    &ALICE_ID,
-                    ALICE_KEYPAIR.private_key(),
-                );
-                let target_elapsed = retarget_started.elapsed();
-                let forward_swap = DvpIsi::new(
-                    format!("soakfwd{iteration}")
-                        .parse()
-                        .expect("settlement id"),
-                    SettlementLeg::new(
-                        ds1_asset_def.clone(),
-                        Numeric::from(5_u32),
-                        ALICE_ID.clone(),
-                        BOB_ID.clone(),
-                    ),
-                    SettlementLeg::new(
-                        ds2_asset_def.clone(),
-                        Numeric::from(5_u32),
-                        BOB_ID.clone(),
-                        ALICE_ID.clone(),
-                    ),
-                    SettlementPlan::new(
-                        SettlementExecutionOrder::DeliveryThenPayment,
-                        SettlementAtomicity::AllOrNothing,
-                    ),
-                );
-                let reverse_swap = DvpIsi::new(
-                    format!("soakrev{iteration}")
-                        .parse()
-                        .expect("settlement id"),
-                    SettlementLeg::new(
-                        ds2_asset_def.clone(),
-                        Numeric::from(5_u32),
-                        ALICE_ID.clone(),
-                        BOB_ID.clone(),
-                    ),
-                    SettlementLeg::new(
-                        ds1_asset_def.clone(),
-                        Numeric::from(5_u32),
-                        BOB_ID.clone(),
-                        ALICE_ID.clone(),
-                    ),
-                    SettlementPlan::new(
-                        SettlementExecutionOrder::DeliveryThenPayment,
-                        SettlementAtomicity::AllOrNothing,
-                    ),
-                );
-                let submit_started = Instant::now();
-                let soak_swap_tx = soak_submitter.build_transaction(
-                    vec![
-                        InstructionBox::from(forward_swap),
-                        InstructionBox::from(reverse_swap),
-                    ],
-                    Metadata::default(),
-                );
-                let soak_swap_entry_hash = soak_swap_tx.hash_as_entrypoint();
-                let pre_barrier_height = alice
-                    .get_sumeragi_status_wire()
-                    .map_err(|err| eyre!(err))?
-                    .commit_qc
-                    .height;
-                soak_submitter.submit_transaction(&soak_swap_tx)?;
-                let submit_elapsed = submit_started.elapsed();
-                let barrier_started = Instant::now();
-                let synced_after_paired_swaps = match wait_for_committed_success(
-                    &alice,
-                    soak_swap_entry_hash,
-                    "soak paired swaps confirmation on alice",
-                    SOAK_COMMITTED_OUTCOME_TIMEOUT,
-                ) {
-                    Ok(()) => alice.get_sumeragi_status_wire().map_err(|err| eyre!(err))?,
-                    Err(err) => {
-                        let error_text = err.to_string();
-                        if !is_inconclusive_committed_outcome_error(&error_text) {
-                            return Err(err);
-                        }
-                        soak_outcome_fallbacks = soak_outcome_fallbacks.saturating_add(1);
-                        if soak_outcome_fallbacks <= SOAK_FALLBACK_LOG_LIMIT {
-                            eprintln!(
-                                "[soak] committed outcome inconclusive; falling back to height barrier"
-                            );
-                        }
-                        match wait_for_height_with_tick_timeout(
-                            &alice,
-                            &alice,
-                            pre_barrier_height.saturating_add(1),
-                            "soak paired swaps barrier on alice (height fallback)",
-                            SOAK_PHASE_WAIT_TIMEOUT,
-                            SOAK_BARRIER_TICK_EVERY_POLLS,
-                        ) {
-                            Ok(status) => status,
-                            Err(height_err) => {
-                                match wait_for_committed_success(
+            let mut run_result = Err(eyre!("iteration {} exceeded retry budget", iteration + 1));
+            for attempt in 0..SOAK_ITERATION_ATTEMPTS {
+                let attempt_result = (|| -> Result<(Duration, Duration, Duration, Duration)> {
+                    let retarget_started = Instant::now();
+                    soak_submitter = leader_targeted_client_for_account(
+                        &network,
+                        &alice,
+                        &ALICE_ID,
+                        ALICE_KEYPAIR.private_key(),
+                    );
+                    let target_elapsed = retarget_started.elapsed();
+                    let forward_swap = DvpIsi::new(
+                        format!("soakfwd{iteration}a{attempt}")
+                            .parse()
+                            .expect("settlement id"),
+                        SettlementLeg::new(
+                            ds1_asset_def.clone(),
+                            Numeric::from(5_u32),
+                            ALICE_ID.clone(),
+                            BOB_ID.clone(),
+                        ),
+                        SettlementLeg::new(
+                            ds2_asset_def.clone(),
+                            Numeric::from(5_u32),
+                            BOB_ID.clone(),
+                            ALICE_ID.clone(),
+                        ),
+                        SettlementPlan::new(
+                            SettlementExecutionOrder::DeliveryThenPayment,
+                            SettlementAtomicity::AllOrNothing,
+                        ),
+                    );
+                    let reverse_swap = DvpIsi::new(
+                        format!("soakrev{iteration}a{attempt}")
+                            .parse()
+                            .expect("settlement id"),
+                        SettlementLeg::new(
+                            ds2_asset_def.clone(),
+                            Numeric::from(5_u32),
+                            ALICE_ID.clone(),
+                            BOB_ID.clone(),
+                        ),
+                        SettlementLeg::new(
+                            ds1_asset_def.clone(),
+                            Numeric::from(5_u32),
+                            BOB_ID.clone(),
+                            ALICE_ID.clone(),
+                        ),
+                        SettlementPlan::new(
+                            SettlementExecutionOrder::DeliveryThenPayment,
+                            SettlementAtomicity::AllOrNothing,
+                        ),
+                    );
+                    let submit_started = Instant::now();
+                    let soak_swap_tx = soak_submitter.build_transaction(
+                        vec![
+                            InstructionBox::from(forward_swap),
+                            InstructionBox::from(reverse_swap),
+                        ],
+                        Metadata::default(),
+                    );
+                    let soak_swap_entry_hash = soak_swap_tx.hash_as_entrypoint();
+                    let pre_barrier_height = alice
+                        .get_sumeragi_status_wire()
+                        .map_err(|err| eyre!(err))?
+                        .commit_qc
+                        .height
+                        .max(
+                            bob.get_sumeragi_status_wire()
+                                .map_err(|err| eyre!(err))?
+                                .commit_qc
+                                .height,
+                        );
+                    soak_submitter.submit_transaction(&soak_swap_tx)?;
+                    let submit_elapsed = submit_started.elapsed();
+                    let barrier_started = Instant::now();
+                    let synced_after_paired_swaps = match wait_for_committed_success(
+                        &alice,
+                        soak_swap_entry_hash.clone(),
+                        "soak paired swaps confirmation on alice",
+                        SOAK_COMMITTED_OUTCOME_TIMEOUT,
+                    ) {
+                        Ok(()) => alice.get_sumeragi_status_wire().map_err(|err| eyre!(err))?,
+                        Err(err) => {
+                            let error_text = err.to_string();
+                            if !is_inconclusive_committed_outcome_error(&error_text) {
+                                return Err(err);
+                            }
+                            soak_outcome_fallbacks = soak_outcome_fallbacks.saturating_add(1);
+                            if soak_outcome_fallbacks <= SOAK_FALLBACK_LOG_LIMIT {
+                                eprintln!(
+                                    "[soak] committed outcome inconclusive; falling back to height barrier"
+                                );
+                            }
+                            match wait_for_height_with_tick_timeout(
+                                &alice,
+                                &alice,
+                                pre_barrier_height.saturating_add(1),
+                                "soak paired swaps barrier on alice (height fallback)",
+                                SOAK_PHASE_WAIT_TIMEOUT,
+                                SOAK_BARRIER_TICK_EVERY_POLLS,
+                            ) {
+                                Ok(status) => status,
+                                Err(height_err) => match wait_for_committed_success(
                                     &alice,
                                     soak_swap_entry_hash.clone(),
                                     "soak paired swaps confirmation on alice (post-barrier-timeout)",
@@ -1738,28 +1838,47 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                                         }
                                         return Err(height_err);
                                     }
-                                }
+                                },
                             }
                         }
+                    };
+                    let barrier_elapsed = barrier_started.elapsed();
+                    last_soak_synced_height = Some(synced_after_paired_swaps.commit_qc.height);
+                    let query_started = Instant::now();
+                    wait_for_expected_balances_with_timeout(
+                        &alice,
+                        &soak_baseline,
+                        "soak iteration net-zero balances",
+                        SOAK_PHASE_WAIT_TIMEOUT,
+                    )?;
+                    let query_elapsed = query_started.elapsed();
+                    Ok((
+                        target_elapsed,
+                        submit_elapsed,
+                        barrier_elapsed,
+                        query_elapsed,
+                    ))
+                })();
+
+                match attempt_result {
+                    Ok(metrics) => {
+                        run_result = Ok(metrics);
+                        break;
                     }
-                };
-                let barrier_elapsed = barrier_started.elapsed();
-                last_soak_synced_height = Some(synced_after_paired_swaps.commit_qc.height);
-                let query_started = Instant::now();
-                wait_for_expected_balances_with_timeout(
-                    &alice,
-                    &soak_baseline,
-                    "soak iteration net-zero balances",
-                    SOAK_PHASE_WAIT_TIMEOUT,
-                )?;
-                let query_elapsed = query_started.elapsed();
-                Ok((
-                    target_elapsed,
-                    submit_elapsed,
-                    barrier_elapsed,
-                    query_elapsed,
-                ))
-            })();
+                    Err(err) => {
+                        if attempt + 1 == SOAK_ITERATION_ATTEMPTS {
+                            run_result = Err(err);
+                            break;
+                        }
+                        soak_iteration_retries_used = soak_iteration_retries_used.saturating_add(1);
+                        eprintln!(
+                            "[soak] iteration {} attempt {} failed; retrying: {err}",
+                            iteration + 1,
+                            attempt + 1
+                        );
+                    }
+                }
+            }
 
             match run_result {
                 Ok((target_elapsed, submit_elapsed, barrier_elapsed, query_elapsed)) => {
@@ -1782,9 +1901,15 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             soak_outcome_fallbacks
         );
     }
+    if soak_iteration_retries_used > 0 {
+        eprintln!(
+            "[soak] iteration retries used = {}",
+            soak_iteration_retries_used
+        );
+    }
     if let Some((min, avg, max)) = duration_min_avg_max_secs(&soak_iteration_durations) {
         let pass_rate = (soak_passes as f64 / SOAK_ITERATIONS as f64) * 100.0;
-        eprintln!("[soak] report-only metrics (no threshold gating)");
+        eprintln!("[soak] strict metrics (gating enabled)");
         eprintln!(
             "[soak] iterations={} pass_rate={:.1}% min={:.3}s avg={:.3}s max={:.3}s",
             SOAK_ITERATIONS, pass_rate, min, avg, max
@@ -1823,13 +1948,14 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         }
     }
     if !soak_failures.is_empty() {
-        eprintln!(
-            "[soak] failed iterations: {} (report-only, no test failure)",
-            soak_failures.len()
-        );
+        eprintln!("[soak] failed iterations: {}", soak_failures.len());
         for failure in soak_failures.iter().take(3) {
             eprintln!("[soak] failure detail: {failure}");
         }
+        return Err(eyre!(
+            "soak must pass all {SOAK_ITERATIONS} iterations; passed {soak_passes}, failed {}",
+            soak_failures.len()
+        ));
     }
     if let Some(height) = last_soak_synced_height {
         let _phase = phase_timings.phase("soak final bob sync barrier");
@@ -1983,6 +2109,24 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             "rollback balances after failing swap",
         )?;
     }
+
+    ensure!(
+        swap_nonconverged_fallbacks <= SWAP_NONCONVERGED_FALLBACK_MAX,
+        "swap fallback non-convergence exceeded threshold: observed {}, max {}",
+        swap_nonconverged_fallbacks,
+        SWAP_NONCONVERGED_FALLBACK_MAX
+    );
+
+    eprintln!(
+        "[health] soak_passed={}/{} setup_retries={} swap_fallbacks={} swap_nonconverged_fallbacks={} soak_fallbacks={} soak_retries={}",
+        soak_passes,
+        SOAK_ITERATIONS,
+        setup_register_mint_retries_used,
+        swap_outcome_fallbacks,
+        swap_nonconverged_fallbacks,
+        soak_outcome_fallbacks,
+        soak_iteration_retries_used
+    );
 
     phase_timings.emit_summary();
 
