@@ -691,7 +691,13 @@ impl Actor {
                                 targets = topology_peers.len(),
                                 "sending block sync update with cached precommit votes to commit topology after recording vote"
                             );
-                        } else {
+                        } else if self.allow_no_roster_fallback_or_fail_closed(
+                            vote.height,
+                            vote.view,
+                            vote.block_hash,
+                            ViewChangeCause::MissingPayload,
+                            "precommit_vote_no_roster",
+                        ) {
                             self.broadcast_block_created_for_block_sync(
                                 super::message::BlockCreated::from(&block),
                                 &topology_peers,
@@ -703,6 +709,13 @@ impl Actor {
                                 signer = vote.signer,
                                 targets = topology_peers.len(),
                                 "sending BlockCreated payload to commit topology (no verifiable roster yet)"
+                            );
+                        } else {
+                            iroha_logger::warn!(
+                                height = vote.height,
+                                view = vote.view,
+                                block = %vote.block_hash,
+                                "skipping BlockCreated fallback broadcast after no-roster fail-closed escalation"
                             );
                         }
                     } else {

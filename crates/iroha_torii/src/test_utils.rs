@@ -726,6 +726,11 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 commit_result_queue_cap: defaults::sumeragi::COMMIT_RESULT_QUEUE_CAP,
             },
             recovery: A::SumeragiRecovery {
+                height_attempt_cap: defaults::sumeragi::RECOVERY_HEIGHT_ATTEMPT_CAP,
+                height_window: Duration::from_millis(defaults::sumeragi::RECOVERY_HEIGHT_WINDOW_MS),
+                hash_miss_cap_before_range_pull:
+                    defaults::sumeragi::RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL,
+                no_roster_fallback_views: defaults::sumeragi::RECOVERY_NO_ROSTER_FALLBACK_VIEWS,
                 missing_block_signer_fallback_attempts:
                     defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
                 view_change_backlog_extension_factor:
@@ -745,6 +750,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 ),
                 range_pull_escalation_after_hash_misses:
                     defaults::sumeragi::RANGE_PULL_ESCALATION_AFTER_HASH_MISSES,
+            },
+            fanout: A::SumeragiFanout {
+                large_set_threshold: defaults::sumeragi::FANOUT_LARGE_SET_THRESHOLD,
+                activity_lookback_blocks: defaults::sumeragi::FANOUT_ACTIVITY_LOOKBACK_BLOCKS,
             },
             gating: A::SumeragiGating {
                 future_height_window: defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,

@@ -1114,6 +1114,7 @@ impl Actor {
             true,
         );
         let mut block_sync = false;
+        let mut allow_blockcreated_fallback = true;
         if !drop_pending && !retransmit_targets.is_empty() {
             let mut update = block_sync_update_with_roster(
                 &pending.block,
@@ -1144,12 +1145,28 @@ impl Actor {
                     self.broadcast_block_sync_update(update, &retransmit_targets);
                     block_sync = true;
                 } else {
-                    debug!(
+                    allow_blockcreated_fallback = self.allow_no_roster_fallback_or_fail_closed(
                         height,
                         view,
-                        block = %block_hash,
-                        "skipping block sync update rebroadcast: no verifiable roster"
+                        block_hash,
+                        ViewChangeCause::MissingQc,
+                        "reschedule_rebroadcast_no_roster",
                     );
+                    if allow_blockcreated_fallback {
+                        debug!(
+                            height,
+                            view,
+                            block = %block_hash,
+                            "skipping block sync update rebroadcast: no verifiable roster"
+                        );
+                    } else {
+                        warn!(
+                            height,
+                            view,
+                            block = %block_hash,
+                            "no-roster fallback budget exhausted; parking block rebroadcast"
+                        );
+                    }
                 }
             } else {
                 debug!(
@@ -1165,6 +1182,8 @@ impl Actor {
         // Keep and rebroadcast the pending block so late payload requests can still succeed while
         // allowing a fresh proposal to be assembled from the requeued transactions.
         let block = if drop_pending {
+            false
+        } else if !allow_blockcreated_fallback {
             false
         } else if retransmit_targets.is_empty() {
             false

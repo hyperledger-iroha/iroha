@@ -4783,6 +4783,35 @@ struct SidecarMismatchRecoveryEntry {
     final_dropped: bool,
 }
 
+#[derive(Debug, Clone)]
+struct DeterministicActiveSet {
+    scored: Vec<(PeerId, u64)>,
+}
+
+#[derive(Debug, Clone)]
+struct FanoutCommittee {
+    peers: Vec<PeerId>,
+    required_commit_votes: usize,
+    redundancy_margin: usize,
+}
+
+#[derive(Debug, Clone)]
+struct NoRosterFallbackBudget {
+    allowed_views: BTreeSet<u64>,
+    escalated_views: BTreeSet<u64>,
+    last_seen: Instant,
+}
+
+impl NoRosterFallbackBudget {
+    fn new(now: Instant) -> Self {
+        Self {
+            allowed_views: BTreeSet::new(),
+            escalated_views: BTreeSet::new(),
+            last_seen: now,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct DeterministicRecoveryProfile {
     signer_fallback_attempts: u32,
@@ -4792,6 +4821,7 @@ struct DeterministicRecoveryProfile {
     sidecar_mismatch_retry_cap: u32,
     sidecar_mismatch_ttl: Duration,
     range_pull_escalation_after_hash_misses: u32,
+    no_roster_fallback_views: u32,
 }
 
 struct QcBuildContext {
@@ -4946,6 +4976,7 @@ pub(super) struct Actor {
     dependency_event_seq: u64,
     missing_block_height_recovery:
         BTreeMap<MissingBlockHeightRecoveryKey, MissingBlockHeightRecoveryBudget>,
+    no_roster_fallback_recovery: BTreeMap<MissingBlockHeightRecoveryKey, NoRosterFallbackBudget>,
     sidecar_mismatch_recovery: BTreeMap<u64, SidecarMismatchRecoveryEntry>,
     range_pull_escalation_cooldowns: BTreeMap<(PeerId, u64, u64), Instant>,
     deferred_qcs: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
@@ -4969,6 +5000,7 @@ pub(super) struct Actor {
     highest_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     locked_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     tick_counter: u64,
+    tick_in_progress: bool,
     last_tick_heartbeat_log: Instant,
     tick_timing: TickTimingMonitor,
     tick_timing_thresholds: TickTimingThresholds,
@@ -9661,6 +9693,7 @@ impl Actor {
             consensus_recovery: BTreeMap::new(),
             dependency_event_seq: 0,
             missing_block_height_recovery: BTreeMap::new(),
+            no_roster_fallback_recovery: BTreeMap::new(),
             sidecar_mismatch_recovery: BTreeMap::new(),
             range_pull_escalation_cooldowns: BTreeMap::new(),
             deferred_qcs: BTreeMap::new(),
@@ -9693,6 +9726,7 @@ impl Actor {
             highest_qc: None,
             locked_qc: None,
             tick_counter: 0,
+            tick_in_progress: false,
             last_tick_heartbeat_log: now,
             tick_timing: TickTimingMonitor::new(now),
             tick_timing_thresholds: TickTimingThresholds::default(),
@@ -10689,6 +10723,16 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn tick(&mut self) -> bool {
+        if self.tick_in_progress {
+            warn!(
+                height = self.state.committed_height(),
+                queue_len = self.queue.active_len(),
+                pending_blocks = self.pending.pending_blocks.len(),
+                "detected re-entrant sumeragi tick invocation; skipping nested tick"
+            );
+            return false;
+        }
+        self.tick_in_progress = true;
         let tick_start = Instant::now();
         self.tick_counter = self.tick_counter.saturating_add(1);
         self.hotspot_log_summary.emit_if_due(tick_start);
@@ -11026,6 +11070,7 @@ impl Actor {
                 );
             }
         }
+        self.tick_in_progress = false;
         progress
     }
 
@@ -14546,34 +14591,33 @@ impl Actor {
     }
 
     fn deterministic_recovery_profile(&self) -> DeterministicRecoveryProfile {
-        let world = self.state.world_view();
-        let block_time = self
-            .block_time_for_mode_from_world(&world, self.consensus_mode)
+        let deferred_qc_ttl = self
+            .config
+            .recovery
+            .deferred_qc_ttl
             .max(Duration::from_millis(1));
-        let commit_time = self
-            .commit_timeout_for_mode_from_world(&world, self.consensus_mode)
+        let missing_block_height_ttl = self
+            .config
+            .recovery
+            .height_window
             .max(Duration::from_millis(1));
-        let deferred_qc_ttl = commit_time.saturating_mul(2).max(block_time);
-        let missing_block_height_ttl = deferred_qc_ttl;
-        let retry_window = rebroadcast_cooldown_from_block_time(block_time)
-            .max(REBROADCAST_COOLDOWN_FLOOR)
-            .max(Duration::from_millis(250));
-        let retry_window_ms = retry_window.as_millis().max(1);
-        let ttl_ms = missing_block_height_ttl.as_millis().max(1);
-        let windows_ceil =
-            ttl_ms.saturating_add(retry_window_ms.saturating_sub(1)) / retry_window_ms;
-        let attempt_cap = u32::try_from(windows_ceil.saturating_mul(2))
-            .unwrap_or(u32::MAX)
-            .max(16);
-
         DeterministicRecoveryProfile {
-            signer_fallback_attempts: 1,
+            signer_fallback_attempts: self.config.recovery.missing_block_signer_fallback_attempts,
             deferred_qc_ttl,
             missing_block_height_ttl,
-            missing_block_height_attempt_cap: attempt_cap,
-            sidecar_mismatch_retry_cap: 8,
-            sidecar_mismatch_ttl: deferred_qc_ttl,
-            range_pull_escalation_after_hash_misses: 3,
+            missing_block_height_attempt_cap: self.config.recovery.height_attempt_cap.max(1),
+            sidecar_mismatch_retry_cap: self.config.recovery.sidecar_mismatch_retry_cap.max(1),
+            sidecar_mismatch_ttl: self
+                .config
+                .recovery
+                .sidecar_mismatch_ttl
+                .max(Duration::from_millis(1)),
+            range_pull_escalation_after_hash_misses: self
+                .config
+                .recovery
+                .hash_miss_cap_before_range_pull
+                .max(1),
+            no_roster_fallback_views: self.config.recovery.no_roster_fallback_views,
         }
     }
 
@@ -14608,6 +14652,11 @@ impl Actor {
     fn recovery_range_pull_escalation_after_hash_misses(&self) -> u32 {
         self.deterministic_recovery_profile()
             .range_pull_escalation_after_hash_misses
+    }
+
+    fn recovery_no_roster_fallback_views(&self) -> u32 {
+        self.deterministic_recovery_profile()
+            .no_roster_fallback_views
     }
 
     fn relay_backpressure_active(&mut self, now: Instant, cooldown: Duration) -> bool {
@@ -14748,6 +14797,12 @@ impl Actor {
             }
             retain
         });
+        let had_no_roster = self
+            .no_roster_fallback_recovery
+            .keys()
+            .any(|key| key.height == height);
+        self.clear_no_roster_fallback_for_height(height);
+        cleared_any |= had_no_roster;
         if cleared_any {
             self.note_missing_block_dependency_event(now);
         }
@@ -14774,6 +14829,230 @@ impl Actor {
             }
             now.saturating_duration_since(entry.last_seen) <= sidecar_expiry
         });
+        self.no_roster_fallback_recovery.retain(|key, entry| {
+            key.height > committed_height
+                && now.saturating_duration_since(entry.last_seen) <= ttl.saturating_mul(8)
+        });
+    }
+
+    fn clear_no_roster_fallback_for_height(&mut self, height: u64) {
+        self.no_roster_fallback_recovery
+            .retain(|key, _| key.height != height);
+    }
+
+    fn allow_no_roster_fallback_for_round(
+        &mut self,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> (bool, u32) {
+        let allowed_views =
+            usize::try_from(self.recovery_no_roster_fallback_views()).unwrap_or(usize::MAX);
+        if allowed_views == 0 {
+            return (false, 0);
+        }
+        let key = self.missing_block_recovery_key_for_height(height);
+        let budget = self
+            .no_roster_fallback_recovery
+            .entry(key)
+            .or_insert_with(|| NoRosterFallbackBudget::new(now));
+        budget.last_seen = now;
+        if budget.allowed_views.contains(&view) {
+            let remaining = allowed_views.saturating_sub(budget.allowed_views.len());
+            let remaining = u32::try_from(remaining).unwrap_or(u32::MAX);
+            return (true, remaining);
+        }
+        if budget.allowed_views.len() < allowed_views {
+            budget.allowed_views.insert(view);
+            super::status::inc_consensus_no_roster_fallback();
+            let remaining = allowed_views.saturating_sub(budget.allowed_views.len());
+            let remaining = u32::try_from(remaining).unwrap_or(u32::MAX);
+            return (true, remaining);
+        }
+        (false, 0)
+    }
+
+    fn escalate_no_roster_fail_closed(
+        &mut self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        cause: ViewChangeCause,
+        reason: &'static str,
+        now: Instant,
+    ) {
+        let key = self.missing_block_recovery_key_for_height(height);
+        let budget = self
+            .no_roster_fallback_recovery
+            .entry(key)
+            .or_insert_with(|| NoRosterFallbackBudget::new(now));
+        budget.last_seen = now;
+        if !budget.escalated_views.insert(view) {
+            return;
+        }
+        super::status::inc_consensus_no_roster_fail_closed();
+        let _ = self.request_range_pull_from_anchor(height, "no_roster_fail_closed", now);
+        if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
+            self.request_missing_block_for_highest_qc_force(highest, "no_roster_fail_closed");
+        }
+        self.trigger_view_change_with_cause(height, view, cause);
+        warn!(
+            height,
+            view,
+            epoch = key.epoch,
+            block = %block_hash,
+            reason,
+            budget_remaining = 0_u32,
+            "no-roster fallback budget exhausted; fail-closed recovery escalation"
+        );
+    }
+
+    fn allow_no_roster_fallback_or_fail_closed(
+        &mut self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        cause: ViewChangeCause,
+        reason: &'static str,
+    ) -> bool {
+        let now = Instant::now();
+        let (allowed, budget_remaining) =
+            self.allow_no_roster_fallback_for_round(height, view, now);
+        if allowed {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                budget_remaining,
+                reason,
+                "allowing bounded no-roster fallback broadcast"
+            );
+            return true;
+        }
+        self.escalate_no_roster_fail_closed(height, view, block_hash, cause, reason, now);
+        false
+    }
+
+    fn deterministic_active_set_from_commit_evidence(
+        &self,
+        peers: &[PeerId],
+        lookback_blocks: u32,
+    ) -> DeterministicActiveSet {
+        let mut scores: BTreeMap<PeerId, u64> = BTreeMap::new();
+        if peers.is_empty() {
+            return DeterministicActiveSet { scored: Vec::new() };
+        }
+        let tracked: BTreeSet<_> = peers.iter().cloned().collect();
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let lookback = u64::from(lookback_blocks.max(1));
+        let min_height = committed_height.saturating_sub(lookback.saturating_sub(1));
+        let snapshots = self.state.commit_roster_journal.read().snapshots();
+        for snapshot in snapshots {
+            let qc = snapshot.commit_qc;
+            if qc.height < min_height || qc.height > committed_height {
+                continue;
+            }
+            let roster = qc.validator_set;
+            if roster.is_empty() {
+                continue;
+            }
+            let Ok(parsed) =
+                parse_signers_bitmap(&qc.aggregate.signers_bitmap, roster.len(), roster.len())
+            else {
+                continue;
+            };
+            for signer in parsed.voting {
+                let Ok(idx) = usize::try_from(signer) else {
+                    continue;
+                };
+                let Some(peer) = roster.get(idx) else {
+                    continue;
+                };
+                if !tracked.contains(peer) {
+                    continue;
+                }
+                let score = scores.entry(peer.clone()).or_insert(0);
+                *score = score.saturating_add(1);
+            }
+        }
+        let mut scored: Vec<_> = scores.into_iter().collect();
+        scored.sort_by(|(lhs_peer, lhs_score), (rhs_peer, rhs_score)| {
+            rhs_score
+                .cmp(lhs_score)
+                .then_with(|| lhs_peer.public_key().cmp(rhs_peer.public_key()))
+                .then_with(|| lhs_peer.cmp(rhs_peer))
+        });
+        DeterministicActiveSet { scored }
+    }
+
+    fn deterministic_fanout_committee_for_round(
+        &self,
+        peers: &[PeerId],
+        lookback_blocks: u32,
+    ) -> FanoutCommittee {
+        let topology = super::network_topology::Topology::new(peers.to_vec());
+        let required_commit_votes = topology.min_votes_for_commit();
+        let redundancy_margin = std::cmp::max(2, required_commit_votes.saturating_add(9) / 10);
+        let active_set = self.deterministic_active_set_from_commit_evidence(peers, lookback_blocks);
+        let mut ranked: Vec<PeerId> = active_set
+            .scored
+            .into_iter()
+            .map(|(peer, _)| peer)
+            .collect();
+        if ranked.is_empty() {
+            ranked = peers.to_vec();
+            ranked.sort_by(|lhs, rhs| {
+                lhs.public_key()
+                    .cmp(rhs.public_key())
+                    .then_with(|| lhs.cmp(rhs))
+            });
+        }
+        let committee_size = required_commit_votes
+            .saturating_add(redundancy_margin)
+            .min(ranked.len());
+        FanoutCommittee {
+            peers: ranked.into_iter().take(committee_size).collect(),
+            required_commit_votes,
+            redundancy_margin,
+        }
+    }
+
+    pub(super) fn transport_fanout_targets_for_round(
+        &mut self,
+        peers: &[PeerId],
+        height: u64,
+        view: u64,
+        reason: &'static str,
+    ) -> Vec<PeerId> {
+        let threshold =
+            usize::try_from(self.config.fanout.large_set_threshold.max(1)).unwrap_or(usize::MAX);
+        if peers.len() <= threshold {
+            super::status::set_consensus_deterministic_committee_size(
+                u64::try_from(peers.len()).unwrap_or(u64::MAX),
+            );
+            return peers.to_vec();
+        }
+        let committee = self.deterministic_fanout_committee_for_round(
+            peers,
+            self.config.fanout.activity_lookback_blocks,
+        );
+        let committee_size = u64::try_from(committee.peers.len()).unwrap_or(u64::MAX);
+        super::status::set_consensus_deterministic_committee_size(committee_size);
+        debug!(
+            height,
+            view,
+            reason,
+            validator_set_size = peers.len(),
+            committee_size = committee.peers.len(),
+            required_commit_votes = committee.required_commit_votes,
+            redundancy_margin = committee.redundancy_margin,
+            "using deterministic active committee for transport fanout"
+        );
+        if committee.peers.is_empty() {
+            peers.to_vec()
+        } else {
+            committee.peers
+        }
     }
 
     fn range_pull_targets_for_height(&self, height: u64) -> Vec<PeerId> {

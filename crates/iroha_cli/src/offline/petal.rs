@@ -583,6 +583,7 @@ impl PetalEvalCaptureArgs {
             self.profile,
             self.seed,
             trials_per_frame,
+            Some(self.min_success_ratio),
         )?;
 
         let report = metrics.to_json(
@@ -907,6 +908,7 @@ impl PetalScoreStylesArgs {
                 self.profile,
                 self.seed,
                 trials_per_frame,
+                None,
             )?;
             let aesthetic_score = images
                 .first()
@@ -3201,6 +3203,7 @@ struct CaptureScenarioMetrics {
 struct CaptureEvalMetrics {
     frame_count: usize,
     frame_successes: usize,
+    planned_attempts: u64,
     attempts: u64,
     successes: u64,
     recovered_frames: usize,
@@ -3212,10 +3215,10 @@ struct CaptureEvalMetrics {
 
 impl CaptureEvalMetrics {
     fn success_ratio(&self) -> f64 {
-        if self.attempts == 0 {
+        if self.planned_attempts == 0 {
             return 0.0;
         }
-        self.successes as f64 / self.attempts as f64
+        self.successes as f64 / self.planned_attempts as f64
     }
 
     fn frame_success_ratio(&self) -> f64 {
@@ -3261,10 +3264,18 @@ impl CaptureEvalMetrics {
             Value::from(self.frame_success_ratio()),
         );
         map.insert("attempts".to_string(), Value::from(self.attempts));
+        map.insert(
+            "planned_attempts".to_string(),
+            Value::from(self.planned_attempts),
+        );
         map.insert("successes".to_string(), Value::from(self.successes));
         map.insert(
             "success_ratio".to_string(),
             Value::from(self.success_ratio()),
+        );
+        map.insert(
+            "aborted_early".to_string(),
+            Value::from(self.attempts < self.planned_attempts),
         );
         map.insert(
             "recovered_frames".to_string(),
@@ -3915,6 +3926,7 @@ fn evaluate_capture_robustness(
     profile: PetalCaptureProfile,
     seed: u64,
     trials_per_frame: u16,
+    fail_fast_min_success_ratio: Option<f64>,
 ) -> Result<CaptureEvalMetrics> {
     if images.len() != expected_bytes.len() {
         return Err(eyre!("frame/image length mismatch"));
@@ -3934,10 +3946,13 @@ fn evaluate_capture_robustness(
 
     let mut attempts = 0u64;
     let mut successes = 0u64;
+    let planned_attempts = images.len() as u64 * u64::from(trials_per_frame);
     let mut frame_successes = 0usize;
     let mut recovered = vec![None; images.len()];
     let search_radius = capture_alignment_search_radius(profile);
-    for (frame_index, (image, expected)) in images.iter().zip(expected_bytes.iter()).enumerate() {
+    'frames: for (frame_index, (image, expected)) in
+        images.iter().zip(expected_bytes.iter()).enumerate()
+    {
         let mut frame_ok = false;
         for trial in 0..trials_per_frame {
             let scenario_idx = (frame_index + usize::from(trial)) % scenarios.len();
@@ -3961,6 +3976,14 @@ fn evaluate_capture_robustness(
                 scenario_metrics[scenario_idx].successes += 1;
                 recovered[frame_index] = Some(expected.clone());
             }
+            if let Some(min_success_ratio) = fail_fast_min_success_ratio {
+                let remaining_attempts = planned_attempts.saturating_sub(attempts);
+                let best_possible_success_ratio =
+                    (successes + remaining_attempts) as f64 / planned_attempts as f64;
+                if best_possible_success_ratio + f64::EPSILON < min_success_ratio {
+                    break 'frames;
+                }
+            }
         }
         if frame_ok {
             frame_successes += 1;
@@ -3974,6 +3997,7 @@ fn evaluate_capture_robustness(
     Ok(CaptureEvalMetrics {
         frame_count: images.len(),
         frame_successes,
+        planned_attempts,
         attempts,
         successes,
         recovered_frames,
@@ -4382,6 +4406,7 @@ mod tests {
         CaptureEvalMetrics {
             frame_count,
             frame_successes: frame_count,
+            planned_attempts: attempts,
             attempts,
             successes,
             recovered_frames: frame_count,
@@ -4890,6 +4915,7 @@ mod tests {
             PetalCaptureProfile::Default,
             42,
             2,
+            None,
         )
         .expect("evaluate capture");
         assert!(
@@ -5064,6 +5090,7 @@ mod tests {
             PetalCaptureProfile::Default,
             1337,
             2,
+            None,
         )
         .expect("evaluate");
         assert_eq!(metrics.frame_count, frame_bytes.len());
