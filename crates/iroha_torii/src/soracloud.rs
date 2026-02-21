@@ -667,6 +667,245 @@ impl Registry {
         })
     }
 
+    pub(crate) async fn apply_rollout(
+        &self,
+        request: SignedRolloutAdvanceRequest,
+    ) -> Result<RolloutResponse, SoracloudError> {
+        verify_rollout_signature(&request)?;
+
+        let service_name: Name =
+            request.payload.service_name.parse().map_err(|err| {
+                SoracloudError::bad_request(format!("invalid service_name: {err}"))
+            })?;
+        if request.payload.rollout_handle.trim().is_empty() {
+            return Err(SoracloudError::bad_request(
+                "rollout_handle must not be empty",
+            ));
+        }
+        if request
+            .payload
+            .promote_to_percent
+            .is_some_and(|value| value > 100)
+        {
+            return Err(SoracloudError::bad_request(
+                "promote_to_percent must be within 0..=100",
+            ));
+        }
+
+        let service_name = service_name.to_string();
+        let signer = request.provenance.signer.to_string();
+        let rollout_handle = request.payload.rollout_handle.clone();
+        let governance_tx_hash = request.payload.governance_tx_hash;
+        let mut state = self.state.write().await;
+        ensure_registry_schema(&state)?;
+        let sequence = state.next_sequence;
+
+        let (mut response, audit_event) = {
+            let entry = state.services.get_mut(&service_name).ok_or_else(|| {
+                SoracloudError::not_found(format!(
+                    "service `{service_name}` not found in control-plane registry"
+                ))
+            })?;
+
+            let mut rollout = entry.active_rollout.clone().ok_or_else(|| {
+                SoracloudError::conflict(format!(
+                    "service `{service_name}` has no active rollout to advance"
+                ))
+            })?;
+            if rollout.rollout_handle != rollout_handle {
+                return Err(SoracloudError::conflict(format!(
+                    "service `{service_name}` active rollout handle mismatch (expected `{}`)",
+                    rollout.rollout_handle
+                )));
+            }
+
+            if request.payload.healthy {
+                let promote_to = request.payload.promote_to_percent.unwrap_or(100);
+                if promote_to < rollout.traffic_percent {
+                    return Err(SoracloudError::conflict(format!(
+                        "rollout traffic cannot decrease from {} to {promote_to}",
+                        rollout.traffic_percent
+                    )));
+                }
+                if promote_to < rollout.canary_percent {
+                    return Err(SoracloudError::conflict(format!(
+                        "rollout traffic cannot be below canary_percent {}",
+                        rollout.canary_percent
+                    )));
+                }
+                rollout.traffic_percent = promote_to;
+                rollout.stage = if promote_to >= 100 {
+                    RolloutStage::Promoted
+                } else {
+                    RolloutStage::Canary
+                };
+                rollout.health_failures = 0;
+                rollout.updated_sequence = sequence;
+
+                if rollout.stage == RolloutStage::Promoted {
+                    entry.active_rollout = None;
+                } else {
+                    entry.active_rollout = Some(rollout.clone());
+                }
+                entry.last_rollout = Some(rollout.clone());
+
+                let current_version = entry.current_version.clone();
+                let current_revision = entry.revisions.last().cloned().ok_or_else(|| {
+                    SoracloudError::conflict(format!(
+                        "service `{service_name}` has no active revision"
+                    ))
+                })?;
+                let audit_event = RegistryAuditEvent {
+                    sequence,
+                    action: SoracloudAction::Rollout,
+                    service_name: service_name.clone(),
+                    from_version: Some(current_version.clone()),
+                    to_version: current_version.clone(),
+                    service_manifest_hash: current_revision.service_manifest_hash,
+                    container_manifest_hash: current_revision.container_manifest_hash,
+                    binding_name: None,
+                    state_key: None,
+                    governance_tx_hash: Some(governance_tx_hash),
+                    rollout_handle: Some(rollout_handle.clone()),
+                    signed_by: signer.clone(),
+                };
+                let response = RolloutResponse {
+                    action: SoracloudAction::Rollout,
+                    service_name: service_name.clone(),
+                    rollout_handle: rollout_handle.clone(),
+                    stage: rollout.stage,
+                    current_version,
+                    traffic_percent: rollout.traffic_percent,
+                    health_failures: rollout.health_failures,
+                    max_health_failures: rollout.max_health_failures,
+                    sequence,
+                    governance_tx_hash,
+                    audit_event_count: 0,
+                    signed_by: signer.clone(),
+                };
+                (response, audit_event)
+            } else {
+                rollout.health_failures = rollout.health_failures.saturating_add(1);
+                rollout.updated_sequence = sequence;
+
+                if rollout.health_failures >= rollout.max_health_failures {
+                    let baseline_version = rollout.baseline_version.clone().ok_or_else(|| {
+                        SoracloudError::conflict(format!(
+                            "service `{service_name}` has no baseline version for auto rollback"
+                        ))
+                    })?;
+                    let previous_version = entry.current_version.clone();
+                    let target = entry
+                        .revisions
+                        .iter()
+                        .rev()
+                        .find(|revision| revision.service_version == baseline_version)
+                        .cloned()
+                        .ok_or_else(|| {
+                            SoracloudError::not_found(format!(
+                                "service `{service_name}` missing baseline revision `{baseline_version}`"
+                            ))
+                        })?;
+
+                    let rollback_revision = RegistryServiceRevision {
+                        sequence,
+                        action: SoracloudAction::Rollback,
+                        service_version: target.service_version.clone(),
+                        service_manifest_hash: target.service_manifest_hash,
+                        container_manifest_hash: target.container_manifest_hash,
+                        replicas: target.replicas,
+                        route_host: target.route_host.clone(),
+                        route_path_prefix: target.route_path_prefix.clone(),
+                        state_binding_count: target.state_binding_count,
+                        state_bindings: target.state_bindings.clone(),
+                        signed_by: signer.clone(),
+                    };
+                    entry.current_version = target.service_version.clone();
+                    sync_binding_states(entry, &target.state_bindings);
+                    entry.revisions.push(rollback_revision);
+
+                    rollout.stage = RolloutStage::RolledBack;
+                    rollout.traffic_percent = 0;
+                    entry.active_rollout = None;
+                    entry.last_rollout = Some(rollout.clone());
+
+                    let audit_event = RegistryAuditEvent {
+                        sequence,
+                        action: SoracloudAction::Rollback,
+                        service_name: service_name.clone(),
+                        from_version: Some(previous_version),
+                        to_version: target.service_version.clone(),
+                        service_manifest_hash: target.service_manifest_hash,
+                        container_manifest_hash: target.container_manifest_hash,
+                        binding_name: None,
+                        state_key: None,
+                        governance_tx_hash: Some(governance_tx_hash),
+                        rollout_handle: Some(rollout_handle.clone()),
+                        signed_by: signer.clone(),
+                    };
+                    let response = RolloutResponse {
+                        action: SoracloudAction::Rollback,
+                        service_name: service_name.clone(),
+                        rollout_handle: rollout_handle.clone(),
+                        stage: rollout.stage,
+                        current_version: target.service_version,
+                        traffic_percent: rollout.traffic_percent,
+                        health_failures: rollout.health_failures,
+                        max_health_failures: rollout.max_health_failures,
+                        sequence,
+                        governance_tx_hash,
+                        audit_event_count: 0,
+                        signed_by: signer.clone(),
+                    };
+                    (response, audit_event)
+                } else {
+                    entry.active_rollout = Some(rollout.clone());
+                    entry.last_rollout = Some(rollout.clone());
+                    let current_version = entry.current_version.clone();
+                    let current_revision = entry.revisions.last().cloned().ok_or_else(|| {
+                        SoracloudError::conflict(format!(
+                            "service `{service_name}` has no active revision"
+                        ))
+                    })?;
+                    let audit_event = RegistryAuditEvent {
+                        sequence,
+                        action: SoracloudAction::Rollout,
+                        service_name: service_name.clone(),
+                        from_version: Some(current_version.clone()),
+                        to_version: current_version.clone(),
+                        service_manifest_hash: current_revision.service_manifest_hash,
+                        container_manifest_hash: current_revision.container_manifest_hash,
+                        binding_name: None,
+                        state_key: None,
+                        governance_tx_hash: Some(governance_tx_hash),
+                        rollout_handle: Some(rollout_handle.clone()),
+                        signed_by: signer.clone(),
+                    };
+                    let response = RolloutResponse {
+                        action: SoracloudAction::Rollout,
+                        service_name: service_name.clone(),
+                        rollout_handle: rollout_handle.clone(),
+                        stage: rollout.stage,
+                        current_version,
+                        traffic_percent: rollout.traffic_percent,
+                        health_failures: rollout.health_failures,
+                        max_health_failures: rollout.max_health_failures,
+                        sequence,
+                        governance_tx_hash,
+                        audit_event_count: 0,
+                        signed_by: signer.clone(),
+                    };
+                    (response, audit_event)
+                }
+            }
+        };
+
+        state.audit_log.push(audit_event);
+        state.next_sequence = state.next_sequence.saturating_add(1);
+        response.audit_event_count = u32::try_from(state.audit_log.len()).unwrap_or(u32::MAX);
+        Ok(response)
+    }
+
     async fn apply_bundle_mutation(
         &self,
         mode: MutationMode,
@@ -738,6 +977,9 @@ impl Registry {
             signed_by: signer.clone(),
         };
 
+        let mut response_rollout_handle = None;
+        let mut response_rollout_stage = None;
+        let mut response_rollout_percent = None;
         let revision_count = {
             let entry = state
                 .services
@@ -746,10 +988,55 @@ impl Registry {
                     current_version: service_version.clone(),
                     revisions: Vec::new(),
                     binding_states: BTreeMap::new(),
+                    active_rollout: None,
+                    last_rollout: None,
                 });
             entry.current_version = service_version.clone();
             sync_binding_states(entry, &request.bundle.service.state_bindings);
             entry.revisions.push(revision);
+
+            if action == SoracloudAction::Upgrade {
+                let canary_percent = request.bundle.service.rollout.canary_percent.min(100);
+                let traffic_percent = if canary_percent == 0 {
+                    100
+                } else {
+                    canary_percent
+                };
+                let rollout_state = RolloutRuntimeState {
+                    rollout_handle: rollout_handle(&service_name, sequence),
+                    baseline_version: previous_version.clone(),
+                    candidate_version: service_version.clone(),
+                    canary_percent,
+                    traffic_percent,
+                    stage: if traffic_percent >= 100 {
+                        RolloutStage::Promoted
+                    } else {
+                        RolloutStage::Canary
+                    },
+                    health_failures: 0,
+                    max_health_failures: request
+                        .bundle
+                        .service
+                        .rollout
+                        .automatic_rollback_failures
+                        .get(),
+                    health_window_secs: request.bundle.service.rollout.health_window_secs.get(),
+                    created_sequence: sequence,
+                    updated_sequence: sequence,
+                };
+                response_rollout_handle = Some(rollout_state.rollout_handle.clone());
+                response_rollout_stage = Some(rollout_state.stage);
+                response_rollout_percent = Some(rollout_state.traffic_percent);
+                if rollout_state.stage == RolloutStage::Promoted {
+                    entry.active_rollout = None;
+                } else {
+                    entry.active_rollout = Some(rollout_state.clone());
+                }
+                entry.last_rollout = Some(rollout_state);
+            } else {
+                entry.active_rollout = None;
+                entry.last_rollout = None;
+            }
             u32::try_from(entry.revisions.len()).unwrap_or(u32::MAX)
         };
 
@@ -764,6 +1051,7 @@ impl Registry {
             binding_name: None,
             state_key: None,
             governance_tx_hash: None,
+            rollout_handle: response_rollout_handle.clone(),
             signed_by: signer.clone(),
         });
         state.next_sequence = state.next_sequence.saturating_add(1);
@@ -780,6 +1068,9 @@ impl Registry {
             revision_count,
             audit_event_count,
             signed_by: signer,
+            rollout_handle: response_rollout_handle,
+            rollout_stage: response_rollout_stage,
+            rollout_percent: response_rollout_percent,
         })
     }
 }
@@ -896,6 +1187,10 @@ fn ensure_registry_schema(state: &RegistryState) -> Result<(), SoracloudError> {
     Ok(())
 }
 
+fn rollout_handle(service_name: &str, sequence: u64) -> String {
+    format!("{service_name}:rollout:{sequence}")
+}
+
 fn verify_bundle_signature(request: &SignedBundleRequest) -> Result<(), SoracloudError> {
     let payload = norito::to_bytes(&request.bundle).map_err(|err| {
         SoracloudError::internal(format!("failed to encode bundle payload: {err}"))
@@ -940,6 +1235,20 @@ fn verify_state_mutation_signature(
     Ok(())
 }
 
+fn verify_rollout_signature(request: &SignedRolloutAdvanceRequest) -> Result<(), SoracloudError> {
+    let payload = norito::to_bytes(&request.payload).map_err(|err| {
+        SoracloudError::internal(format!("failed to encode rollout payload: {err}"))
+    })?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized("rollout provenance signature verification failed")
+        })?;
+    Ok(())
+}
+
 pub(crate) async fn handle_deploy(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
@@ -980,6 +1289,21 @@ pub(crate) async fn handle_rollback(
     }
 
     match app.soracloud_registry.apply_rollback(request).await {
+        Ok(response) => JsonBody(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_rollout(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedRolloutAdvanceRequest>,
+) -> Response {
+    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/rollout").await {
+        return err.into_response();
+    }
+
+    match app.soracloud_registry.apply_rollout(request).await {
         Ok(response) => JsonBody(response).into_response(),
         Err(err) => err.into_response(),
     }
@@ -1111,6 +1435,32 @@ mod tests {
         let encoded = norito::to_bytes(&payload).expect("encode state mutation payload");
         let signature = Signature::new(key_pair.private_key(), &encoded);
         SignedStateMutationRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn signed_rollout_request(
+        service_name: &str,
+        rollout_handle: &str,
+        healthy: bool,
+        promote_to_percent: Option<u8>,
+        governance_seed: &[u8],
+        key_pair: &KeyPair,
+    ) -> SignedRolloutAdvanceRequest {
+        let payload = RolloutAdvancePayload {
+            service_name: service_name.to_string(),
+            rollout_handle: rollout_handle.to_string(),
+            healthy,
+            promote_to_percent,
+            governance_tx_hash: Hash::new(governance_seed),
+        };
+        let encoded = norito::to_bytes(&payload).expect("encode rollout payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedRolloutAdvanceRequest {
             payload,
             provenance: ManifestProvenance {
                 signer: key_pair.public_key().clone(),
@@ -1282,5 +1632,126 @@ mod tests {
             .await
             .expect_err("wrong prefix must fail");
         assert_eq!(prefix_err.kind, SoracloudErrorKind::Conflict);
+    }
+
+    #[tokio::test]
+    async fn rollout_canary_advances_and_closes_on_full_promotion() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+        registry
+            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
+            .await
+            .expect("deploy");
+
+        let upgraded = registry
+            .apply_upgrade(signed_bundle_request(fixture_bundle("1.1.0"), &key_pair))
+            .await
+            .expect("upgrade");
+        let handle = upgraded
+            .rollout_handle
+            .clone()
+            .expect("upgrade should provide rollout handle");
+        assert_eq!(upgraded.rollout_stage, Some(RolloutStage::Canary));
+        assert_eq!(upgraded.rollout_percent, Some(20));
+
+        let canary = registry
+            .apply_rollout(signed_rollout_request(
+                "web_portal",
+                &handle,
+                true,
+                Some(50),
+                b"rollout-canary-1",
+                &key_pair,
+            ))
+            .await
+            .expect("canary advance");
+        assert_eq!(canary.action, SoracloudAction::Rollout);
+        assert_eq!(canary.stage, RolloutStage::Canary);
+        assert_eq!(canary.traffic_percent, 50);
+
+        let promoted = registry
+            .apply_rollout(signed_rollout_request(
+                "web_portal",
+                &handle,
+                true,
+                None,
+                b"rollout-promote-2",
+                &key_pair,
+            ))
+            .await
+            .expect("promotion");
+        assert_eq!(promoted.action, SoracloudAction::Rollout);
+        assert_eq!(promoted.stage, RolloutStage::Promoted);
+        assert_eq!(promoted.traffic_percent, 100);
+
+        let snapshot = registry.snapshot(Some("web_portal"), 10).await;
+        let service = snapshot.services.first().expect("service exists");
+        assert!(
+            service.active_rollout.is_none(),
+            "promoted rollout should close"
+        );
+        assert_eq!(
+            service.last_rollout.as_ref().map(|rollout| rollout.stage),
+            Some(RolloutStage::Promoted)
+        );
+    }
+
+    #[tokio::test]
+    async fn rollout_auto_rolls_back_after_health_failures() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+        registry
+            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
+            .await
+            .expect("deploy");
+        let upgraded = registry
+            .apply_upgrade(signed_bundle_request(fixture_bundle("1.1.0"), &key_pair))
+            .await
+            .expect("upgrade");
+        let handle = upgraded
+            .rollout_handle
+            .clone()
+            .expect("upgrade should provide rollout handle");
+
+        for index in 0..2 {
+            let response = registry
+                .apply_rollout(signed_rollout_request(
+                    "web_portal",
+                    &handle,
+                    false,
+                    None,
+                    format!("rollout-fail-{index}").as_bytes(),
+                    &key_pair,
+                ))
+                .await
+                .expect("pre-threshold health failure");
+            assert_eq!(response.action, SoracloudAction::Rollout);
+            assert_eq!(response.stage, RolloutStage::Canary);
+        }
+
+        let rollback = registry
+            .apply_rollout(signed_rollout_request(
+                "web_portal",
+                &handle,
+                false,
+                None,
+                b"rollout-fail-terminal",
+                &key_pair,
+            ))
+            .await
+            .expect("terminal health failure should rollback");
+        assert_eq!(rollback.action, SoracloudAction::Rollback);
+        assert_eq!(rollback.stage, RolloutStage::RolledBack);
+        assert_eq!(rollback.current_version, "1.0.0");
+        assert_eq!(rollback.traffic_percent, 0);
+
+        let snapshot = registry.snapshot(Some("web_portal"), 10).await;
+        let service = snapshot.services.first().expect("service exists");
+        assert_eq!(service.current_version, "1.0.0");
+        assert!(service.active_rollout.is_none());
+        assert_eq!(
+            service.last_rollout.as_ref().map(|rollout| rollout.stage),
+            Some(RolloutStage::RolledBack)
+        );
     }
 }
