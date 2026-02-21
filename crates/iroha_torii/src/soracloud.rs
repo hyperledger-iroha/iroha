@@ -17,7 +17,8 @@ use iroha_data_model::{
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
-        SoraDeploymentBundleV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+        AgentApartmentManifestV1, SoraDeploymentBundleV1, SoraStateBindingV1,
+        SoraStateEncryptionV1, SoraStateMutabilityV1,
     },
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
@@ -28,6 +29,10 @@ use crate::{JsonBody, NoritoJson, NoritoQuery, SharedAppState};
 const REGISTRY_SCHEMA_VERSION: u16 = 1;
 const DEFAULT_AUDIT_LIMIT: usize = 20;
 const MAX_AUDIT_LIMIT: usize = 500;
+const AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS: u64 = 1_000;
+const AGENT_AUTONOMY_MAX_HASH_BYTES: usize = 256;
+const AGENT_AUTONOMY_MAX_LABEL_BYTES: usize = 128;
+const AGENT_AUTONOMY_RECENT_RUN_LIMIT: usize = 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "action", content = "value")]
@@ -37,6 +42,42 @@ pub(crate) enum SoracloudAction {
     Rollback,
     StateMutation,
     Rollout,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+)]
+#[norito(tag = "action", content = "value")]
+pub(crate) enum AgentApartmentAction {
+    Deploy,
+    PolicyRevoked,
+    ArtifactAllowed,
+    AutonomyRunApproved,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+)]
+#[norito(tag = "status", content = "value")]
+pub(crate) enum AgentRuntimeStatus {
+    Running,
+    LeaseExpired,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,6 +174,64 @@ pub(crate) struct SignedRolloutAdvanceRequest {
     pub provenance: ManifestProvenance,
 }
 
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct AgentDeployPayload {
+    pub manifest: AgentApartmentManifestV1,
+    pub lease_ticks: u64,
+    #[norito(default)]
+    pub autonomy_budget_units: Option<u64>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedAgentDeployRequest {
+    pub payload: AgentDeployPayload,
+    pub provenance: ManifestProvenance,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct AgentPolicyRevokePayload {
+    pub apartment_name: String,
+    pub capability: String,
+    #[norito(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedAgentPolicyRevokeRequest {
+    pub payload: AgentPolicyRevokePayload,
+    pub provenance: ManifestProvenance,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct AgentArtifactAllowPayload {
+    pub apartment_name: String,
+    pub artifact_hash: String,
+    #[norito(default)]
+    pub provenance_hash: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedAgentArtifactAllowRequest {
+    pub payload: AgentArtifactAllowPayload,
+    pub provenance: ManifestProvenance,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct AgentAutonomyRunPayload {
+    pub apartment_name: String,
+    pub artifact_hash: String,
+    #[norito(default)]
+    pub provenance_hash: Option<String>,
+    pub budget_units: u64,
+    pub run_label: String,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedAgentAutonomyRunRequest {
+    pub payload: AgentAutonomyRunPayload,
+    pub provenance: ManifestProvenance,
+}
+
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub(crate) struct RolloutResponse {
     pub action: SoracloudAction,
@@ -171,6 +270,11 @@ pub(crate) struct RegistryStatusQuery {
     pub service_name: Option<String>,
     #[norito(default)]
     pub audit_limit: Option<u32>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize)]
+pub(crate) struct AgentAutonomyStatusQuery {
+    pub apartment_name: String,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -232,6 +336,10 @@ struct RegistryState {
     services: BTreeMap<String, RegistryServiceEntry>,
     #[norito(default)]
     audit_log: Vec<RegistryAuditEvent>,
+    #[norito(default)]
+    apartments: BTreeMap<String, AgentApartmentRuntimeState>,
+    #[norito(default)]
+    apartment_audit_log: Vec<AgentApartmentAuditEvent>,
 }
 
 impl Default for RegistryState {
@@ -241,6 +349,8 @@ impl Default for RegistryState {
             next_sequence: 1,
             services: BTreeMap::new(),
             audit_log: Vec::new(),
+            apartments: BTreeMap::new(),
+            apartment_audit_log: Vec::new(),
         }
     }
 }
@@ -312,6 +422,64 @@ struct BindingRuntimeState {
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentArtifactAllowRule {
+    artifact_hash: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    provenance_hash: Option<String>,
+    added_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentApartmentRuntimeState {
+    manifest: AgentApartmentManifestV1,
+    manifest_hash: Hash,
+    status: AgentRuntimeStatus,
+    deployed_sequence: u64,
+    lease_expires_sequence: u64,
+    #[norito(default)]
+    revoked_policy_capabilities: BTreeSet<String>,
+    autonomy_budget_ceiling_units: u64,
+    autonomy_budget_remaining_units: u64,
+    #[norito(default)]
+    artifact_allowlist: BTreeMap<String, AgentArtifactAllowRule>,
+    #[norito(default)]
+    autonomy_run_history: Vec<AgentAutonomyRunRecord>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentApartmentAuditEvent {
+    sequence: u64,
+    action: AgentApartmentAction,
+    apartment_name: String,
+    status: AgentRuntimeStatus,
+    lease_expires_sequence: u64,
+    manifest_hash: Hash,
+    signed_by: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    capability: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    artifact_hash: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    provenance_hash: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    run_id: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    run_label: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    budget_units: Option<u64>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub(crate) struct RolloutRuntimeState {
     pub rollout_handle: String,
     #[norito(default)]
@@ -326,6 +494,108 @@ pub(crate) struct RolloutRuntimeState {
     pub health_window_secs: u32,
     pub created_sequence: u64,
     pub updated_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct AgentMutationResponse {
+    pub action: AgentApartmentAction,
+    pub apartment_name: String,
+    pub sequence: u64,
+    pub status: AgentRuntimeStatus,
+    pub lease_expires_sequence: u64,
+    pub lease_remaining_ticks: u64,
+    pub manifest_hash: Hash,
+    pub revoked_policy_capability_count: u32,
+    pub budget_remaining_units: u64,
+    pub allowlist_count: u32,
+    pub run_count: u32,
+    pub audit_event_count: u32,
+    pub signed_by: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub capability: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct AgentAutonomyMutationResponse {
+    pub action: AgentApartmentAction,
+    pub apartment_name: String,
+    pub sequence: u64,
+    pub status: AgentRuntimeStatus,
+    pub lease_expires_sequence: u64,
+    pub lease_remaining_ticks: u64,
+    pub manifest_hash: Hash,
+    pub artifact_hash: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub provenance_hash: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub run_label: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub budget_units: Option<u64>,
+    pub budget_remaining_units: u64,
+    pub allowlist_count: u32,
+    pub run_count: u32,
+    pub audit_event_count: u32,
+    pub signed_by: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct AgentAutonomyStatusResponse {
+    pub apartment_name: String,
+    pub sequence: u64,
+    pub status: AgentRuntimeStatus,
+    pub lease_expires_sequence: u64,
+    pub lease_remaining_ticks: u64,
+    pub manifest_hash: Hash,
+    pub revoked_policy_capability_count: u32,
+    pub budget_ceiling_units: u64,
+    pub budget_remaining_units: u64,
+    pub allowlist_count: u32,
+    pub run_count: u32,
+    #[norito(default)]
+    pub allowlist: Vec<AgentAutonomyAllowlistEntry>,
+    #[norito(default)]
+    pub recent_runs: Vec<AgentAutonomyRunRecord>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct AgentAutonomyAllowlistEntry {
+    pub artifact_hash: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub provenance_hash: Option<String>,
+    pub added_sequence: u64,
+}
+
+impl AgentAutonomyAllowlistEntry {
+    fn from_rule(rule: &AgentArtifactAllowRule) -> Self {
+        Self {
+            artifact_hash: rule.artifact_hash.clone(),
+            provenance_hash: rule.provenance_hash.clone(),
+            added_sequence: rule.added_sequence,
+        }
+    }
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct AgentAutonomyRunRecord {
+    pub run_id: String,
+    pub artifact_hash: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub provenance_hash: Option<String>,
+    pub budget_units: u64,
+    pub run_label: String,
+    pub approved_sequence: u64,
 }
 
 #[derive(Debug, Default)]
@@ -906,6 +1176,479 @@ impl Registry {
         Ok(response)
     }
 
+    pub(crate) async fn apply_agent_deploy(
+        &self,
+        request: SignedAgentDeployRequest,
+    ) -> Result<AgentMutationResponse, SoracloudError> {
+        verify_agent_deploy_signature(&request)?;
+        request.payload.manifest.validate().map_err(|err| {
+            SoracloudError::bad_request(format!(
+                "agent apartment manifest failed validation: {err}"
+            ))
+        })?;
+        if request.payload.lease_ticks == 0 {
+            return Err(SoracloudError::bad_request(
+                "lease_ticks must be greater than zero",
+            ));
+        }
+
+        let autonomy_budget_units = request
+            .payload
+            .autonomy_budget_units
+            .unwrap_or(AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS);
+        if autonomy_budget_units == 0 {
+            return Err(SoracloudError::bad_request(
+                "autonomy_budget_units must be greater than zero",
+            ));
+        }
+
+        let apartment_name = request.payload.manifest.apartment_name.to_string();
+        let signer = request.provenance.signer.to_string();
+        let mut state = self.state.write().await;
+        ensure_registry_schema(&state)?;
+        if state.apartments.contains_key(&apartment_name) {
+            return Err(SoracloudError::conflict(format!(
+                "apartment `{apartment_name}` already exists in control-plane runtime"
+            )));
+        }
+
+        let sequence = state.next_sequence;
+        let manifest_hash =
+            Hash::new(norito::to_bytes(&request.payload.manifest).map_err(|err| {
+                SoracloudError::internal(format!("failed to encode agent manifest payload: {err}"))
+            })?);
+        let runtime_state = AgentApartmentRuntimeState {
+            manifest: request.payload.manifest,
+            manifest_hash,
+            status: AgentRuntimeStatus::Running,
+            deployed_sequence: sequence,
+            lease_expires_sequence: sequence.saturating_add(request.payload.lease_ticks),
+            revoked_policy_capabilities: BTreeSet::new(),
+            autonomy_budget_ceiling_units: autonomy_budget_units,
+            autonomy_budget_remaining_units: autonomy_budget_units,
+            artifact_allowlist: BTreeMap::new(),
+            autonomy_run_history: Vec::new(),
+        };
+        let response = AgentMutationResponse {
+            action: AgentApartmentAction::Deploy,
+            apartment_name: apartment_name.clone(),
+            sequence,
+            status: agent_runtime_status_for_sequence(&runtime_state, sequence.saturating_add(1)),
+            lease_expires_sequence: runtime_state.lease_expires_sequence,
+            lease_remaining_ticks: agent_lease_remaining_ticks(
+                &runtime_state,
+                sequence.saturating_add(1),
+            ),
+            manifest_hash,
+            revoked_policy_capability_count: 0,
+            budget_remaining_units: runtime_state.autonomy_budget_remaining_units,
+            allowlist_count: 0,
+            run_count: 0,
+            audit_event_count: 0,
+            signed_by: signer.clone(),
+            capability: None,
+            reason: None,
+        };
+
+        state
+            .apartments
+            .insert(apartment_name.clone(), runtime_state);
+        state.apartment_audit_log.push(AgentApartmentAuditEvent {
+            sequence,
+            action: AgentApartmentAction::Deploy,
+            apartment_name,
+            status: response.status,
+            lease_expires_sequence: response.lease_expires_sequence,
+            manifest_hash,
+            signed_by: signer,
+            capability: None,
+            reason: None,
+            artifact_hash: None,
+            provenance_hash: None,
+            run_id: None,
+            run_label: None,
+            budget_units: None,
+        });
+        state.next_sequence = state.next_sequence.saturating_add(1);
+
+        Ok(AgentMutationResponse {
+            audit_event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
+            ..response
+        })
+    }
+
+    pub(crate) async fn apply_agent_policy_revoke(
+        &self,
+        request: SignedAgentPolicyRevokeRequest,
+    ) -> Result<AgentMutationResponse, SoracloudError> {
+        verify_agent_policy_revoke_signature(&request)?;
+
+        let apartment_name = parse_agent_apartment_name(&request.payload.apartment_name)?;
+        let capability = parse_agent_capability_name(&request.payload.capability)?;
+        let reason = request
+            .payload
+            .reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let signer = request.provenance.signer.to_string();
+
+        let mut state = self.state.write().await;
+        ensure_registry_schema(&state)?;
+        let sequence = state.next_sequence;
+
+        let response = {
+            let runtime = state.apartments.get_mut(&apartment_name).ok_or_else(|| {
+                SoracloudError::not_found(format!(
+                    "apartment `{apartment_name}` not found in control-plane runtime"
+                ))
+            })?;
+            let capability_declared = runtime
+                .manifest
+                .policy_capabilities
+                .iter()
+                .any(|candidate| candidate.as_ref() == capability.as_str());
+            if !capability_declared {
+                return Err(SoracloudError::conflict(format!(
+                    "apartment `{apartment_name}` does not declare policy capability `{capability}`"
+                )));
+            }
+            if runtime
+                .revoked_policy_capabilities
+                .contains(capability.as_str())
+            {
+                return Err(SoracloudError::conflict(format!(
+                    "policy capability `{capability}` already revoked for apartment `{apartment_name}`"
+                )));
+            }
+            runtime
+                .revoked_policy_capabilities
+                .insert(capability.clone());
+
+            AgentMutationResponse {
+                action: AgentApartmentAction::PolicyRevoked,
+                apartment_name: apartment_name.clone(),
+                sequence,
+                status: agent_runtime_status_for_sequence(runtime, sequence.saturating_add(1)),
+                lease_expires_sequence: runtime.lease_expires_sequence,
+                lease_remaining_ticks: agent_lease_remaining_ticks(
+                    runtime,
+                    sequence.saturating_add(1),
+                ),
+                manifest_hash: runtime.manifest_hash,
+                revoked_policy_capability_count: agent_revoked_capability_count(runtime),
+                budget_remaining_units: runtime.autonomy_budget_remaining_units,
+                allowlist_count: agent_allowlist_count(runtime),
+                run_count: agent_run_count(runtime),
+                audit_event_count: 0,
+                signed_by: signer.clone(),
+                capability: Some(capability.clone()),
+                reason: reason.clone(),
+            }
+        };
+
+        state.apartment_audit_log.push(AgentApartmentAuditEvent {
+            sequence,
+            action: AgentApartmentAction::PolicyRevoked,
+            apartment_name: apartment_name.clone(),
+            status: response.status,
+            lease_expires_sequence: response.lease_expires_sequence,
+            manifest_hash: response.manifest_hash,
+            signed_by: signer,
+            capability: Some(capability),
+            reason: reason.clone(),
+            artifact_hash: None,
+            provenance_hash: None,
+            run_id: None,
+            run_label: None,
+            budget_units: None,
+        });
+        state.next_sequence = state.next_sequence.saturating_add(1);
+
+        Ok(AgentMutationResponse {
+            audit_event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
+            ..response
+        })
+    }
+
+    pub(crate) async fn apply_agent_artifact_allow(
+        &self,
+        request: SignedAgentArtifactAllowRequest,
+    ) -> Result<AgentAutonomyMutationResponse, SoracloudError> {
+        verify_agent_artifact_allow_signature(&request)?;
+        let apartment_name = parse_agent_apartment_name(&request.payload.apartment_name)?;
+        let artifact_hash =
+            normalize_agent_hash_like("--artifact-hash", &request.payload.artifact_hash)?;
+        let provenance_hash = normalize_optional_agent_hash_like(
+            "--provenance-hash",
+            request.payload.provenance_hash.as_deref(),
+        )?;
+        let signer = request.provenance.signer.to_string();
+
+        let mut state = self.state.write().await;
+        ensure_registry_schema(&state)?;
+        let sequence = state.next_sequence;
+
+        let response = {
+            let runtime = state.apartments.get_mut(&apartment_name).ok_or_else(|| {
+                SoracloudError::not_found(format!(
+                    "apartment `{apartment_name}` not found in control-plane runtime"
+                ))
+            })?;
+            if agent_runtime_status_for_sequence(runtime, sequence)
+                == AgentRuntimeStatus::LeaseExpired
+            {
+                return Err(SoracloudError::conflict(format!(
+                    "apartment `{apartment_name}` lease expired at sequence {}; renew before autonomy actions",
+                    runtime.lease_expires_sequence
+                )));
+            }
+            if !(agent_policy_capability_active(runtime, "governance.audit")
+                || agent_policy_capability_active(runtime, "agent.autonomy.allow"))
+            {
+                return Err(SoracloudError::conflict(format!(
+                    "apartment `{apartment_name}` does not have active `governance.audit` or `agent.autonomy.allow` capability"
+                )));
+            }
+            if runtime
+                .artifact_allowlist
+                .get(&artifact_hash)
+                .is_some_and(|rule| rule.provenance_hash == provenance_hash)
+            {
+                return Err(SoracloudError::conflict(format!(
+                    "artifact `{artifact_hash}` already allowlisted for apartment `{apartment_name}` with the same provenance rule"
+                )));
+            }
+            runtime.artifact_allowlist.insert(
+                artifact_hash.clone(),
+                AgentArtifactAllowRule {
+                    artifact_hash: artifact_hash.clone(),
+                    provenance_hash: provenance_hash.clone(),
+                    added_sequence: sequence,
+                },
+            );
+
+            AgentAutonomyMutationResponse {
+                action: AgentApartmentAction::ArtifactAllowed,
+                apartment_name: apartment_name.clone(),
+                sequence,
+                status: agent_runtime_status_for_sequence(runtime, sequence.saturating_add(1)),
+                lease_expires_sequence: runtime.lease_expires_sequence,
+                lease_remaining_ticks: agent_lease_remaining_ticks(
+                    runtime,
+                    sequence.saturating_add(1),
+                ),
+                manifest_hash: runtime.manifest_hash,
+                artifact_hash: artifact_hash.clone(),
+                provenance_hash: provenance_hash.clone(),
+                run_id: None,
+                run_label: None,
+                budget_units: None,
+                budget_remaining_units: runtime.autonomy_budget_remaining_units,
+                allowlist_count: agent_allowlist_count(runtime),
+                run_count: agent_run_count(runtime),
+                audit_event_count: 0,
+                signed_by: signer.clone(),
+            }
+        };
+
+        state.apartment_audit_log.push(AgentApartmentAuditEvent {
+            sequence,
+            action: AgentApartmentAction::ArtifactAllowed,
+            apartment_name: apartment_name.clone(),
+            status: response.status,
+            lease_expires_sequence: response.lease_expires_sequence,
+            manifest_hash: response.manifest_hash,
+            signed_by: signer,
+            capability: None,
+            reason: None,
+            artifact_hash: Some(response.artifact_hash.clone()),
+            provenance_hash: response.provenance_hash.clone(),
+            run_id: None,
+            run_label: None,
+            budget_units: None,
+        });
+        state.next_sequence = state.next_sequence.saturating_add(1);
+
+        Ok(AgentAutonomyMutationResponse {
+            audit_event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
+            ..response
+        })
+    }
+
+    pub(crate) async fn apply_agent_autonomy_run(
+        &self,
+        request: SignedAgentAutonomyRunRequest,
+    ) -> Result<AgentAutonomyMutationResponse, SoracloudError> {
+        verify_agent_autonomy_run_signature(&request)?;
+        let apartment_name = parse_agent_apartment_name(&request.payload.apartment_name)?;
+        let artifact_hash =
+            normalize_agent_hash_like("--artifact-hash", &request.payload.artifact_hash)?;
+        let provenance_hash = normalize_optional_agent_hash_like(
+            "--provenance-hash",
+            request.payload.provenance_hash.as_deref(),
+        )?;
+        if request.payload.budget_units == 0 {
+            return Err(SoracloudError::bad_request(
+                "budget_units must be greater than zero",
+            ));
+        }
+        let run_label = normalize_run_label(&request.payload.run_label)?;
+        let signer = request.provenance.signer.to_string();
+
+        let mut state = self.state.write().await;
+        ensure_registry_schema(&state)?;
+        let sequence = state.next_sequence;
+
+        let response = {
+            let runtime = state.apartments.get_mut(&apartment_name).ok_or_else(|| {
+                SoracloudError::not_found(format!(
+                    "apartment `{apartment_name}` not found in control-plane runtime"
+                ))
+            })?;
+            if agent_runtime_status_for_sequence(runtime, sequence)
+                == AgentRuntimeStatus::LeaseExpired
+            {
+                return Err(SoracloudError::conflict(format!(
+                    "apartment `{apartment_name}` lease expired at sequence {}; renew before autonomy actions",
+                    runtime.lease_expires_sequence
+                )));
+            }
+            if !agent_policy_capability_active(runtime, "agent.autonomy.run") {
+                return Err(SoracloudError::conflict(format!(
+                    "apartment `{apartment_name}` does not have active `agent.autonomy.run` capability"
+                )));
+            }
+            let allow_rule = runtime.artifact_allowlist.get(&artifact_hash).ok_or_else(|| {
+                SoracloudError::conflict(format!(
+                    "artifact `{artifact_hash}` is not allowlisted for apartment `{apartment_name}`"
+                ))
+            })?;
+            if let Some(expected_provenance) = allow_rule.provenance_hash.as_deref() {
+                let provided_provenance = provenance_hash.as_deref().ok_or_else(|| {
+                    SoracloudError::conflict(format!(
+                        "artifact `{artifact_hash}` requires provenance_hash `{expected_provenance}`"
+                    ))
+                })?;
+                if provided_provenance != expected_provenance {
+                    return Err(SoracloudError::conflict(format!(
+                        "artifact `{artifact_hash}` provenance mismatch: expected `{expected_provenance}`, got `{provided_provenance}`"
+                    )));
+                }
+            }
+            if request.payload.budget_units > runtime.autonomy_budget_remaining_units {
+                return Err(SoracloudError::conflict(format!(
+                    "requested budget {} exceeds remaining autonomy budget {} for apartment `{apartment_name}`",
+                    request.payload.budget_units, runtime.autonomy_budget_remaining_units
+                )));
+            }
+            runtime.autonomy_budget_remaining_units = runtime
+                .autonomy_budget_remaining_units
+                .saturating_sub(request.payload.budget_units);
+
+            let run_id = format!("{apartment_name}:autonomy:{sequence}");
+            runtime.autonomy_run_history.push(AgentAutonomyRunRecord {
+                run_id: run_id.clone(),
+                artifact_hash: artifact_hash.clone(),
+                provenance_hash: provenance_hash.clone(),
+                budget_units: request.payload.budget_units,
+                run_label: run_label.clone(),
+                approved_sequence: sequence,
+            });
+
+            AgentAutonomyMutationResponse {
+                action: AgentApartmentAction::AutonomyRunApproved,
+                apartment_name: apartment_name.clone(),
+                sequence,
+                status: agent_runtime_status_for_sequence(runtime, sequence.saturating_add(1)),
+                lease_expires_sequence: runtime.lease_expires_sequence,
+                lease_remaining_ticks: agent_lease_remaining_ticks(
+                    runtime,
+                    sequence.saturating_add(1),
+                ),
+                manifest_hash: runtime.manifest_hash,
+                artifact_hash: artifact_hash.clone(),
+                provenance_hash: provenance_hash.clone(),
+                run_id: Some(run_id),
+                run_label: Some(run_label.clone()),
+                budget_units: Some(request.payload.budget_units),
+                budget_remaining_units: runtime.autonomy_budget_remaining_units,
+                allowlist_count: agent_allowlist_count(runtime),
+                run_count: agent_run_count(runtime),
+                audit_event_count: 0,
+                signed_by: signer.clone(),
+            }
+        };
+
+        state.apartment_audit_log.push(AgentApartmentAuditEvent {
+            sequence,
+            action: AgentApartmentAction::AutonomyRunApproved,
+            apartment_name: apartment_name.clone(),
+            status: response.status,
+            lease_expires_sequence: response.lease_expires_sequence,
+            manifest_hash: response.manifest_hash,
+            signed_by: signer,
+            capability: None,
+            reason: None,
+            artifact_hash: Some(response.artifact_hash.clone()),
+            provenance_hash: response.provenance_hash.clone(),
+            run_id: response.run_id.clone(),
+            run_label: response.run_label.clone(),
+            budget_units: response.budget_units,
+        });
+        state.next_sequence = state.next_sequence.saturating_add(1);
+
+        Ok(AgentAutonomyMutationResponse {
+            audit_event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
+            ..response
+        })
+    }
+
+    pub(crate) async fn agent_autonomy_status(
+        &self,
+        apartment_name: &str,
+    ) -> Result<AgentAutonomyStatusResponse, SoracloudError> {
+        let apartment_name = parse_agent_apartment_name(apartment_name)?;
+        let state = self.state.read().await;
+        ensure_registry_schema(&state)?;
+        let sequence = state.next_sequence;
+        let runtime = state.apartments.get(&apartment_name).ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "apartment `{apartment_name}` not found in control-plane runtime"
+            ))
+        })?;
+
+        let recent_runs = runtime
+            .autonomy_run_history
+            .iter()
+            .rev()
+            .take(AGENT_AUTONOMY_RECENT_RUN_LIMIT)
+            .cloned()
+            .collect::<Vec<_>>();
+        let allowlist = runtime
+            .artifact_allowlist
+            .values()
+            .map(AgentAutonomyAllowlistEntry::from_rule)
+            .collect::<Vec<_>>();
+
+        Ok(AgentAutonomyStatusResponse {
+            apartment_name,
+            sequence,
+            status: agent_runtime_status_for_sequence(runtime, sequence),
+            lease_expires_sequence: runtime.lease_expires_sequence,
+            lease_remaining_ticks: agent_lease_remaining_ticks(runtime, sequence),
+            manifest_hash: runtime.manifest_hash,
+            revoked_policy_capability_count: agent_revoked_capability_count(runtime),
+            budget_ceiling_units: runtime.autonomy_budget_ceiling_units,
+            budget_remaining_units: runtime.autonomy_budget_remaining_units,
+            allowlist_count: agent_allowlist_count(runtime),
+            run_count: agent_run_count(runtime),
+            allowlist,
+            recent_runs,
+        })
+    }
+
     async fn apply_bundle_mutation(
         &self,
         mode: MutationMode,
@@ -1187,6 +1930,120 @@ fn ensure_registry_schema(state: &RegistryState) -> Result<(), SoracloudError> {
     Ok(())
 }
 
+fn parse_agent_apartment_name(apartment_name: &str) -> Result<String, SoracloudError> {
+    let normalized = apartment_name.trim();
+    let parsed: Name = normalized
+        .parse()
+        .map_err(|err| SoracloudError::bad_request(format!("invalid apartment_name: {err}")))?;
+    Ok(parsed.to_string())
+}
+
+fn parse_agent_capability_name(capability: &str) -> Result<String, SoracloudError> {
+    let normalized = capability.trim();
+    let parsed: Name = normalized
+        .parse()
+        .map_err(|err| SoracloudError::bad_request(format!("invalid capability: {err}")))?;
+    Ok(parsed.to_string())
+}
+
+fn validate_agent_hash_like(flag_name: &str, value: &str) -> Result<(), SoracloudError> {
+    if value.is_empty() {
+        return Err(SoracloudError::bad_request(format!(
+            "{flag_name} must not be empty"
+        )));
+    }
+    if value.len() > AGENT_AUTONOMY_MAX_HASH_BYTES {
+        return Err(SoracloudError::bad_request(format!(
+            "{flag_name} exceeds max bytes ({AGENT_AUTONOMY_MAX_HASH_BYTES})"
+        )));
+    }
+    if value.chars().any(|ch| ch.is_ascii_whitespace()) {
+        return Err(SoracloudError::bad_request(format!(
+            "{flag_name} must not contain whitespace"
+        )));
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | '-' | '_' | '.' | '#'))
+    {
+        return Err(SoracloudError::bad_request(format!(
+            "{flag_name} must use only ASCII letters, digits, or [: - _ . #]"
+        )));
+    }
+    Ok(())
+}
+
+fn normalize_agent_hash_like(flag_name: &str, value: &str) -> Result<String, SoracloudError> {
+    let normalized = value.trim();
+    validate_agent_hash_like(flag_name, normalized)?;
+    Ok(normalized.to_owned())
+}
+
+fn normalize_optional_agent_hash_like(
+    flag_name: &str,
+    value: Option<&str>,
+) -> Result<Option<String>, SoracloudError> {
+    value
+        .map(|raw| normalize_agent_hash_like(flag_name, raw))
+        .transpose()
+}
+
+fn normalize_run_label(run_label: &str) -> Result<String, SoracloudError> {
+    let normalized = run_label.trim();
+    if normalized.is_empty() {
+        return Err(SoracloudError::bad_request("run_label must not be empty"));
+    }
+    if normalized.len() > AGENT_AUTONOMY_MAX_LABEL_BYTES {
+        return Err(SoracloudError::bad_request(format!(
+            "run_label exceeds max bytes ({AGENT_AUTONOMY_MAX_LABEL_BYTES})"
+        )));
+    }
+    if normalized.chars().any(char::is_control) {
+        return Err(SoracloudError::bad_request(
+            "run_label must not contain control characters",
+        ));
+    }
+    Ok(normalized.to_owned())
+}
+
+fn agent_policy_capability_active(state: &AgentApartmentRuntimeState, capability: &str) -> bool {
+    let declared = state
+        .manifest
+        .policy_capabilities
+        .iter()
+        .any(|candidate| candidate.as_ref() == capability);
+    declared && !state.revoked_policy_capabilities.contains(capability)
+}
+
+fn agent_runtime_status_for_sequence(
+    state: &AgentApartmentRuntimeState,
+    current_sequence: u64,
+) -> AgentRuntimeStatus {
+    if current_sequence >= state.lease_expires_sequence {
+        AgentRuntimeStatus::LeaseExpired
+    } else {
+        state.status
+    }
+}
+
+fn agent_lease_remaining_ticks(state: &AgentApartmentRuntimeState, current_sequence: u64) -> u64 {
+    state
+        .lease_expires_sequence
+        .saturating_sub(current_sequence)
+}
+
+fn agent_revoked_capability_count(state: &AgentApartmentRuntimeState) -> u32 {
+    u32::try_from(state.revoked_policy_capabilities.len()).unwrap_or(u32::MAX)
+}
+
+fn agent_allowlist_count(state: &AgentApartmentRuntimeState) -> u32 {
+    u32::try_from(state.artifact_allowlist.len()).unwrap_or(u32::MAX)
+}
+
+fn agent_run_count(state: &AgentApartmentRuntimeState) -> u32 {
+    u32::try_from(state.autonomy_run_history.len()).unwrap_or(u32::MAX)
+}
+
 fn rollout_handle(service_name: &str, sequence: u64) -> String {
     format!("{service_name}:rollout:{sequence}")
 }
@@ -1206,9 +2063,7 @@ fn verify_bundle_signature(request: &SignedBundleRequest) -> Result<(), Soraclou
 }
 
 fn verify_rollback_signature(request: &SignedRollbackRequest) -> Result<(), SoracloudError> {
-    let payload = norito::to_bytes(&request.payload).map_err(|err| {
-        SoracloudError::internal(format!("failed to encode rollback payload: {err}"))
-    })?;
+    let payload = encode_rollback_signature_payload(&request.payload)?;
     request
         .provenance
         .signature
@@ -1217,6 +2072,14 @@ fn verify_rollback_signature(request: &SignedRollbackRequest) -> Result<(), Sora
             SoracloudError::unauthorized("rollback provenance signature verification failed")
         })?;
     Ok(())
+}
+
+fn encode_rollback_signature_payload(payload: &RollbackPayload) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(&(
+        payload.service_name.as_str(),
+        payload.target_version.as_deref(),
+    ))
+    .map_err(|err| SoracloudError::internal(format!("failed to encode rollback payload: {err}")))
 }
 
 fn verify_state_mutation_signature(
@@ -1236,9 +2099,7 @@ fn verify_state_mutation_signature(
 }
 
 fn verify_rollout_signature(request: &SignedRolloutAdvanceRequest) -> Result<(), SoracloudError> {
-    let payload = norito::to_bytes(&request.payload).map_err(|err| {
-        SoracloudError::internal(format!("failed to encode rollout payload: {err}"))
-    })?;
+    let payload = encode_rollout_signature_payload(&request.payload)?;
     request
         .provenance
         .signature
@@ -1247,6 +2108,93 @@ fn verify_rollout_signature(request: &SignedRolloutAdvanceRequest) -> Result<(),
             SoracloudError::unauthorized("rollout provenance signature verification failed")
         })?;
     Ok(())
+}
+
+fn verify_agent_deploy_signature(request: &SignedAgentDeployRequest) -> Result<(), SoracloudError> {
+    let payload = norito::to_bytes(&request.payload).map_err(|err| {
+        SoracloudError::internal(format!("failed to encode agent deploy payload: {err}"))
+    })?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized("agent deploy provenance signature verification failed")
+        })?;
+    Ok(())
+}
+
+fn verify_agent_policy_revoke_signature(
+    request: &SignedAgentPolicyRevokeRequest,
+) -> Result<(), SoracloudError> {
+    let payload = norito::to_bytes(&request.payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode agent policy revoke payload: {err}"
+        ))
+    })?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized(
+                "agent policy revoke provenance signature verification failed",
+            )
+        })?;
+    Ok(())
+}
+
+fn verify_agent_artifact_allow_signature(
+    request: &SignedAgentArtifactAllowRequest,
+) -> Result<(), SoracloudError> {
+    let payload = norito::to_bytes(&request.payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode agent artifact allow payload: {err}"
+        ))
+    })?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized(
+                "agent artifact allow provenance signature verification failed",
+            )
+        })?;
+    Ok(())
+}
+
+fn verify_agent_autonomy_run_signature(
+    request: &SignedAgentAutonomyRunRequest,
+) -> Result<(), SoracloudError> {
+    let payload = norito::to_bytes(&request.payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode agent autonomy run payload: {err}"
+        ))
+    })?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized(
+                "agent autonomy run provenance signature verification failed",
+            )
+        })?;
+    Ok(())
+}
+
+fn encode_rollout_signature_payload(
+    payload: &RolloutAdvancePayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(&(
+        payload.service_name.as_str(),
+        payload.rollout_handle.as_str(),
+        payload.healthy,
+        payload.promote_to_percent,
+        payload.governance_tx_hash,
+    ))
+    .map_err(|err| SoracloudError::internal(format!("failed to encode rollout payload: {err}")))
 }
 
 pub(crate) async fn handle_deploy(
@@ -1324,6 +2272,105 @@ pub(crate) async fn handle_state_mutation(
     }
 }
 
+pub(crate) async fn handle_agent_deploy(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedAgentDeployRequest>,
+) -> Response {
+    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/agent/deploy").await {
+        return err.into_response();
+    }
+
+    match app.soracloud_registry.apply_agent_deploy(request).await {
+        Ok(response) => JsonBody(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_agent_policy_revoke(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedAgentPolicyRevokeRequest>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/agent/policy/revoke").await
+    {
+        return err.into_response();
+    }
+
+    match app
+        .soracloud_registry
+        .apply_agent_policy_revoke(request)
+        .await
+    {
+        Ok(response) => JsonBody(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_agent_autonomy_allow(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedAgentArtifactAllowRequest>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/agent/autonomy/allow").await
+    {
+        return err.into_response();
+    }
+
+    match app
+        .soracloud_registry
+        .apply_agent_artifact_allow(request)
+        .await
+    {
+        Ok(response) => JsonBody(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_agent_autonomy_run(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedAgentAutonomyRunRequest>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/agent/autonomy/run").await
+    {
+        return err.into_response();
+    }
+
+    match app
+        .soracloud_registry
+        .apply_agent_autonomy_run(request)
+        .await
+    {
+        Ok(response) => JsonBody(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_agent_autonomy_status(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoQuery(query): NoritoQuery<AgentAutonomyStatusQuery>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/agent/autonomy/status").await
+    {
+        return err.into_response();
+    }
+
+    match app
+        .soracloud_registry
+        .agent_autonomy_status(&query.apartment_name)
+        .await
+    {
+        Ok(response) => JsonBody(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
 pub(crate) async fn handle_registry_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
@@ -1357,8 +2404,10 @@ mod tests {
     use iroha_crypto::{KeyPair, Signature};
     use iroha_data_model::{
         Encode,
+        name::Name,
         soracloud::{
-            SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SoraContainerManifestV1, SoraServiceManifestV1,
+            AgentApartmentManifestV1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SoraContainerManifestV1,
+            SoraServiceManifestV1,
         },
     };
 
@@ -1417,7 +2466,7 @@ mod tests {
             service_name: service_name.to_string(),
             target_version: target_version.map(ToOwned::to_owned),
         };
-        let encoded = norito::to_bytes(&payload).expect("encode rollback payload");
+        let encoded = encode_rollback_signature_payload(&payload).expect("encode rollback payload");
         let signature = Signature::new(key_pair.private_key(), &encoded);
         SignedRollbackRequest {
             payload,
@@ -1458,9 +2507,87 @@ mod tests {
             promote_to_percent,
             governance_tx_hash: Hash::new(governance_seed),
         };
-        let encoded = norito::to_bytes(&payload).expect("encode rollout payload");
+        let encoded = encode_rollout_signature_payload(&payload).expect("encode rollout payload");
         let signature = Signature::new(key_pair.private_key(), &encoded);
         SignedRolloutAdvanceRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn fixture_agent_manifest() -> AgentApartmentManifestV1 {
+        let mut manifest: AgentApartmentManifestV1 = load_json(&workspace_fixture(
+            "fixtures/soracloud/agent_apartment_manifest_v1.json",
+        ));
+        manifest.policy_capabilities.push(
+            "agent.autonomy.run"
+                .parse::<Name>()
+                .expect("valid capability"),
+        );
+        manifest.policy_capabilities.push(
+            "agent.autonomy.allow"
+                .parse::<Name>()
+                .expect("valid capability"),
+        );
+        manifest.validate().expect("agent manifest should validate");
+        manifest
+    }
+
+    fn signed_agent_deploy_request(
+        payload: AgentDeployPayload,
+        key_pair: &KeyPair,
+    ) -> SignedAgentDeployRequest {
+        let encoded = norito::to_bytes(&payload).expect("encode agent deploy payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedAgentDeployRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn signed_agent_policy_revoke_request(
+        payload: AgentPolicyRevokePayload,
+        key_pair: &KeyPair,
+    ) -> SignedAgentPolicyRevokeRequest {
+        let encoded = norito::to_bytes(&payload).expect("encode agent policy revoke payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedAgentPolicyRevokeRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn signed_agent_artifact_allow_request(
+        payload: AgentArtifactAllowPayload,
+        key_pair: &KeyPair,
+    ) -> SignedAgentArtifactAllowRequest {
+        let encoded = norito::to_bytes(&payload).expect("encode agent artifact allow payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedAgentArtifactAllowRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn signed_agent_autonomy_run_request(
+        payload: AgentAutonomyRunPayload,
+        key_pair: &KeyPair,
+    ) -> SignedAgentAutonomyRunRequest {
+        let encoded = norito::to_bytes(&payload).expect("encode agent autonomy run payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedAgentAutonomyRunRequest {
             payload,
             provenance: ManifestProvenance {
                 signer: key_pair.public_key().clone(),
@@ -1753,5 +2880,169 @@ mod tests {
             service.last_rollout.as_ref().map(|rollout| rollout.stage),
             Some(RolloutStage::RolledBack)
         );
+    }
+
+    #[tokio::test]
+    async fn agent_autonomy_runtime_enforces_allowlist_budget_and_revocation() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+
+        let deployed = registry
+            .apply_agent_deploy(signed_agent_deploy_request(
+                AgentDeployPayload {
+                    manifest: fixture_agent_manifest(),
+                    lease_ticks: 32,
+                    autonomy_budget_units: Some(500),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("agent deploy");
+        assert_eq!(deployed.action, AgentApartmentAction::Deploy);
+        assert_eq!(deployed.budget_remaining_units, 500);
+
+        let allow = registry
+            .apply_agent_artifact_allow(signed_agent_artifact_allow_request(
+                AgentArtifactAllowPayload {
+                    apartment_name: "ops_agent".to_owned(),
+                    artifact_hash: "hash:ABCD0123#01".to_owned(),
+                    provenance_hash: Some("hash:PROV0001#01".to_owned()),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("allow artifact");
+        assert_eq!(allow.action, AgentApartmentAction::ArtifactAllowed);
+        assert_eq!(allow.allowlist_count, 1);
+        assert_eq!(allow.budget_remaining_units, 500);
+
+        let run = registry
+            .apply_agent_autonomy_run(signed_agent_autonomy_run_request(
+                AgentAutonomyRunPayload {
+                    apartment_name: "ops_agent".to_owned(),
+                    artifact_hash: "hash:ABCD0123#01".to_owned(),
+                    provenance_hash: Some("hash:PROV0001#01".to_owned()),
+                    budget_units: 120,
+                    run_label: "nightly-train-step-1".to_owned(),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("autonomy run");
+        assert_eq!(run.action, AgentApartmentAction::AutonomyRunApproved);
+        assert_eq!(run.run_count, 1);
+        assert_eq!(run.budget_remaining_units, 380);
+        assert!(
+            run.run_id
+                .as_deref()
+                .is_some_and(|run_id| run_id.contains(":autonomy:"))
+        );
+
+        let status = registry
+            .agent_autonomy_status("ops_agent")
+            .await
+            .expect("autonomy status");
+        assert_eq!(status.allowlist_count, 1);
+        assert_eq!(status.run_count, 1);
+        assert_eq!(status.budget_remaining_units, 380);
+        assert_eq!(status.recent_runs.len(), 1);
+        assert_eq!(status.recent_runs[0].run_label, "nightly-train-step-1");
+
+        let provenance_mismatch = registry
+            .apply_agent_autonomy_run(signed_agent_autonomy_run_request(
+                AgentAutonomyRunPayload {
+                    apartment_name: "ops_agent".to_owned(),
+                    artifact_hash: "hash:ABCD0123#01".to_owned(),
+                    provenance_hash: Some("hash:WRONG0001#01".to_owned()),
+                    budget_units: 1,
+                    run_label: "mismatch".to_owned(),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect_err("provenance mismatch must fail");
+        assert_eq!(provenance_mismatch.kind, SoracloudErrorKind::Conflict);
+        assert!(
+            provenance_mismatch.message.contains("provenance mismatch"),
+            "unexpected mismatch error: {}",
+            provenance_mismatch.message
+        );
+
+        let revoke = registry
+            .apply_agent_policy_revoke(signed_agent_policy_revoke_request(
+                AgentPolicyRevokePayload {
+                    apartment_name: "ops_agent".to_owned(),
+                    capability: "agent.autonomy.run".to_owned(),
+                    reason: Some("manual-review".to_owned()),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("policy revoke");
+        assert_eq!(revoke.action, AgentApartmentAction::PolicyRevoked);
+        assert_eq!(revoke.revoked_policy_capability_count, 1);
+
+        let revoked_run = registry
+            .apply_agent_autonomy_run(signed_agent_autonomy_run_request(
+                AgentAutonomyRunPayload {
+                    apartment_name: "ops_agent".to_owned(),
+                    artifact_hash: "hash:ABCD0123#01".to_owned(),
+                    provenance_hash: Some("hash:PROV0001#01".to_owned()),
+                    budget_units: 1,
+                    run_label: "revoked".to_owned(),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect_err("run with revoked capability must fail");
+        assert_eq!(revoked_run.kind, SoracloudErrorKind::Conflict);
+        assert!(
+            revoked_run.message.contains("agent.autonomy.run"),
+            "unexpected revoked capability error: {}",
+            revoked_run.message
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_autonomy_runtime_rejects_actions_after_lease_expiry() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+
+        registry
+            .apply_agent_deploy(signed_agent_deploy_request(
+                AgentDeployPayload {
+                    manifest: fixture_agent_manifest(),
+                    lease_ticks: 1,
+                    autonomy_budget_units: Some(100),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("agent deploy");
+
+        let expired_allow = registry
+            .apply_agent_artifact_allow(signed_agent_artifact_allow_request(
+                AgentArtifactAllowPayload {
+                    apartment_name: "ops_agent".to_owned(),
+                    artifact_hash: "hash:ABCD0123#01".to_owned(),
+                    provenance_hash: None,
+                },
+                &key_pair,
+            ))
+            .await
+            .expect_err("allow should fail after lease expiry");
+        assert_eq!(expired_allow.kind, SoracloudErrorKind::Conflict);
+        assert!(
+            expired_allow.message.contains("lease expired"),
+            "unexpected lease-expiry error: {}",
+            expired_allow.message
+        );
+
+        let status = registry
+            .agent_autonomy_status("ops_agent")
+            .await
+            .expect("status should still resolve");
+        assert_eq!(status.status, AgentRuntimeStatus::LeaseExpired);
+        assert_eq!(status.lease_remaining_ticks, 0);
     }
 }

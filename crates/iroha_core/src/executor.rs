@@ -22,12 +22,12 @@ use iroha_data_model::{
     executor::{self as data_model_executor, ExecutorDataModel},
     isi::{
         CustomInstruction, InstructionBox, InstructionBox as DMInstructionBox, RemoveKeyValueBox,
-        SetKeyValueBox, error::InstructionExecutionError, register::RegisterBox,
+        SetKeyValueBox, TransferBox, error::InstructionExecutionError, register::RegisterBox,
     },
     metadata::Metadata,
     parameter::CustomParameterId,
     permission::Permission,
-    prelude::{Register, Trigger},
+    prelude::{Account, DomainId, Register, Transfer, Trigger},
     query::{AnyQueryBox, QueryRequest},
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
@@ -2116,6 +2116,14 @@ impl Executor {
             }
         }
 
+        if let Some(transfer_domain) = extract_transfer_domain(&instruction)
+            && !can_transfer_domain(&state_transaction.world, authority, &transfer_domain)?
+        {
+            return Err(ValidationFail::NotPermitted(
+                "Can't transfer domain of another account".to_owned(),
+            ));
+        }
+
         let instruction_id = instruction.id();
         instruction
             .execute(authority, state_transaction)
@@ -2595,6 +2603,31 @@ fn extract_account_metadata_target(instruction: &InstructionBox) -> Option<Accou
         })
 }
 
+fn extract_transfer_domain(
+    instruction: &InstructionBox,
+) -> Option<Transfer<Account, DomainId, Account>> {
+    let instr_any = instruction.as_any();
+    if let Some(transfer) = instr_any.downcast_ref::<Transfer<Account, DomainId, Account>>() {
+        return Some(transfer.clone());
+    }
+    if let Some(transfer_box) = instr_any.downcast_ref::<TransferBox>() {
+        return match transfer_box {
+            TransferBox::Domain(transfer) => Some(transfer.clone()),
+            _ => None,
+        };
+    }
+    if !instruction.id().contains("Domain") {
+        return None;
+    }
+    let bytes = instruction.dyn_encode();
+    std::panic::catch_unwind(|| {
+        let mut slice = &bytes[..];
+        Transfer::<Account, DomainId, Account>::decode(&mut slice).ok()
+    })
+    .ok()
+    .flatten()
+}
+
 fn authority_has_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -2643,6 +2676,30 @@ fn can_modify_account_metadata(
     }
     .into();
     authority_has_permission(world, authority, &required)
+}
+
+fn can_transfer_domain(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    transfer: &Transfer<Account, DomainId, Account>,
+) -> Result<bool, ValidationFail> {
+    if transfer.source() == authority {
+        return Ok(true);
+    }
+
+    let source_domain_owner = world
+        .domain(transfer.source().domain())
+        .map(|domain| domain.owned_by().clone())
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
+    if &source_domain_owner == authority {
+        return Ok(true);
+    }
+
+    let transferred_domain_owner = world
+        .domain(transfer.object())
+        .map(|domain| domain.owned_by().clone())
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
+    Ok(&transferred_domain_owner == authority)
 }
 
 fn normalize_role_permission_for_initial_executor(
@@ -3117,7 +3174,7 @@ mod tests {
         let query_handle = query::store::LiveQueryStore::start_test();
         let chain: ChainId = "test-chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
         let key: Name = "meta".parse().expect("key");
@@ -3258,6 +3315,77 @@ mod tests {
         assert!(
             matches!(res, Err(ValidationFail::NotPermitted(_))),
             "initial executor should deny registering asset definition without permission"
+        );
+    }
+
+    #[test]
+    fn initial_executor_denies_transfer_domain_without_ownership() {
+        let alice_id = ALICE_ID.clone();
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let foo_domain_id: DomainId = "foo".parse().expect("foo domain id");
+        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id).build(&user1);
+        let foo_domain = Domain::new(foo_domain_id.clone()).build(&user1);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+
+        let world = World::with(
+            [users_domain, foo_domain],
+            [alice_account, user1_account, user2_account],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(genesis_header)
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let executor = super::Executor::Initial;
+        let instruction = InstructionBox::from(Transfer::domain(
+            user1.clone(),
+            foo_domain_id,
+            user2.clone(),
+        ));
+        let transfer = extract_transfer_domain(&instruction)
+            .expect("expected to extract domain transfer from instruction");
+
+        let mut stx = block.transaction();
+        assert_eq!(
+            stx.world
+                .domain(user1.domain())
+                .expect("users domain should exist")
+                .owned_by(),
+            &user1
+        );
+        assert_eq!(
+            stx.world
+                .domain(transfer.object())
+                .expect("foo domain should exist")
+                .owned_by(),
+            &user1
+        );
+        let allowed = can_transfer_domain(&stx.world, &alice_id, &transfer)
+            .expect("domain transfer permission check");
+        assert!(
+            !allowed,
+            "alice should not be allowed to transfer foo domain"
+        );
+        assert!(
+            !(stx._curr_block.is_genesis() && stx.block_hashes.is_empty()),
+            "test must execute in non-genesis context"
+        );
+        let res = executor.execute_instruction(&mut stx, &alice_id, instruction);
+        assert!(
+            matches!(res, Err(ValidationFail::NotPermitted(_))),
+            "initial executor should deny domain transfer from another account, got: {res:?}"
         );
     }
 
