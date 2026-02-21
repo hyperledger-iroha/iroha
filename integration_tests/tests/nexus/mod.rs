@@ -1,6 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Nexus-specific integration test modules.
 
+mod autoscale_localnet;
 mod cbdc_rollout_bundle;
 mod cbdc_whitelist;
 mod cross_dataspace_localnet;

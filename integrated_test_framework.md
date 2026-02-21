@@ -80,6 +80,26 @@ Note on API: In this codebase, Torii is an HTTP/WebSocket API (Axum). Tests shou
 4) Stop 1–2 peers, continue submitting transactions with remaining 5 peers; ensure progress and consistency among running peers.
 5) Restart stopped peers and verify catch‑up and cross‑peer equality.
 
+## Testus Localnet Runbook
+
+- Regenerate the Testus profile bundle after profile changes:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo run -p xtask --bin xtask -- kagami-profiles --profile iroha3-testus`
+- Build required localnet binaries once:
+  - `cargo build -p iroha_kagami --bin kagami`
+  - `cargo build -p irohad --bin irohad`
+- Run the 7-validator bootstrap check:
+  - `KAGAMI_BIN=$PWD/target/debug/kagami TEST_NETWORK_BIN_IROHAD=$PWD/target/debug/irohad IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test testus_public_localnet testus_localnet_bootstrap_7_validators -- --nocapture`
+- Run churn behavior tests (ignored by default):
+  - `KAGAMI_BIN=$PWD/target/debug/kagami TEST_NETWORK_BIN_IROHAD=$PWD/target/debug/irohad IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test testus_public_localnet testus_localnet_joiner_register_unregister_behavior -- --ignored --nocapture`
+  - `KAGAMI_BIN=$PWD/target/debug/kagami TEST_NETWORK_BIN_IROHAD=$PWD/target/debug/irohad IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test testus_public_localnet testus_localnet_restart_catchup_behavior -- --ignored --nocapture`
+- Run the full 5 TPS, 60-minute churn simulation:
+  - `KAGAMI_BIN=$PWD/target/debug/kagami TEST_NETWORK_BIN_IROHAD=$PWD/target/debug/irohad IROHA_TEST_SKIP_BUILD=1 IROHA_TESTUS_SIM_DURATION_SECS=3600 IROHA_TESTUS_LOAD_TPS=5 cargo test -p integration_tests --test testus_public_localnet testus_public_localnet_5tps_churn_stability -- --ignored --nocapture`
+- Optional tuning knobs:
+  - `IROHA_TESTUS_MAX_HEIGHT_SKEW` (default `2`) sets allowed validator height skew.
+  - `IROHA_TESTUS_MAX_HEIGHT_SKEW_GRACE_SECS` (default `30`) allows transient skew bursts; only sustained unrecovered breaches fail.
+  - `IROHA_TESTUS_STALL_TIMEOUT_SECS` (default `300`) controls max no-progress window for `max_height` before stall failure.
+- Simulation summary is written under the run temp directory as `localnet/testus_simulation_summary.json`; set `IROHA_TESTUS_KEEP_LOCALNET=1` to keep artifacts on success/failure.
+
 ## CI Usage
 
 - Build: `cargo build --workspace`
