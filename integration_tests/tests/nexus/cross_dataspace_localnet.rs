@@ -13,6 +13,7 @@ use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
+    crypto::HashOf,
     data_model::{
         Level, ValidationFail,
         account::{Account, AccountId},
@@ -37,6 +38,7 @@ use iroha::{
         peer::PeerId,
         permission::Permission,
         prelude::{FindAssetById, FindPermissionsByAccountId, Numeric},
+        transaction::TransactionEntrypoint,
     },
     query::QueryError,
 };
@@ -44,7 +46,13 @@ use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
 use iroha_crypto::PrivateKey;
 use iroha_data_model::prelude::QueryBuilderExt;
-use iroha_data_model::query::error::{FindError, QueryExecutionFail};
+use iroha_data_model::query::{
+    CommittedTxFilters,
+    dsl::CompoundPredicate,
+    error::{FindError, QueryExecutionFail},
+    parameters::{FetchSize, Pagination},
+    transaction::prelude::FindTransactions,
+};
 use iroha_executor_data_model::permission::{
     asset::CanTransferAssetWithDefinition, asset_definition::CanRegisterAssetDefinition,
 };
@@ -80,6 +88,8 @@ const BALANCE_WAIT_TICK_EVERY_POLLS: u64 = 5;
 const PERMISSION_WAIT_TICK_EVERY_POLLS: u64 = 5;
 const BLOCKING_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(20);
 const ROLLBACK_CAPPED_ATTEMPTS: usize = 2;
+const ROLLBACK_HISTORY_RETRY_TIMEOUT: Duration = Duration::from_secs(4);
+const ROLLBACK_HISTORY_FALLBACK_TIMEOUT: Duration = Duration::from_secs(25);
 const SOAK_PHASE_WAIT_TIMEOUT: Duration = Duration::from_secs(18);
 const SOAK_BARRIER_TICK_EVERY_POLLS: u64 = 5;
 const SOAK_ITERATIONS: usize = 10;
@@ -888,6 +898,51 @@ fn is_inconclusive_blocking_submit_error(error_text: &str) -> bool {
         || error_text.contains("Failed to send http POST request")
 }
 
+fn wait_for_committed_rejection_reason(
+    client: &Client,
+    entry_hash: HashOf<TransactionEntrypoint>,
+    context: &str,
+    timeout_duration: Duration,
+) -> Result<String> {
+    let started = Instant::now();
+    let mut last_error: Option<String> = None;
+    let one = NonZeroU64::new(1).expect("nonzero");
+    while started.elapsed() <= timeout_duration {
+        let filters = CommittedTxFilters {
+            entry_eq: Some(entry_hash.clone()),
+            ..Default::default()
+        };
+        match client
+            .query(FindTransactions::new())
+            .filter(CompoundPredicate::from_filters(filters))
+            .with_pagination(Pagination::new(Some(one), 0))
+            .with_fetch_size(FetchSize::new(Some(one)))
+            .execute_all()
+        {
+            Ok(snapshot) => {
+                if let Some(tx) = snapshot.first() {
+                    return match &tx.result().0 {
+                        Ok(_) => Err(eyre!(
+                            "{context}: transaction {entry_hash} committed successfully, expected rejection"
+                        )),
+                        Err(reason) => Ok(reason.to_string()),
+                    };
+                }
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+    let suffix = last_error
+        .map(|err| format!("; last tx history query error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for committed rejection reason for transaction {entry_hash}{suffix}"
+    ))
+}
+
 struct PhaseTimings {
     test_name: &'static str,
     started: Instant,
@@ -1171,8 +1226,8 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             &ALICE_ID,
             ALICE_KEYPAIR.private_key(),
         );
-        let _phase = phase_timings.phase("setup grants: tx submit + confirm");
-        submitter.submit_all_blocking(vec![
+        let _phase = phase_timings.phase("setup grants: tx submit enqueue");
+        submitter.submit_all(vec![
             InstructionBox::from(Grant::account_permission(
                 CanRegisterAssetDefinition {
                     domain: wonderland_domain.clone(),
@@ -1187,6 +1242,15 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             )),
         ])?;
         next_expected_height = next_height_after(&alice)?;
+    }
+    {
+        let _phase = phase_timings.phase("setup grants: barrier wait");
+        let setup_synced_alice = wait_for_height(
+            &alice,
+            next_expected_height,
+            "grant setup confirmation on alice",
+        )?;
+        next_expected_height = setup_synced_alice.commit_qc.height.saturating_add(1);
     }
     {
         let _phase = phase_timings.phase("setup grants: query/assert");
@@ -1289,21 +1353,19 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             &ALICE_ID,
             ALICE_KEYPAIR.private_key(),
         );
+        next_expected_height = next_expected_height.max(next_height_after(&alice)?);
         {
-            let _phase = phase_timings.phase("execute successful swap: tx submit + confirm");
-            let mut submitter = submitter;
-            submitter.transaction_status_timeout = BLOCKING_CONFIRMATION_TIMEOUT;
-            if let Err(err) = submitter.submit_blocking(InstructionBox::from(successful_swap)) {
-                let error_text = err.to_string();
-                if is_inconclusive_blocking_submit_error(&error_text) {
-                    eprintln!(
-                        "[swap] successful swap confirmation inconclusive after {:.1}s; validating via balances",
-                        BLOCKING_CONFIRMATION_TIMEOUT.as_secs_f64()
-                    );
-                } else {
-                    return Err(err);
-                }
-            }
+            let _phase = phase_timings.phase("execute successful swap: tx submit enqueue");
+            submitter.submit(InstructionBox::from(successful_swap))?;
+        }
+        {
+            let _phase = phase_timings.phase("execute successful swap: barrier wait");
+            let swap_synced_alice = wait_for_height(
+                &alice,
+                next_expected_height,
+                "successful swap confirmation on alice",
+            )?;
+            next_expected_height = swap_synced_alice.commit_qc.height.saturating_add(1);
         }
         {
             let _phase = phase_timings.phase("execute successful swap: query/assert");
@@ -1350,23 +1412,19 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         );
         let submitter =
             leader_targeted_client_for_account(&network, &bob, &BOB_ID, BOB_KEYPAIR.private_key());
+        next_expected_height = next_expected_height.max(next_height_after(&alice)?);
         {
-            let _phase = phase_timings.phase("execute reverse swap: tx submit + confirm");
-            let mut submitter = submitter;
-            submitter.transaction_status_timeout = BLOCKING_CONFIRMATION_TIMEOUT;
-            if let Err(err) =
-                submitter.submit_blocking(InstructionBox::from(reverse_successful_swap))
-            {
-                let error_text = err.to_string();
-                if is_inconclusive_blocking_submit_error(&error_text) {
-                    eprintln!(
-                        "[swap] reverse swap confirmation inconclusive after {:.1}s; validating via balances",
-                        BLOCKING_CONFIRMATION_TIMEOUT.as_secs_f64()
-                    );
-                } else {
-                    return Err(err);
-                }
-            }
+            let _phase = phase_timings.phase("execute reverse swap: tx submit enqueue");
+            submitter.submit(InstructionBox::from(reverse_successful_swap))?;
+        }
+        {
+            let _phase = phase_timings.phase("execute reverse swap: barrier wait");
+            let reverse_swap_synced_alice = wait_for_height(
+                &alice,
+                next_expected_height,
+                "reverse swap confirmation on alice",
+            )?;
+            next_expected_height = reverse_swap_synced_alice.commit_qc.height.saturating_add(1);
         }
         {
             let _phase = phase_timings.phase("execute reverse swap: query/assert");
@@ -1590,6 +1648,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     {
         let _phase = phase_timings.phase("execute failing swap + rollback verification");
         let mut failure_text = None;
+        let mut last_attempt_entry_hash: Option<HashOf<TransactionEntrypoint>> = None;
         for attempt in 0..ROLLBACK_CAPPED_ATTEMPTS {
             let settlement_id = if attempt == 0 {
                 "ds1ds2swapfail".to_owned()
@@ -1622,8 +1681,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 ALICE_KEYPAIR.private_key(),
             );
             let mut submitter = submitter;
+            let failing_swap_tx = submitter
+                .build_transaction([InstructionBox::from(failing_swap)], Metadata::default());
+            let entry_hash = failing_swap_tx.hash_as_entrypoint();
+            last_attempt_entry_hash = Some(entry_hash.clone());
             submitter.transaction_status_timeout = BLOCKING_CONFIRMATION_TIMEOUT;
-            match submitter.submit_blocking(InstructionBox::from(failing_swap)) {
+            match submitter.submit_transaction_blocking(&failing_swap_tx) {
                 Ok(_) => {
                     return Err(eyre!(
                         "underfunded counter-leg unexpectedly approved on rollback attempt {}",
@@ -1641,6 +1704,15 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     if is_inconclusive_blocking_submit_error(&error_text)
                         && attempt + 1 < ROLLBACK_CAPPED_ATTEMPTS
                     {
+                        if let Ok(committed_reason) = wait_for_committed_rejection_reason(
+                            &alice,
+                            entry_hash.clone(),
+                            "rollback rejection reason from committed history",
+                            ROLLBACK_HISTORY_RETRY_TIMEOUT,
+                        ) {
+                            failure_text = Some(committed_reason);
+                            break;
+                        }
                         eprintln!(
                             "[rollback] inconclusive submit on attempt {}; retrying with fresh leader target",
                             attempt + 1
@@ -1655,38 +1727,15 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         let mut failure_text = failure_text
             .ok_or_else(|| eyre!("rollback rejection attempt did not produce an error"))?;
         if is_inconclusive_blocking_submit_error(&failure_text) {
-            eprintln!(
-                "[rollback] falling back to uncapped blocking confirmation for rejection reason"
-            );
-            let final_fallback_swap = DvpIsi::new(
-                "ds1ds2swapfail_final".parse().expect("settlement id"),
-                SettlementLeg::new(
-                    ds1_asset_def.clone(),
-                    Numeric::from(10_u32),
-                    ALICE_ID.clone(),
-                    BOB_ID.clone(),
-                ),
-                SettlementLeg::new(
-                    ds2_asset_def.clone(),
-                    Numeric::from(10_000_u32),
-                    BOB_ID.clone(),
-                    ALICE_ID.clone(),
-                ),
-                SettlementPlan::new(
-                    SettlementExecutionOrder::DeliveryThenPayment,
-                    SettlementAtomicity::AllOrNothing,
-                ),
-            );
-            let submitter = leader_targeted_client_for_account(
-                &network,
+            let entry_hash = last_attempt_entry_hash
+                .ok_or_else(|| eyre!("missing transaction entry hash for rollback fallback"))?;
+            eprintln!("[rollback] falling back to committed history lookup for rejection reason");
+            failure_text = wait_for_committed_rejection_reason(
                 &alice,
-                &ALICE_ID,
-                ALICE_KEYPAIR.private_key(),
-            );
-            let fallback_error = submitter
-                .submit_blocking(InstructionBox::from(final_fallback_swap))
-                .expect_err("underfunded counter-leg must reject all-or-nothing settlement");
-            failure_text = fallback_error.to_string();
+                entry_hash,
+                "rollback rejection reason from committed history fallback",
+                ROLLBACK_HISTORY_FALLBACK_TIMEOUT,
+            )?;
         }
         assert!(
             failure_text.contains("settlement leg requires 10000")
