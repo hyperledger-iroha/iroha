@@ -670,7 +670,7 @@ pub mod isi {
     impl Execute for Transfer<Account, DomainId, Account> {
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let Transfer {
@@ -681,6 +681,16 @@ pub mod isi {
 
             let _ = state_transaction.world.account(&source)?;
             let _ = state_transaction.world.account(&destination)?;
+
+            let authority_is_source_owner = authority == &source
+                || state_transaction.world.domain(source.domain())?.owned_by() == authority;
+            let authority_is_transferred_domain_owner =
+                state_transaction.world.domain(&object)?.owned_by() == authority;
+            if !(authority_is_source_owner || authority_is_transferred_domain_owner) {
+                return Err(Error::InvariantViolation(
+                    "Can't transfer domain of another account".to_owned().into(),
+                ));
+            }
 
             let domain = state_transaction.world.domain_mut(&object)?;
 
@@ -913,6 +923,18 @@ mod tests {
         state.world.domains.insert(domain_id.clone(), domain);
     }
 
+    fn seed_account(state: &mut State, account_id: &AccountId) {
+        let account = Account {
+            id: account_id.clone(),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+        };
+        let (account_id, account_value) = account.into_key_value();
+        state.world.accounts.insert(account_id, account_value);
+    }
+
     fn seed_manifest_record<F>(
         world: &mut World,
         uaid: UniversalAccountId,
@@ -1017,6 +1039,43 @@ mod tests {
         assert!(
             err.to_string().contains("raw PII"),
             "error should mention raw PII: {err}"
+        );
+    }
+
+    #[test]
+    fn transfer_domain_rejects_authority_without_ownership() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let transferred_domain_id: DomainId = "foo".parse().expect("foo domain id");
+        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+
+        seed_domain(&mut state, authority.domain(), &authority);
+        seed_account(&mut state, &authority);
+        seed_domain(&mut state, &users_domain_id, &user1);
+        seed_domain(&mut state, &transferred_domain_id, &user1);
+        seed_account(&mut state, &user1);
+        seed_account(&mut state, &user2);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let err = Transfer::domain(user1.clone(), transferred_domain_id.clone(), user2)
+            .execute(&authority, &mut tx)
+            .expect_err("transfer must fail for authority that does not own source or domain");
+        assert!(
+            err.to_string()
+                .contains("Can't transfer domain of another account"),
+            "unexpected transfer error: {err}"
+        );
+        assert_eq!(
+            tx.world
+                .domain(&transferred_domain_id)
+                .expect("domain should still exist")
+                .owned_by(),
+            &user1
         );
     }
 
