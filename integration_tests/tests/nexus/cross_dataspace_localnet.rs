@@ -962,7 +962,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             "route probes propagation on bob",
         )?;
     }
-
     let ds1_asset_def: AssetDefinitionId = "ds1coin#wonderland".parse().expect("asset definition");
     let ds2_asset_def: AssetDefinitionId = "ds2coin#wonderland".parse().expect("asset definition");
     let wonderland_domain: DomainId = "wonderland".parse().expect("domain id");
@@ -1032,16 +1031,16 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         )?;
     }
 
-    let setup_alice_submitter = leader_targeted_client_for_account(
-        &network,
-        &alice,
-        &ALICE_ID,
-        ALICE_KEYPAIR.private_key(),
-    );
-    let setup_bob_submitter =
-        leader_targeted_client_for_account(&network, &bob, &BOB_ID, BOB_KEYPAIR.private_key());
     {
         next_expected_height = next_expected_height.max(next_height_after(&alice)?);
+        let setup_alice_submitter = leader_targeted_client_for_account(
+            &network,
+            &alice,
+            &ALICE_ID,
+            ALICE_KEYPAIR.private_key(),
+        );
+        let setup_bob_submitter =
+            leader_targeted_client_for_account(&network, &bob, &BOB_ID, BOB_KEYPAIR.private_key());
         let _phase = phase_timings.phase("setup register+mint: tx submit enqueue");
         setup_alice_submitter.submit_all(vec![
             InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(

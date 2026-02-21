@@ -47,6 +47,8 @@ const INTERIM_CONVERGENCE_MAX_SKEW: u64 = 6;
 const DEFAULT_MAX_VIEW_CHANGE_RATE: f64 = 0.2;
 const PROCESS_DOWNTIME_SECS: u64 = 5;
 const JOINER_CATCHUP_TIMEOUT_SECS: u64 = 60;
+const JOINER_STALL_LOG_EVERY: u64 = 5;
+const JOINER_PROGRESS_LOG_EVERY: u64 = 5;
 const LOCALNET_BLOCK_TIME_MS: u64 = 1_000;
 const LOCALNET_COMMIT_TIME_MS: u64 = 1_000;
 const MAX_TX_BURST_PER_TICK: u32 = 32;
@@ -371,7 +373,8 @@ async fn testus_localnet_joiner_register_unregister_behavior() -> Result<()> {
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
         let mut harness = setup_testus_harness(&out_dir, "testus-membership").await?;
-        membership_join_cycle(&mut harness).await?;
+        let mut joiner_warning_state = JoinerCatchupWarningState::default();
+        membership_join_cycle(&mut harness, &mut joiner_warning_state).await?;
         membership_leave_cycle(&mut harness).await?;
         Ok(())
     }
@@ -450,6 +453,7 @@ async fn run_testus_simulation(
     let mut saturated_samples = 0_u64;
     let mut total_samples = 0_u64;
     let mut joiner_active = false;
+    let mut joiner_warning_state = JoinerCatchupWarningState::default();
     let mut restart_idx = first_process_churn_index(harness.validator_clients.len());
     let mut paused_for_churn = Duration::ZERO;
     let mut skew_breach_started_at = None;
@@ -502,7 +506,7 @@ async fn run_testus_simulation(
                 membership_leave_cycle(harness).await?;
                 membership_leave_cycles = membership_leave_cycles.saturating_add(1);
             } else {
-                membership_join_cycle(harness).await?;
+                membership_join_cycle(harness, &mut joiner_warning_state).await?;
                 membership_join_cycles = membership_join_cycles.saturating_add(1);
             }
             paused_for_churn = paused_for_churn.saturating_add(churn_start.elapsed());
@@ -725,7 +729,10 @@ fn validator_restart_catchup_target(baseline: u64) -> u64 {
     baseline.saturating_sub(INTERIM_CONVERGENCE_MAX_SKEW)
 }
 
-async fn membership_join_cycle(harness: &mut TestusHarness) -> Result<()> {
+async fn membership_join_cycle(
+    harness: &mut TestusHarness,
+    joiner_warning_state: &mut JoinerCatchupWarningState,
+) -> Result<()> {
     let baseline =
         validator_max_height_with_retry(&harness.validator_clients, READY_TIMEOUT).await?;
     if !is_peer_present(&harness.primary_client, &harness.joiner.peer_id)? {
@@ -751,18 +758,33 @@ async fn membership_join_cycle(harness: &mut TestusHarness) -> Result<()> {
     match wait_for_height_or_progress(&harness.joiner.client, catchup_target, catchup_timeout).await
     {
         Ok((start, current)) => match assess_joiner_catchup(start, current, catchup_target) {
-            JoinerCatchupAssessment::ReachedTarget => {}
-            JoinerCatchupAssessment::Progressed => {
-                eprintln!(
-                    "joiner catch-up is still below validator target after observed progress: baseline={baseline}, target={catchup_target}, start={start}, current={current}"
-                );
+            JoinerCatchupAssessment::ReachedTarget => {
+                joiner_warning_state.on_reached_target();
             }
-            JoinerCatchupAssessment::Stalled => {}
+            JoinerCatchupAssessment::Progressed => {
+                let progress_count = joiner_warning_state.on_progress_below_target();
+                if should_log_on_first_and_every_nth(progress_count, JOINER_PROGRESS_LOG_EVERY) {
+                    eprintln!(
+                        "joiner catch-up is still below validator target after observed progress: baseline={baseline}, target={catchup_target}, start={start}, current={current}, consecutive_progress_cycles={progress_count}"
+                    );
+                }
+            }
+            JoinerCatchupAssessment::Stalled => {
+                let stalled_count = joiner_warning_state.on_stalled();
+                if should_log_on_first_and_every_nth(stalled_count, JOINER_STALL_LOG_EVERY) {
+                    eprintln!(
+                        "joiner catch-up stalled after registration: baseline={baseline}, target={catchup_target}, start={start}, current={current}, consecutive_stalled_cycles={stalled_count}"
+                    );
+                }
+            }
         },
         Err(err) => {
-            eprintln!(
-                "joiner catch-up stalled after registration: baseline={baseline}, target={catchup_target}, err={err:?}"
-            );
+            let stalled_count = joiner_warning_state.on_stalled();
+            if should_log_on_first_and_every_nth(stalled_count, JOINER_STALL_LOG_EVERY) {
+                eprintln!(
+                    "joiner catch-up stalled after registration: baseline={baseline}, target={catchup_target}, err={err:?}, consecutive_stalled_cycles={stalled_count}"
+                );
+            }
         }
     }
     let convergence_target =
@@ -785,6 +807,36 @@ enum JoinerCatchupAssessment {
     ReachedTarget,
     Progressed,
     Stalled,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct JoinerCatchupWarningState {
+    consecutive_stalled: u64,
+    consecutive_progress_below_target: u64,
+}
+
+impl JoinerCatchupWarningState {
+    fn on_reached_target(&mut self) {
+        self.consecutive_stalled = 0;
+        self.consecutive_progress_below_target = 0;
+    }
+
+    fn on_progress_below_target(&mut self) -> u64 {
+        self.consecutive_progress_below_target =
+            self.consecutive_progress_below_target.saturating_add(1);
+        self.consecutive_stalled = 0;
+        self.consecutive_progress_below_target
+    }
+
+    fn on_stalled(&mut self) -> u64 {
+        self.consecutive_stalled = self.consecutive_stalled.saturating_add(1);
+        self.consecutive_progress_below_target = 0;
+        self.consecutive_stalled
+    }
+}
+
+fn should_log_on_first_and_every_nth(count: u64, every: u64) -> bool {
+    count == 1 || count % every == 0
 }
 
 fn assess_joiner_catchup(start: u64, current: u64, target: u64) -> JoinerCatchupAssessment {
@@ -1135,6 +1187,47 @@ fn validator_restart_catchup_target_subtracts_interim_skew() {
 #[test]
 fn validator_restart_catchup_target_saturates_at_zero() {
     assert_eq!(validator_restart_catchup_target(3), 0);
+}
+
+#[test]
+fn warning_state_logs_first_and_every_interval_for_stalls() {
+    let mut warning_state = JoinerCatchupWarningState::default();
+    let first = warning_state.on_stalled();
+    let second = warning_state.on_stalled();
+    let third = warning_state.on_stalled();
+    let fourth = warning_state.on_stalled();
+    let fifth = warning_state.on_stalled();
+    assert!(should_log_on_first_and_every_nth(
+        first,
+        JOINER_STALL_LOG_EVERY
+    ));
+    assert!(!should_log_on_first_and_every_nth(
+        second,
+        JOINER_STALL_LOG_EVERY
+    ));
+    assert!(!should_log_on_first_and_every_nth(
+        third,
+        JOINER_STALL_LOG_EVERY
+    ));
+    assert!(!should_log_on_first_and_every_nth(
+        fourth,
+        JOINER_STALL_LOG_EVERY
+    ));
+    assert!(should_log_on_first_and_every_nth(
+        fifth,
+        JOINER_STALL_LOG_EVERY
+    ));
+}
+
+#[test]
+fn warning_state_resets_stall_counter_after_progress() {
+    let mut warning_state = JoinerCatchupWarningState::default();
+    warning_state.on_stalled();
+    warning_state.on_stalled();
+    let progress_count = warning_state.on_progress_below_target();
+    assert_eq!(progress_count, 1);
+    let stalled_count = warning_state.on_stalled();
+    assert_eq!(stalled_count, 1);
 }
 
 async fn submit_instruction_with_retry(
