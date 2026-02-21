@@ -40,6 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "executor_custom_instructions_complex",
         "executor_with_migration_fail",
         "executor_with_fuel",
+        "executor_with_custom_parameter",
         // IVM samples referenced by integration tests
         "mint_rose_trigger",
         "create_nft_for_every_user_trigger",

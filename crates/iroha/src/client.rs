@@ -4987,6 +4987,24 @@ fn should_fallback_after_confirmation_error(err: &eyre::Report) -> bool {
     !is_final_tx_confirmation_error(err)
 }
 
+fn unwrap_final_tx_confirmation_error(err: eyre::Report) -> eyre::Report {
+    match err.downcast::<TxConfirmationFinalError>() {
+        Ok(final_err) => {
+            let maybe_reason = final_err
+                .report
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<TransactionRejectionReason>())
+                .cloned();
+            if let Some(reason) = maybe_reason {
+                eyre::Report::from(reason)
+            } else {
+                final_err.report
+            }
+        }
+        Err(err) => err,
+    }
+}
+
 /// Iroha client
 #[derive(Clone, Display)]
 #[display("{}@{torii_url}", key_pair.public_key())]
@@ -5734,14 +5752,14 @@ impl Client {
                             iterator.close().await;
                         }
                         match result {
-                            Ok(inner) => match inner {
-                                Ok(ok) => Ok(ok),
-                                Err(err) => {
-                                    if !should_fallback_after_confirmation_error(&err) {
-                                        return Err(err);
-                                    }
-                                    let err = err.wrap_err(timeout_err());
-                                    warn!(
+                                Ok(inner) => match inner {
+                                    Ok(ok) => Ok(ok),
+                                    Err(err) => {
+                                        if !should_fallback_after_confirmation_error(&err) {
+                                            return Err(unwrap_final_tx_confirmation_error(err));
+                                        }
+                                        let err = err.wrap_err(timeout_err());
+                                        warn!(
                                         %hash,
                                         ?err,
                                         "tx confirmation stream returned error; falling back to pipeline status query"
@@ -10917,9 +10935,8 @@ fn tx_rejection_to_report(
             .wrap_err(format!("Transaction rejected: {innermost_msg}"));
     }
 
-    // Otherwise, fall back to the string representation to avoid requiring
-    // `std::error::Error` impls on the rejection reason (works under `fast_dsl`).
-    eyre!(reason.to_string()).wrap_err("Transaction rejected")
+    // Preserve the structured rejection reason as the root cause so callers can downcast.
+    eyre::Report::from(reason.clone()).wrap_err("Transaction rejected")
 }
 
 pub(crate) fn join_torii_url(url: &Url, path: &str) -> Url {
@@ -13857,7 +13874,8 @@ mod tests {
 
     #[test]
     fn sumeragi_operator_endpoints_include_signature_headers_when_key_configured() {
-        let cases: [(&str, fn(&Client) -> Result<norito::json::Value>); 3] = [
+        type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
+        let cases: [SumeragiEndpointCase; 3] = [
             (
                 "/v1/sumeragi/pacemaker",
                 Client::get_sumeragi_pacemaker_json,

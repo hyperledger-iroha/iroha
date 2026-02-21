@@ -476,7 +476,7 @@ impl AppState {
         let mut events = VecDeque::new();
         push_event(&mut events, {
             let peer_count = peers.len();
-            format!("UPLINK ESTABLISHED. {} TARGETS ACQUIRED.", peer_count)
+            format!("UPLINK ESTABLISHED. {peer_count} TARGETS ACQUIRED.")
         });
         Self {
             refresh,
@@ -770,7 +770,7 @@ fn render_ui(frame: &mut ratatui::Frame<'_>, app: &AppState) {
 fn build_summary(app: &AppState) -> Line<'static> {
     let text = format_summary_text(app);
     Line::from(vec![Span::styled(
-        format!(">>> OVERRIDE STATUS: {}", text),
+        format!(">>> OVERRIDE STATUS: {text}"),
         Style::default()
             .fg(Color::LightCyan)
             .bg(Color::Black)
@@ -996,7 +996,7 @@ fn render_events(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, ap
             .rev()
             .map(|msg| {
                 Line::from(Span::styled(
-                    format!("> {}", msg),
+                    format!("> {msg}"),
                     Style::default().fg(Color::LightCyan),
                 ))
             })

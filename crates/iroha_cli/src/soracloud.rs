@@ -112,18 +112,48 @@ impl Run for Command {
                 let output = args.run(&context.config().key_pair)?;
                 context.print_data(&output)
             }
-            Command::AgentDeploy(args) => context.print_data(&args.run()?),
-            Command::AgentLeaseRenew(args) => context.print_data(&args.run()?),
-            Command::AgentRestart(args) => context.print_data(&args.run()?),
+            Command::AgentDeploy(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::AgentLeaseRenew(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::AgentRestart(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
             Command::AgentStatus(args) => context.print_data(&args.run()?),
-            Command::AgentWalletSpend(args) => context.print_data(&args.run()?),
-            Command::AgentWalletApprove(args) => context.print_data(&args.run()?),
-            Command::AgentPolicyRevoke(args) => context.print_data(&args.run()?),
-            Command::AgentMessageSend(args) => context.print_data(&args.run()?),
-            Command::AgentMessageAck(args) => context.print_data(&args.run()?),
+            Command::AgentWalletSpend(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::AgentWalletApprove(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::AgentPolicyRevoke(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::AgentMessageSend(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::AgentMessageAck(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
             Command::AgentMailboxStatus(args) => context.print_data(&args.run()?),
-            Command::AgentArtifactAllow(args) => context.print_data(&args.run()?),
-            Command::AgentAutonomyRun(args) => context.print_data(&args.run()?),
+            Command::AgentArtifactAllow(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::AgentAutonomyRun(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
             Command::AgentAutonomyStatus(args) => context.print_data(&args.run()?),
         }
     }
@@ -538,10 +568,19 @@ pub struct AgentDeployArgs {
     /// Initial autonomy execution budget units.
     #[arg(long, value_name = "UNITS", default_value_t = AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS)]
     autonomy_budget_units: u64,
+    /// Optional Torii base URL; when provided, calls live `agent/deploy` instead of local registry simulation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl AgentDeployArgs {
-    fn run(self) -> Result<AgentMutationOutput> {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.lease_ticks == 0 {
             return Err(eyre!("--lease-ticks must be greater than zero"));
         }
@@ -551,6 +590,23 @@ impl AgentDeployArgs {
         let manifest: AgentApartmentManifestV1 = load_json(&self.manifest)?;
         manifest.validate()?;
 
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let request = signed_agent_deploy_request(
+                manifest,
+                self.lease_ticks,
+                self.autonomy_budget_units,
+                key_pair,
+            )?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                "v1/soracloud/agent/deploy",
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output = apply_agent_deploy_with_budget(
             &mut registry,
@@ -559,7 +615,7 @@ impl AgentDeployArgs {
             self.autonomy_budget_units,
         )?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud agent deploy output")
     }
 }
 
@@ -575,18 +631,41 @@ pub struct AgentLeaseRenewArgs {
     /// Lease extension ticks.
     #[arg(long, value_name = "TICKS", default_value_t = 120)]
     lease_ticks: u64,
+    /// Optional Torii base URL; when provided, calls live `agent/lease/renew` instead of local registry simulation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl AgentLeaseRenewArgs {
-    fn run(self) -> Result<AgentMutationOutput> {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.lease_ticks == 0 {
             return Err(eyre!("--lease-ticks must be greater than zero"));
         }
+
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let request =
+                signed_agent_lease_renew_request(&self.apartment_name, self.lease_ticks, key_pair)?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                "v1/soracloud/agent/lease/renew",
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output =
             apply_agent_lease_renew(&mut registry, &self.apartment_name, self.lease_ticks)?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud agent lease renew output")
     }
 }
 
@@ -602,14 +681,36 @@ pub struct AgentRestartArgs {
     /// Human-readable reason captured in scheduler events.
     #[arg(long, value_name = "TEXT")]
     reason: String,
+    /// Optional Torii base URL; when provided, calls live `agent/restart` instead of local registry simulation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl AgentRestartArgs {
-    fn run(self) -> Result<AgentMutationOutput> {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let request =
+                signed_agent_restart_request(&self.apartment_name, &self.reason, key_pair)?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                "v1/soracloud/agent/restart",
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output = apply_agent_restart(&mut registry, &self.apartment_name, &self.reason)?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud agent restart output")
     }
 }
 
@@ -622,10 +723,29 @@ pub struct AgentStatusArgs {
     /// Optional apartment name filter.
     #[arg(long, value_name = "NAME")]
     apartment_name: Option<String>,
+    /// Optional Torii base URL; when provided, queries live `agent/status` instead of local registry simulation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when querying live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane status query.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl AgentStatusArgs {
-    fn run(self) -> Result<AgentStatusOutput> {
+    fn run(self) -> Result<norito::json::Value> {
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let (_, payload) = fetch_torii_soracloud_agent_status(
+                torii_url,
+                self.apartment_name.as_deref(),
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let registry = load_registry(&self.registry)?;
         let mut apartments = Vec::new();
         for (apartment_name, entry) in &registry.apartments {
@@ -642,12 +762,13 @@ impl AgentStatusArgs {
                 registry.next_sequence,
             ));
         }
-        Ok(AgentStatusOutput {
+        let output = AgentStatusOutput {
             schema_version: registry.schema_version,
             apartment_count: u32::try_from(apartments.len()).unwrap_or(u32::MAX),
             event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
             apartments,
-        })
+        };
+        json::to_value(&output).wrap_err("failed to encode soracloud agent status output")
     }
 }
 
@@ -666,13 +787,40 @@ pub struct AgentWalletSpendArgs {
     /// Spend amount in nanos.
     #[arg(long, value_name = "NANOS")]
     amount_nanos: u64,
+    /// Optional Torii base URL; when provided, calls live `agent/wallet/spend` instead of local registry simulation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl AgentWalletSpendArgs {
-    fn run(self) -> Result<AgentWalletMutationOutput> {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.amount_nanos == 0 {
             return Err(eyre!("--amount-nanos must be greater than zero"));
         }
+
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let request = signed_agent_wallet_spend_request(
+                &self.apartment_name,
+                &self.asset_definition,
+                self.amount_nanos,
+                key_pair,
+            )?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                "v1/soracloud/agent/wallet/spend",
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output = apply_agent_wallet_spend(
             &mut registry,
@@ -681,7 +829,7 @@ impl AgentWalletSpendArgs {
             self.amount_nanos,
         )?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud agent wallet spend output")
     }
 }
 
@@ -697,15 +845,40 @@ pub struct AgentWalletApproveArgs {
     /// Wallet request identifier emitted by `agent-wallet-spend`.
     #[arg(long, value_name = "REQUEST")]
     request_id: String,
+    /// Optional Torii base URL; when provided, calls live `agent/wallet/approve` instead of local registry simulation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl AgentWalletApproveArgs {
-    fn run(self) -> Result<AgentWalletMutationOutput> {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let request = signed_agent_wallet_approve_request(
+                &self.apartment_name,
+                &self.request_id,
+                key_pair,
+            )?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                "v1/soracloud/agent/wallet/approve",
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output =
             apply_agent_wallet_approve(&mut registry, &self.apartment_name, &self.request_id)?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud agent wallet approve output")
     }
 }
 
@@ -724,10 +897,36 @@ pub struct AgentPolicyRevokeArgs {
     /// Optional reason included in audit events.
     #[arg(long, value_name = "TEXT")]
     reason: Option<String>,
+    /// Optional Torii base URL; when provided, calls live `agent/policy/revoke` instead of local registry simulation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl AgentPolicyRevokeArgs {
-    fn run(self) -> Result<AgentWalletMutationOutput> {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let request = signed_agent_policy_revoke_request(
+                &self.apartment_name,
+                &self.capability,
+                self.reason.as_deref(),
+                key_pair,
+            )?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                "v1/soracloud/agent/policy/revoke",
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output = apply_agent_policy_revoke(
             &mut registry,
@@ -736,7 +935,7 @@ impl AgentPolicyRevokeArgs {
             self.reason.as_deref(),
         )?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud agent policy revoke output")
     }
 }
 
@@ -758,10 +957,37 @@ pub struct AgentMessageSendArgs {
     /// Message payload (UTF-8 text).
     #[arg(long, value_name = "TEXT")]
     payload: String,
+    /// Optional Torii base URL; when provided, calls live `agent/message/send` instead of local registry simulation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl AgentMessageSendArgs {
-    fn run(self) -> Result<AgentMailboxMutationOutput> {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let request = signed_agent_message_send_request(
+                &self.from_apartment,
+                &self.to_apartment,
+                &self.channel,
+                &self.payload,
+                key_pair,
+            )?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                "v1/soracloud/agent/message/send",
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output = apply_agent_message_send(
             &mut registry,
@@ -771,7 +997,7 @@ impl AgentMessageSendArgs {
             &self.payload,
         )?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud agent message send output")
     }
 }
 
@@ -787,15 +1013,37 @@ pub struct AgentMessageAckArgs {
     /// Message identifier emitted by `agent-message-send`.
     #[arg(long, value_name = "MESSAGE")]
     message_id: String,
+    /// Optional Torii base URL; when provided, calls live `agent/message/ack` instead of local registry simulation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl AgentMessageAckArgs {
-    fn run(self) -> Result<AgentMailboxMutationOutput> {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let request =
+                signed_agent_message_ack_request(&self.apartment_name, &self.message_id, key_pair)?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                "v1/soracloud/agent/message/ack",
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output =
             apply_agent_message_ack(&mut registry, &self.apartment_name, &self.message_id)?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud agent message ack output")
     }
 }
 
@@ -808,10 +1056,29 @@ pub struct AgentMailboxStatusArgs {
     /// Apartment name to inspect.
     #[arg(long, value_name = "NAME")]
     apartment_name: String,
+    /// Optional Torii base URL; when provided, queries live `agent/mailbox/status` instead of local registry simulation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when querying live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane status query.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl AgentMailboxStatusArgs {
-    fn run(self) -> Result<AgentMailboxStatusOutput> {
+    fn run(self) -> Result<norito::json::Value> {
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let (_, payload) = fetch_torii_soracloud_agent_mailbox_status(
+                torii_url,
+                &self.apartment_name,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let registry = load_registry(&self.registry)?;
         let apartment_name = self.apartment_name.trim();
         if apartment_name.is_empty() {
@@ -826,14 +1093,15 @@ impl AgentMailboxStatusArgs {
             .iter()
             .map(AgentMailboxMessageEntry::from_message)
             .collect::<Vec<_>>();
-        Ok(AgentMailboxStatusOutput {
+        let output = AgentMailboxStatusOutput {
             schema_version: registry.schema_version,
             apartment_name: apartment_name.to_owned(),
             status: runtime_status_for_sequence(runtime, registry.next_sequence),
             pending_message_count: u32::try_from(messages.len()).unwrap_or(u32::MAX),
             event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
             messages,
-        })
+        };
+        json::to_value(&output).wrap_err("failed to encode soracloud agent mailbox status output")
     }
 }
 
@@ -852,10 +1120,36 @@ pub struct AgentArtifactAllowArgs {
     /// Optional provenance hash required for this artifact.
     #[arg(long, value_name = "HASH")]
     provenance_hash: Option<String>,
+    /// Optional Torii base URL; when provided, calls live `agent/autonomy/allow` instead of local registry simulation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl AgentArtifactAllowArgs {
-    fn run(self) -> Result<AgentAutonomyMutationOutput> {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let request = signed_agent_artifact_allow_request(
+                &self.apartment_name,
+                &self.artifact_hash,
+                self.provenance_hash.as_deref(),
+                key_pair,
+            )?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                "v1/soracloud/agent/autonomy/allow",
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output = apply_agent_artifact_allow(
             &mut registry,
@@ -864,7 +1158,7 @@ impl AgentArtifactAllowArgs {
             self.provenance_hash.as_deref(),
         )?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud agent autonomy allow output")
     }
 }
 
@@ -889,13 +1183,42 @@ pub struct AgentAutonomyRunArgs {
     /// Human-readable run label.
     #[arg(long, value_name = "LABEL")]
     run_label: String,
+    /// Optional Torii base URL; when provided, calls live `agent/autonomy/run` instead of local registry simulation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl AgentAutonomyRunArgs {
-    fn run(self) -> Result<AgentAutonomyMutationOutput> {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.budget_units == 0 {
             return Err(eyre!("--budget-units must be greater than zero"));
         }
+
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let request = signed_agent_autonomy_run_request(
+                &self.apartment_name,
+                &self.artifact_hash,
+                self.provenance_hash.as_deref(),
+                self.budget_units,
+                &self.run_label,
+                key_pair,
+            )?;
+            let (_, payload) = post_torii_soracloud_mutation(
+                torii_url,
+                "v1/soracloud/agent/autonomy/run",
+                &request,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let mut registry = load_registry(&self.registry)?;
         let output = apply_agent_autonomy_run(
             &mut registry,
@@ -906,7 +1229,7 @@ impl AgentAutonomyRunArgs {
             &self.run_label,
         )?;
         write_json(&self.registry, &registry)?;
-        Ok(output)
+        json::to_value(&output).wrap_err("failed to encode soracloud agent autonomy run output")
     }
 }
 
@@ -919,10 +1242,29 @@ pub struct AgentAutonomyStatusArgs {
     /// Apartment name to inspect.
     #[arg(long, value_name = "NAME")]
     apartment_name: String,
+    /// Optional Torii base URL; when provided, queries live `agent/autonomy/status` instead of local registry simulation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when querying Torii.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane query.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
 }
 
 impl AgentAutonomyStatusArgs {
-    fn run(self) -> Result<AgentAutonomyStatusOutput> {
+    fn run(self) -> Result<norito::json::Value> {
+        if let Some(torii_url) = self.torii_url.as_deref() {
+            let (_, payload) = fetch_torii_soracloud_agent_autonomy_status(
+                torii_url,
+                &self.apartment_name,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            return Ok(payload);
+        }
+
         let registry = load_registry(&self.registry)?;
         let apartment_name = self.apartment_name.trim();
         if apartment_name.is_empty() {
@@ -944,7 +1286,7 @@ impl AgentAutonomyStatusArgs {
             .take(20)
             .cloned()
             .collect::<Vec<_>>();
-        Ok(AgentAutonomyStatusOutput {
+        let output = AgentAutonomyStatusOutput {
             schema_version: registry.schema_version,
             apartment_name: apartment_name.to_owned(),
             status: runtime_status_for_sequence(runtime, registry.next_sequence),
@@ -955,7 +1297,8 @@ impl AgentAutonomyStatusArgs {
             event_count: u32::try_from(registry.apartment_events.len()).unwrap_or(u32::MAX),
             allowlist,
             recent_runs,
-        })
+        };
+        json::to_value(&output).wrap_err("failed to encode soracloud agent autonomy status output")
     }
 }
 
@@ -1675,6 +2018,212 @@ struct RolloutAdvancePayload {
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedRolloutAdvanceRequest {
     payload: RolloutAdvancePayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct AgentDeployPayload {
+    manifest: AgentApartmentManifestV1,
+    lease_ticks: u64,
+    #[norito(default)]
+    autonomy_budget_units: Option<u64>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedAgentDeployRequest {
+    payload: AgentDeployPayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct AgentLeaseRenewPayload {
+    apartment_name: String,
+    lease_ticks: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedAgentLeaseRenewRequest {
+    payload: AgentLeaseRenewPayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct AgentRestartPayload {
+    apartment_name: String,
+    reason: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedAgentRestartRequest {
+    payload: AgentRestartPayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct AgentPolicyRevokePayload {
+    apartment_name: String,
+    capability: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedAgentPolicyRevokeRequest {
+    payload: AgentPolicyRevokePayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct AgentWalletSpendPayload {
+    apartment_name: String,
+    asset_definition: String,
+    amount_nanos: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedAgentWalletSpendRequest {
+    payload: AgentWalletSpendPayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct AgentWalletApprovePayload {
+    apartment_name: String,
+    request_id: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedAgentWalletApproveRequest {
+    payload: AgentWalletApprovePayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct AgentMessageSendPayload {
+    from_apartment: String,
+    to_apartment: String,
+    channel: String,
+    payload: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedAgentMessageSendRequest {
+    payload: AgentMessageSendPayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct AgentMessageAckPayload {
+    apartment_name: String,
+    message_id: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedAgentMessageAckRequest {
+    payload: AgentMessageAckPayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct AgentArtifactAllowPayload {
+    apartment_name: String,
+    artifact_hash: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    provenance_hash: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedAgentArtifactAllowRequest {
+    payload: AgentArtifactAllowPayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct AgentAutonomyRunPayload {
+    apartment_name: String,
+    artifact_hash: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    provenance_hash: Option<String>,
+    budget_units: u64,
+    run_label: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedAgentAutonomyRunRequest {
+    payload: AgentAutonomyRunPayload,
     provenance: ManifestProvenance,
 }
 
@@ -3441,6 +3990,306 @@ fn signed_rollout_request(
     })
 }
 
+fn signed_agent_deploy_request(
+    manifest: AgentApartmentManifestV1,
+    lease_ticks: u64,
+    autonomy_budget_units: u64,
+    key_pair: &KeyPair,
+) -> Result<SignedAgentDeployRequest> {
+    let payload = AgentDeployPayload {
+        manifest,
+        lease_ticks,
+        autonomy_budget_units: Some(autonomy_budget_units),
+    };
+    let encoded = encode_agent_deploy_signature_payload(&payload)
+        .wrap_err("failed to encode agent deploy payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedAgentDeployRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_agent_lease_renew_request(
+    apartment_name: &str,
+    lease_ticks: u64,
+    key_pair: &KeyPair,
+) -> Result<SignedAgentLeaseRenewRequest> {
+    if apartment_name.trim().is_empty() {
+        return Err(eyre!("--apartment-name must not be empty"));
+    }
+    if lease_ticks == 0 {
+        return Err(eyre!("--lease-ticks must be greater than zero"));
+    }
+    let payload = AgentLeaseRenewPayload {
+        apartment_name: apartment_name.to_owned(),
+        lease_ticks,
+    };
+    let encoded = encode_agent_lease_renew_signature_payload(&payload)
+        .wrap_err("failed to encode agent lease renew payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedAgentLeaseRenewRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_agent_restart_request(
+    apartment_name: &str,
+    reason: &str,
+    key_pair: &KeyPair,
+) -> Result<SignedAgentRestartRequest> {
+    if apartment_name.trim().is_empty() {
+        return Err(eyre!("--apartment-name must not be empty"));
+    }
+    if reason.trim().is_empty() {
+        return Err(eyre!("--reason must not be empty"));
+    }
+    let payload = AgentRestartPayload {
+        apartment_name: apartment_name.to_owned(),
+        reason: reason.to_owned(),
+    };
+    let encoded = encode_agent_restart_signature_payload(&payload)
+        .wrap_err("failed to encode agent restart payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedAgentRestartRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_agent_policy_revoke_request(
+    apartment_name: &str,
+    capability: &str,
+    reason: Option<&str>,
+    key_pair: &KeyPair,
+) -> Result<SignedAgentPolicyRevokeRequest> {
+    if apartment_name.trim().is_empty() {
+        return Err(eyre!("--apartment-name must not be empty"));
+    }
+    if capability.trim().is_empty() {
+        return Err(eyre!("--capability must not be empty"));
+    }
+    let payload = AgentPolicyRevokePayload {
+        apartment_name: apartment_name.to_owned(),
+        capability: capability.to_owned(),
+        reason: reason.map(ToOwned::to_owned),
+    };
+    let encoded = encode_agent_policy_revoke_signature_payload(&payload)
+        .wrap_err("failed to encode agent policy revoke payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedAgentPolicyRevokeRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_agent_wallet_spend_request(
+    apartment_name: &str,
+    asset_definition: &str,
+    amount_nanos: u64,
+    key_pair: &KeyPair,
+) -> Result<SignedAgentWalletSpendRequest> {
+    if apartment_name.trim().is_empty() {
+        return Err(eyre!("--apartment-name must not be empty"));
+    }
+    if asset_definition.trim().is_empty() {
+        return Err(eyre!("--asset-definition must not be empty"));
+    }
+    if amount_nanos == 0 {
+        return Err(eyre!("--amount-nanos must be greater than zero"));
+    }
+    let payload = AgentWalletSpendPayload {
+        apartment_name: apartment_name.to_owned(),
+        asset_definition: asset_definition.to_owned(),
+        amount_nanos,
+    };
+    let encoded = encode_agent_wallet_spend_signature_payload(&payload)
+        .wrap_err("failed to encode agent wallet spend payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedAgentWalletSpendRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_agent_wallet_approve_request(
+    apartment_name: &str,
+    request_id: &str,
+    key_pair: &KeyPair,
+) -> Result<SignedAgentWalletApproveRequest> {
+    if apartment_name.trim().is_empty() {
+        return Err(eyre!("--apartment-name must not be empty"));
+    }
+    if request_id.trim().is_empty() {
+        return Err(eyre!("--request-id must not be empty"));
+    }
+    let payload = AgentWalletApprovePayload {
+        apartment_name: apartment_name.to_owned(),
+        request_id: request_id.to_owned(),
+    };
+    let encoded = encode_agent_wallet_approve_signature_payload(&payload)
+        .wrap_err("failed to encode agent wallet approve payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedAgentWalletApproveRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_agent_message_send_request(
+    from_apartment: &str,
+    to_apartment: &str,
+    channel: &str,
+    payload: &str,
+    key_pair: &KeyPair,
+) -> Result<SignedAgentMessageSendRequest> {
+    if from_apartment.trim().is_empty() {
+        return Err(eyre!("--from-apartment must not be empty"));
+    }
+    if to_apartment.trim().is_empty() {
+        return Err(eyre!("--to-apartment must not be empty"));
+    }
+    if channel.trim().is_empty() {
+        return Err(eyre!("--channel must not be empty"));
+    }
+    if payload.trim().is_empty() {
+        return Err(eyre!("--payload must not be empty"));
+    }
+    let payload = AgentMessageSendPayload {
+        from_apartment: from_apartment.to_owned(),
+        to_apartment: to_apartment.to_owned(),
+        channel: channel.to_owned(),
+        payload: payload.to_owned(),
+    };
+    let encoded = encode_agent_message_send_signature_payload(&payload)
+        .wrap_err("failed to encode agent message send payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedAgentMessageSendRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_agent_message_ack_request(
+    apartment_name: &str,
+    message_id: &str,
+    key_pair: &KeyPair,
+) -> Result<SignedAgentMessageAckRequest> {
+    if apartment_name.trim().is_empty() {
+        return Err(eyre!("--apartment-name must not be empty"));
+    }
+    if message_id.trim().is_empty() {
+        return Err(eyre!("--message-id must not be empty"));
+    }
+    let payload = AgentMessageAckPayload {
+        apartment_name: apartment_name.to_owned(),
+        message_id: message_id.to_owned(),
+    };
+    let encoded = encode_agent_message_ack_signature_payload(&payload)
+        .wrap_err("failed to encode agent message ack payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedAgentMessageAckRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_agent_artifact_allow_request(
+    apartment_name: &str,
+    artifact_hash: &str,
+    provenance_hash: Option<&str>,
+    key_pair: &KeyPair,
+) -> Result<SignedAgentArtifactAllowRequest> {
+    if apartment_name.trim().is_empty() {
+        return Err(eyre!("--apartment-name must not be empty"));
+    }
+    validate_hash_like_value("--artifact-hash", artifact_hash.trim())?;
+    if let Some(provenance_hash) = provenance_hash {
+        validate_hash_like_value("--provenance-hash", provenance_hash.trim())?;
+    }
+    let payload = AgentArtifactAllowPayload {
+        apartment_name: apartment_name.to_owned(),
+        artifact_hash: artifact_hash.to_owned(),
+        provenance_hash: provenance_hash.map(ToOwned::to_owned),
+    };
+    let encoded = encode_agent_artifact_allow_signature_payload(&payload)
+        .wrap_err("failed to encode agent autonomy allow payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedAgentArtifactAllowRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_agent_autonomy_run_request(
+    apartment_name: &str,
+    artifact_hash: &str,
+    provenance_hash: Option<&str>,
+    budget_units: u64,
+    run_label: &str,
+    key_pair: &KeyPair,
+) -> Result<SignedAgentAutonomyRunRequest> {
+    if apartment_name.trim().is_empty() {
+        return Err(eyre!("--apartment-name must not be empty"));
+    }
+    validate_hash_like_value("--artifact-hash", artifact_hash.trim())?;
+    if let Some(provenance_hash) = provenance_hash {
+        validate_hash_like_value("--provenance-hash", provenance_hash.trim())?;
+    }
+    if budget_units == 0 {
+        return Err(eyre!("--budget-units must be greater than zero"));
+    }
+    let run_label = run_label.trim();
+    if run_label.is_empty() {
+        return Err(eyre!("--run-label must not be empty"));
+    }
+    let payload = AgentAutonomyRunPayload {
+        apartment_name: apartment_name.to_owned(),
+        artifact_hash: artifact_hash.to_owned(),
+        provenance_hash: provenance_hash.map(ToOwned::to_owned),
+        budget_units,
+        run_label: run_label.to_owned(),
+    };
+    let encoded = encode_agent_autonomy_run_signature_payload(&payload)
+        .wrap_err("failed to encode agent autonomy run payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedAgentAutonomyRunRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
 fn encode_rollout_signature_payload(payload: &RolloutAdvancePayload) -> Result<Vec<u8>> {
     norito::to_bytes(&(
         payload.service_name.as_str(),
@@ -3450,6 +4299,95 @@ fn encode_rollout_signature_payload(payload: &RolloutAdvancePayload) -> Result<V
         payload.governance_tx_hash,
     ))
     .wrap_err("failed to encode rollout signature payload tuple")
+}
+
+fn encode_agent_deploy_signature_payload(payload: &AgentDeployPayload) -> Result<Vec<u8>> {
+    norito::to_bytes(&(
+        payload.manifest.clone(),
+        payload.lease_ticks,
+        payload.autonomy_budget_units,
+    ))
+    .wrap_err("failed to encode agent deploy signature payload tuple")
+}
+
+fn encode_agent_lease_renew_signature_payload(payload: &AgentLeaseRenewPayload) -> Result<Vec<u8>> {
+    norito::to_bytes(&(payload.apartment_name.as_str(), payload.lease_ticks))
+        .wrap_err("failed to encode agent lease renew signature payload tuple")
+}
+
+fn encode_agent_restart_signature_payload(payload: &AgentRestartPayload) -> Result<Vec<u8>> {
+    norito::to_bytes(&(payload.apartment_name.as_str(), payload.reason.as_str()))
+        .wrap_err("failed to encode agent restart signature payload tuple")
+}
+
+fn encode_agent_policy_revoke_signature_payload(
+    payload: &AgentPolicyRevokePayload,
+) -> Result<Vec<u8>> {
+    norito::to_bytes(&(
+        payload.apartment_name.as_str(),
+        payload.capability.as_str(),
+        payload.reason.as_deref(),
+    ))
+    .wrap_err("failed to encode agent policy revoke signature payload tuple")
+}
+
+fn encode_agent_wallet_spend_signature_payload(
+    payload: &AgentWalletSpendPayload,
+) -> Result<Vec<u8>> {
+    norito::to_bytes(&(
+        payload.apartment_name.as_str(),
+        payload.asset_definition.as_str(),
+        payload.amount_nanos,
+    ))
+    .wrap_err("failed to encode agent wallet spend signature payload tuple")
+}
+
+fn encode_agent_wallet_approve_signature_payload(
+    payload: &AgentWalletApprovePayload,
+) -> Result<Vec<u8>> {
+    norito::to_bytes(&(payload.apartment_name.as_str(), payload.request_id.as_str()))
+        .wrap_err("failed to encode agent wallet approve signature payload tuple")
+}
+
+fn encode_agent_message_send_signature_payload(
+    payload: &AgentMessageSendPayload,
+) -> Result<Vec<u8>> {
+    norito::to_bytes(&(
+        payload.from_apartment.as_str(),
+        payload.to_apartment.as_str(),
+        payload.channel.as_str(),
+        payload.payload.as_str(),
+    ))
+    .wrap_err("failed to encode agent message send signature payload tuple")
+}
+
+fn encode_agent_message_ack_signature_payload(payload: &AgentMessageAckPayload) -> Result<Vec<u8>> {
+    norito::to_bytes(&(payload.apartment_name.as_str(), payload.message_id.as_str()))
+        .wrap_err("failed to encode agent message ack signature payload tuple")
+}
+
+fn encode_agent_artifact_allow_signature_payload(
+    payload: &AgentArtifactAllowPayload,
+) -> Result<Vec<u8>> {
+    norito::to_bytes(&(
+        payload.apartment_name.as_str(),
+        payload.artifact_hash.as_str(),
+        payload.provenance_hash.as_deref(),
+    ))
+    .wrap_err("failed to encode agent artifact allow signature payload tuple")
+}
+
+fn encode_agent_autonomy_run_signature_payload(
+    payload: &AgentAutonomyRunPayload,
+) -> Result<Vec<u8>> {
+    norito::to_bytes(&(
+        payload.apartment_name.as_str(),
+        payload.artifact_hash.as_str(),
+        payload.provenance_hash.as_deref(),
+        payload.budget_units,
+        payload.run_label.as_str(),
+    ))
+    .wrap_err("failed to encode agent autonomy run signature payload tuple")
 }
 
 fn post_torii_soracloud_mutation<T>(
@@ -3556,6 +4494,161 @@ fn fetch_torii_soracloud_status(
 
     let payload: norito::json::Value =
         json::from_slice(&body).wrap_err("failed to decode Torii soracloud status JSON payload")?;
+    Ok((endpoint.to_string(), payload))
+}
+
+fn fetch_torii_soracloud_agent_status(
+    torii_url: &str,
+    apartment_name: Option<&str>,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)> {
+    let mut endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join("v1/soracloud/agent/status")
+        .wrap_err("failed to derive /v1/soracloud/agent/status URL from --torii-url")?;
+    if let Some(apartment_name) = apartment_name
+        && !apartment_name.trim().is_empty()
+    {
+        endpoint
+            .query_pairs_mut()
+            .append_pair("apartment_name", apartment_name.trim());
+    }
+
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for soracloud agent status")?;
+
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii agent status response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /v1/soracloud/agent/status returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+
+    let payload: norito::json::Value = json::from_slice(&body)
+        .wrap_err("failed to decode Torii soracloud agent status JSON payload")?;
+    Ok((endpoint.to_string(), payload))
+}
+
+fn fetch_torii_soracloud_agent_mailbox_status(
+    torii_url: &str,
+    apartment_name: &str,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)> {
+    let apartment_name = apartment_name.trim();
+    if apartment_name.is_empty() {
+        return Err(eyre!("--apartment-name must not be empty"));
+    }
+
+    let mut endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join("v1/soracloud/agent/mailbox/status")
+        .wrap_err("failed to derive /v1/soracloud/agent/mailbox/status URL from --torii-url")?;
+    endpoint
+        .query_pairs_mut()
+        .append_pair("apartment_name", apartment_name);
+
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for soracloud agent mailbox status")?;
+
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii agent mailbox status response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /v1/soracloud/agent/mailbox/status returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+
+    let payload: norito::json::Value = json::from_slice(&body)
+        .wrap_err("failed to decode Torii soracloud agent mailbox status JSON payload")?;
+    Ok((endpoint.to_string(), payload))
+}
+
+fn fetch_torii_soracloud_agent_autonomy_status(
+    torii_url: &str,
+    apartment_name: &str,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)> {
+    let apartment_name = apartment_name.trim();
+    if apartment_name.is_empty() {
+        return Err(eyre!("--apartment-name must not be empty"));
+    }
+
+    let mut endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join("v1/soracloud/agent/autonomy/status")
+        .wrap_err("failed to derive /v1/soracloud/agent/autonomy/status URL from --torii-url")?;
+    endpoint
+        .query_pairs_mut()
+        .append_pair("apartment_name", apartment_name);
+
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for soracloud agent autonomy status")?;
+
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii agent autonomy status response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /v1/soracloud/agent/autonomy/status returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+
+    let payload: norito::json::Value = json::from_slice(&body)
+        .wrap_err("failed to decode Torii soracloud agent autonomy status JSON payload")?;
     Ok((endpoint.to_string(), payload))
 }
 
@@ -4558,6 +5651,27 @@ mod tests {
     }
 
     #[test]
+    fn fetch_torii_agent_autonomy_status_rejects_invalid_url() {
+        let err = fetch_torii_soracloud_agent_autonomy_status("not-a-url", "ops_agent", None, 5)
+            .expect_err("invalid URL must fail");
+        assert!(err.to_string().contains("invalid --torii-url"));
+    }
+
+    #[test]
+    fn fetch_torii_agent_status_rejects_invalid_url() {
+        let err = fetch_torii_soracloud_agent_status("not-a-url", Some("ops_agent"), None, 5)
+            .expect_err("invalid URL must fail");
+        assert!(err.to_string().contains("invalid --torii-url"));
+    }
+
+    #[test]
+    fn fetch_torii_agent_mailbox_status_rejects_invalid_url() {
+        let err = fetch_torii_soracloud_agent_mailbox_status("not-a-url", "ops_agent", None, 5)
+            .expect_err("invalid URL must fail");
+        assert!(err.to_string().contains("invalid --torii-url"));
+    }
+
+    #[test]
     fn signed_bundle_request_uses_verifiable_signature() {
         let container = fixture_container();
         let mut service = fixture_service();
@@ -4603,6 +5717,172 @@ mod tests {
         )
         .expect("signed rollout request");
         let payload = encode_rollout_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_agent_deploy_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_deploy_request(fixture_agent_apartment(), 120, 500, &key_pair)
+            .expect("signed agent deploy request");
+        let payload =
+            encode_agent_deploy_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_agent_lease_renew_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_lease_renew_request("ops_agent", 120, &key_pair)
+            .expect("signed agent lease renew request");
+        let payload =
+            encode_agent_lease_renew_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_agent_restart_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_restart_request("ops_agent", "manual-restart", &key_pair)
+            .expect("signed agent restart request");
+        let payload =
+            encode_agent_restart_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_agent_policy_revoke_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_policy_revoke_request(
+            "ops_agent",
+            "agent.autonomy.run",
+            Some("manual-review"),
+            &key_pair,
+        )
+        .expect("signed agent policy revoke request");
+        let payload =
+            encode_agent_policy_revoke_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_agent_wallet_spend_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request =
+            signed_agent_wallet_spend_request("ops_agent", "xor#sora", 1_000_000, &key_pair)
+                .expect("signed agent wallet spend request");
+        let payload =
+            encode_agent_wallet_spend_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_agent_wallet_approve_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request =
+            signed_agent_wallet_approve_request("ops_agent", "ops_agent:wallet:7", &key_pair)
+                .expect("signed agent wallet approve request");
+        let payload = encode_agent_wallet_approve_signature_payload(&request.payload)
+            .expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_agent_message_send_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_message_send_request(
+            "ops_agent",
+            "worker_agent",
+            "ops.sync",
+            "rotate-key-42",
+            &key_pair,
+        )
+        .expect("signed agent message send request");
+        let payload =
+            encode_agent_message_send_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_agent_message_ack_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request =
+            signed_agent_message_ack_request("worker_agent", "worker_agent:mail:3", &key_pair)
+                .expect("signed agent message ack request");
+        let payload =
+            encode_agent_message_ack_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_agent_artifact_allow_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_artifact_allow_request(
+            "ops_agent",
+            "hash:ABCD0123#01",
+            Some("hash:PROV0001#01"),
+            &key_pair,
+        )
+        .expect("signed agent artifact allow request");
+        let payload = encode_agent_artifact_allow_signature_payload(&request.payload)
+            .expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_agent_autonomy_run_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_autonomy_run_request(
+            "ops_agent",
+            "hash:ABCD0123#01",
+            Some("hash:PROV0001#01"),
+            120,
+            "nightly-train-step-1",
+            &key_pair,
+        )
+        .expect("signed agent autonomy run request");
+        let payload =
+            encode_agent_autonomy_run_signature_payload(&request.payload).expect("encode payload");
         request
             .provenance
             .signature

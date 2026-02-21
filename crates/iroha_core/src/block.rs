@@ -7661,6 +7661,25 @@ pub(crate) mod valid {
                                     .cloned()
                             })
                     };
+                    let asset_transfer_target = |instruction: &InstructionBox| {
+                        instruction
+                            .as_any()
+                            .downcast_ref::<TransferBox>()
+                            .and_then(|transfer| match transfer {
+                                TransferBox::Asset(transfer) => Some(transfer.clone()),
+                                _ => None,
+                            })
+                            .or_else(|| {
+                                instruction
+                                    .as_any()
+                                    .downcast_ref::<iroha_data_model::isi::Transfer<
+                                        iroha_data_model::asset::Asset,
+                                        iroha_primitives::numeric::Numeric,
+                                        iroha_data_model::account::Account,
+                                    >>()
+                                    .cloned()
+                            })
+                    };
                     let requires_fee_postprocessing =
                         |tx: &iroha_data_model::transaction::SignedTransaction| {
                             if !state_block.pipeline.gas.accepted_assets.is_empty() {
@@ -7684,6 +7703,12 @@ pub(crate) mod valid {
                     let eval_detached = |p: &PreparedEntry| {
                         if let Some(Ok(ovl)) = overlays.get(p.idx) {
                             let tx = txs[p.idx];
+                            if matches!(
+                                &*state_block.world.executor,
+                                crate::executor::Executor::UserProvided(_)
+                            ) {
+                                return (p.idx, None);
+                            }
                             if requires_fee_postprocessing(tx) {
                                 return (p.idx, None);
                             }
@@ -7691,6 +7716,10 @@ pub(crate) mod valid {
                             let mut unsupported = false;
                             let mut reject: Option<TransactionRejectionReason> = None;
                             for instr in ovl.instructions() {
+                                if asset_transfer_target(instr).is_some() {
+                                    unsupported = true;
+                                    break;
+                                }
                                 if !detached_is_genesis {
                                     if let Some(nft_id) = nft_metadata_target(instr) {
                                         match delta.can_modify_nft_metadata(
