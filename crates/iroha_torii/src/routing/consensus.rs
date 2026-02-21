@@ -2870,6 +2870,46 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.qc_rebuild_successes_total,
         ),
         json_entry(
+            "consensus_missing_qc_reacquire_attempt_total",
+            snap.consensus_missing_qc_reacquire_attempt_total,
+        ),
+        json_entry(
+            "consensus_missing_qc_reacquire_success_total",
+            snap.consensus_missing_qc_reacquire_success_total,
+        ),
+        json_entry(
+            "consensus_missing_qc_reacquire_exhausted_total",
+            snap.consensus_missing_qc_reacquire_exhausted_total,
+        ),
+        json_entry(
+            "consensus_missing_qc_rotation_deferred_total",
+            snap.consensus_missing_qc_rotation_deferred_total,
+        ),
+        json_entry(
+            "consensus_forced_proposal_attempt_total",
+            snap.consensus_forced_proposal_attempt_total,
+        ),
+        json_entry(
+            "consensus_forced_proposal_success_total",
+            snap.consensus_forced_proposal_success_total,
+        ),
+        json_entry(
+            "consensus_no_roster_refresh_retry_total",
+            snap.consensus_no_roster_refresh_retry_total,
+        ),
+        json_entry(
+            "consensus_no_roster_refresh_attempt_total",
+            snap.consensus_no_roster_refresh_attempt_total,
+        ),
+        json_entry(
+            "consensus_no_roster_refresh_success_total",
+            snap.consensus_no_roster_refresh_success_total,
+        ),
+        json_entry(
+            "blocksync_range_pull_candidate_exhausted_total",
+            snap.blocksync_range_pull_candidate_exhausted_total,
+        ),
+        json_entry(
             "qc_quorum_without_qc_total",
             snap.qc_quorum_without_qc_total,
         ),
@@ -3571,6 +3611,84 @@ mod status_tests {
             Some("hint_mismatch")
         );
         assert_eq!(entry.get("total").and_then(Value::as_u64), Some(4));
+    }
+
+    #[test]
+    fn status_snapshot_json_includes_recovery_reacquire_fields() {
+        let snap = sumeragi::StatusSnapshot {
+            consensus_missing_qc_reacquire_attempt_total: 2,
+            consensus_missing_qc_reacquire_success_total: 1,
+            consensus_missing_qc_reacquire_exhausted_total: 3,
+            consensus_missing_qc_rotation_deferred_total: 4,
+            consensus_forced_proposal_attempt_total: 5,
+            consensus_forced_proposal_success_total: 2,
+            consensus_no_roster_refresh_retry_total: 6,
+            consensus_no_roster_refresh_attempt_total: 3,
+            consensus_no_roster_refresh_success_total: 1,
+            blocksync_range_pull_candidate_exhausted_total: 7,
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        assert_eq!(
+            payload
+                .get("consensus_missing_qc_reacquire_attempt_total")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            payload
+                .get("consensus_missing_qc_reacquire_success_total")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            payload
+                .get("consensus_missing_qc_reacquire_exhausted_total")
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            payload
+                .get("consensus_missing_qc_rotation_deferred_total")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            payload
+                .get("consensus_forced_proposal_attempt_total")
+                .and_then(Value::as_u64),
+            Some(5)
+        );
+        assert_eq!(
+            payload
+                .get("consensus_forced_proposal_success_total")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            payload
+                .get("consensus_no_roster_refresh_retry_total")
+                .and_then(Value::as_u64),
+            Some(6)
+        );
+        assert_eq!(
+            payload
+                .get("consensus_no_roster_refresh_attempt_total")
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            payload
+                .get("consensus_no_roster_refresh_success_total")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            payload
+                .get("blocksync_range_pull_candidate_exhausted_total")
+                .and_then(Value::as_u64),
+            Some(7)
+        );
     }
 
     #[test]

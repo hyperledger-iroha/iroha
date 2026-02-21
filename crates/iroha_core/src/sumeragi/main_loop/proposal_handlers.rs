@@ -1,6 +1,6 @@
 //! Proposal- and block-created message handling.
 
-use std::sync::mpsc;
+use std::{sync::mpsc, time::Instant};
 
 use iroha_logger::prelude::*;
 
@@ -724,6 +724,20 @@ impl Actor {
     }
 
     pub(super) fn note_proposal_seen(&mut self, height: u64, view: u64, payload_hash: Hash) {
+        if self
+            .subsystems
+            .propose
+            .proposal_liveness
+            .is_some_and(|slot| slot.height == height && slot.view == view)
+        {
+            self.mark_proposal_liveness_state(
+                height,
+                view,
+                ProposalLivenessState::Normal,
+                Instant::now(),
+            );
+            self.subsystems.propose.proposal_liveness = None;
+        }
         if self
             .subsystems
             .propose
