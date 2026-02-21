@@ -57,41 +57,39 @@ impl ThemeIntro {
     }
 
     pub async fn play(&self, options: ThemeOptions) -> Result<ThemePlayback> {
-        render_ascii_intro().await?;
-
         let mut playback = ThemePlayback::default();
-        if !options.audio {
-            return Ok(playback);
-        }
-
-        if let Some(player) = &options.midi_player {
-            let midi_path = if let Some(path) = &options.midi_file {
-                path.clone()
+        if options.audio {
+            if let Some(player) = &options.midi_player {
+                let midi_path = if let Some(path) = &options.midi_file {
+                    path.clone()
+                } else {
+                    etenraku::write_demo_midi_file().wrap_err("write theme midi")?
+                };
+                let child = tokio::process::Command::new(player)
+                    .arg(&midi_path)
+                    .spawn()
+                    .wrap_err("spawn midi player")?;
+                playback.midi_child = Some(child);
             } else {
-                etenraku::write_demo_midi_file().wrap_err("write theme midi")?
-            };
-            let child = tokio::process::Command::new(player)
-                .arg(&midi_path)
-                .spawn()
-                .wrap_err("spawn midi player")?;
-            playback.midi_child = Some(child);
-        } else {
-            #[cfg(any(
-                target_os = "macos",
-                target_os = "windows",
-                all(target_os = "linux", feature = "linux-builtin-synth")
-            ))]
-            {
-                match start_builtin_synth_demo() {
-                    Ok(handle) => {
-                        playback.synth = Some(handle);
-                    }
-                    Err(err) => {
-                        eprintln!("iroha_monitor: theme audio disabled ({err:?})");
+                #[cfg(any(
+                    target_os = "macos",
+                    target_os = "windows",
+                    all(target_os = "linux", feature = "linux-builtin-synth")
+                ))]
+                {
+                    match start_builtin_synth_demo() {
+                        Ok(handle) => {
+                            playback.synth = Some(handle);
+                        }
+                        Err(err) => {
+                            eprintln!("iroha_monitor: theme audio disabled ({err:?})");
+                        }
                     }
                 }
             }
         }
+
+        render_ascii_intro().await?;
 
         Ok(playback)
     }
