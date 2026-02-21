@@ -1242,6 +1242,11 @@ mod tests {
             trust_penalty_unknown_peer:
                 iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+            deferred_send_ttl: Duration::from_millis(
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+            ),
+            deferred_send_max_per_peer:
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             p2p_proxy: None,

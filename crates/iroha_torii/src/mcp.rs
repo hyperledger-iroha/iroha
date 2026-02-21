@@ -6960,6 +6960,9 @@ fn extract_transaction_hash_argument(arguments: &Map) -> Result<String, String> 
         if let Some(hash) = path.get("hash").and_then(Value::as_str) {
             return Ok(hash.to_owned());
         }
+        if let Some(hash) = path.get("transaction_hash").and_then(Value::as_str) {
+            return Ok(hash.to_owned());
+        }
     }
     arguments
         .get("hash")
@@ -6967,7 +6970,7 @@ fn extract_transaction_hash_argument(arguments: &Map) -> Result<String, String> 
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| {
-            "`hash` is required (provide `hash`, `transaction_hash`, or `path.hash`)".to_owned()
+            "`hash` is required (provide `hash`, `transaction_hash`, `path.hash`, or `path.transaction_hash`)".to_owned()
         })
 }
 
@@ -12520,9 +12523,16 @@ fn iroha_transactions_get_tool() -> ToolSpec {
                 "path": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["hash"],
+                    "anyOf": [
+                        { "required": ["hash"] },
+                        { "required": ["transaction_hash"] }
+                    ],
                     "properties": {
-                        "hash": { "type": "string" }
+                        "hash": { "type": "string" },
+                        "transaction_hash": {
+                            "type": "string",
+                            "description": "Alias for `path.hash`."
+                        }
                     }
                 },
                 "headers": {
@@ -12598,9 +12608,16 @@ fn iroha_instructions_get_tool() -> ToolSpec {
                 "path": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["hash", "index"],
+                    "anyOf": [
+                        { "required": ["hash", "index"] },
+                        { "required": ["transaction_hash", "index"] }
+                    ],
                     "properties": {
                         "hash": { "type": "string" },
+                        "transaction_hash": {
+                            "type": "string",
+                            "description": "Alias for `path.hash`."
+                        },
                         "index": { "type": "integer" }
                     }
                 },
@@ -14091,6 +14108,18 @@ mod tests {
     fn extract_transaction_hash_argument_accepts_top_level_shortcut() {
         let args = norito::json!({
             "hash": "deadbeef"
+        });
+        let hash =
+            extract_transaction_hash_argument(args.as_object().expect("object")).expect("hash");
+        assert_eq!(hash, "deadbeef");
+    }
+
+    #[test]
+    fn extract_transaction_hash_argument_accepts_path_alias_shortcut() {
+        let args = norito::json!({
+            "path": {
+                "transaction_hash": "deadbeef"
+            }
         });
         let hash =
             extract_transaction_hash_argument(args.as_object().expect("object")).expect("hash");

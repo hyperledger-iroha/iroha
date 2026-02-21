@@ -1983,6 +1983,24 @@ impl Actor {
         let (consensus_mode, _, _) = self.consensus_context_for_height(tracked_height);
         let topology_peers = self.roster_for_live_vote_with_mode(tracked_height, consensus_mode);
         let active_topology_peers = topology_peers.clone();
+        let tracked_view = self.phase_tracker.current_view(tracked_height).unwrap_or(0);
+        if self.proposal_gated_by_missing_dependencies(tracked_height) {
+            self.subsystems.propose.pacemaker.next_deadline = now
+                .checked_add(
+                    self.subsystems
+                        .propose
+                        .pacemaker
+                        .propose_interval
+                        .max(Duration::from_millis(1)),
+                )
+                .unwrap_or(now);
+            debug!(
+                height = tracked_height,
+                view = tracked_view,
+                "deferring proposal while canonical dependencies are still recovering"
+            );
+            return false;
+        }
         // Drop stale NEW_VIEW entries so proposals cannot regress after higher QCs arrive.
         self.subsystems
             .propose
@@ -1990,15 +2008,15 @@ impl Actor {
             .drop_below_height(tracked_height);
 
         if topology_peers.is_empty() {
-            if pending_queue_len > 0 {
-                iroha_logger::info!(
-                    queue_len = pending_queue_len,
-                    height = view_height,
-                    "deferring proposal: empty commit topology"
-                );
-            } else {
-                trace!("deferring proposal: empty commit topology");
-            }
+            let _ = self.handle_empty_commit_topology_recovery(
+                tracked_height,
+                tracked_view,
+                tip_hash,
+                pending_queue_len,
+                now,
+                ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+                "pacemaker_propose_ready",
+            );
             return false;
         }
 
@@ -2029,6 +2047,7 @@ impl Actor {
             view_age = self.phase_tracker.view_age(tracked_height, now);
         }
         let current_view = self.phase_tracker.current_view(tracked_height);
+        self.clear_consensus_recovery_for_round(tracked_height, current_view.unwrap_or(0));
         let bootstrap_view = current_view.is_none_or(|view| view == 0);
         if let Some(view) = current_view {
             // Avoid proposing stale views by pruning NEW_VIEW entries below the local view.
@@ -2683,10 +2702,14 @@ impl Actor {
 
         let proposal_roster = active_topology_peers;
         if proposal_roster.is_empty() {
-            warn!(
+            let _ = self.handle_empty_commit_topology_recovery(
                 height,
-                view = view_idx,
-                "deferring proposal: empty commit topology for selected height"
+                view_idx,
+                Some(highest_qc.subject_block_hash),
+                pending_queue_len,
+                now,
+                ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+                "proposal_roster_selected_empty",
             );
             return false;
         }

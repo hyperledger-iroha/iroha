@@ -208,9 +208,8 @@ fn spawn_rbc_persist_worker(
         cfg.max_sessions,
         cfg.max_bytes,
     )?;
-    let join_handle = std::thread::Builder::new()
-        .name("sumeragi-rbc-persist".to_owned())
-        .spawn(move || {
+    let join_handle =
+        crate::sumeragi::sumeragi_thread_builder("sumeragi-rbc-persist").spawn(move || {
             while let Ok(work) = work_rx.recv() {
                 let key = work.key;
                 let outcome = store.persist_snapshot(&work.persisted);
@@ -239,49 +238,46 @@ fn spawn_rbc_seed_worker(wake_tx: Option<mpsc::SyncSender<()>>) -> io::Result<Rb
         let result_tx = result_tx.clone();
         let wake_tx = wake_tx.clone();
         let thread_name = format!("sumeragi-rbc-seed-{idx}");
-        let handle = std::thread::Builder::new()
-            .name(thread_name)
-            .spawn(move || {
-                loop {
-                    let work = {
-                        let guard = match work_rx.lock() {
-                            Ok(guard) => guard,
-                            Err(poisoned) => poisoned.into_inner(),
-                        };
-                        guard.recv()
+        let handle = crate::sumeragi::sumeragi_thread_builder(thread_name).spawn(move || {
+            loop {
+                let work = {
+                    let guard = match work_rx.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
                     };
-                    let Ok(work) = work else {
-                        break;
-                    };
-                    let key = work.key;
-                    let payload_hash = work.payload_hash;
-                    let outcome = Actor::build_rbc_session_from_payload(
-                        &work.payload_bytes,
+                    guard.recv()
+                };
+                let Ok(work) = work else {
+                    break;
+                };
+                let key = work.key;
+                let payload_hash = work.payload_hash;
+                let outcome = Actor::build_rbc_session_from_payload(
+                    &work.payload_bytes,
+                    payload_hash,
+                    work.chunk_size,
+                    work.epoch,
+                )
+                .map_err(eyre::Report::from);
+                if result_tx
+                    .send(RbcSeedResult {
+                        key,
                         payload_hash,
-                        work.chunk_size,
-                        work.epoch,
-                    )
-                    .map_err(eyre::Report::from);
-                    if result_tx
-                        .send(RbcSeedResult {
-                            key,
-                            payload_hash,
-                            outcome,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                    if let Some(wake) = wake_tx.as_ref() {
-                        let _ = wake.try_send(());
-                    }
+                        outcome,
+                    })
+                    .is_err()
+                {
+                    break;
                 }
-            })?;
+                if let Some(wake) = wake_tx.as_ref() {
+                    let _ = wake.try_send(());
+                }
+            }
+        })?;
         worker_handles.push(handle);
     }
     drop(result_tx);
-    let join_handle = std::thread::Builder::new()
-        .name("sumeragi-rbc-seed-supervisor".to_owned())
+    let join_handle = crate::sumeragi::sumeragi_thread_builder("sumeragi-rbc-seed-supervisor")
         .spawn(move || {
             for handle in worker_handles {
                 if handle.join().is_err() {
@@ -2163,7 +2159,7 @@ impl Actor {
             now,
             retry_window,
             view_change_window,
-            self.config.recovery.missing_block_signer_fallback_attempts,
+            self.recovery_signer_fallback_attempts(),
         );
         self.pending.missing_block_requests = requests;
         if defer_view_change {
@@ -2310,7 +2306,7 @@ impl Actor {
             now,
             retry_window,
             view_change_window,
-            self.config.recovery.missing_block_signer_fallback_attempts,
+            self.recovery_signer_fallback_attempts(),
         );
         self.pending.missing_block_requests = requests;
         if defer_view_change {
@@ -2924,12 +2920,10 @@ impl Actor {
                 let world = self.state.world_view();
                 let commit_topology = self.state.commit_topology_snapshot();
                 let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
-                let roster = super::roster::derive_active_topology_for_mode_from_world(
+                let roster = self.active_topology_with_genesis_fallback_from_world(
                     &world,
                     commit_topology.as_slice(),
                     height,
-                    self.common_config.trusted_peers.value(),
-                    self.common_config.peer.id(),
                     consensus_mode,
                 );
                 super::roster::canonicalize_roster_for_mode(roster, consensus_mode)

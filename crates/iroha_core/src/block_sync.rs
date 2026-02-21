@@ -42,6 +42,7 @@ const BLOCK_SYNC_QUEUE_CAP_FLOOR: usize = 4;
 const BLOCK_SYNC_REQUEST_MAX_PENDING: u8 = 8;
 const BLOCK_SYNC_REQUEST_TTL_FLOOR_MS: u64 = 1_000;
 const BLOCK_SYNC_QC_WARNING_COOLDOWN: Duration = Duration::from_secs(3);
+const BLOCK_SYNC_ROSTER_SIDECAR_MISMATCH_WARNING_COOLDOWN: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum BlockSyncQcWarningKind {
@@ -112,6 +113,70 @@ fn allow_block_sync_qc_warning(
     )
 }
 
+#[derive(Debug, Default)]
+struct BlockSyncRosterSidecarMismatchWarningThrottle {
+    entries: BTreeMap<(u64, HashOf<BlockHeader>, HashOf<BlockHeader>), (Instant, u64)>,
+}
+
+impl BlockSyncRosterSidecarMismatchWarningThrottle {
+    fn allow(
+        &mut self,
+        height: u64,
+        expected: HashOf<BlockHeader>,
+        stored: HashOf<BlockHeader>,
+        now: Instant,
+        cooldown: Duration,
+    ) -> Option<u64> {
+        let key = (height, expected, stored);
+        if let Some((last_emit, suppressed)) = self.entries.get_mut(&key) {
+            if cooldown > Duration::ZERO && now.saturating_duration_since(*last_emit) < cooldown {
+                *suppressed = suppressed.saturating_add(1);
+                return None;
+            }
+            let suppressed_since_last = *suppressed;
+            *last_emit = now;
+            *suppressed = 0;
+            self.gc(now, cooldown);
+            return Some(suppressed_since_last);
+        }
+        self.entries.insert(key, (now, 0));
+        self.gc(now, cooldown);
+        Some(0)
+    }
+
+    fn gc(&mut self, now: Instant, cooldown: Duration) {
+        let expiry_window = if cooldown > Duration::ZERO {
+            cooldown.saturating_mul(8)
+        } else {
+            Duration::from_secs(1)
+        };
+        self.entries
+            .retain(|_, (recorded, _)| now.saturating_duration_since(*recorded) <= expiry_window);
+    }
+}
+
+static BLOCK_SYNC_ROSTER_SIDECAR_MISMATCH_WARNING_THROTTLE: LazyLock<
+    parking_lot::Mutex<BlockSyncRosterSidecarMismatchWarningThrottle>,
+> = LazyLock::new(|| {
+    parking_lot::Mutex::new(BlockSyncRosterSidecarMismatchWarningThrottle::default())
+});
+
+fn allow_block_sync_roster_sidecar_mismatch_warning(
+    height: u64,
+    expected: HashOf<BlockHeader>,
+    stored: HashOf<BlockHeader>,
+) -> Option<u64> {
+    BLOCK_SYNC_ROSTER_SIDECAR_MISMATCH_WARNING_THROTTLE
+        .lock()
+        .allow(
+            height,
+            expected,
+            stored,
+            Instant::now(),
+            BLOCK_SYNC_ROSTER_SIDECAR_MISMATCH_WARNING_COOLDOWN,
+        )
+}
+
 #[cfg(test)]
 mod block_sync_qc_warning_throttle_tests {
     use super::{BlockSyncQcWarningKind, BlockSyncQcWarningThrottle};
@@ -157,6 +222,47 @@ mod block_sync_qc_warning_throttle_tests {
                 1,
                 now + Duration::from_millis(80),
                 cooldown,
+            ),
+            Some(1)
+        );
+    }
+}
+
+#[cfg(test)]
+mod block_sync_roster_sidecar_warning_throttle_tests {
+    use super::BlockSyncRosterSidecarMismatchWarningThrottle;
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn roster_sidecar_warning_throttle_coalesces_duplicates() {
+        let mut throttle = BlockSyncRosterSidecarMismatchWarningThrottle::default();
+        let cooldown = Duration::from_millis(50);
+        let now = Instant::now();
+        let expected =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([12; Hash::LENGTH]));
+        let stored =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([13; Hash::LENGTH]));
+
+        assert_eq!(throttle.allow(9, expected, stored, now, cooldown), Some(0));
+        assert_eq!(
+            throttle.allow(
+                9,
+                expected,
+                stored,
+                now + Duration::from_millis(10),
+                cooldown
+            ),
+            None
+        );
+        assert_eq!(
+            throttle.allow(
+                9,
+                expected,
+                stored,
+                now + Duration::from_millis(80),
+                cooldown
             ),
             Some(1)
         );
@@ -2705,12 +2811,21 @@ pub mod message {
             if meta.block_hash == block_hash {
                 Some(meta)
             } else {
-                warn!(
-                    expected = %block_hash,
-                    stored = %meta.block_hash,
-                    height = block_height,
-                    "ignoring roster sidecar with mismatched hash"
-                );
+                if let Some(suppressed_since_last) =
+                    allow_block_sync_roster_sidecar_mismatch_warning(
+                        block_height,
+                        block_hash,
+                        meta.block_hash,
+                    )
+                {
+                    warn!(
+                        expected = %block_hash,
+                        stored = %meta.block_hash,
+                        height = block_height,
+                        suppressed_since_last,
+                        "ignoring roster sidecar with mismatched hash"
+                    );
+                }
                 None
             }
         }) {

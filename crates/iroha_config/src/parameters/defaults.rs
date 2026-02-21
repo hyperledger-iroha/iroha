@@ -746,6 +746,10 @@ pub mod network {
     pub const CONNECT_STARTUP_DELAY: Duration = Duration::from_millis(0);
     /// Timeout applied to an individual outbound dial attempt (TCP/TLS/QUIC/WS).
     pub const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
+    /// Maximum age for deferred outbound frames queued while peer session is missing.
+    pub const DEFERRED_SEND_TTL_MS: u64 = 1_500;
+    /// Maximum deferred outbound frames retained per peer while session is missing.
+    pub const DEFERRED_SEND_MAX_PER_PEER: usize = 256;
     /// Idle timeout before expiring accept throttle buckets.
     pub const ACCEPT_BUCKET_IDLE: Duration = Duration::from_mins(10);
     /// Maximum number of accept throttle buckets to retain.
@@ -2463,6 +2467,10 @@ pub mod sumeragi {
     pub const COLLECTORS_REDUNDANT_SEND_R: u8 = 3;
     /// Extra topology fanout alongside collector routing (0 = disabled).
     pub const COLLECTORS_PARALLEL_TOPOLOGY_FANOUT: usize = 1;
+    /// Validator-set size threshold where deterministic active-subset fanout engages.
+    pub const FANOUT_LARGE_SET_THRESHOLD: u32 = 256;
+    /// Number of finalized blocks to inspect when scoring validator activity.
+    pub const FANOUT_ACTIVITY_LOOKBACK_BLOCKS: u32 = 128;
     /// Optional cap on transactions per block (None = unlimited).
     pub const BLOCK_MAX_TRANSACTIONS: Option<NonZeroUsize> = None;
     /// Commit-time threshold (ms) for applying fast-finality proposal caps.
@@ -2538,6 +2546,33 @@ pub mod sumeragi {
     /// Default number of missing-block fetch attempts before falling back to the full topology.
     /// A value of 0 disables signer preference.
     pub const MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: u32 = 1;
+    /// Backlog-aware multiplier applied to quorum-reschedule grace windows.
+    pub const VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR: f64 = 1.5;
+    /// Maximum additional quorum-reschedule grace window under backlog (milliseconds).
+    pub const VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS: u64 = 200;
+    /// TTL for deferred QC missing-payload recovery before escalation (milliseconds).
+    pub const DEFERRED_QC_TTL_MS: u64 = 2_000;
+    /// Deterministic per-height missing-block attempt cap before hard escalation.
+    pub const MISSING_BLOCK_HEIGHT_ATTEMPT_CAP: u32 = 48;
+    /// Deterministic per-height missing-block dwell cap before hard escalation (milliseconds).
+    /// Defaults to 2 * commit_time with the default 1s commit timeout.
+    pub const MISSING_BLOCK_HEIGHT_TTL_MS: u64 = 2_000;
+    /// Deterministic per-height attempt cap used by bounded recovery.
+    pub const RECOVERY_HEIGHT_ATTEMPT_CAP: u32 = 48;
+    /// Deterministic per-height dwell window used by bounded recovery.
+    /// Defaults to 2 * commit_time with the default 1s commit timeout.
+    pub const RECOVERY_HEIGHT_WINDOW_MS: u64 = 2_000;
+    /// Hash-miss threshold before escalating dependency recovery to range pull.
+    pub const RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: u32 = 3;
+    /// Number of views where no-roster fallback broadcasts remain allowed.
+    pub const RECOVERY_NO_ROSTER_FALLBACK_VIEWS: u32 = 1;
+    /// Sidecar mismatch retries before final-drop and canonical-only rebuild.
+    pub const SIDECAR_MISMATCH_RETRY_CAP: u32 = 8;
+    /// Sidecar mismatch TTL before final-drop (milliseconds).
+    /// Defaults to 2 * commit_time with the default 1s commit timeout.
+    pub const SIDECAR_MISMATCH_TTL_MS: u64 = 2_000;
+    /// Number of hash misses before escalating missing dependencies to range pull.
+    pub const RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: u32 = 3;
     /// Consecutive membership mismatches required before alerting.
     pub const MEMBERSHIP_MISMATCH_ALERT_THRESHOLD: u32 = 1;
     /// Whether to drop consensus messages from peers with repeated membership mismatches.

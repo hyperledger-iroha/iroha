@@ -430,6 +430,12 @@ async fn run_monitor_loop(
                     InputEvent::Quit => break,
                     InputEvent::FocusNext => app.focus_next(),
                     InputEvent::FocusPrev => app.focus_prev(),
+                    InputEvent::Resize => {
+                        terminal.clear()?;
+                        if let Err(err) = terminal.draw(|frame| render_ui(frame, &app)) {
+                            return Err(err.into());
+                        }
+                    }
                 }
             }
             _ = ticker.tick() => {
@@ -470,7 +476,7 @@ impl AppState {
         let mut events = VecDeque::new();
         push_event(&mut events, {
             let peer_count = peers.len();
-            format!("祭 network awakened with {peer_count} peers")
+            format!("UPLINK ESTABLISHED. {} TARGETS ACQUIRED.", peer_count)
         });
         Self {
             refresh,
@@ -579,11 +585,11 @@ impl PeerSlot {
             .unwrap_or_else(|| self.endpoint.clone());
 
         if self.latest.is_none() {
-            push_event(events, format!("{name} joined the matsuri"));
+            push_event(events, format!("NODE [{name}] SYNCED"));
         }
 
         if let Some(warning) = snapshot.warnings.last() {
-            push_event(events, format!("{name}: {warning}"));
+            push_event(events, format!("WARN [{name}]: {warning}"));
             self.last_warning = Some(warning.clone());
         } else {
             self.last_warning = None;
@@ -604,6 +610,7 @@ enum InputEvent {
     Quit,
     FocusNext,
     FocusPrev,
+    Resize,
 }
 
 fn spawn_input_listener(tx: mpsc::Sender<InputEvent>) {
@@ -635,8 +642,7 @@ fn spawn_input_listener(tx: mpsc::Sender<InputEvent>) {
                         }
                     }
                     Ok(Event::Resize(_, _)) => {
-                        let _ = tx.blocking_send(InputEvent::FocusNext);
-                        let _ = tx.blocking_send(InputEvent::FocusPrev);
+                        let _ = tx.blocking_send(InputEvent::Resize);
                     }
                     Err(_) => break,
                     _ => {}
@@ -715,12 +721,15 @@ fn render_ui(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     let header = Paragraph::new(header_text).block(
         Block::default()
             .title(Span::styled(
-                "祭 Matsuri Vision",
+                "CYBER-NEO-TOKYO MAINFRAME VISION // VER 1.0.4",
                 Style::default()
-                    .fg(Color::LightMagenta)
-                    .add_modifier(Modifier::BOLD),
+                    .fg(Color::LightGreen)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD | Modifier::REVERSED),
             ))
-            .borders(Borders::ALL),
+            .border_type(ratatui::widgets::BorderType::Double)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green)),
     );
     frame.render_widget(header, layout[0]);
 
@@ -761,10 +770,11 @@ fn render_ui(frame: &mut ratatui::Frame<'_>, app: &AppState) {
 fn build_summary(app: &AppState) -> Line<'static> {
     let text = format_summary_text(app);
     Line::from(vec![Span::styled(
-        text,
+        format!(">>> OVERRIDE STATUS: {}", text),
         Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
+            .fg(Color::LightCyan)
+            .bg(Color::Black)
+            .add_modifier(Modifier::BOLD | Modifier::RAPID_BLINK),
     )])
 }
 
@@ -820,17 +830,18 @@ fn format_headless_line(app: &AppState) -> String {
 
 fn render_peer_table(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &AppState) {
     let header = Row::new(vec![
-        Cell::from("Peer"),
-        Cell::from("Blocks"),
-        Cell::from("Tx ok/rej"),
-        Cell::from("Queue"),
-        Cell::from("Gas"),
-        Cell::from("Latency"),
-        Cell::from("Mood"),
+        Cell::from("NODE_ID"),
+        Cell::from("SEC_BLOCKS"),
+        Cell::from("TX_OK/ERR"),
+        Cell::from("SPOOL"),
+        Cell::from("COMPUTE"),
+        Cell::from("PING_MS"),
+        Cell::from("DIAGNOSTIC"),
     ])
     .style(
         Style::default()
-            .fg(Color::Yellow)
+            .fg(Color::Black)
+            .bg(Color::LightGreen)
             .add_modifier(Modifier::BOLD),
     );
 
@@ -851,27 +862,35 @@ fn render_peer_table(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect
                 Cell::from(note),
             ]);
             if highlight {
-                row = row.style(Style::default().bg(Color::DarkGray));
+                row = row.style(Style::default().fg(Color::Black).bg(Color::Cyan));
+            } else {
+                row = row.style(Style::default().fg(Color::Green));
             }
             row
         })
         .collect::<Vec<_>>();
 
     let widths = [
-        Constraint::Length(18),
-        Constraint::Length(10),
-        Constraint::Length(12),
-        Constraint::Length(6),
-        Constraint::Length(8),
-        Constraint::Length(8),
-        Constraint::Min(10),
+        Constraint::Percentage(20),
+        Constraint::Percentage(10),
+        Constraint::Percentage(15),
+        Constraint::Percentage(10),
+        Constraint::Percentage(10),
+        Constraint::Percentage(10),
+        Constraint::Percentage(25),
     ];
 
     let table = Table::new(rows, widths).header(header).block(
-        Block::default().borders(Borders::ALL).title(Span::styled(
-            "Torii peers",
-            Style::default().fg(Color::LightCyan),
-        )),
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(ratatui::widgets::BorderType::Thick)
+            .border_style(Style::default().fg(Color::Green))
+            .title(Span::styled(
+                "NETWORK INTERFACE MODULE // ACTIVE",
+                Style::default()
+                    .fg(Color::LightGreen)
+                    .add_modifier(Modifier::BOLD),
+            )),
     );
 
     frame.render_widget(table, area);
@@ -888,23 +907,29 @@ fn render_gas_trend(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect,
         });
     let min = if min == u64::MAX { 0 } else { min };
     let max = max.max(1);
-    let title = format!("Gas trend (min {min} • max {max} • latest {latest})");
-    let block = Block::default().borders(Borders::ALL).title(Span::styled(
-        title,
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-    ));
+    let title = format!("COMPUTE FLUX (MIN {min} // MAX {max} // CUR {latest})");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Plain)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            title,
+            Style::default()
+                .fg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD),
+        ));
 
     if data.is_empty() {
-        let help = Paragraph::new("Awaiting gas samples...").block(block);
+        let help = Paragraph::new("INITIALIZING TELEMETRY...")
+            .block(block)
+            .style(Style::default().fg(Color::Green));
         frame.render_widget(help, area);
         return;
     }
 
     let spark = Sparkline::default()
         .block(block)
-        .style(Style::default().fg(Color::LightYellow))
+        .style(Style::default().fg(Color::LightGreen).bg(Color::Black))
         .data(&data)
         .max(max);
     frame.render_widget(spark, area);
@@ -920,7 +945,7 @@ fn peer_row_data(slot: &PeerSlot) -> (String, String, String, String, String, St
     let mut note = slot
         .last_warning
         .clone()
-        .unwrap_or_else(|| "煌く".to_string());
+        .unwrap_or_else(|| "ONLINE".to_string());
 
     if let Some(snapshot) = &slot.latest {
         if let Some(status) = &snapshot.status {
@@ -941,7 +966,7 @@ fn peer_row_data(slot: &PeerSlot) -> (String, String, String, String, String, St
                 } else if let Some(up) = status.uptime {
                     note = format!("{up} s");
                 } else {
-                    note = "祭り良好".to_string();
+                    note = "NOMINAL".to_string();
                 }
             }
         }
@@ -953,7 +978,7 @@ fn peer_row_data(slot: &PeerSlot) -> (String, String, String, String, String, St
             latency = format!("{millis}ms");
         }
     } else {
-        note = "待機中".to_string();
+        note = "STANDBY".to_string();
     }
 
     (name, blocks, txs, queue, gas, latency, note)
@@ -961,25 +986,35 @@ fn peer_row_data(slot: &PeerSlot) -> (String, String, String, String, String, St
 
 fn render_events(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &AppState) {
     let lines: Vec<Line<'_>> = if app.events.is_empty() {
-        vec![Line::from("(quiet shrine)")]
+        vec![Line::from(Span::styled(
+            "AWAITING TRANSMISSIONS...",
+            Style::default().fg(Color::DarkGray),
+        ))]
     } else {
         app.events
             .iter()
             .rev()
             .map(|msg| {
                 Line::from(Span::styled(
-                    msg.clone(),
-                    Style::default().fg(Color::LightMagenta),
+                    format!("> {}", msg),
+                    Style::default().fg(Color::LightCyan),
                 ))
             })
             .collect()
     };
 
-    let events =
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(Span::styled(
-            "Festival whispers",
-            Style::default().fg(Color::LightMagenta),
-        )));
+    let events = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(ratatui::widgets::BorderType::Thick)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(Span::styled(
+                "SYS_LOG // INTERCEPTS",
+                Style::default()
+                    .fg(Color::LightCyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+    );
     frame.render_widget(events, area);
 }
 
@@ -1057,7 +1092,7 @@ mod tests {
 
         let initial_line = format_headless_line(&app);
         assert!(
-            initial_line.contains("network awakened"),
+            initial_line.contains("UPLINK ESTABLISHED"),
             "expected initial line to mention awakening, got `{initial_line}`"
         );
 
@@ -1092,7 +1127,7 @@ mod tests {
 
         let headless_line = format_headless_line(&app);
         assert!(
-            headless_line.contains("joined the matsuri"),
+            headless_line.contains("SYNCED"),
             "expected join event in `{headless_line}`"
         );
     }

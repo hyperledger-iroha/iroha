@@ -14534,6 +14534,26 @@ impl Torii {
                     "/v1/soracloud/registry",
                     get(soracloud::handle_registry_status),
                 )
+                .route(
+                    "/v1/soracloud/agent/deploy",
+                    post(soracloud::handle_agent_deploy),
+                )
+                .route(
+                    "/v1/soracloud/agent/policy/revoke",
+                    post(soracloud::handle_agent_policy_revoke),
+                )
+                .route(
+                    "/v1/soracloud/agent/autonomy/allow",
+                    post(soracloud::handle_agent_autonomy_allow),
+                )
+                .route(
+                    "/v1/soracloud/agent/autonomy/run",
+                    post(soracloud::handle_agent_autonomy_run),
+                )
+                .route(
+                    "/v1/soracloud/agent/autonomy/status",
+                    get(soracloud::handle_agent_autonomy_status),
+                )
                 // Asset Definitions listing
                 .route(
                     "/v1/assets/definitions",

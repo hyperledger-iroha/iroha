@@ -52,7 +52,7 @@ fn simulate_transfer<T>(
 
     let (alice_id, mouse_id) = generate_two_ids();
     let create_mouse = create_mouse(mouse_id.clone());
-    let asset_definition_id: AssetDefinitionId = "camomile#wonderland".parse().unwrap();
+    let asset_definition_id = asset_definition_id_for(context);
     let create_asset =
         Register::asset_definition(asset_definition_ctr(asset_definition_id.clone()));
     let mint_asset = mint_ctr(
@@ -103,15 +103,22 @@ fn create_mouse(mouse_id: AccountId) -> Register<Account> {
     Register::account(Account::new(mouse_id))
 }
 
+fn asset_definition_id_for(context: &str) -> AssetDefinitionId {
+    format!("camomile_{context}#wonderland")
+        .parse()
+        .expect("asset definition id should be valid")
+}
+
 #[test]
 fn should_fail_if_asset_not_found() {
-    let Some((network, _rt)) = start_default("should_fail_if_asset_not_found") else {
+    let context = "should_fail_if_asset_not_found";
+    let Some((network, _rt)) = start_default(context) else {
         return;
     };
     let iroha = network.client();
 
     let (alice_id, mouse_id) = generate_two_ids();
-    let asset_definition_id: AssetDefinitionId = "camomile#wonderland".parse().unwrap();
+    let asset_definition_id = asset_definition_id_for(context);
     let create_asset_definition =
         Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
     let asset_id = AssetId::new(asset_definition_id.clone(), alice_id);

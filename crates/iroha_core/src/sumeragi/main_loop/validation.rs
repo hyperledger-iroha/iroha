@@ -85,8 +85,7 @@ pub(super) fn spawn_validation_workers(
         let chain_id = chain_id.clone();
         let genesis_account = genesis_account.clone();
         let name = format!("sumeragi-validate-{idx}");
-        let join_handle = std::thread::Builder::new()
-            .name(name)
+        let join_handle = crate::sumeragi::sumeragi_thread_builder(name)
             .spawn(move || {
                 while let Ok(work) = work_rx.recv() {
                     let ValidationWork {

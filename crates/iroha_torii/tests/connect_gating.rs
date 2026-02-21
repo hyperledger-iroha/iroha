@@ -480,6 +480,26 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             recovery: A::SumeragiRecovery {
                 missing_block_signer_fallback_attempts:
                     iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+                view_change_backlog_extension_factor:
+                    iroha_config::parameters::defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR,
+                view_change_backlog_extension_cap: core::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS,
+                ),
+                deferred_qc_ttl: core::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::DEFERRED_QC_TTL_MS,
+                ),
+                missing_block_height_attempt_cap:
+                    iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_HEIGHT_ATTEMPT_CAP,
+                missing_block_height_ttl: core::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_HEIGHT_TTL_MS,
+                ),
+                sidecar_mismatch_retry_cap:
+                    iroha_config::parameters::defaults::sumeragi::SIDECAR_MISMATCH_RETRY_CAP,
+                sidecar_mismatch_ttl: core::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::SIDECAR_MISMATCH_TTL_MS,
+                ),
+                range_pull_escalation_after_hash_misses:
+                    iroha_config::parameters::defaults::sumeragi::RANGE_PULL_ESCALATION_AFTER_HASH_MISSES,
             },
             gating: A::SumeragiGating {
                 future_height_window:

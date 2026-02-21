@@ -819,6 +819,266 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn confidential_unshield_rejected_without_zk_registration() -> Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_config_layer(|layer| {
+            layer.write(["confidential", "enabled"], true);
+        });
+
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(confidential_unshield_rejected_without_zk_registration),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    network.ensure_blocks(1).await?;
+
+    let tx_builder_client = network.client();
+    let source = tx_builder_client.account.clone();
+
+    let mut peer_clients = network
+        .peers()
+        .iter()
+        .map(NetworkPeer::client)
+        .collect::<Vec<_>>();
+    if peer_clients.is_empty() {
+        peer_clients.push(tx_builder_client.clone());
+    }
+
+    let asset_def: AssetDefinitionId = "zkunshieldnotregistered#wonderland".parse().unwrap();
+    let mut non_empty_target = 1_u64;
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+        ],
+        &mut non_empty_target,
+        "prepare non-zk asset for rejected unshield",
+    )
+    .await?;
+
+    let before_balance = numeric_balance_any(
+        &peer_clients,
+        AssetId::new(asset_def.clone(), source.clone()),
+    )?;
+    assert_eq!(before_balance, Numeric::from(300_u32));
+
+    let denied_unshield_tx = tx_builder_client.build_transaction_from_items(
+        vec![InstructionBox::from(
+            iroha_data_model::isi::zk::Unshield::new(
+                asset_def.clone(),
+                source.clone(),
+                100_u128,
+                vec![marker(12)],
+                debug_ok_attachment(),
+                None,
+            ),
+        )],
+        iroha_data_model::metadata::Metadata::default(),
+    );
+
+    let submit_result = submit_transaction_on_any_peer(
+        &peer_clients,
+        &denied_unshield_tx,
+        "unshield without zk registration unexpectedly accepted",
+    );
+    if let Err(err) = submit_result {
+        assert!(
+            err.chain().any(|cause| {
+                let text = cause.to_string().to_lowercase();
+                text.contains("unshield") || text.contains("policy") || text.contains("permitted")
+            }),
+            "expected policy rejection for non-zk unshield, got: {err:?}"
+        );
+    }
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Log::new(
+                Level::INFO,
+                "post denied unshield without registration barrier".to_owned(),
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "post denied unshield without registration barrier failed",
+    )
+    .await?;
+
+    let after_balance = numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
+    assert_eq!(after_balance, Numeric::from(300_u32));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_config_layer(|layer| {
+            layer.write(["confidential", "enabled"], true);
+        });
+
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(confidential_unshield_duplicate_nullifier_rejected),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    network.ensure_blocks(1).await?;
+
+    let tx_builder_client = network.client();
+    let source = tx_builder_client.account.clone();
+
+    let mut peer_clients = network
+        .peers()
+        .iter()
+        .map(NetworkPeer::client)
+        .collect::<Vec<_>>();
+    if peer_clients.is_empty() {
+        peer_clients.push(tx_builder_client.clone());
+    }
+
+    let asset_def: AssetDefinitionId = "zkdupnullifier#wonderland".parse().unwrap();
+    let mut non_empty_target = 1_u64;
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Mint::asset_numeric(500_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            iroha_data_model::isi::zk::RegisterZkAsset::new(
+                asset_def.clone(),
+                iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+                true,
+                true,
+                None,
+                None,
+                None,
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "prepare duplicate-nullifier zk asset",
+    )
+    .await?;
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            iroha_data_model::isi::zk::Shield::new(
+                asset_def.clone(),
+                source.clone(),
+                300_u128,
+                marker(91),
+                ConfidentialEncryptedPayload::default(),
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "shield before duplicate-nullifier unshield failed",
+    )
+    .await?;
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            iroha_data_model::isi::zk::Unshield::new(
+                asset_def.clone(),
+                source.clone(),
+                120_u128,
+                vec![marker(61)],
+                debug_ok_attachment(),
+                None,
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "first unshield before duplicate-nullifier check failed",
+    )
+    .await?;
+
+    let after_first_unshield = numeric_balance_any(
+        &peer_clients,
+        AssetId::new(asset_def.clone(), source.clone()),
+    )?;
+    assert_eq!(after_first_unshield, Numeric::from(320_u32));
+
+    let duplicate_unshield_tx = tx_builder_client.build_transaction_from_items(
+        vec![InstructionBox::from(
+            iroha_data_model::isi::zk::Unshield::new(
+                asset_def.clone(),
+                source.clone(),
+                80_u128,
+                vec![marker(61)],
+                debug_ok_attachment(),
+                None,
+            ),
+        )],
+        iroha_data_model::metadata::Metadata::default(),
+    );
+
+    let submit_result = submit_transaction_on_any_peer(
+        &peer_clients,
+        &duplicate_unshield_tx,
+        "duplicate-nullifier unshield unexpectedly accepted",
+    );
+    if let Err(err) = submit_result {
+        assert!(
+            err.chain().any(|cause| {
+                let text = cause.to_string().to_lowercase();
+                text.contains("duplicate") || text.contains("nullifier")
+            }),
+            "expected duplicate-nullifier rejection signal, got: {err:?}"
+        );
+    }
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Log::new(
+                Level::INFO,
+                "post duplicate-nullifier unshield barrier".to_owned(),
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "post duplicate-nullifier unshield barrier failed",
+    )
+    .await?;
+
+    let after_duplicate_attempt =
+        numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
+    assert_eq!(after_duplicate_attempt, Numeric::from(320_u32));
+
+    Ok(())
+}
+
 #[test]
 fn transient_client_error_detector_matches_expected_messages() {
     for message in [

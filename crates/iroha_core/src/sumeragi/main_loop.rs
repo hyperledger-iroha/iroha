@@ -10,7 +10,7 @@ use std::{
     ops::Bound::{Excluded, Unbounded},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, LazyLock, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -150,8 +150,7 @@ use proposals::ProposalMismatch;
 use proposals::{ProposalCache, detect_proposal_mismatch, evidence_within_horizon};
 use roster::{
     apply_roster_indices_to_manager, canonicalize_roster, compute_membership_view_hash,
-    compute_roster_indices_from_topology, derive_active_topology_for_mode_from_world,
-    derive_active_topology_from_views, derive_local_validator_index_for_mode,
+    compute_roster_indices_from_topology, derive_local_validator_index_for_mode,
     derive_local_validator_index_for_mode_from_world, roster_member_allowed_bls,
 };
 #[cfg(test)]
@@ -2864,13 +2863,15 @@ fn touch_missing_block_request(
             if height_advanced {
                 stats.height = height;
             }
-            if view_advanced || height_advanced {
+            if height_advanced {
                 stats.first_seen = now;
                 stats.last_requested = now;
                 stats.attempts = 0;
-                if view_advanced {
-                    stats.view_change_triggered_view = None;
-                }
+            } else if view_advanced {
+                // Preserve dwell/attempt history across view churn so recovery cannot
+                // perpetually re-arm by advancing views on the same missing payload.
+                stats.last_requested = now;
+                stats.view_change_triggered_view = None;
             }
             if phase_rank(phase) > phase_rank(stats.phase) {
                 stats.phase = phase;
@@ -3320,6 +3321,12 @@ impl Actor {
         let parent_height = block_height.saturating_sub(1);
         let (consensus_mode, _mode_tag, _prf_seed) =
             self.consensus_context_for_height(parent_height);
+        self.observe_sidecar_mismatch_for_height(
+            parent_height,
+            parent_hash,
+            "request_missing_parent",
+        );
+        let allow_sidecar = !self.sidecar_quarantined_for_height(parent_height);
         let (roster, roster_source) = if let Some(selection) = persisted_roster_for_block(
             self.state.as_ref(),
             &self.kura,
@@ -3329,6 +3336,7 @@ impl Actor {
             None,
             &self.roster_validation_cache,
             None,
+            allow_sidecar,
         )
         .or_else(|| {
             block_sync_history_roster_for_block(
@@ -3348,13 +3356,14 @@ impl Actor {
         } else {
             let world = self.state.world_view();
             let commit_topology_snapshot = self.state.commit_topology_snapshot();
-            let roster = derive_active_topology_from_views(
+            let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+            let roster = self.active_topology_with_genesis_fallback_from_world(
                 &world,
                 commit_topology_snapshot.as_slice(),
-                self.common_config.trusted_peers.value(),
-                self.common_config.peer.id(),
+                committed_height,
+                consensus_mode,
             );
-            (roster, "trusted_peers")
+            (roster, "committed_topology")
         };
         if roster.is_empty() {
             debug!(
@@ -3392,7 +3401,7 @@ impl Actor {
             now,
             retry_window,
             view_change_window,
-            self.config.recovery.missing_block_signer_fallback_attempts,
+            self.recovery_signer_fallback_attempts(),
         );
         self.pending.missing_block_requests = requests;
         let dwell = self
@@ -3408,6 +3417,43 @@ impl Actor {
         let dwell_ms = dwell.as_millis().try_into().unwrap_or(u64::MAX);
         self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
         super::status::record_missing_block_fetch(targets_len, dwell_ms);
+        match &decision {
+            MissingBlockFetchDecision::Requested { target_kind, .. } => {
+                self.note_missing_block_height_attempt(
+                    parent_hash,
+                    parent_height,
+                    block_view,
+                    MissingBlockRecoveryStage::ParentFetch,
+                    Some(*target_kind),
+                    now,
+                );
+            }
+            MissingBlockFetchDecision::NoTargets => {
+                self.note_missing_block_height_attempt(
+                    parent_hash,
+                    parent_height,
+                    block_view,
+                    MissingBlockRecoveryStage::ParentFetch,
+                    None,
+                    now,
+                );
+            }
+            MissingBlockFetchDecision::Backoff => {
+                self.note_missing_block_height_hash_miss(
+                    parent_hash,
+                    parent_height,
+                    block_view,
+                    MissingBlockRecoveryStage::ParentFetch,
+                    now,
+                );
+            }
+        }
+        let _ = self.maybe_escalate_missing_block_height_recovery(
+            parent_hash,
+            parent_height,
+            block_view,
+            now,
+        );
 
         match decision {
             MissingBlockFetchDecision::Requested {
@@ -4560,6 +4606,47 @@ type QcVoteKey = (
 );
 
 const KNOWN_BLOCK_QC_WORK_PER_TICK: usize = 2;
+const QUARANTINED_BLOCK_SYNC_QC_PER_TICK: usize = 4;
+const QUARANTINED_BLOCK_SYNC_QC_CAP: usize = 256;
+const QUARANTINED_BLOCK_SYNC_QC_MAX_ATTEMPTS: u32 = 4;
+const DEFERRED_MISSING_PAYLOAD_QC_PER_TICK: usize = 4;
+const DEFERRED_MISSING_PAYLOAD_QC_CAP: usize = 256;
+const DEFERRED_MISSING_PAYLOAD_QC_MAX_ATTEMPTS: u32 = 4;
+const EMPTY_COMMIT_TOPOLOGY_RECOVERY_MAX_RETRIES: u32 = 3;
+const EMPTY_COMMIT_TOPOLOGY_RECOVERY_LOG_COOLDOWN: Duration = Duration::from_secs(5);
+const ROSTER_SIDECAR_MISMATCH_LOG_COOLDOWN: Duration = Duration::from_secs(5);
+const RANGE_PULL_DEDUP_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConsensusRecoveryState {
+    RefreshTopology,
+    BlockSync,
+    WaitingForDependencies,
+    ViewChangeEscalation,
+}
+
+impl ConsensusRecoveryState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::RefreshTopology => "refresh_topology",
+            Self::BlockSync => "block_sync",
+            Self::WaitingForDependencies => "wait",
+            Self::ViewChangeEscalation => "view_change",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ConsensusRecoveryEntry {
+    state: ConsensusRecoveryState,
+    first_seen: Instant,
+    last_attempt: Instant,
+    retries: u32,
+    dependency_requested: bool,
+    dependency_event_seq: u64,
+    waiting_since: Option<Instant>,
+    last_observed_dependency_seq: u64,
+}
 
 #[derive(Debug)]
 struct KnownBlockQcWork {
@@ -4572,6 +4659,169 @@ struct KnownBlockQcWork {
     prf_seed: Option<[u8; 32]>,
     commit_qc_match: bool,
     aggregate_ok: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuarantinedQcTarget {
+    BlockSync,
+    LockedPayload,
+}
+
+#[derive(Debug, Clone)]
+struct QuarantinedQcCandidate {
+    qc: crate::sumeragi::consensus::Qc,
+    first_seen: Instant,
+    last_attempt: Instant,
+    attempts: u32,
+    escalated_fetch: bool,
+    reason: &'static str,
+    target: QuarantinedQcTarget,
+}
+
+#[derive(Debug, Clone)]
+struct DeferredQcEntry {
+    qc: crate::sumeragi::consensus::Qc,
+    first_seen: Instant,
+    last_attempt: Instant,
+    attempts: u32,
+    escalated_fetch: bool,
+    reason: &'static str,
+}
+
+#[derive(Debug, Clone)]
+struct DeferredRosterQcEntry {
+    first_seen: Instant,
+    last_attempt: Instant,
+    attempts: u32,
+    escalated_fetch: bool,
+    reason: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct MissingBlockHeightRecoveryKey {
+    height: u64,
+    epoch: u64,
+    mode_tag: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingBlockRecoveryStage {
+    HashFetch,
+    ParentFetch,
+    RangePullFromAnchor,
+    ApplyAndRevalidate,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RangePullEscalationState {
+    stage: MissingBlockRecoveryStage,
+    hash_misses: u32,
+    no_progress_windows: u32,
+    inflight: bool,
+    last_requested: Option<Instant>,
+    last_progress: Instant,
+}
+
+impl RangePullEscalationState {
+    fn new(now: Instant) -> Self {
+        Self {
+            stage: MissingBlockRecoveryStage::HashFetch,
+            hash_misses: 0,
+            no_progress_windows: 0,
+            inflight: false,
+            last_requested: None,
+            last_progress: now,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MissingBlockHeightRecoveryBudget {
+    first_seen: Instant,
+    last_seen: Instant,
+    attempts: u32,
+    signer_target_attempts: u32,
+    topology_target_attempts: u32,
+    parent_fetch_attempts: u32,
+    last_view: u64,
+    last_hash: HashOf<BlockHeader>,
+    escalated_view: Option<u64>,
+    range_pull: RangePullEscalationState,
+}
+
+impl MissingBlockHeightRecoveryBudget {
+    fn new(
+        now: Instant,
+        block_hash: HashOf<BlockHeader>,
+        view: u64,
+        stage: MissingBlockRecoveryStage,
+    ) -> Self {
+        let mut range_pull = RangePullEscalationState::new(now);
+        range_pull.stage = stage;
+        Self {
+            first_seen: now,
+            last_seen: now,
+            attempts: 0,
+            signer_target_attempts: 0,
+            topology_target_attempts: 0,
+            parent_fetch_attempts: 0,
+            last_view: view,
+            last_hash: block_hash,
+            escalated_view: None,
+            range_pull,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SidecarMismatchRecoveryEntry {
+    mismatch_count: u32,
+    first_seen: Instant,
+    last_seen: Instant,
+    quarantined: bool,
+    canonical_rebuild_inflight: bool,
+    final_dropped: bool,
+}
+
+#[derive(Debug, Clone)]
+struct DeterministicActiveSet {
+    scored: Vec<(PeerId, u64)>,
+}
+
+#[derive(Debug, Clone)]
+struct FanoutCommittee {
+    peers: Vec<PeerId>,
+    required_commit_votes: usize,
+    redundancy_margin: usize,
+}
+
+#[derive(Debug, Clone)]
+struct NoRosterFallbackBudget {
+    allowed_views: BTreeSet<u64>,
+    escalated_views: BTreeSet<u64>,
+    last_seen: Instant,
+}
+
+impl NoRosterFallbackBudget {
+    fn new(now: Instant) -> Self {
+        Self {
+            allowed_views: BTreeSet::new(),
+            escalated_views: BTreeSet::new(),
+            last_seen: now,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DeterministicRecoveryProfile {
+    signer_fallback_attempts: u32,
+    deferred_qc_ttl: Duration,
+    missing_block_height_ttl: Duration,
+    missing_block_height_attempt_cap: u32,
+    sidecar_mismatch_retry_cap: u32,
+    sidecar_mismatch_ttl: Duration,
+    range_pull_escalation_after_hash_misses: u32,
+    no_roster_fallback_views: u32,
 }
 
 struct QcBuildContext {
@@ -4722,7 +4972,17 @@ pub(super) struct Actor {
         HashOf<BlockHeader>,
         BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
     >,
+    consensus_recovery: BTreeMap<(u64, u64), ConsensusRecoveryEntry>,
+    dependency_event_seq: u64,
+    missing_block_height_recovery:
+        BTreeMap<MissingBlockHeightRecoveryKey, MissingBlockHeightRecoveryBudget>,
+    no_roster_fallback_recovery: BTreeMap<MissingBlockHeightRecoveryKey, NoRosterFallbackBudget>,
+    sidecar_mismatch_recovery: BTreeMap<u64, SidecarMismatchRecoveryEntry>,
+    range_pull_escalation_cooldowns: BTreeMap<(PeerId, u64, u64), Instant>,
     deferred_qcs: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
+    deferred_qc_roster_state: BTreeMap<QcVoteKey, DeferredRosterQcEntry>,
+    deferred_missing_payload_qcs: BTreeMap<QcVoteKey, DeferredQcEntry>,
+    quarantined_block_sync_qcs: BTreeMap<QcVoteKey, QuarantinedQcCandidate>,
     known_block_qc_work: BTreeMap<QcVoteKey, KnownBlockQcWork>,
     deferred_block_sync_updates: BTreeMap<DeferredBlockSyncKey, DeferredBlockSyncUpdate>,
     vote_roster_cache: BTreeMap<HashOf<BlockHeader>, VoteRosterCacheEntry>,
@@ -4740,6 +5000,7 @@ pub(super) struct Actor {
     highest_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     locked_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     tick_counter: u64,
+    tick_in_progress: bool,
     last_tick_heartbeat_log: Instant,
     tick_timing: TickTimingMonitor,
     tick_timing_thresholds: TickTimingThresholds,
@@ -5790,7 +6051,6 @@ enum BlockSyncRosterSource {
     RosterSidecar,
     CommitRosterJournal,
     CommitTopologySnapshot,
-    TrustedPeersFallback,
 }
 
 impl BlockSyncRosterSource {
@@ -5804,7 +6064,6 @@ impl BlockSyncRosterSource {
             Self::RosterSidecar => "roster_sidecar",
             Self::CommitRosterJournal => "commit_roster_journal",
             Self::CommitTopologySnapshot => "commit_topology_snapshot",
-            Self::TrustedPeersFallback => "trusted_peers_fallback",
         }
     }
 }
@@ -6360,6 +6619,7 @@ fn persisted_roster_for_block(
     block_view: Option<u64>,
     roster_cache: &RosterValidationCache,
     selection_cache: Option<&mut BlockSyncRosterSelectionCache>,
+    allow_sidecar: bool,
 ) -> Option<BlockSyncRosterSelection> {
     let mode_tag = match consensus_mode {
         ConsensusMode::Permissioned => PERMISSIONED_TAG,
@@ -6415,19 +6675,21 @@ fn persisted_roster_for_block(
         );
     }
 
-    if let Some(meta) = kura.read_roster_metadata(block_height).and_then(|meta| {
-        if meta.block_hash == block_hash {
-            Some(meta)
-        } else {
-            warn!(
-                expected = %block_hash,
-                stored = %meta.block_hash,
-                height = block_height,
-                "ignoring roster sidecar with mismatched hash"
-            );
-            None
+    if allow_sidecar && let Some(meta) = kura.read_roster_metadata(block_height) {
+        if meta.block_hash != block_hash {
+            if let Some(suppressed_since_last) =
+                allow_roster_sidecar_mismatch_warning(block_height, block_hash, meta.block_hash)
+            {
+                warn!(
+                    expected = %block_hash,
+                    stored = %meta.block_hash,
+                    height = block_height,
+                    suppressed_since_last,
+                    "ignoring roster sidecar with mismatched hash"
+                );
+            }
+            return None;
         }
-    }) {
         let key_view = block_view
             .or_else(|| meta.commit_qc.as_ref().map(|qc| qc.view))
             .or_else(|| meta.validator_checkpoint.as_ref().map(|chk| chk.view))
@@ -6486,8 +6748,8 @@ fn block_sync_update_with_roster(
     state: &State,
     kura: &Kura,
     fallback_consensus_mode: ConsensusMode,
-    trusted: &iroha_config::parameters::actual::TrustedPeers,
-    me: &PeerId,
+    _trusted: &iroha_config::parameters::actual::TrustedPeers,
+    _me: &PeerId,
     roster_cache: &RosterValidationCache,
 ) -> super::message::BlockSyncUpdate {
     let block_hash = block.hash();
@@ -6513,6 +6775,7 @@ fn block_sync_update_with_roster(
         Some(block_view),
         roster_cache,
         None,
+        true,
     )
     .or_else(|| {
         block_sync_history_roster_for_block(
@@ -6525,16 +6788,21 @@ fn block_sync_update_with_roster(
         )
     })
     .or_else(|| {
-        // Use the active roster so checkpoint signature indices match consensus ordering.
+        // Use committed topology state for uncertified block-sync fallback.
         let world = state.world.view();
         let commit_topology = state.commit_topology.view();
-        let roster =
-            derive_active_topology_from_views(&world, commit_topology.as_slice(), trusted, me);
-        let source = if commit_topology.is_empty() {
-            BlockSyncRosterSource::TrustedPeersFallback
+        let mut roster = if commit_topology.is_empty() {
+            world.peers().iter().cloned().collect()
         } else {
-            BlockSyncRosterSource::CommitTopologySnapshot
+            commit_topology.as_slice().to_vec()
         };
+        roster = roster::filter_roster_with_live_consensus_keys_at_height_world(
+            &world,
+            roster,
+            block_height.saturating_add(1),
+        );
+        roster = roster::canonicalize_roster_for_mode(roster, consensus_mode);
+        let source = BlockSyncRosterSource::CommitTopologySnapshot;
         drop(commit_topology);
         drop(world);
         if roster.is_empty() {
@@ -7072,8 +7340,8 @@ fn select_block_sync_roster(
     checkpoint_hint: Option<&ValidatorSetCheckpoint>,
     stake_snapshot_hint: Option<&CommitStakeSnapshot>,
     state: &State,
-    trusted: &iroha_config::parameters::actual::TrustedPeers,
-    me: &PeerId,
+    _trusted: &iroha_config::parameters::actual::TrustedPeers,
+    _me: &PeerId,
     consensus_mode: ConsensusMode,
     mode_tag: &'static str,
     allow_uncertified: bool,
@@ -7173,13 +7441,18 @@ fn select_block_sync_roster(
     if allow_uncertified {
         let world = state.world_view();
         let commit_topology = state.commit_topology_snapshot();
-        let roster =
-            derive_active_topology_from_views(&world, commit_topology.as_slice(), trusted, me);
-        let source = if commit_topology.is_empty() {
-            BlockSyncRosterSource::TrustedPeersFallback
+        let mut roster = if commit_topology.is_empty() {
+            world.peers().iter().cloned().collect()
         } else {
-            BlockSyncRosterSource::CommitTopologySnapshot
+            commit_topology
         };
+        roster = roster::filter_roster_with_live_consensus_keys_at_height_world(
+            &world,
+            roster,
+            block_height.saturating_add(1),
+        );
+        roster = roster::canonicalize_roster_for_mode(roster, consensus_mode);
+        let source = BlockSyncRosterSource::CommitTopologySnapshot;
         let stake_snapshot = match consensus_mode {
             ConsensusMode::Npos => roster_cache.stake_snapshot_for_roster(&roster),
             ConsensusMode::Permissioned => None,
@@ -7436,22 +7709,28 @@ impl Actor {
         height: u64,
         consensus_mode: ConsensusMode,
     ) -> Vec<PeerId> {
-        let roster = derive_active_topology_from_views(
-            world,
-            commit_topology,
-            self.common_config.trusted_peers.value(),
-            self.common_config.peer.id(),
-        );
-        if !roster.is_empty() {
-            return roster;
+        // Live consensus rounds must derive validator topology from committed chain state.
+        // Bootstrap is handled via genesis fallback below when the committed roster is still empty.
+        if !commit_topology.is_empty() {
+            let roster = roster::canonicalize_roster_for_mode(
+                roster::filter_roster_with_live_consensus_keys_at_height_world(
+                    world,
+                    commit_topology.to_vec(),
+                    height.saturating_add(1),
+                ),
+                consensus_mode,
+            );
+            if !roster.is_empty() {
+                return roster;
+            }
         }
         let mut genesis_roster = self.genesis_roster_from_genesis_block();
         if genesis_roster.is_empty() {
-            return roster;
+            return Vec::new();
         }
         genesis_roster = roster::canonicalize_roster_for_mode(genesis_roster, consensus_mode);
         if genesis_roster.is_empty() {
-            return roster;
+            return Vec::new();
         }
         info!(
             height,
@@ -8911,14 +9190,17 @@ impl Actor {
                 config.consensus_mode,
             );
             let commit_topology_snapshot = state.commit_topology_snapshot();
-            let commit_topology = derive_active_topology_for_mode_from_world(
+            let mut commit_topology = if commit_topology_snapshot.is_empty() {
+                world.peers().iter().cloned().collect()
+            } else {
+                commit_topology_snapshot
+            };
+            commit_topology = roster::filter_roster_with_live_consensus_keys_at_height_world(
                 &world,
-                commit_topology_snapshot.as_slice(),
-                height,
-                common_config.trusted_peers.value(),
-                common_config.peer.id(),
-                mode,
+                commit_topology,
+                height.saturating_add(1),
             );
+            commit_topology = roster::canonicalize_roster_for_mode(commit_topology, mode);
             let pacemaker_block_time = super::resolve_npos_block_time_from_world(&world);
             let pacemaker_timeouts = if matches!(mode, ConsensusMode::Npos) {
                 super::resolve_npos_timeouts_from_world(&world, &config.npos)
@@ -9408,7 +9690,16 @@ impl Actor {
             vote_log: BTreeMap::new(),
             vote_validation_cache: BTreeMap::new(),
             deferred_votes: BTreeMap::new(),
+            consensus_recovery: BTreeMap::new(),
+            dependency_event_seq: 0,
+            missing_block_height_recovery: BTreeMap::new(),
+            no_roster_fallback_recovery: BTreeMap::new(),
+            sidecar_mismatch_recovery: BTreeMap::new(),
+            range_pull_escalation_cooldowns: BTreeMap::new(),
             deferred_qcs: BTreeMap::new(),
+            deferred_qc_roster_state: BTreeMap::new(),
+            deferred_missing_payload_qcs: BTreeMap::new(),
+            quarantined_block_sync_qcs: BTreeMap::new(),
             known_block_qc_work: BTreeMap::new(),
             deferred_block_sync_updates: BTreeMap::new(),
             vote_roster_cache: BTreeMap::new(),
@@ -9435,6 +9726,7 @@ impl Actor {
             highest_qc: None,
             locked_qc: None,
             tick_counter: 0,
+            tick_in_progress: false,
             last_tick_heartbeat_log: now,
             tick_timing: TickTimingMonitor::new(now),
             tick_timing_thresholds: TickTimingThresholds::default(),
@@ -10360,6 +10652,8 @@ impl Actor {
 
         if !self.deferred_votes.is_empty()
             || !self.deferred_qcs.is_empty()
+            || !self.deferred_missing_payload_qcs.is_empty()
+            || !self.quarantined_block_sync_qcs.is_empty()
             || !self.deferred_block_sync_updates.is_empty()
         {
             return Some(now);
@@ -10429,6 +10723,16 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn tick(&mut self) -> bool {
+        if self.tick_in_progress {
+            warn!(
+                height = self.state.committed_height(),
+                queue_len = self.queue.active_len(),
+                pending_blocks = self.pending.pending_blocks.len(),
+                "detected re-entrant sumeragi tick invocation; skipping nested tick"
+            );
+            return false;
+        }
+        self.tick_in_progress = true;
         let tick_start = Instant::now();
         self.tick_counter = self.tick_counter.saturating_add(1);
         self.hotspot_log_summary.emit_if_due(tick_start);
@@ -10493,6 +10797,11 @@ impl Actor {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_qcs");
             self.try_replay_deferred_qcs()
         };
+        let deferred_missing_payload_progress = {
+            let _view_ctx =
+                StateViewContextGuard::new("sumeragi.tick.replay_deferred_missing_payload_qcs");
+            self.try_replay_deferred_missing_payload_qcs(now)
+        };
         let deferred_vote_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_votes");
             self.try_replay_deferred_votes()
@@ -10500,6 +10809,11 @@ impl Actor {
         let deferred_block_sync_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_block_sync");
             self.try_replay_deferred_block_sync_updates()
+        };
+        let quarantined_block_sync_qc_progress = {
+            let _view_ctx =
+                StateViewContextGuard::new("sumeragi.tick.replay_quarantined_block_sync_qcs");
+            self.try_replay_quarantined_block_sync_qcs(now, tick_deadline)
         };
         let known_block_qc_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.known_block_qc_work");
@@ -10535,8 +10849,10 @@ impl Actor {
             || refresh_progress
             || committed_progress
             || deferred_qc_progress
+            || deferred_missing_payload_progress
             || deferred_vote_progress
             || deferred_block_sync_progress
+            || quarantined_block_sync_qc_progress
             || known_block_qc_progress
             || missing_block_progress
             || reschedule_progress
@@ -10754,6 +11070,7 @@ impl Actor {
                 );
             }
         }
+        self.tick_in_progress = false;
         progress
     }
 
@@ -14273,6 +14590,75 @@ impl Actor {
         payload_rebroadcast_cooldown_from_block_time(block_time)
     }
 
+    fn deterministic_recovery_profile(&self) -> DeterministicRecoveryProfile {
+        let deferred_qc_ttl = self
+            .config
+            .recovery
+            .deferred_qc_ttl
+            .max(Duration::from_millis(1));
+        let missing_block_height_ttl = self
+            .config
+            .recovery
+            .height_window
+            .max(Duration::from_millis(1));
+        DeterministicRecoveryProfile {
+            signer_fallback_attempts: self.config.recovery.missing_block_signer_fallback_attempts,
+            deferred_qc_ttl,
+            missing_block_height_ttl,
+            missing_block_height_attempt_cap: self.config.recovery.height_attempt_cap.max(1),
+            sidecar_mismatch_retry_cap: self.config.recovery.sidecar_mismatch_retry_cap.max(1),
+            sidecar_mismatch_ttl: self
+                .config
+                .recovery
+                .sidecar_mismatch_ttl
+                .max(Duration::from_millis(1)),
+            range_pull_escalation_after_hash_misses: self
+                .config
+                .recovery
+                .hash_miss_cap_before_range_pull
+                .max(1),
+            no_roster_fallback_views: self.config.recovery.no_roster_fallback_views,
+        }
+    }
+
+    fn recovery_signer_fallback_attempts(&self) -> u32 {
+        self.deterministic_recovery_profile()
+            .signer_fallback_attempts
+    }
+
+    fn recovery_deferred_qc_ttl(&self) -> Duration {
+        self.deterministic_recovery_profile().deferred_qc_ttl
+    }
+
+    fn recovery_missing_block_height_ttl(&self) -> Duration {
+        self.deterministic_recovery_profile()
+            .missing_block_height_ttl
+    }
+
+    fn recovery_missing_block_height_attempt_cap(&self) -> u32 {
+        self.deterministic_recovery_profile()
+            .missing_block_height_attempt_cap
+    }
+
+    fn recovery_sidecar_mismatch_retry_cap(&self) -> u32 {
+        self.deterministic_recovery_profile()
+            .sidecar_mismatch_retry_cap
+    }
+
+    fn recovery_sidecar_mismatch_ttl(&self) -> Duration {
+        self.deterministic_recovery_profile().sidecar_mismatch_ttl
+    }
+
+    fn recovery_range_pull_escalation_after_hash_misses(&self) -> u32 {
+        self.deterministic_recovery_profile()
+            .range_pull_escalation_after_hash_misses
+    }
+
+    fn recovery_no_roster_fallback_views(&self) -> u32 {
+        self.deterministic_recovery_profile()
+            .no_roster_fallback_views
+    }
+
     fn relay_backpressure_active(&mut self, now: Instant, cooldown: Duration) -> bool {
         self.relay_backpressure.active(now, cooldown)
     }
@@ -14311,6 +14697,928 @@ impl Actor {
         )
     }
 
+    /// Compute a bounded timeout extension used to dampen view changes while backlog converges.
+    ///
+    /// Recovery timing is deterministic and derived from on-chain block/commit time, so no
+    /// additional backlog extension knobs are applied here.
+    fn backlog_extended_view_change_timeout(
+        &self,
+        base_timeout: Duration,
+        _backlog_signals: bool,
+    ) -> Duration {
+        base_timeout
+    }
+
+    fn missing_block_recovery_key_for_height(&self, height: u64) -> MissingBlockHeightRecoveryKey {
+        let (_, mode_tag, _) = self.consensus_context_for_height(height);
+        MissingBlockHeightRecoveryKey {
+            height,
+            epoch: self.epoch_for_height(height),
+            mode_tag,
+        }
+    }
+
+    fn note_missing_block_dependency_event(&mut self, now: Instant) {
+        self.dependency_event_seq = self.dependency_event_seq.saturating_add(1);
+        for budget in self.missing_block_height_recovery.values_mut() {
+            budget.range_pull.last_progress = now;
+            if budget.range_pull.stage == MissingBlockRecoveryStage::RangePullFromAnchor {
+                budget.range_pull.stage = MissingBlockRecoveryStage::ApplyAndRevalidate;
+            }
+            budget.range_pull.hash_misses = 0;
+            budget.range_pull.inflight = false;
+        }
+    }
+
+    fn note_missing_block_height_attempt(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        stage: MissingBlockRecoveryStage,
+        target_kind: Option<MissingBlockFetchTargetKind>,
+        now: Instant,
+    ) {
+        let key = self.missing_block_recovery_key_for_height(height);
+        let entry = self
+            .missing_block_height_recovery
+            .entry(key)
+            .or_insert_with(|| MissingBlockHeightRecoveryBudget::new(now, block_hash, view, stage));
+        entry.last_seen = now;
+        entry.last_view = view;
+        entry.last_hash = block_hash;
+        entry.attempts = entry.attempts.saturating_add(1);
+        entry.range_pull.stage = stage;
+        match stage {
+            MissingBlockRecoveryStage::ParentFetch => {
+                entry.parent_fetch_attempts = entry.parent_fetch_attempts.saturating_add(1);
+            }
+            MissingBlockRecoveryStage::HashFetch
+            | MissingBlockRecoveryStage::RangePullFromAnchor
+            | MissingBlockRecoveryStage::ApplyAndRevalidate => {}
+        }
+        match target_kind {
+            Some(MissingBlockFetchTargetKind::Signers) => {
+                entry.signer_target_attempts = entry.signer_target_attempts.saturating_add(1);
+            }
+            Some(MissingBlockFetchTargetKind::Topology) => {
+                entry.topology_target_attempts = entry.topology_target_attempts.saturating_add(1);
+            }
+            None => {}
+        }
+    }
+
+    fn note_missing_block_height_hash_miss(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        stage: MissingBlockRecoveryStage,
+        now: Instant,
+    ) {
+        let key = self.missing_block_recovery_key_for_height(height);
+        let entry = self
+            .missing_block_height_recovery
+            .entry(key)
+            .or_insert_with(|| MissingBlockHeightRecoveryBudget::new(now, block_hash, view, stage));
+        entry.last_seen = now;
+        entry.last_view = view;
+        entry.last_hash = block_hash;
+        entry.range_pull.stage = stage;
+        entry.range_pull.hash_misses = entry.range_pull.hash_misses.saturating_add(1);
+    }
+
+    fn clear_missing_block_recovery_for_height(&mut self, height: u64, now: Instant) {
+        let mut cleared_any = false;
+        self.missing_block_height_recovery.retain(|key, _| {
+            let retain = key.height != height;
+            if !retain {
+                cleared_any = true;
+            }
+            retain
+        });
+        let had_no_roster = self
+            .no_roster_fallback_recovery
+            .keys()
+            .any(|key| key.height == height);
+        self.clear_no_roster_fallback_for_height(height);
+        cleared_any |= had_no_roster;
+        if cleared_any {
+            self.note_missing_block_dependency_event(now);
+        }
+    }
+
+    fn prune_missing_block_recovery_state(&mut self, now: Instant) {
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let ttl = self
+            .recovery_missing_block_height_ttl()
+            .max(Duration::from_millis(1));
+        self.missing_block_height_recovery.retain(|key, entry| {
+            key.height > committed_height
+                && now.saturating_duration_since(entry.last_seen) <= ttl.saturating_mul(8)
+        });
+        self.range_pull_escalation_cooldowns
+            .retain(|_, expires| now < *expires);
+        let sidecar_expiry = self
+            .recovery_sidecar_mismatch_ttl()
+            .max(Duration::from_millis(1))
+            .saturating_mul(8);
+        self.sidecar_mismatch_recovery.retain(|height, entry| {
+            if *height <= committed_height {
+                return false;
+            }
+            now.saturating_duration_since(entry.last_seen) <= sidecar_expiry
+        });
+        self.no_roster_fallback_recovery.retain(|key, entry| {
+            key.height > committed_height
+                && now.saturating_duration_since(entry.last_seen) <= ttl.saturating_mul(8)
+        });
+    }
+
+    fn clear_no_roster_fallback_for_height(&mut self, height: u64) {
+        self.no_roster_fallback_recovery
+            .retain(|key, _| key.height != height);
+    }
+
+    fn allow_no_roster_fallback_for_round(
+        &mut self,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> (bool, u32) {
+        let allowed_views =
+            usize::try_from(self.recovery_no_roster_fallback_views()).unwrap_or(usize::MAX);
+        if allowed_views == 0 {
+            return (false, 0);
+        }
+        let key = self.missing_block_recovery_key_for_height(height);
+        let budget = self
+            .no_roster_fallback_recovery
+            .entry(key)
+            .or_insert_with(|| NoRosterFallbackBudget::new(now));
+        budget.last_seen = now;
+        if budget.allowed_views.contains(&view) {
+            let remaining = allowed_views.saturating_sub(budget.allowed_views.len());
+            let remaining = u32::try_from(remaining).unwrap_or(u32::MAX);
+            return (true, remaining);
+        }
+        if budget.allowed_views.len() < allowed_views {
+            budget.allowed_views.insert(view);
+            super::status::inc_consensus_no_roster_fallback();
+            let remaining = allowed_views.saturating_sub(budget.allowed_views.len());
+            let remaining = u32::try_from(remaining).unwrap_or(u32::MAX);
+            return (true, remaining);
+        }
+        (false, 0)
+    }
+
+    fn escalate_no_roster_fail_closed(
+        &mut self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        cause: ViewChangeCause,
+        reason: &'static str,
+        now: Instant,
+    ) {
+        let key = self.missing_block_recovery_key_for_height(height);
+        let budget = self
+            .no_roster_fallback_recovery
+            .entry(key)
+            .or_insert_with(|| NoRosterFallbackBudget::new(now));
+        budget.last_seen = now;
+        if !budget.escalated_views.insert(view) {
+            return;
+        }
+        super::status::inc_consensus_no_roster_fail_closed();
+        let _ = self.request_range_pull_from_anchor(height, "no_roster_fail_closed", now);
+        if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
+            self.request_missing_block_for_highest_qc_force(highest, "no_roster_fail_closed");
+        }
+        self.trigger_view_change_with_cause(height, view, cause);
+        warn!(
+            height,
+            view,
+            epoch = key.epoch,
+            block = %block_hash,
+            reason,
+            budget_remaining = 0_u32,
+            "no-roster fallback budget exhausted; fail-closed recovery escalation"
+        );
+    }
+
+    fn allow_no_roster_fallback_or_fail_closed(
+        &mut self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        cause: ViewChangeCause,
+        reason: &'static str,
+    ) -> bool {
+        let now = Instant::now();
+        let (allowed, budget_remaining) =
+            self.allow_no_roster_fallback_for_round(height, view, now);
+        if allowed {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                budget_remaining,
+                reason,
+                "allowing bounded no-roster fallback broadcast"
+            );
+            return true;
+        }
+        self.escalate_no_roster_fail_closed(height, view, block_hash, cause, reason, now);
+        false
+    }
+
+    fn deterministic_active_set_from_commit_evidence(
+        &self,
+        peers: &[PeerId],
+        lookback_blocks: u32,
+    ) -> DeterministicActiveSet {
+        let mut scores: BTreeMap<PeerId, u64> = BTreeMap::new();
+        if peers.is_empty() {
+            return DeterministicActiveSet { scored: Vec::new() };
+        }
+        let tracked: BTreeSet<_> = peers.iter().cloned().collect();
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let lookback = u64::from(lookback_blocks.max(1));
+        let min_height = committed_height.saturating_sub(lookback.saturating_sub(1));
+        let snapshots = self.state.commit_roster_journal.read().snapshots();
+        for snapshot in snapshots {
+            let qc = snapshot.commit_qc;
+            if qc.height < min_height || qc.height > committed_height {
+                continue;
+            }
+            let roster = qc.validator_set;
+            if roster.is_empty() {
+                continue;
+            }
+            let Ok(parsed) =
+                parse_signers_bitmap(&qc.aggregate.signers_bitmap, roster.len(), roster.len())
+            else {
+                continue;
+            };
+            for signer in parsed.voting {
+                let Ok(idx) = usize::try_from(signer) else {
+                    continue;
+                };
+                let Some(peer) = roster.get(idx) else {
+                    continue;
+                };
+                if !tracked.contains(peer) {
+                    continue;
+                }
+                let score = scores.entry(peer.clone()).or_insert(0);
+                *score = score.saturating_add(1);
+            }
+        }
+        let mut scored: Vec<_> = scores.into_iter().collect();
+        scored.sort_by(|(lhs_peer, lhs_score), (rhs_peer, rhs_score)| {
+            rhs_score
+                .cmp(lhs_score)
+                .then_with(|| lhs_peer.public_key().cmp(rhs_peer.public_key()))
+                .then_with(|| lhs_peer.cmp(rhs_peer))
+        });
+        DeterministicActiveSet { scored }
+    }
+
+    fn deterministic_fanout_committee_for_round(
+        &self,
+        peers: &[PeerId],
+        lookback_blocks: u32,
+    ) -> FanoutCommittee {
+        let topology = super::network_topology::Topology::new(peers.to_vec());
+        let required_commit_votes = topology.min_votes_for_commit();
+        let redundancy_margin = std::cmp::max(2, required_commit_votes.saturating_add(9) / 10);
+        let active_set = self.deterministic_active_set_from_commit_evidence(peers, lookback_blocks);
+        let mut ranked: Vec<PeerId> = active_set
+            .scored
+            .into_iter()
+            .map(|(peer, _)| peer)
+            .collect();
+        if ranked.is_empty() {
+            ranked = peers.to_vec();
+            ranked.sort_by(|lhs, rhs| {
+                lhs.public_key()
+                    .cmp(rhs.public_key())
+                    .then_with(|| lhs.cmp(rhs))
+            });
+        }
+        let committee_size = required_commit_votes
+            .saturating_add(redundancy_margin)
+            .min(ranked.len());
+        FanoutCommittee {
+            peers: ranked.into_iter().take(committee_size).collect(),
+            required_commit_votes,
+            redundancy_margin,
+        }
+    }
+
+    pub(super) fn transport_fanout_targets_for_round(
+        &mut self,
+        peers: &[PeerId],
+        height: u64,
+        view: u64,
+        reason: &'static str,
+    ) -> Vec<PeerId> {
+        let threshold =
+            usize::try_from(self.config.fanout.large_set_threshold.max(1)).unwrap_or(usize::MAX);
+        if peers.len() <= threshold {
+            super::status::set_consensus_deterministic_committee_size(
+                u64::try_from(peers.len()).unwrap_or(u64::MAX),
+            );
+            return peers.to_vec();
+        }
+        let committee = self.deterministic_fanout_committee_for_round(
+            peers,
+            self.config.fanout.activity_lookback_blocks,
+        );
+        let committee_size = u64::try_from(committee.peers.len()).unwrap_or(u64::MAX);
+        super::status::set_consensus_deterministic_committee_size(committee_size);
+        debug!(
+            height,
+            view,
+            reason,
+            validator_set_size = peers.len(),
+            committee_size = committee.peers.len(),
+            required_commit_votes = committee.required_commit_votes,
+            redundancy_margin = committee.redundancy_margin,
+            "using deterministic active committee for transport fanout"
+        );
+        if committee.peers.is_empty() {
+            peers.to_vec()
+        } else {
+            committee.peers
+        }
+    }
+
+    fn range_pull_targets_for_height(&self, height: u64) -> Vec<PeerId> {
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let mut targets = self.roster_for_live_vote_with_mode(height, consensus_mode);
+        if targets.is_empty() {
+            targets = self.effective_commit_topology();
+        }
+        if targets.is_empty() {
+            targets = self
+                .common_config
+                .trusted_peers
+                .value()
+                .others
+                .iter()
+                .map(|peer| peer.id().clone())
+                .collect();
+        }
+        targets
+    }
+
+    fn request_range_pull_from_anchor(
+        &mut self,
+        height: u64,
+        reason: &'static str,
+        now: Instant,
+    ) -> bool {
+        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let Some(anchor_hash) = self.state.latest_block_hash_fast() else {
+            return false;
+        };
+        let targets = self.range_pull_targets_for_height(height);
+        if targets.is_empty() {
+            return false;
+        }
+        let cooldown = self
+            .recovery_missing_block_height_ttl()
+            .max(RANGE_PULL_DEDUP_COOLDOWN_FLOOR);
+        let expires = now.checked_add(cooldown).unwrap_or(now);
+        let mut sent = 0usize;
+        for peer in targets {
+            let dedup_key = (peer.clone(), local_height, height);
+            if self
+                .range_pull_escalation_cooldowns
+                .get(&dedup_key)
+                .is_some_and(|deadline| now < *deadline)
+            {
+                continue;
+            }
+            self.range_pull_escalation_cooldowns
+                .insert(dedup_key, expires);
+            let request = crate::block_sync::message::GetBlocksAfter::new(
+                self.common_config.peer.id().clone(),
+                Some(anchor_hash),
+                Some(anchor_hash),
+                BTreeSet::new(),
+            );
+            self.network.post(Post {
+                data: NetworkMessage::BlockSync(Box::new(
+                    crate::block_sync::message::Message::GetBlocksAfter(request),
+                )),
+                peer_id: peer,
+                priority: Priority::Low,
+            });
+            sent = sent.saturating_add(1);
+        }
+
+        if sent == 0 {
+            return false;
+        }
+
+        super::status::inc_blocksync_range_pull_escalation();
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.inc_blocksync_range_pull_escalation();
+        }
+        info!(
+            height,
+            local_height,
+            anchor = %anchor_hash,
+            targets = sent,
+            reason,
+            "requested block-sync range pull from committed anchor"
+        );
+        true
+    }
+
+    fn maybe_escalate_missing_block_height_recovery(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
+        let key = self.missing_block_recovery_key_for_height(height);
+        let Some(mut budget) = self.missing_block_height_recovery.get(&key).copied() else {
+            return false;
+        };
+        let ttl = self
+            .recovery_missing_block_height_ttl()
+            .max(Duration::from_millis(1));
+        let attempt_cap = self.recovery_missing_block_height_attempt_cap().max(1);
+        let range_pull_hash_miss_cap = self
+            .recovery_range_pull_escalation_after_hash_misses()
+            .max(1);
+
+        if budget.range_pull.inflight
+            && budget
+                .range_pull
+                .last_requested
+                .is_some_and(|requested| now.saturating_duration_since(requested) >= ttl)
+        {
+            budget.range_pull.inflight = false;
+            super::status::inc_blocksync_range_pull_failure();
+            #[cfg(feature = "telemetry")]
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.inc_blocksync_range_pull_failure();
+            }
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                ttl_ms = ttl.as_millis(),
+                "range-pull recovery window expired without progress"
+            );
+        }
+
+        let dwell = now.saturating_duration_since(budget.first_seen);
+        let hard_cap_due = budget.attempts >= attempt_cap || dwell >= ttl;
+        let range_pull_due = budget.range_pull.hash_misses >= range_pull_hash_miss_cap
+            || now.saturating_duration_since(budget.range_pull.last_progress) >= ttl;
+        if !hard_cap_due && !range_pull_due {
+            self.missing_block_height_recovery.insert(key, budget);
+            return false;
+        }
+
+        budget.range_pull.stage = MissingBlockRecoveryStage::RangePullFromAnchor;
+        budget.range_pull.last_requested = Some(now);
+        budget.range_pull.inflight = self.request_range_pull_from_anchor(
+            height,
+            if hard_cap_due {
+                "missing_block_height_hard_cap"
+            } else {
+                "missing_block_hash_miss_streak"
+            },
+            now,
+        );
+        budget.range_pull.hash_misses = 0;
+        budget.range_pull.no_progress_windows =
+            budget.range_pull.no_progress_windows.saturating_add(1);
+
+        let mut progressed = budget.range_pull.inflight;
+        if hard_cap_due && budget.escalated_view != Some(view) {
+            budget.escalated_view = Some(view);
+            super::status::inc_consensus_missing_block_height_escalation();
+            #[cfg(feature = "telemetry")]
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.inc_consensus_missing_block_height_escalation();
+            }
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                attempts = budget.attempts,
+                attempt_cap,
+                dwell_ms = dwell.as_millis(),
+                "missing-block height recovery hard cap tripped; escalating deterministically"
+            );
+            self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingPayload);
+            progressed = true;
+        }
+        self.missing_block_height_recovery.insert(key, budget);
+        progressed
+    }
+
+    fn note_missing_block_height_recovery_success(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        now: Instant,
+    ) {
+        self.clear_missing_block_recovery_for_height(height, now);
+        super::status::inc_blocksync_range_pull_success();
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.inc_blocksync_range_pull_success();
+        }
+        debug!(
+            height,
+            block = %block_hash,
+            "missing-block dependency became available; cleared height recovery budget"
+        );
+    }
+
+    fn sidecar_quarantined_for_height(&self, height: u64) -> bool {
+        self.sidecar_mismatch_recovery
+            .get(&height)
+            .is_some_and(|entry| entry.quarantined)
+    }
+
+    fn sidecar_entry_expired(&self, entry: SidecarMismatchRecoveryEntry, now: Instant) -> bool {
+        now.saturating_duration_since(entry.first_seen) >= self.recovery_sidecar_mismatch_ttl()
+    }
+
+    fn note_sidecar_mismatch(
+        &mut self,
+        height: u64,
+        expected: HashOf<BlockHeader>,
+        stored: HashOf<BlockHeader>,
+        reason: &'static str,
+    ) {
+        let now = Instant::now();
+        let mut entry = self
+            .sidecar_mismatch_recovery
+            .get(&height)
+            .copied()
+            .unwrap_or(SidecarMismatchRecoveryEntry {
+                mismatch_count: 0,
+                first_seen: now,
+                last_seen: now,
+                quarantined: false,
+                canonical_rebuild_inflight: false,
+                final_dropped: false,
+            });
+        entry.mismatch_count = entry.mismatch_count.saturating_add(1);
+        entry.last_seen = now;
+        entry.quarantined = true;
+        entry.canonical_rebuild_inflight = true;
+
+        let should_final_drop = entry.mismatch_count >= self.recovery_sidecar_mismatch_retry_cap()
+            || self.sidecar_entry_expired(entry, now);
+        if should_final_drop && !entry.final_dropped {
+            entry.final_dropped = true;
+            entry.canonical_rebuild_inflight = false;
+            super::status::inc_consensus_sidecar_final_drop();
+            #[cfg(feature = "telemetry")]
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.inc_consensus_sidecar_final_drop();
+            }
+        }
+
+        if !self
+            .sidecar_mismatch_recovery
+            .get(&height)
+            .is_some_and(|existing| existing.quarantined)
+        {
+            super::status::inc_consensus_sidecar_quarantine();
+            #[cfg(feature = "telemetry")]
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.inc_consensus_sidecar_quarantine();
+            }
+        }
+
+        self.sidecar_mismatch_recovery.insert(height, entry);
+        let _ = self.request_range_pull_from_anchor(height, "sidecar_mismatch", now);
+        if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
+            self.request_missing_block_for_highest_qc_force(highest, "sidecar_mismatch");
+        }
+        warn!(
+            height,
+            expected = %expected,
+            stored = %stored,
+            mismatches = entry.mismatch_count,
+            quarantined = entry.quarantined,
+            final_drop = entry.final_dropped,
+            reason,
+            "roster sidecar mismatch detected; fail-closed quarantine active"
+        );
+    }
+
+    fn clear_sidecar_mismatch_for_height(&mut self, height: u64) {
+        self.sidecar_mismatch_recovery.remove(&height);
+    }
+
+    fn observe_sidecar_mismatch_for_height(
+        &mut self,
+        height: u64,
+        expected_hash: HashOf<BlockHeader>,
+        reason: &'static str,
+    ) {
+        if let Some(meta) = self.kura.read_roster_metadata(height)
+            && meta.block_hash != expected_hash
+        {
+            self.note_sidecar_mismatch(height, expected_hash, meta.block_hash, reason);
+        }
+    }
+
+    fn proposal_gated_by_missing_dependencies(&self, height: u64) -> bool {
+        self.missing_block_height_recovery
+            .iter()
+            .any(|(key, budget)| {
+                key.height == height
+                    && (budget.range_pull.inflight
+                        || budget.range_pull.stage
+                            == MissingBlockRecoveryStage::RangePullFromAnchor)
+            })
+    }
+
+    fn note_consensus_recovery_state_transition(&self, state: ConsensusRecoveryState) {
+        super::status::inc_consensus_recovery_state_transition(state.as_str());
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.inc_consensus_recovery_state_transition(state.as_str());
+        }
+    }
+
+    pub(super) fn clear_consensus_recovery_for_round(&mut self, height: u64, _view: u64) {
+        self.consensus_recovery
+            .retain(|(entry_height, _), _| *entry_height != height);
+    }
+
+    fn prune_stale_consensus_recovery(&mut self, now: Instant) {
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let retention = self
+            .commit_quorum_timeout()
+            .max(self.subsystems.propose.pacemaker.propose_interval)
+            .max(Duration::from_millis(1))
+            .saturating_mul(8);
+        self.consensus_recovery.retain(|(height, _), entry| {
+            *height >= committed_height.saturating_sub(1)
+                && now.saturating_duration_since(entry.last_attempt) <= retention
+        });
+    }
+
+    fn handle_empty_commit_topology_recovery(
+        &mut self,
+        height: u64,
+        view: u64,
+        block_hash: Option<HashOf<BlockHeader>>,
+        queue_len: usize,
+        now: Instant,
+        warning_kind: ProposalDeferWarningKind,
+        reason: &'static str,
+    ) -> bool {
+        super::status::inc_consensus_empty_commit_topology_defer();
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.inc_consensus_empty_commit_topology_defer();
+        }
+
+        self.prune_stale_consensus_recovery(now);
+
+        enum RecoveryAction {
+            RefreshTopology,
+            TriggerBlockSync,
+            EscalateViewChange,
+            Wait,
+        }
+
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        let consensus_queue_backlog = queue_depths.vote_rx > 0
+            || queue_depths.block_payload_rx > 0
+            || queue_depths.rbc_chunk_rx > 0
+            || queue_depths.block_rx > 0
+            || queue_depths.consensus_rx > 0;
+        let backlog_signals = self.has_unresolved_rbc_backlog() || consensus_queue_backlog;
+        let wait_window_base = self
+            .commit_quorum_timeout()
+            .max(self.subsystems.propose.pacemaker.propose_interval)
+            .max(Duration::from_millis(1));
+        let wait_window =
+            self.backlog_extended_view_change_timeout(wait_window_base, backlog_signals);
+
+        let mut created = false;
+        let mut transition: Option<ConsensusRecoveryState> = None;
+        let sidecar_quarantine_active = self.sidecar_quarantined_for_height(height);
+        let dependency_seq = self.dependency_event_seq;
+        let inherited = self
+            .consensus_recovery
+            .iter()
+            .filter(|((entry_height, entry_view), _)| *entry_height == height && *entry_view < view)
+            .max_by_key(|((_, entry_view), _)| *entry_view)
+            .map(|(_, entry)| *entry);
+        let (action, active_state, retries, age, dependency_arrived, dependency_requested) = {
+            let entry = match self.consensus_recovery.entry((height, view)) {
+                Entry::Vacant(vacant) => {
+                    if let Some(previous) = inherited {
+                        vacant.insert(ConsensusRecoveryEntry {
+                            state: previous.state,
+                            first_seen: previous.first_seen,
+                            last_attempt: now,
+                            retries: previous.retries,
+                            dependency_requested: previous.dependency_requested,
+                            dependency_event_seq: previous.dependency_event_seq,
+                            waiting_since: previous.waiting_since,
+                            last_observed_dependency_seq: previous.last_observed_dependency_seq,
+                        })
+                    } else {
+                        created = true;
+                        vacant.insert(ConsensusRecoveryEntry {
+                            state: ConsensusRecoveryState::RefreshTopology,
+                            first_seen: now,
+                            last_attempt: now,
+                            retries: 0,
+                            dependency_requested: false,
+                            dependency_event_seq: dependency_seq,
+                            waiting_since: None,
+                            last_observed_dependency_seq: dependency_seq,
+                        })
+                    }
+                }
+                Entry::Occupied(occupied) => occupied.into_mut(),
+            };
+            entry.last_attempt = now;
+            entry.retries = entry.retries.saturating_add(1);
+            let retries = entry.retries;
+            let age = now.saturating_duration_since(entry.first_seen);
+            let dependency_arrived = dependency_seq > entry.last_observed_dependency_seq;
+            let current_state = entry.state;
+            let action = match current_state {
+                ConsensusRecoveryState::RefreshTopology => {
+                    entry.dependency_requested = false;
+                    entry.waiting_since = None;
+                    transition = Some(ConsensusRecoveryState::BlockSync);
+                    RecoveryAction::RefreshTopology
+                }
+                ConsensusRecoveryState::BlockSync => {
+                    entry.dependency_requested = true;
+                    entry.dependency_event_seq = dependency_seq;
+                    entry.waiting_since = Some(now);
+                    entry.last_observed_dependency_seq = dependency_seq;
+                    transition = Some(ConsensusRecoveryState::WaitingForDependencies);
+                    RecoveryAction::TriggerBlockSync
+                }
+                ConsensusRecoveryState::WaitingForDependencies => {
+                    if dependency_arrived {
+                        entry.last_observed_dependency_seq = dependency_seq;
+                        transition = Some(ConsensusRecoveryState::RefreshTopology);
+                        RecoveryAction::RefreshTopology
+                    } else if sidecar_quarantine_active
+                        || !entry.dependency_requested
+                        || entry.retries >= EMPTY_COMMIT_TOPOLOGY_RECOVERY_MAX_RETRIES
+                        || age >= wait_window
+                        || entry.waiting_since.is_some_and(|since| {
+                            now.saturating_duration_since(since) >= wait_window
+                        })
+                    {
+                        transition = Some(ConsensusRecoveryState::ViewChangeEscalation);
+                        RecoveryAction::EscalateViewChange
+                    } else {
+                        RecoveryAction::Wait
+                    }
+                }
+                ConsensusRecoveryState::ViewChangeEscalation => RecoveryAction::EscalateViewChange,
+            };
+            if let Some(next) = transition {
+                entry.state = next;
+            }
+            (
+                action,
+                entry.state,
+                retries,
+                age,
+                dependency_arrived,
+                entry.dependency_requested,
+            )
+        };
+        if inherited.is_some() {
+            self.consensus_recovery
+                .retain(|(entry_height, entry_view), _| {
+                    *entry_height != height || *entry_view >= view
+                });
+        }
+        if created {
+            self.note_consensus_recovery_state_transition(ConsensusRecoveryState::RefreshTopology);
+        }
+        if let Some(next) = transition {
+            self.note_consensus_recovery_state_transition(next);
+        }
+
+        let throttle_hash = block_hash.unwrap_or_else(|| {
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]))
+        });
+        if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
+            warning_kind,
+            height,
+            view,
+            throttle_hash,
+            now,
+            EMPTY_COMMIT_TOPOLOGY_RECOVERY_LOG_COOLDOWN,
+        ) {
+            warn!(
+                height,
+                view,
+                queue_len,
+                retries,
+                age_ms = age.as_millis(),
+                wait_window_ms = wait_window.as_millis(),
+                recovery_state = active_state.as_str(),
+                dependency_requested,
+                dependency_arrived,
+                sidecar_quarantine_active,
+                reason,
+                suppressed_since_last,
+                "deferring consensus path: empty commit topology"
+            );
+        }
+        super::status::observe_consensus_recovery_stuck_round(age.as_secs());
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.observe_consensus_recovery_stuck_round(age);
+        }
+
+        let next_deadline = now
+            .checked_add(
+                self.subsystems
+                    .propose
+                    .pacemaker
+                    .propose_interval
+                    .max(Duration::from_millis(1)),
+            )
+            .unwrap_or(now);
+        self.subsystems.propose.pacemaker.next_deadline = next_deadline;
+
+        match action {
+            RecoveryAction::RefreshTopology => {
+                let refreshed = self.effective_commit_topology();
+                let _ = self.refresh_commit_topology_state(&refreshed);
+                let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+                if !self
+                    .roster_for_live_vote_with_mode(height, consensus_mode)
+                    .is_empty()
+                {
+                    self.clear_consensus_recovery_for_round(height, view);
+                }
+                true
+            }
+            RecoveryAction::TriggerBlockSync => {
+                if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
+                    self.request_missing_block_for_highest_qc_force(
+                        highest,
+                        "empty_commit_topology_recovery",
+                    );
+                }
+                let commit_topology = self.effective_commit_topology();
+                self.request_missing_parents_for_gap(
+                    commit_topology.as_slice(),
+                    None,
+                    "empty_commit_topology_recovery",
+                );
+                let _ = self.request_range_pull_from_anchor(
+                    height,
+                    "empty_commit_topology_recovery",
+                    now,
+                );
+                true
+            }
+            RecoveryAction::EscalateViewChange => {
+                self.clear_consensus_recovery_for_round(height, view);
+                let _ = self.request_range_pull_from_anchor(
+                    height,
+                    "empty_commit_topology_escalation",
+                    now,
+                );
+                super::status::inc_consensus_empty_commit_topology_escalation();
+                #[cfg(feature = "telemetry")]
+                if let Some(telemetry) = self.telemetry_handle() {
+                    telemetry.inc_consensus_empty_commit_topology_escalation();
+                }
+                self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingQc);
+                true
+            }
+            RecoveryAction::Wait => false,
+        }
+    }
+
     fn backpressure_override_due(&self, now: Instant) -> bool {
         if self.queue.active_len() == 0 {
             return false;
@@ -14344,11 +15652,6 @@ impl Actor {
             return false;
         }
         if self.subsystems.commit.inflight.is_some() {
-            return false;
-        }
-        if !self.pending.missing_block_requests.is_empty() {
-            // Avoid view-change churn while we're still synchronizing missing payloads.
-            self.queue_ready_since = None;
             return false;
         }
         if self.queue.active_len() == 0 {
@@ -14901,6 +16204,10 @@ impl Actor {
         }
         self.subsystems.propose.forced_view_after_timeout = Some((height, next_view));
         self.prune_stale_view_state(height, next_view);
+        self.consensus_recovery
+            .retain(|(entry_height, entry_view), _| {
+                *entry_height != height || *entry_view >= next_view
+            });
         // Drop earlier views for the active height so proposals_seen can't grow unbounded.
         self.subsystems
             .propose
@@ -15735,6 +17042,8 @@ enum ProposalDeferWarningKind {
     ParentMissing,
     InsufficientOnlinePeers,
     ProceedingBelowQuorumAfterGrace,
+    EmptyCommitTopologyProposal,
+    EmptyCommitTopologyFinalize,
 }
 
 #[derive(Debug, Default)]
@@ -15752,7 +17061,12 @@ impl ProposalDeferWarningThrottle {
         now: Instant,
         cooldown: Duration,
     ) -> Option<u64> {
-        let key = (kind, height, view, highest_hash);
+        let normalized_view = match kind {
+            ProposalDeferWarningKind::EmptyCommitTopologyProposal
+            | ProposalDeferWarningKind::EmptyCommitTopologyFinalize => 0,
+            _ => view,
+        };
+        let key = (kind, height, normalized_view, highest_hash);
         if let Some((last_emit, suppressed)) = self.entries.get_mut(&key) {
             if cooldown > Duration::ZERO && now.saturating_duration_since(*last_emit) < cooldown {
                 *suppressed = suppressed.saturating_add(1);
@@ -15813,6 +17127,69 @@ impl MissingQcWarningThrottle {
         self.entries
             .retain(|_, (recorded, _)| now.saturating_duration_since(*recorded) <= expiry_window);
     }
+}
+
+#[derive(Debug, Default)]
+struct RosterSidecarMismatchWarningThrottle {
+    entries: BTreeMap<(u64, HashOf<BlockHeader>, HashOf<BlockHeader>), (Instant, u64)>,
+}
+
+impl RosterSidecarMismatchWarningThrottle {
+    fn allow(
+        &mut self,
+        height: u64,
+        expected: HashOf<BlockHeader>,
+        stored: HashOf<BlockHeader>,
+        now: Instant,
+        cooldown: Duration,
+    ) -> Option<u64> {
+        let key = (height, expected, stored);
+        if let Some((last_emit, suppressed)) = self.entries.get_mut(&key) {
+            if cooldown > Duration::ZERO && now.saturating_duration_since(*last_emit) < cooldown {
+                *suppressed = suppressed.saturating_add(1);
+                return None;
+            }
+            let suppressed_since_last = *suppressed;
+            *last_emit = now;
+            *suppressed = 0;
+            self.gc(now, cooldown);
+            return Some(suppressed_since_last);
+        }
+        self.entries.insert(key, (now, 0));
+        self.gc(now, cooldown);
+        Some(0)
+    }
+
+    fn gc(&mut self, now: Instant, cooldown: Duration) {
+        let expiry_window = if cooldown > Duration::ZERO {
+            cooldown.saturating_mul(8)
+        } else {
+            Duration::from_secs(1)
+        };
+        self.entries
+            .retain(|_, (recorded, _)| now.saturating_duration_since(*recorded) <= expiry_window);
+    }
+}
+
+static ROSTER_SIDECAR_MISMATCH_WARNING_THROTTLE: LazyLock<
+    Mutex<RosterSidecarMismatchWarningThrottle>,
+> = LazyLock::new(|| Mutex::new(RosterSidecarMismatchWarningThrottle::default()));
+
+fn allow_roster_sidecar_mismatch_warning(
+    height: u64,
+    expected: HashOf<BlockHeader>,
+    stored: HashOf<BlockHeader>,
+) -> Option<u64> {
+    ROSTER_SIDECAR_MISMATCH_WARNING_THROTTLE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .allow(
+            height,
+            expected,
+            stored,
+            Instant::now(),
+            ROSTER_SIDECAR_MISMATCH_LOG_COOLDOWN,
+        )
 }
 
 #[cfg(test)]
@@ -16076,6 +17453,49 @@ mod proposal_defer_warning_throttle_tests {
             Some(1)
         );
     }
+
+    #[test]
+    fn proposal_defer_warning_throttle_coalesces_empty_topology_across_views() {
+        let mut throttle = ProposalDeferWarningThrottle::default();
+        let now = Instant::now();
+        let cooldown = Duration::from_millis(40);
+        let hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([32; Hash::LENGTH]));
+
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+                12,
+                1,
+                hash,
+                now,
+                cooldown,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+                12,
+                2,
+                hash,
+                now + Duration::from_millis(10),
+                cooldown,
+            ),
+            None
+        );
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+                12,
+                3,
+                hash,
+                now + Duration::from_millis(60),
+                cooldown,
+            ),
+            Some(1)
+        );
+    }
 }
 
 #[cfg(test)]
@@ -16096,6 +17516,47 @@ mod missing_qc_warning_throttle_tests {
         );
         assert_eq!(
             throttle.allow(10, 0, now + Duration::from_millis(70), cooldown),
+            Some(1)
+        );
+    }
+}
+
+#[cfg(test)]
+mod roster_sidecar_mismatch_warning_throttle_tests {
+    use super::RosterSidecarMismatchWarningThrottle;
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn roster_sidecar_mismatch_warning_throttle_aggregates_suppressed_events() {
+        let mut throttle = RosterSidecarMismatchWarningThrottle::default();
+        let now = Instant::now();
+        let cooldown = Duration::from_millis(50);
+        let expected =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([41; Hash::LENGTH]));
+        let stored =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([42; Hash::LENGTH]));
+
+        assert_eq!(throttle.allow(8, expected, stored, now, cooldown), Some(0));
+        assert_eq!(
+            throttle.allow(
+                8,
+                expected,
+                stored,
+                now + Duration::from_millis(10),
+                cooldown
+            ),
+            None
+        );
+        assert_eq!(
+            throttle.allow(
+                8,
+                expected,
+                stored,
+                now + Duration::from_millis(80),
+                cooldown
+            ),
             Some(1)
         );
     }

@@ -1211,6 +1211,10 @@ pub struct Network {
     pub connect_startup_delay: Duration,
     /// Timeout applied to an individual outbound dial attempt (TCP/TLS/QUIC/WS).
     pub dial_timeout: Duration,
+    /// Maximum age for deferred outbound frames queued while the peer session is missing.
+    pub deferred_send_ttl: Duration,
+    /// Maximum deferred outbound frames retained per peer while session is missing.
+    pub deferred_send_max_per_peer: usize,
     /// Interval between peer gossip batches.
     pub peer_gossip_period: Duration,
     /// Maximum interval between peer gossip batches (idle backoff ceiling).
@@ -3874,8 +3878,41 @@ pub struct SumeragiPersistence {
 /// Recovery-related configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiRecovery {
+    /// Deterministic per-height missing-block attempt cap before hard escalation.
+    pub height_attempt_cap: u32,
+    /// Deterministic per-height missing-block dwell window before hard escalation.
+    pub height_window: Duration,
+    /// Hash-miss threshold before escalating dependency recovery to range pull.
+    pub hash_miss_cap_before_range_pull: u32,
+    /// Number of views where no-roster fallback broadcasts remain allowed.
+    pub no_roster_fallback_views: u32,
     /// Missing-block fetch attempts before falling back to the full commit topology.
     pub missing_block_signer_fallback_attempts: u32,
+    /// Backlog-aware multiplier applied to quorum-reschedule grace windows.
+    pub view_change_backlog_extension_factor: f64,
+    /// Maximum additional quorum-reschedule grace window applied under backlog.
+    pub view_change_backlog_extension_cap: Duration,
+    /// TTL for deferred QC missing-payload recovery before escalation.
+    pub deferred_qc_ttl: Duration,
+    /// Deterministic per-height missing-block attempt cap before hard escalation.
+    pub missing_block_height_attempt_cap: u32,
+    /// Deterministic per-height missing-block dwell cap before hard escalation.
+    pub missing_block_height_ttl: Duration,
+    /// Sidecar mismatch retries before final-drop and canonical-only rebuild.
+    pub sidecar_mismatch_retry_cap: u32,
+    /// Sidecar mismatch TTL before final-drop.
+    pub sidecar_mismatch_ttl: Duration,
+    /// Hash-miss threshold before escalating dependency recovery to range pull.
+    pub range_pull_escalation_after_hash_misses: u32,
+}
+
+/// Deterministic transport fanout configuration for large validator sets.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiFanout {
+    /// Validator-set size threshold where deterministic active-subset fanout engages.
+    pub large_set_threshold: u32,
+    /// Number of finalized blocks used when scoring validator activity.
+    pub activity_lookback_blocks: u32,
 }
 
 /// Ingress gating and penalty configuration.
@@ -4030,6 +4067,8 @@ pub struct Sumeragi {
     pub persistence: SumeragiPersistence,
     /// Recovery-related configuration.
     pub recovery: SumeragiRecovery,
+    /// Deterministic transport fanout configuration.
+    pub fanout: SumeragiFanout,
     /// Ingress gating and penalty configuration.
     pub gating: SumeragiGating,
     /// RBC (reliable broadcast) configuration.

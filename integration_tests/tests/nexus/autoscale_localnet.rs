@@ -331,6 +331,58 @@ fn wait_for_contracted_lanes_with_heartbeat(
     ))
 }
 
+fn run_expand_contract_cycle(
+    network: &sandbox::SerializedNetwork,
+    submitters: &[Client],
+    cycle_index: usize,
+) -> Result<()> {
+    let load_started = Instant::now();
+    submit_load_round_robin(submitters, LOAD_TX_COUNT)?;
+    eprintln!(
+        "[autoscale-localnet][cycle {cycle_index}] load submission ({} tx): {:.3}s",
+        LOAD_TX_COUNT,
+        load_started.elapsed().as_secs_f64()
+    );
+
+    let expansion_probe_client = peer_client_with_timeout(network.peer());
+    let expansion_started = Instant::now();
+    let expansion_context = format!("autoscale expansion cycle {cycle_index}");
+    let expansion_prefix = format!("autoscale-expand-probe-cycle-{cycle_index}");
+    wait_for_storage_lane_count_with_heartbeat(
+        network,
+        &expansion_probe_client,
+        submitters,
+        SCALED_PROVISIONED_LANES,
+        SCALE_OUT_WAIT_TIMEOUT,
+        &expansion_context,
+        &expansion_prefix,
+        EXPANSION_PROBE_INTERVAL,
+    )?;
+    eprintln!(
+        "[autoscale-localnet][cycle {cycle_index}] expansion wait: {:.3}s",
+        expansion_started.elapsed().as_secs_f64()
+    );
+
+    let heartbeat_client = peer_client_with_timeout(network.peer());
+    let contraction_started = Instant::now();
+    let contraction_context = format!("autoscale contraction cycle {cycle_index}");
+    let contraction_prefix = format!("autoscale-heartbeat-cycle-{cycle_index}");
+    wait_for_contracted_lanes_with_heartbeat(
+        network,
+        &heartbeat_client,
+        SCALE_IN_WAIT_TIMEOUT,
+        &contraction_context,
+        &contraction_prefix,
+        CONTRACTION_HEARTBEAT_INTERVAL,
+    )?;
+    eprintln!(
+        "[autoscale-localnet][cycle {cycle_index}] contraction wait: {:.3}s",
+        contraction_started.elapsed().as_secs_f64()
+    );
+
+    Ok(())
+}
+
 #[test]
 fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
     let context = stringify!(nexus_autoscale_expands_and_contracts_lanes_in_localnet);
@@ -369,45 +421,7 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
         .iter()
         .map(peer_client_with_timeout)
         .collect();
-    let load_started = Instant::now();
-    submit_load_round_robin(&submitters, LOAD_TX_COUNT)?;
-    eprintln!(
-        "[autoscale-localnet] load submission ({} tx): {:.3}s",
-        LOAD_TX_COUNT,
-        load_started.elapsed().as_secs_f64()
-    );
-
-    let expansion_probe_client = peer_client_with_timeout(network.peer());
-    let expansion_started = Instant::now();
-    wait_for_storage_lane_count_with_heartbeat(
-        &network,
-        &expansion_probe_client,
-        &submitters,
-        SCALED_PROVISIONED_LANES,
-        SCALE_OUT_WAIT_TIMEOUT,
-        "autoscale expansion",
-        "autoscale-expand-probe",
-        EXPANSION_PROBE_INTERVAL,
-    )?;
-    eprintln!(
-        "[autoscale-localnet] expansion wait: {:.3}s",
-        expansion_started.elapsed().as_secs_f64()
-    );
-
-    let heartbeat_client = peer_client_with_timeout(network.peer());
-    let contraction_started = Instant::now();
-    wait_for_contracted_lanes_with_heartbeat(
-        &network,
-        &heartbeat_client,
-        SCALE_IN_WAIT_TIMEOUT,
-        "autoscale contraction",
-        "autoscale-heartbeat",
-        CONTRACTION_HEARTBEAT_INTERVAL,
-    )?;
-    eprintln!(
-        "[autoscale-localnet] contraction wait: {:.3}s",
-        contraction_started.elapsed().as_secs_f64()
-    );
+    run_expand_contract_cycle(&network, &submitters, 1)?;
     eprintln!(
         "[autoscale-localnet] total runtime: {:.3}s",
         test_started.elapsed().as_secs_f64()
@@ -416,11 +430,61 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
     Ok(())
 }
 
+#[test]
+#[ignore = "localnet repeated autoscale cycle regression"]
+fn nexus_autoscale_repeats_expand_contract_cycles_in_localnet() -> Result<()> {
+    let context = stringify!(nexus_autoscale_repeats_expand_contract_cycles_in_localnet);
+    let test_started = Instant::now();
+    let startup_started = Instant::now();
+    let Some((network, _rt)) =
+        sandbox::start_network_blocking_or_skip(autoscale_localnet_builder(), context)?
+    else {
+        return Ok(());
+    };
+    eprintln!(
+        "[autoscale-localnet][multi-cycle] network startup: {:.3}s",
+        startup_started.elapsed().as_secs_f64()
+    );
+
+    ensure!(
+        network.peers().len() == TOTAL_PEERS,
+        "expected {TOTAL_PEERS} peers, got {}",
+        network.peers().len()
+    );
+
+    let baseline_started = Instant::now();
+    wait_for_storage_lane_count(
+        &network,
+        INITIAL_PROVISIONED_LANES,
+        SCALE_OUT_WAIT_TIMEOUT,
+        "baseline lane count for repeated cycles",
+    )?;
+    eprintln!(
+        "[autoscale-localnet][multi-cycle] baseline lane count wait: {:.3}s",
+        baseline_started.elapsed().as_secs_f64()
+    );
+
+    let submitters: Vec<Client> = network
+        .peers()
+        .iter()
+        .map(peer_client_with_timeout)
+        .collect();
+
+    run_expand_contract_cycle(&network, &submitters, 1)?;
+    run_expand_contract_cycle(&network, &submitters, 2)?;
+
+    eprintln!(
+        "[autoscale-localnet][multi-cycle] total runtime: {:.3}s",
+        test_started.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        LaneStatusSnapshot, PeerStatusSnapshot, expansion_observed_on_minimum_peers,
-        expansion_top_up_tx_count,
+        LaneStatusSnapshot, PeerStatusSnapshot, all_peers_show_contracted_profile,
+        expansion_observed_on_minimum_peers, expansion_top_up_tx_count,
     };
 
     #[test]
@@ -502,5 +566,44 @@ mod tests {
             &status_snapshot,
             2
         ));
+    }
+
+    #[test]
+    fn contraction_profile_accepts_absent_or_zero_capacity_elastic_lane() {
+        let absent_elastic = vec![
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 9000,
+                }],
+            },
+            PeerStatusSnapshot {
+                lanes: vec![
+                    LaneStatusSnapshot {
+                        lane_id: 0,
+                        capacity: 8000,
+                    },
+                    LaneStatusSnapshot {
+                        lane_id: 1,
+                        capacity: 0,
+                    },
+                ],
+            },
+        ];
+        assert!(all_peers_show_contracted_profile(&absent_elastic));
+
+        let elastic_still_active = vec![PeerStatusSnapshot {
+            lanes: vec![
+                LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 9000,
+                },
+                LaneStatusSnapshot {
+                    lane_id: 1,
+                    capacity: 1,
+                },
+            ],
+        }];
+        assert!(!all_peers_show_contracted_profile(&elastic_still_active));
     }
 }

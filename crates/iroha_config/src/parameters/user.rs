@@ -5686,6 +5686,30 @@ pub struct SumeragiPersistence {
 /// User-level configuration container for `SumeragiRecovery`.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiRecovery {
+    /// Deterministic per-height recovery attempt cap before hard escalation.
+    #[config(
+        env = "SUMERAGI_RECOVERY_HEIGHT_ATTEMPT_CAP",
+        default = "defaults::sumeragi::RECOVERY_HEIGHT_ATTEMPT_CAP"
+    )]
+    pub height_attempt_cap: u32,
+    /// Deterministic per-height recovery dwell window before hard escalation (milliseconds).
+    #[config(
+        env = "SUMERAGI_RECOVERY_HEIGHT_WINDOW_MS",
+        default = "defaults::sumeragi::RECOVERY_HEIGHT_WINDOW_MS"
+    )]
+    pub height_window_ms: u64,
+    /// Hash-miss threshold before escalating dependency recovery to range pull.
+    #[config(
+        env = "SUMERAGI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL",
+        default = "defaults::sumeragi::RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL"
+    )]
+    pub hash_miss_cap_before_range_pull: u32,
+    /// Number of views where no-roster fallback broadcasts remain allowed.
+    #[config(
+        env = "SUMERAGI_RECOVERY_NO_ROSTER_FALLBACK_VIEWS",
+        default = "defaults::sumeragi::RECOVERY_NO_ROSTER_FALLBACK_VIEWS"
+    )]
+    pub no_roster_fallback_views: u32,
     /// Missing-block fetch attempts before falling back to the full commit topology.
     /// A value of 0 disables signer preference.
     #[config(
@@ -5693,6 +5717,71 @@ pub struct SumeragiRecovery {
         default = "defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS"
     )]
     pub missing_block_signer_fallback_attempts: u32,
+    /// Backlog-aware multiplier applied to quorum-reschedule grace windows.
+    #[config(
+        env = "SUMERAGI_VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR",
+        default = "defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR"
+    )]
+    pub view_change_backlog_extension_factor: f64,
+    /// Maximum additional quorum-reschedule grace window under backlog (milliseconds).
+    #[config(
+        env = "SUMERAGI_VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS",
+        default = "defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS"
+    )]
+    pub view_change_backlog_extension_cap_ms: u64,
+    /// TTL for deferred QC missing-payload recovery before escalation (milliseconds).
+    #[config(
+        env = "SUMERAGI_DEFERRED_QC_TTL_MS",
+        default = "defaults::sumeragi::DEFERRED_QC_TTL_MS"
+    )]
+    pub deferred_qc_ttl_ms: u64,
+    /// Deterministic per-height missing-block retry cap before hard escalation.
+    #[config(
+        env = "SUMERAGI_MISSING_BLOCK_HEIGHT_ATTEMPT_CAP",
+        default = "defaults::sumeragi::MISSING_BLOCK_HEIGHT_ATTEMPT_CAP"
+    )]
+    pub missing_block_height_attempt_cap: u32,
+    /// Deterministic per-height missing-block dwell cap before hard escalation (milliseconds).
+    #[config(
+        env = "SUMERAGI_MISSING_BLOCK_HEIGHT_TTL_MS",
+        default = "defaults::sumeragi::MISSING_BLOCK_HEIGHT_TTL_MS"
+    )]
+    pub missing_block_height_ttl_ms: u64,
+    /// Sidecar mismatch retries before final-drop and canonical-only rebuild.
+    #[config(
+        env = "SUMERAGI_SIDECAR_MISMATCH_RETRY_CAP",
+        default = "defaults::sumeragi::SIDECAR_MISMATCH_RETRY_CAP"
+    )]
+    pub sidecar_mismatch_retry_cap: u32,
+    /// Sidecar mismatch TTL before final-drop (milliseconds).
+    #[config(
+        env = "SUMERAGI_SIDECAR_MISMATCH_TTL_MS",
+        default = "defaults::sumeragi::SIDECAR_MISMATCH_TTL_MS"
+    )]
+    pub sidecar_mismatch_ttl_ms: u64,
+    /// Hash-miss threshold before escalating dependency recovery to range pull.
+    #[config(
+        env = "SUMERAGI_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES",
+        default = "defaults::sumeragi::RANGE_PULL_ESCALATION_AFTER_HASH_MISSES"
+    )]
+    pub range_pull_escalation_after_hash_misses: u32,
+}
+
+/// User-level configuration container for deterministic transport fanout.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiFanout {
+    /// Validator-set size threshold where deterministic active-subset fanout engages.
+    #[config(
+        env = "SUMERAGI_FANOUT_LARGE_SET_THRESHOLD",
+        default = "defaults::sumeragi::FANOUT_LARGE_SET_THRESHOLD"
+    )]
+    pub large_set_threshold: u32,
+    /// Number of finalized blocks to inspect when scoring validator activity.
+    #[config(
+        env = "SUMERAGI_FANOUT_ACTIVITY_LOOKBACK_BLOCKS",
+        default = "defaults::sumeragi::FANOUT_ACTIVITY_LOOKBACK_BLOCKS"
+    )]
+    pub activity_lookback_blocks: u32,
 }
 
 /// User-level configuration container for `SumeragiGating`.
@@ -5922,6 +6011,9 @@ pub struct Sumeragi {
     /// Recovery behavior.
     #[config(nested)]
     pub recovery: SumeragiRecovery,
+    /// Deterministic transport fanout behavior.
+    #[config(nested)]
+    pub fanout: SumeragiFanout,
     /// Ingress gating and penalties.
     #[config(nested)]
     pub gating: SumeragiGating,
@@ -6406,6 +6498,7 @@ impl Sumeragi {
             da,
             persistence,
             recovery,
+            fanout,
             gating,
             finality,
             keys,
@@ -6589,6 +6682,125 @@ impl Sumeragi {
             } else {
                 true
             };
+        let height_attempt_cap_ok = if recovery.height_attempt_cap == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.recovery.height_attempt_cap must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
+        let height_window_ok = if recovery.height_window_ms == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.recovery.height_window_ms must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
+        let hash_miss_cap_ok = if recovery.hash_miss_cap_before_range_pull == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.recovery.hash_miss_cap_before_range_pull must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
+        let backlog_extension_factor_ok =
+            if !recovery.view_change_backlog_extension_factor.is_finite()
+                || recovery.view_change_backlog_extension_factor < 1.0
+            {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.recovery.view_change_backlog_extension_factor must be finite and >= 1.0",
+            ));
+                false
+            } else {
+                true
+            };
+        let backlog_extension_cap_ok = if recovery.view_change_backlog_extension_cap_ms == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.recovery.view_change_backlog_extension_cap_ms must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
+        let deferred_qc_ttl_ok = if recovery.deferred_qc_ttl_ms == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.recovery.deferred_qc_ttl_ms must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
+        let missing_block_height_attempt_cap_ok = if recovery.missing_block_height_attempt_cap == 0
+        {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.recovery.missing_block_height_attempt_cap must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
+        let missing_block_height_ttl_ok =
+            if recovery.missing_block_height_ttl_ms == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.recovery.missing_block_height_ttl_ms must be greater than zero",
+                ));
+                false
+            } else {
+                true
+            };
+        let sidecar_mismatch_retry_cap_ok =
+            if recovery.sidecar_mismatch_retry_cap == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.recovery.sidecar_mismatch_retry_cap must be greater than zero",
+                ));
+                false
+            } else {
+                true
+            };
+        let sidecar_mismatch_ttl_ok = if recovery.sidecar_mismatch_ttl_ms == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.recovery.sidecar_mismatch_ttl_ms must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
+        let range_pull_escalation_after_hash_misses_ok = if recovery
+            .range_pull_escalation_after_hash_misses
+            == 0
+        {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.recovery.range_pull_escalation_after_hash_misses must be greater than zero",
+                ));
+            false
+        } else {
+            true
+        };
+        let fanout_threshold_ok = if fanout.large_set_threshold == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.fanout.large_set_threshold must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
+        let fanout_lookback_ok = if fanout.activity_lookback_blocks == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.fanout.activity_lookback_blocks must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
         let membership_mismatch_threshold_ok = if gating.membership_mismatch_alert_threshold == 0 {
             emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
                 "sumeragi.gating.membership_mismatch_alert_threshold must be greater than zero",
@@ -6681,6 +6893,19 @@ impl Sumeragi {
             && commit_inflight_ok
             && commit_work_queue_ok
             && commit_result_queue_ok
+            && height_attempt_cap_ok
+            && height_window_ok
+            && hash_miss_cap_ok
+            && backlog_extension_factor_ok
+            && backlog_extension_cap_ok
+            && deferred_qc_ttl_ok
+            && missing_block_height_attempt_cap_ok
+            && missing_block_height_ttl_ok
+            && sidecar_mismatch_retry_cap_ok
+            && sidecar_mismatch_ttl_ok
+            && range_pull_escalation_after_hash_misses_ok
+            && fanout_threshold_ok
+            && fanout_lookback_ok
             && membership_mismatch_threshold_ok
             && rbc_chunk_max_ok
             && pending_caps_ok
@@ -6726,6 +6951,33 @@ impl Sumeragi {
         let proof_policy = match finality.proof_policy {
             ProofPolicy::Off => actual::ProofPolicy::Off,
             ProofPolicy::ZkParent => actual::ProofPolicy::ZkParent,
+        };
+        let recovery_height_attempt_cap = if recovery.height_attempt_cap
+            == defaults::sumeragi::RECOVERY_HEIGHT_ATTEMPT_CAP
+            && recovery.missing_block_height_attempt_cap
+                != defaults::sumeragi::MISSING_BLOCK_HEIGHT_ATTEMPT_CAP
+        {
+            recovery.missing_block_height_attempt_cap
+        } else {
+            recovery.height_attempt_cap
+        };
+        let recovery_height_window_ms = if recovery.height_window_ms
+            == defaults::sumeragi::RECOVERY_HEIGHT_WINDOW_MS
+            && recovery.missing_block_height_ttl_ms
+                != defaults::sumeragi::MISSING_BLOCK_HEIGHT_TTL_MS
+        {
+            recovery.missing_block_height_ttl_ms
+        } else {
+            recovery.height_window_ms
+        };
+        let recovery_hash_miss_cap_before_range_pull = if recovery.hash_miss_cap_before_range_pull
+            == defaults::sumeragi::RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL
+            && recovery.range_pull_escalation_after_hash_misses
+                != defaults::sumeragi::RANGE_PULL_ESCALATION_AFTER_HASH_MISSES
+        {
+            recovery.range_pull_escalation_after_hash_misses
+        } else {
+            recovery.hash_miss_cap_before_range_pull
         };
 
         Some(actual::Sumeragi {
@@ -6815,8 +7067,30 @@ impl Sumeragi {
                 commit_result_queue_cap: persistence.commit_result_queue_cap,
             },
             recovery: actual::SumeragiRecovery {
+                height_attempt_cap: recovery_height_attempt_cap,
+                height_window: std::time::Duration::from_millis(recovery_height_window_ms),
+                hash_miss_cap_before_range_pull: recovery_hash_miss_cap_before_range_pull,
+                no_roster_fallback_views: recovery.no_roster_fallback_views,
                 missing_block_signer_fallback_attempts: recovery
                     .missing_block_signer_fallback_attempts,
+                view_change_backlog_extension_factor: recovery.view_change_backlog_extension_factor,
+                view_change_backlog_extension_cap: std::time::Duration::from_millis(
+                    recovery.view_change_backlog_extension_cap_ms,
+                ),
+                deferred_qc_ttl: std::time::Duration::from_millis(recovery.deferred_qc_ttl_ms),
+                missing_block_height_attempt_cap: recovery_height_attempt_cap,
+                missing_block_height_ttl: std::time::Duration::from_millis(
+                    recovery_height_window_ms,
+                ),
+                sidecar_mismatch_retry_cap: recovery.sidecar_mismatch_retry_cap,
+                sidecar_mismatch_ttl: std::time::Duration::from_millis(
+                    recovery.sidecar_mismatch_ttl_ms,
+                ),
+                range_pull_escalation_after_hash_misses: recovery_hash_miss_cap_before_range_pull,
+            },
+            fanout: actual::SumeragiFanout {
+                large_set_threshold: fanout.large_set_threshold,
+                activity_lookback_blocks: fanout.activity_lookback_blocks,
             },
             gating: actual::SumeragiGating {
                 future_height_window: gating.future_height_window,
@@ -8075,6 +8349,14 @@ pub struct Network {
     /// Timeout applied to an individual outbound dial attempt (milliseconds, clamped to >= 100ms).
     #[config(default = "defaults::network::DIAL_TIMEOUT.into()")]
     pub dial_timeout_ms: DurationMs,
+    /// Maximum age for deferred outbound frames while the peer session is missing (milliseconds).
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS))"
+    )]
+    pub deferred_send_ttl_ms: DurationMs,
+    /// Maximum deferred outbound frames retained per peer while session is missing.
+    #[config(default = "defaults::network::DEFERRED_SEND_MAX_PER_PEER")]
+    pub deferred_send_max_per_peer: usize,
     /// Enable QUIC transport (feature-gated).
     #[config(env = "P2P_QUIC", default)]
     pub quic_enabled: bool,
@@ -8381,6 +8663,8 @@ impl Network {
             idle_timeout_ms: idle_timeout,
             connect_startup_delay_ms: connect_startup_delay,
             dial_timeout_ms: dial_timeout,
+            deferred_send_ttl_ms,
+            deferred_send_max_per_peer,
             dns_refresh_interval_ms: dns_refresh_interval,
             dns_refresh_ttl_ms: dns_refresh_ttl,
             quic_enabled,
@@ -8596,6 +8880,8 @@ impl Network {
                 idle_timeout,
                 connect_startup_delay: connect_startup_delay.get(),
                 dial_timeout,
+                deferred_send_ttl: deferred_send_ttl_ms.get().max(min_interval),
+                deferred_send_max_per_peer: deferred_send_max_per_peer.max(1),
                 peer_gossip_period,
                 peer_gossip_max_period,
                 trust_gossip,
