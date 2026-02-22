@@ -407,6 +407,7 @@ static CONSENSUS_EMPTY_COMMIT_TOPOLOGY_ESCALATION_TOTAL: AtomicU64 = AtomicU64::
 static CONSENSUS_RECOVERY_STATE_TRANSITIONS: OnceLock<Mutex<BTreeMap<&'static str, u64>>> =
     OnceLock::new();
 static CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_MISSING_BLOCK_HEIGHT_PROGRESS_DEFERRED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_MISSING_QC_REACQUIRE_ATTEMPT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_MISSING_QC_REACQUIRE_SUCCESS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_MISSING_QC_REACQUIRE_EXHAUSTED_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -3389,6 +3390,8 @@ pub struct StatusSnapshot {
     pub consensus_recovery_state_transitions: BTreeMap<&'static str, u64>,
     /// Height-scoped missing-block recoveries escalated via deterministic hard cap.
     pub consensus_missing_block_height_escalation_total: u64,
+    /// Hard-cap escalations deferred because dependency convergence was still observed in-flight.
+    pub consensus_missing_block_height_progress_deferred_total: u64,
     /// Bounded pre-rotation reacquire attempts before missing-QC view changes.
     pub consensus_missing_qc_reacquire_attempt_total: u64,
     /// Bounded pre-rotation reacquire attempts that triggered a recovery action before rotation.
@@ -4303,6 +4306,8 @@ pub fn snapshot() -> StatusSnapshot {
         consensus_recovery_state_transitions: consensus_recovery_state_transition_snapshot(),
         consensus_missing_block_height_escalation_total:
             CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL.load(Ordering::Relaxed),
+        consensus_missing_block_height_progress_deferred_total:
+            CONSENSUS_MISSING_BLOCK_HEIGHT_PROGRESS_DEFERRED_TOTAL.load(Ordering::Relaxed),
         consensus_missing_qc_reacquire_attempt_total: CONSENSUS_MISSING_QC_REACQUIRE_ATTEMPT_TOTAL
             .load(Ordering::Relaxed),
         consensus_missing_qc_reacquire_success_total: CONSENSUS_MISSING_QC_REACQUIRE_SUCCESS_TOTAL
@@ -4903,6 +4908,13 @@ pub fn inc_consensus_missing_block_height_escalation() {
     CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Increment counter when hard-cap escalation is deferred due to in-flight dependency progress.
+pub fn inc_consensus_missing_block_height_progress_deferred() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_MISSING_BLOCK_HEIGHT_PROGRESS_DEFERRED_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Increment counter for bounded pre-rotation missing-QC reacquire attempts.
 pub fn inc_consensus_missing_qc_reacquire_attempt() {
     #[cfg(test)]
@@ -5362,6 +5374,7 @@ pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
     CONSENSUS_EMPTY_COMMIT_TOPOLOGY_DEFER_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_EMPTY_COMMIT_TOPOLOGY_ESCALATION_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_MISSING_BLOCK_HEIGHT_PROGRESS_DEFERRED_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_MISSING_QC_REACQUIRE_ATTEMPT_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_MISSING_QC_REACQUIRE_SUCCESS_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_MISSING_QC_REACQUIRE_EXHAUSTED_TOTAL.store(0, Ordering::Relaxed);
@@ -8089,6 +8102,7 @@ mod tests {
         super::inc_qc_deferred_expired();
         super::inc_consensus_empty_commit_topology_defer();
         super::inc_consensus_empty_commit_topology_escalation();
+        super::inc_consensus_missing_block_height_progress_deferred();
         super::inc_consensus_missing_qc_reacquire_attempt();
         super::inc_consensus_missing_qc_reacquire_success();
         super::inc_consensus_missing_qc_reacquire_exhausted();
@@ -8112,6 +8126,10 @@ mod tests {
         assert_eq!(snapshot.qc_deferred_expired_total, 1);
         assert_eq!(snapshot.consensus_empty_commit_topology_defer_total, 1);
         assert_eq!(snapshot.consensus_empty_commit_topology_escalation_total, 1);
+        assert_eq!(
+            snapshot.consensus_missing_block_height_progress_deferred_total,
+            1
+        );
         assert_eq!(snapshot.consensus_missing_qc_reacquire_attempt_total, 1);
         assert_eq!(snapshot.consensus_missing_qc_reacquire_success_total, 1);
         assert_eq!(snapshot.consensus_missing_qc_reacquire_exhausted_total, 1);

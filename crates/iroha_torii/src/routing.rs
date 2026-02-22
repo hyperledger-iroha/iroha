@@ -42914,6 +42914,31 @@ pub async fn handle_v1_asset_holders_query(
 #[cfg(feature = "app_api")]
 fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
     use FilterExpr as F;
+    let validate_asset_id = |value: &norito::json::Value| -> Result<()> {
+        let Some(raw) = value.as_str() else {
+            return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+        };
+        if raw.parse::<iroha_data_model::asset::AssetId>().is_ok() {
+            return Ok(());
+        }
+        let (definition_part, account_part) = raw
+            .rsplit_once('#')
+            .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+        if account_part.is_empty() {
+            return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+        }
+        if let Some(name_only) = definition_part.strip_suffix('#') {
+            return name_only
+                .parse::<iroha_data_model::prelude::Name>()
+                .map(|_| ())
+                .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex));
+        }
+        definition_part
+            .parse::<iroha_data_model::asset::id::AssetDefinitionId>()
+            .map(|_| ())
+            .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
+    };
+
     match expr {
         F::And(list) | F::Or(list) => {
             for e in list {
@@ -42927,10 +42952,7 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
                 .is_string()
                 .then_some(())
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
-            "asset_id" => v
-                .is_string()
-                .then_some(())
-                .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
+            "asset_id" => validate_asset_id(v),
             "quantity" => v
                 .is_number()
                 .then_some(())
@@ -42950,11 +42972,7 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
                 .all(norito::json::Value::is_string)
                 .then_some(())
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
-            "asset_id" => list
-                .iter()
-                .all(norito::json::Value::is_string)
-                .then_some(())
-                .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
+            "asset_id" => list.iter().try_for_each(validate_asset_id),
             "quantity" => list
                 .iter()
                 .all(norito::json::Value::is_number)

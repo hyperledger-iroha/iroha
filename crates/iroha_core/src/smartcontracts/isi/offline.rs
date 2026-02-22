@@ -956,40 +956,16 @@ pub mod isi {
             let definition_id = certificate.allowance.asset.definition().clone();
             certificate.expires_at_ms = certificate.issued_at_ms + 1;
             certificate.policy.expires_at_ms = certificate.expires_at_ms;
-            let certificate_id = certificate.certificate_id();
             let domain = Domain::new(controller.domain().clone()).build(&controller);
             let controller_account = Account::new(controller.clone()).build(&controller);
             let escrow_account = Account::new(escrow.clone()).build(&escrow);
             let asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
                     .build(&controller);
-            let controller_asset = Asset::new(
-                AssetId::new(definition_id.clone(), controller.clone()),
-                Numeric::new(50, 0),
-            );
-            let escrow_asset = Asset::new(
-                AssetId::new(definition_id.clone(), escrow.clone()),
-                Numeric::new(50, 0),
-            );
-            let mut world = World::with_assets(
+            let world = World::with(
                 [domain],
                 [controller_account, escrow_account],
                 [asset_definition],
-                [controller_asset, escrow_asset],
-                [],
-            );
-            world.offline_allowances.insert(
-                certificate_id,
-                OfflineAllowanceRecord {
-                    certificate: certificate.clone(),
-                    current_commitment: certificate.allowance.commitment.clone(),
-                    registered_at_ms: certificate.issued_at_ms,
-                    remaining_amount: Numeric::new(50, 0),
-                    counter_state: OfflineCounterState::default(),
-                    verdict_id: None,
-                    attestation_nonce: None,
-                    refresh_at_ms: None,
-                },
             );
 
             let kura = Kura::blank_kura_for_testing();
@@ -1059,39 +1035,17 @@ pub mod isi {
             let controller = certificate.controller.clone();
             let escrow = sample_account(0x02, "offline");
             let definition_id = certificate.allowance.asset.definition().clone();
-            let record = OfflineAllowanceRecord {
-                certificate: certificate.clone(),
-                current_commitment: certificate.allowance.commitment.clone(),
-                registered_at_ms: certificate.issued_at_ms,
-                remaining_amount: Numeric::new(50, 0),
-                counter_state: OfflineCounterState::default(),
-                verdict_id: None,
-                attestation_nonce: None,
-                refresh_at_ms: None,
-            };
             let domain = Domain::new(controller.domain().clone()).build(&controller);
             let controller_account = Account::new(controller.clone()).build(&controller);
             let escrow_account = Account::new(escrow.clone()).build(&escrow);
             let asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
                     .build(&controller);
-            let controller_asset = Asset::new(
-                AssetId::new(definition_id.clone(), controller.clone()),
-                Numeric::new(50, 0),
-            );
-            let escrow_asset = Asset::new(
-                AssetId::new(definition_id.clone(), escrow.clone()),
-                Numeric::new(50, 0),
-            );
-            let mut world = World::with_assets(
+            let world = World::with(
                 [domain],
                 [controller_account, escrow_account],
                 [asset_definition],
-                [controller_asset, escrow_asset],
-                [],
             );
-            let certificate_id = certificate.certificate_id();
-            world.offline_allowances.insert(certificate_id, record);
 
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -1161,39 +1115,17 @@ pub mod isi {
             let controller = certificate.controller.clone();
             let escrow = sample_account(0x02, "offline");
             let definition_id = certificate.allowance.asset.definition().clone();
-            let record = OfflineAllowanceRecord {
-                certificate: certificate.clone(),
-                current_commitment: certificate.allowance.commitment.clone(),
-                registered_at_ms: certificate.issued_at_ms,
-                remaining_amount: Numeric::new(50, 0),
-                counter_state: OfflineCounterState::default(),
-                verdict_id: None,
-                attestation_nonce: None,
-                refresh_at_ms: None,
-            };
             let domain = Domain::new(controller.domain().clone()).build(&controller);
             let controller_account = Account::new(controller.clone()).build(&controller);
             let escrow_account = Account::new(escrow.clone()).build(&escrow);
             let asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
                     .build(&controller);
-            let controller_asset_entry = Asset::new(
-                AssetId::new(definition_id.clone(), controller.clone()),
-                Numeric::new(50, 0),
-            );
-            let escrow_asset_entry = Asset::new(
-                AssetId::new(definition_id.clone(), escrow.clone()),
-                Numeric::new(50, 0),
-            );
-            let mut world = World::with_assets(
+            let world = World::with(
                 [domain],
                 [controller_account, escrow_account],
                 [asset_definition],
-                [controller_asset_entry, escrow_asset_entry],
-                [],
             );
-            let certificate_id = certificate.certificate_id();
-            world.offline_allowances.insert(certificate_id, record);
 
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();

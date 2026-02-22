@@ -32,15 +32,15 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::Domain,
     isi::{
-        Register,
+        Mint, Register,
         offline::{RegisterOfflineAllowance, SubmitOfflineToOnlineTransfer},
     },
     metadata::Metadata,
     name::Name,
     offline::{
-        AndroidProvisionedProof, OfflineAllowanceCommitment, OfflinePlatformProof,
-        OfflineSpendReceipt, OfflineToOnlineTransfer, OfflineWalletCertificate,
-        OfflineWalletPolicy,
+        AndroidProvisionedProof, OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineAllowanceCommitment,
+        OfflinePlatformProof, OfflineSpendReceipt, OfflineToOnlineTransfer,
+        OfflineWalletCertificate, OfflineWalletPolicy,
     },
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec};
@@ -396,6 +396,12 @@ fn seed_transfer(state: &Arc<State>, fixtures: &Fixtures) {
     {
         let mut block = state.block(header_one);
         let mut tx = block.transaction();
+        let mut asset_definition_metadata = Metadata::default();
+        asset_definition_metadata.insert(
+            Name::from_str(OFFLINE_ASSET_ENABLED_METADATA_KEY)
+                .expect("offline enabled metadata key"),
+            true,
+        );
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&fixtures.operator, &mut tx)
             .expect("domain registration");
@@ -409,11 +415,17 @@ fn seed_transfer(state: &Arc<State>, fixtures: &Fixtures) {
             spec: NumericSpec::default(),
             mintable: Mintable::Infinitely,
             logo: None,
-            metadata: Metadata::default(),
+            metadata: asset_definition_metadata,
             confidential_policy: AssetConfidentialPolicy::default(),
         })
         .execute(&fixtures.operator, &mut tx)
         .expect("asset definition registration");
+        Mint::asset_numeric(
+            fixtures.certificate.allowance.amount.clone(),
+            fixtures.certificate.allowance.asset.clone(),
+        )
+        .execute(&fixtures.controller, &mut tx)
+        .expect("allowance prefund");
         RegisterOfflineAllowance {
             certificate: fixtures.certificate.clone(),
         }

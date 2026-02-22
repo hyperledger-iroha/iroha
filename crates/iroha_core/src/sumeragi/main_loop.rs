@@ -2765,6 +2765,8 @@ struct MissingBlockRequest {
     view_change_window: Option<Duration>,
     first_seen: Instant,
     last_requested: Instant,
+    last_dependency_progress: Instant,
+    last_rbc_observed: Option<Instant>,
     view_change_triggered_view: Option<u64>,
     attempts: u32,
 }
@@ -2830,6 +2832,8 @@ fn touch_missing_block_request(
                 view_change_window,
                 first_seen: now,
                 last_requested: now,
+                last_dependency_progress: now,
+                last_rbc_observed: None,
                 view_change_triggered_view: None,
                 attempts: 0,
             });
@@ -2866,6 +2870,8 @@ fn touch_missing_block_request(
             if height_advanced {
                 stats.first_seen = now;
                 stats.last_requested = now;
+                stats.last_dependency_progress = now;
+                stats.last_rbc_observed = None;
                 stats.attempts = 0;
             } else if view_advanced {
                 // Preserve dwell/attempt history across view churn so recovery cannot
@@ -2913,6 +2919,27 @@ fn touch_missing_block_request(
             retry_due
         }
     }
+}
+
+fn note_missing_block_request_dependency_progress(
+    requests: &mut BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    now: Instant,
+    observed_via_rbc: bool,
+) -> bool {
+    let Some(stats) = requests.get_mut(&block_hash) else {
+        return false;
+    };
+    if stats.height != height || stats.view != view {
+        return false;
+    }
+    stats.last_dependency_progress = now;
+    if observed_via_rbc {
+        stats.last_rbc_observed = Some(now);
+    }
+    true
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -10048,10 +10075,8 @@ impl Actor {
             .collector_plan_targets
             .clone_from(&targets);
         self.subsystems.propose.collector_plan = Some(CollectorPlan::new(targets));
-        self.subsystems.propose.collector_role_index = {
-            let topology = super::network_topology::Topology::new(self.effective_commit_topology());
-            self.local_validator_index_for_topology(&topology)
-        };
+        self.subsystems.propose.collector_role_index =
+            self.local_validator_index_for_topology(topology);
 
         if let Some(plan) = self.subsystems.propose.collector_plan.as_mut() {
             if let Some(primary) = plan.next() {
@@ -14941,6 +14966,36 @@ impl Actor {
         }
     }
 
+    fn note_missing_block_request_dependency_progress(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+        observed_via_rbc: bool,
+    ) -> bool {
+        let noted = note_missing_block_request_dependency_progress(
+            &mut self.pending.missing_block_requests,
+            block_hash,
+            height,
+            view,
+            now,
+            observed_via_rbc,
+        );
+        if !noted {
+            return false;
+        }
+        let key = self.missing_block_recovery_key_for_height(height);
+        if let Some(budget) = self.missing_block_height_recovery.get_mut(&key) {
+            budget.range_pull.last_progress = now;
+            budget.range_pull.hash_misses = 0;
+            if budget.range_pull.stage == MissingBlockRecoveryStage::RangePullFromAnchor {
+                budget.range_pull.stage = MissingBlockRecoveryStage::ApplyAndRevalidate;
+            }
+        }
+        true
+    }
+
     fn note_missing_block_height_attempt(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -15210,8 +15265,18 @@ impl Actor {
         super::status::inc_consensus_no_roster_refresh_attempt();
         let mut made_progress = false;
         if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
-            made_progress |=
+            let requested =
                 self.request_missing_block_for_highest_qc_force(highest, "no_roster_bootstrap");
+            if requested {
+                let _ = self.note_missing_block_request_dependency_progress(
+                    highest.subject_block_hash,
+                    highest.height,
+                    highest.view,
+                    now,
+                    false,
+                );
+            }
+            made_progress |= requested;
         }
         let missing_before = self.pending.missing_block_requests.len();
         let roster_hint = self.effective_commit_topology();
@@ -15615,12 +15680,33 @@ impl Actor {
         let range_pull_hash_miss_cap = self
             .recovery_range_pull_escalation_after_hash_misses()
             .max(1);
+        let request_progress = self
+            .pending
+            .missing_block_requests
+            .get(&block_hash)
+            .filter(|stats| stats.height == height && stats.view == view)
+            .map(|stats| {
+                (
+                    stats.last_dependency_progress,
+                    stats.last_rbc_observed,
+                    stats.view_change_triggered_in_view(),
+                )
+            });
+        let recent_dependency_progress = request_progress.and_then(|(progress, _, _)| {
+            (now.saturating_duration_since(progress) < ttl).then_some(progress)
+        });
+        let recent_rbc_progress = request_progress
+            .and_then(|(_, observed, _)| observed)
+            .filter(|observed| now.saturating_duration_since(*observed) < ttl);
+        let view_change_already_triggered =
+            request_progress.is_some_and(|(_, _, triggered)| triggered);
 
         if budget.range_pull.inflight
             && budget
                 .range_pull
                 .last_requested
                 .is_some_and(|requested| now.saturating_duration_since(requested) >= ttl)
+            && recent_dependency_progress.is_none()
         {
             budget.range_pull.inflight = false;
             super::status::inc_blocksync_range_pull_failure();
@@ -15636,9 +15722,25 @@ impl Actor {
                 "range-pull recovery window expired without progress"
             );
         }
+        if let Some(progress_at) = recent_dependency_progress {
+            budget.range_pull.last_progress = progress_at;
+        }
 
         let dwell = now.saturating_duration_since(budget.first_seen);
         let hard_cap_due = budget.attempts >= attempt_cap || dwell >= ttl;
+        if hard_cap_due && (recent_dependency_progress.is_some() || recent_rbc_progress.is_some()) {
+            super::status::inc_consensus_missing_block_height_progress_deferred();
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                attempts = budget.attempts,
+                ttl_ms = ttl.as_millis(),
+                "deferring missing-block hard-cap escalation due to recent dependency progress"
+            );
+            self.missing_block_height_recovery.insert(key, budget);
+            return false;
+        }
         let attempt_streak_due = budget.attempts >= range_pull_attempt_threshold;
         let hash_miss_due = budget.range_pull.hash_misses >= range_pull_hash_miss_cap;
         let no_progress_due = now.saturating_duration_since(budget.range_pull.last_progress) >= ttl;
@@ -15699,8 +15801,15 @@ impl Actor {
         budget.range_pull.no_progress_windows =
             budget.range_pull.no_progress_windows.saturating_add(1);
 
+        let defer_view_change =
+            hard_cap_due && self.should_defer_missing_block_view_change(&block_hash, height, view);
         let mut progressed = budget.range_pull.inflight;
-        if hard_cap_due && !defer_hard_cap_escalation && budget.escalated_view != Some(view) {
+        if hard_cap_due
+            && !defer_hard_cap_escalation
+            && !defer_view_change
+            && !view_change_already_triggered
+            && budget.escalated_view != Some(view)
+        {
             budget.escalated_view = Some(view);
             super::status::inc_consensus_missing_block_height_escalation();
             #[cfg(feature = "telemetry")]
@@ -15718,6 +15827,25 @@ impl Actor {
             );
             self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingPayload);
             progressed = true;
+        } else if hard_cap_due && view_change_already_triggered {
+            budget.escalated_view = Some(view);
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                attempts = budget.attempts,
+                dwell_ms = dwell.as_millis(),
+                "skipping missing-block hard-cap escalation: view change already triggered in this view"
+            );
+        } else if hard_cap_due && defer_view_change {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                attempts = budget.attempts,
+                dwell_ms = dwell.as_millis(),
+                "deferring missing-block hard-cap view change while dependency backlog converges"
+            );
         }
         self.missing_block_height_recovery.insert(key, budget);
         progressed

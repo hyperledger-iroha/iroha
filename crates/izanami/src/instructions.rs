@@ -769,6 +769,8 @@ const BASE_RECIPES_STABLE: &[RecipeKind] = &[
     RecipeKind::SetAssetInstanceKeyValue,
     RecipeKind::RemoveAssetInstanceKeyValue,
     RecipeKind::RegisterRole,
+    RecipeKind::MintTriggerRepetitions,
+    RecipeKind::BurnTriggerRepetitions,
     RecipeKind::DeployIvmContract,
     RecipeKind::DeployKotodamaContract,
 ];
@@ -3612,32 +3614,41 @@ mod tests {
         let PreparedChaos { mut state, .. } =
             prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(93);
-        let mint_plan = state
-            .plan_mint_trigger_repetitions(&mut rng)
-            .expect("mint repetitions");
-        assert_eq!(mint_plan.label, "mint_trigger_repetitions");
-        mint_plan.apply_updates(&mut state, true);
-        if state
-            .trigger_repetitions
-            .values()
-            .all(|amount| *amount == 0)
-        {
+        let trigger_id = loop {
             let mint_plan = state
                 .plan_mint_trigger_repetitions(&mut rng)
-                .expect("mint repetitions after register");
+                .expect("mint repetitions");
             assert_eq!(mint_plan.label, "mint_trigger_repetitions");
             mint_plan.apply_updates(&mut state, true);
-        }
-        let (trigger_id, minted) = state
+            if let Some((id, amount)) = state
+                .trigger_repetitions
+                .iter()
+                .next()
+                .map(|(id, amount)| (id.clone(), *amount))
+                && amount > 1
+            {
+                break id;
+            }
+        };
+        let minted = state
             .trigger_repetitions
-            .iter()
-            .next()
-            .map(|(id, amount)| (id.clone(), *amount))
-            .expect("repetition tracked");
-        assert!(minted > 0, "mint should increase repetition counter");
-        let burn_plan = state
-            .plan_burn_trigger_repetitions(&mut rng)
-            .expect("burn repetitions");
+            .get(&trigger_id)
+            .copied()
+            .unwrap_or_default();
+        assert!(
+            minted > 1,
+            "mint should provide enough repetitions for burn"
+        );
+        let burn_plan = loop {
+            let plan = state
+                .plan_burn_trigger_repetitions(&mut rng)
+                .expect("burn repetitions");
+            if plan.label == "burn_trigger_repetitions" {
+                break plan;
+            }
+            assert_eq!(plan.label, "mint_trigger_repetitions");
+            plan.apply_updates(&mut state, true);
+        };
         assert_eq!(burn_plan.label, "burn_trigger_repetitions");
         burn_plan.apply_updates(&mut state, true);
         let remaining = state
