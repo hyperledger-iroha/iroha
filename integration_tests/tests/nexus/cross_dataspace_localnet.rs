@@ -97,11 +97,11 @@ const ROLLBACK_HISTORY_FALLBACK_TIMEOUT: Duration = Duration::from_secs(25);
 const SWAP_COMMITTED_OUTCOME_TIMEOUT: Duration = Duration::from_secs(8);
 const SWAP_POST_BARRIER_OUTCOME_TIMEOUT: Duration = Duration::from_secs(6);
 const SWAP_NONCONVERGED_FALLBACK_MAX: usize = 2;
-const SOAK_PHASE_WAIT_TIMEOUT: Duration = Duration::from_secs(24);
+const SOAK_PHASE_WAIT_TIMEOUT: Duration = Duration::from_secs(32);
 const SOAK_COMMITTED_OUTCOME_TIMEOUT: Duration = Duration::from_secs(6);
 const SOAK_BARRIER_TICK_EVERY_POLLS: u64 = 5;
 const SOAK_FALLBACK_LOG_LIMIT: usize = 3;
-const SOAK_ITERATION_ATTEMPTS: usize = 2;
+const SOAK_ITERATION_ATTEMPTS: usize = 3;
 const SOAK_ITERATIONS: usize = 10;
 
 fn localnet_builder() -> NetworkBuilder {

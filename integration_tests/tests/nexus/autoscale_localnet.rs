@@ -12,7 +12,7 @@ use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
-    data_model::{Level, isi::Log},
+    data_model::{Level, isi::Log, nexus::LaneId},
 };
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
@@ -25,11 +25,13 @@ const ELASTIC_LANE_ID: u32 = 1;
 const LOAD_TX_COUNT: usize = 48;
 const LANE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const EXPANSION_PROBE_INTERVAL: Duration = Duration::from_millis(1000);
-const EXPANSION_TOP_UP_EVERY_HEARTBEATS: u64 = 10;
+const EXPANSION_TOP_UP_EVERY_HEARTBEATS: u64 = 4;
 const EXPANSION_TOP_UP_TX_COUNT: usize = 16;
-const EXPANSION_REINFORCE_EVERY_HEARTBEATS: u64 = 30;
+const EXPANSION_REINFORCE_EVERY_HEARTBEATS: u64 = 12;
 const EXPANSION_REINFORCE_TX_COUNT: usize = 32;
 const EXPANSION_STATUS_SIGNAL_GRACE: Duration = Duration::from_secs(8);
+const EXPANSION_POST_STORAGE_STATUS_WINDOW: Duration = Duration::from_secs(8);
+const EXPANSION_POST_STORAGE_TOP_UP_TX_COUNT: usize = 16;
 const CONTRACTION_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
 const SCALE_OUT_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 const SCALE_IN_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -120,8 +122,25 @@ struct LaneStatusSnapshot {
 #[derive(Clone, Debug)]
 struct LaneCommitmentSnapshot {
     lane_id: u32,
+    block_height: u64,
     tx_count: u64,
     teu_total: u64,
+}
+
+#[derive(Clone, Debug)]
+struct LaneRelaySnapshot {
+    lane_id: u32,
+    block_height: u64,
+}
+
+#[derive(Clone, Debug)]
+struct LaneValidatorSnapshot {
+    lane_id: u32,
+    total: u64,
+    active: u64,
+    pending_activation: u64,
+    max_activation_epoch: u64,
+    max_activation_height: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -129,11 +148,95 @@ struct PeerStatusSnapshot {
     lanes: Vec<LaneStatusSnapshot>,
     lane_commitments: Vec<LaneCommitmentSnapshot>,
     lane_governance_ids: Vec<u32>,
+    lane_relay: Vec<LaneRelaySnapshot>,
+    lane_validators: Vec<LaneValidatorSnapshot>,
     commit_signatures_required: u64,
     commit_qc_validator_set_len: u64,
     txs_approved: u64,
     txs_rejected: u64,
     blocks_non_empty: u64,
+}
+
+fn decode_lane_validator_snapshot(
+    payload: &norito::json::Value,
+    lane_id: u32,
+) -> Option<LaneValidatorSnapshot> {
+    let root = payload.as_object()?;
+    let items = root.get("items").and_then(norito::json::Value::as_array);
+    let total = root
+        .get("total")
+        .and_then(norito::json::Value::as_u64)
+        .or_else(|| items.and_then(|entries| u64::try_from(entries.len()).ok()))
+        .unwrap_or_default();
+
+    let mut active = 0_u64;
+    let mut pending_activation = 0_u64;
+    let mut max_activation_epoch = 0_u64;
+    let mut max_activation_height = 0_u64;
+    if let Some(entries) = items {
+        for entry in entries {
+            let entry_obj = entry.as_object();
+            let status_type = entry
+                .as_object()
+                .and_then(|item| item.get("status"))
+                .and_then(norito::json::Value::as_object)
+                .and_then(|status| status.get("type"))
+                .and_then(norito::json::Value::as_str);
+            match status_type {
+                Some("Active") => active = active.saturating_add(1),
+                Some("PendingActivation") => {
+                    pending_activation = pending_activation.saturating_add(1);
+                }
+                _ => {}
+            }
+            if let Some(epoch) = entry_obj
+                .and_then(|item| item.get("activation_epoch"))
+                .and_then(norito::json::Value::as_u64)
+            {
+                max_activation_epoch = max_activation_epoch.max(epoch);
+            }
+            if let Some(height) = entry_obj
+                .and_then(|item| item.get("activation_height"))
+                .and_then(norito::json::Value::as_u64)
+            {
+                max_activation_height = max_activation_height.max(height);
+            }
+        }
+    }
+
+    Some(LaneValidatorSnapshot {
+        lane_id,
+        total,
+        active,
+        pending_activation,
+        max_activation_epoch,
+        max_activation_height,
+    })
+}
+
+fn is_not_found_lane_validator_error(message: &str) -> bool {
+    message.contains("404") || message.contains("Not Found")
+}
+
+fn fetch_lane_validator_snapshot(client: &Client, lane_id: u32) -> Option<LaneValidatorSnapshot> {
+    match client.get_public_lane_validators(LaneId::new(lane_id), None) {
+        Ok(payload) => decode_lane_validator_snapshot(&payload, lane_id),
+        Err(err) => {
+            let message = err.to_string();
+            if is_not_found_lane_validator_error(&message) {
+                Some(LaneValidatorSnapshot {
+                    lane_id,
+                    total: 0,
+                    active: 0,
+                    pending_activation: 0,
+                    max_activation_epoch: 0,
+                    max_activation_height: 0,
+                })
+            } else {
+                None
+            }
+        }
+    }
 }
 
 fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatusSnapshot>> {
@@ -155,25 +258,38 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                     committed: lane.committed,
                 })
                 .collect::<Vec<_>>();
-            let (lane_commitments, lane_governance_ids) = match client.get_sumeragi_status() {
-                Ok(sumeragi_status) => (
-                    sumeragi_status
-                        .lane_commitments
-                        .into_iter()
-                        .map(|lane| LaneCommitmentSnapshot {
-                            lane_id: lane.lane_id.as_u32(),
-                            tx_count: lane.tx_count,
-                            teu_total: lane.teu_total,
-                        })
-                        .collect::<Vec<_>>(),
-                    sumeragi_status
-                        .lane_governance
-                        .into_iter()
-                        .map(|lane| lane.lane_id.as_u32())
-                        .collect::<Vec<_>>(),
-                ),
-                Err(_) => (Vec::new(), Vec::new()),
-            };
+            let (lane_commitments, lane_governance_ids, lane_relay) =
+                match client.get_sumeragi_status() {
+                    Ok(sumeragi_status) => (
+                        sumeragi_status
+                            .lane_commitments
+                            .into_iter()
+                            .map(|lane| LaneCommitmentSnapshot {
+                                lane_id: lane.lane_id.as_u32(),
+                                block_height: lane.block_height,
+                                tx_count: lane.tx_count,
+                                teu_total: lane.teu_total,
+                            })
+                            .collect::<Vec<_>>(),
+                        sumeragi_status
+                            .lane_governance
+                            .into_iter()
+                            .map(|lane| lane.lane_id.as_u32())
+                            .collect::<Vec<_>>(),
+                        sumeragi_status
+                            .lane_relay_envelopes
+                            .into_iter()
+                            .map(|lane| LaneRelaySnapshot {
+                                lane_id: lane.lane_id.as_u32(),
+                                block_height: lane.block_height,
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    Err(_) => (Vec::new(), Vec::new(), Vec::new()),
+                };
+            let lane_validators = fetch_lane_validator_snapshot(&client, ELASTIC_LANE_ID)
+                .into_iter()
+                .collect::<Vec<_>>();
             let commit_signatures_required = status
                 .sumeragi
                 .as_ref()
@@ -188,6 +304,8 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                 lanes,
                 lane_commitments,
                 lane_governance_ids,
+                lane_relay,
+                lane_validators,
                 commit_signatures_required,
                 commit_qc_validator_set_len,
                 txs_approved: status.txs_approved,
@@ -219,6 +337,38 @@ fn peer_has_lane_commitment_activity(peer: &PeerStatusSnapshot, lane_id: u32) ->
         .any(|lane| lane.lane_id == lane_id && (lane.tx_count > 0 || lane.teu_total > 0))
 }
 
+fn peer_lane_status(peer: &PeerStatusSnapshot, lane_id: u32) -> Option<&LaneStatusSnapshot> {
+    peer.lanes.iter().find(|lane| lane.lane_id == lane_id)
+}
+
+fn peer_lane_commitment_snapshot(
+    peer: &PeerStatusSnapshot,
+    lane_id: u32,
+) -> Option<&LaneCommitmentSnapshot> {
+    peer.lane_commitments
+        .iter()
+        .filter(|lane| lane.lane_id == lane_id)
+        .max_by_key(|lane| lane.block_height)
+}
+
+fn peer_lane_relay_height(peer: &PeerStatusSnapshot, lane_id: u32) -> Option<u64> {
+    peer.lane_relay
+        .iter()
+        .filter(|relay| relay.lane_id == lane_id)
+        .map(|relay| relay.block_height)
+        .max()
+}
+
+fn peer_lane_validator_snapshot(
+    peer: &PeerStatusSnapshot,
+    lane_id: u32,
+) -> Option<&LaneValidatorSnapshot> {
+    peer.lane_validators
+        .iter()
+        .filter(|lane| lane.lane_id == lane_id)
+        .max_by_key(|lane| (lane.active, lane.pending_activation, lane.total))
+}
+
 fn peer_has_lane_declaration(peer: &PeerStatusSnapshot, lane_id: u32) -> bool {
     peer.lanes.iter().any(|lane| lane.lane_id == lane_id)
         || peer
@@ -229,6 +379,10 @@ fn peer_has_lane_declaration(peer: &PeerStatusSnapshot, lane_id: u32) -> bool {
             .lane_governance_ids
             .iter()
             .any(|declared_lane| *declared_lane == lane_id)
+        || peer.lane_validators.iter().any(|lane| {
+            lane.lane_id == lane_id
+                && (lane.total > 0 || lane.active > 0 || lane.pending_activation > 0)
+        })
 }
 
 fn peer_has_lane_declaration_transition(
@@ -242,6 +396,67 @@ fn peer_has_lane_declaration_transition(
     !peer_has_lane_declaration(baseline_peer, lane_id) && peer_has_lane_declaration(peer, lane_id)
 }
 
+fn peer_has_lane_progress_transition(
+    peer: &PeerStatusSnapshot,
+    baseline_peer: Option<&PeerStatusSnapshot>,
+    lane_id: u32,
+) -> bool {
+    let Some(baseline_peer) = baseline_peer else {
+        return false;
+    };
+
+    let status_progressed = match (
+        peer_lane_status(peer, lane_id),
+        peer_lane_status(baseline_peer, lane_id),
+    ) {
+        (Some(current), Some(baseline)) => {
+            current.capacity > baseline.capacity || current.committed > baseline.committed
+        }
+        (Some(current), None) => current.capacity > 0 || current.committed > 0,
+        _ => false,
+    };
+
+    let commitment_progressed = match (
+        peer_lane_commitment_snapshot(peer, lane_id),
+        peer_lane_commitment_snapshot(baseline_peer, lane_id),
+    ) {
+        (Some(current), Some(baseline)) => {
+            current.block_height > baseline.block_height
+                || current.tx_count > baseline.tx_count
+                || current.teu_total > baseline.teu_total
+        }
+        (Some(current), None) => {
+            current.block_height > 0 || current.tx_count > 0 || current.teu_total > 0
+        }
+        _ => false,
+    };
+
+    let relay_progressed = match (
+        peer_lane_relay_height(peer, lane_id),
+        peer_lane_relay_height(baseline_peer, lane_id),
+    ) {
+        (Some(current), Some(baseline)) => current > baseline,
+        (Some(current), None) => current > 0,
+        _ => false,
+    };
+
+    let validator_progressed = match (
+        peer_lane_validator_snapshot(peer, lane_id),
+        peer_lane_validator_snapshot(baseline_peer, lane_id),
+    ) {
+        (Some(current), Some(baseline)) => {
+            current.active > baseline.active
+                || current.pending_activation > baseline.pending_activation
+                || current.total > baseline.total
+                || current.max_activation_epoch > baseline.max_activation_epoch
+                || current.max_activation_height > baseline.max_activation_height
+        }
+        _ => false,
+    };
+
+    status_progressed || commitment_progressed || relay_progressed || validator_progressed
+}
+
 fn peers_with_expanded_lane_signal(
     snapshot: &[PeerStatusSnapshot],
     baseline_snapshot: Option<&[PeerStatusSnapshot]>,
@@ -253,11 +468,56 @@ fn peers_with_expanded_lane_signal(
         if peer_has_active_lane_capacity(peer, lane_id)
             || peer_has_lane_commitment_activity(peer, lane_id)
             || peer_has_lane_declaration_transition(peer, baseline_peer, lane_id)
+            || peer_has_lane_progress_transition(peer, baseline_peer, lane_id)
         {
             peers_with_signal += 1;
         }
     }
     peers_with_signal
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ExpansionSignalBreakdown {
+    peers_with_active_capacity: usize,
+    peers_with_commitment_activity: usize,
+    peers_with_lane_declaration: usize,
+    peers_with_lane_declaration_transition: usize,
+    peers_with_lane_progress_transition: usize,
+    peers_with_lane_validator_snapshot: usize,
+    peers_with_lane_validator_activity: usize,
+}
+
+fn expansion_signal_breakdown(
+    snapshot: &[PeerStatusSnapshot],
+    baseline_snapshot: Option<&[PeerStatusSnapshot]>,
+    lane_id: u32,
+) -> ExpansionSignalBreakdown {
+    let mut breakdown = ExpansionSignalBreakdown::default();
+    for (index, peer) in snapshot.iter().enumerate() {
+        let baseline_peer = baseline_snapshot.and_then(|baseline| baseline.get(index));
+        if peer_has_active_lane_capacity(peer, lane_id) {
+            breakdown.peers_with_active_capacity += 1;
+        }
+        if peer_has_lane_commitment_activity(peer, lane_id) {
+            breakdown.peers_with_commitment_activity += 1;
+        }
+        if peer_has_lane_declaration(peer, lane_id) {
+            breakdown.peers_with_lane_declaration += 1;
+        }
+        if peer_has_lane_declaration_transition(peer, baseline_peer, lane_id) {
+            breakdown.peers_with_lane_declaration_transition += 1;
+        }
+        if peer_has_lane_progress_transition(peer, baseline_peer, lane_id) {
+            breakdown.peers_with_lane_progress_transition += 1;
+        }
+        if let Some(validator) = peer_lane_validator_snapshot(peer, lane_id) {
+            breakdown.peers_with_lane_validator_snapshot += 1;
+            if validator.active > 0 || validator.pending_activation > 0 {
+                breakdown.peers_with_lane_validator_activity += 1;
+            }
+        }
+    }
+    breakdown
 }
 
 fn expansion_observed_on_quorum_peers(
@@ -477,6 +737,17 @@ fn expansion_top_up_tx_count(heartbeat_seq: u64) -> usize {
     0
 }
 
+fn expansion_probe_top_up_tx_count(
+    heartbeat_seq: u64,
+    storage_expanded: bool,
+    elapsed: Duration,
+) -> usize {
+    if storage_expanded && elapsed >= EXPANSION_STATUS_SIGNAL_GRACE {
+        return EXPANSION_POST_STORAGE_TOP_UP_TX_COUNT;
+    }
+    expansion_top_up_tx_count(heartbeat_seq)
+}
+
 fn wait_for_expanded_lanes_with_heartbeat(
     network: &sandbox::SerializedNetwork,
     heartbeat_client: &Client,
@@ -496,10 +767,14 @@ fn wait_for_expanded_lanes_with_heartbeat(
     let mut last_top_up_error = None::<String>;
     let mut last_status_error = None::<String>;
     let mut consecutive_status_failures = 0_u32;
+    let mut post_grace_wait_logged = false;
 
     while started.elapsed() <= timeout {
         let storage_snapshot = lane_snapshot(network)?;
         let storage_expanded = expansion_observed_on_storage(&storage_snapshot);
+        let elapsed = started.elapsed();
+        let fallback_ready_at =
+            EXPANSION_STATUS_SIGNAL_GRACE + EXPANSION_POST_STORAGE_STATUS_WINDOW;
         let status_snapshot = match status_snapshot(network) {
             Ok(snapshot) => {
                 consecutive_status_failures = 0;
@@ -514,12 +789,22 @@ fn wait_for_expanded_lanes_with_heartbeat(
                         STATUS_SNAPSHOT_RETRY_LIMIT
                     ));
                 }
-                if storage_expanded && started.elapsed() >= EXPANSION_STATUS_SIGNAL_GRACE {
+                if storage_expanded && elapsed >= fallback_ready_at {
                     eprintln!(
-                        "[autoscale-localnet] {context}: expansion observed via storage lane provisioning fallback after status errors (grace window {:?})",
-                        EXPANSION_STATUS_SIGNAL_GRACE
+                        "[autoscale-localnet] {context}: expansion observed via storage lane provisioning fallback after status errors (grace {:?} + post-storage status window {:?})",
+                        EXPANSION_STATUS_SIGNAL_GRACE, EXPANSION_POST_STORAGE_STATUS_WINDOW
                     );
                     return Ok(());
+                }
+                if storage_expanded
+                    && elapsed >= EXPANSION_STATUS_SIGNAL_GRACE
+                    && !post_grace_wait_logged
+                {
+                    eprintln!(
+                        "[autoscale-localnet] {context}: storage expansion reached grace window; continuing status probe for {:?} before fallback",
+                        EXPANSION_POST_STORAGE_STATUS_WINDOW
+                    );
+                    post_grace_wait_logged = true;
                 }
                 last_storage_snapshot = storage_snapshot;
                 if let Err(heartbeat_err) = heartbeat_client.submit(Log::new(
@@ -529,7 +814,8 @@ fn wait_for_expanded_lanes_with_heartbeat(
                     last_heartbeat_error = Some(heartbeat_err.to_string());
                 }
                 heartbeat_seq = heartbeat_seq.saturating_add(1);
-                let top_up_tx_count = expansion_top_up_tx_count(heartbeat_seq);
+                let top_up_tx_count =
+                    expansion_probe_top_up_tx_count(heartbeat_seq, storage_expanded, elapsed);
                 if top_up_tx_count > 0 {
                     if let Err(top_up_err) =
                         submit_load_round_robin(top_up_clients, top_up_tx_count)
@@ -548,22 +834,35 @@ fn wait_for_expanded_lanes_with_heartbeat(
             quorum_required,
         ) {
             eprintln!(
-                "[autoscale-localnet] {context}: expansion observed via status lane activity"
+                "[autoscale-localnet] {context}: expansion observed via status lane activity/lifecycle transitions"
             );
             return Ok(());
         }
-        if storage_expanded && started.elapsed() >= EXPANSION_STATUS_SIGNAL_GRACE {
+        if storage_expanded && elapsed >= fallback_ready_at {
             let peers_with_status_signal = peers_with_expanded_lane_signal(
                 &status_snapshot,
                 Some(baseline_status_snapshot),
                 ELASTIC_LANE_ID,
             );
+            let signal_breakdown = expansion_signal_breakdown(
+                &status_snapshot,
+                Some(baseline_status_snapshot),
+                ELASTIC_LANE_ID,
+            );
             eprintln!(
-                "[autoscale-localnet] {context}: expansion observed via storage lane provisioning fallback after {:.3}s (status signal {peers_with_status_signal}/{quorum_required}, grace {:?})",
-                started.elapsed().as_secs_f64(),
-                EXPANSION_STATUS_SIGNAL_GRACE
+                "[autoscale-localnet] {context}: expansion observed via storage lane provisioning fallback after {:.3}s (status signal {peers_with_status_signal}/{quorum_required}, grace {:?} + post-storage status window {:?}); signal breakdown: {signal_breakdown:?}",
+                elapsed.as_secs_f64(),
+                EXPANSION_STATUS_SIGNAL_GRACE,
+                EXPANSION_POST_STORAGE_STATUS_WINDOW
             );
             return Ok(());
+        }
+        if storage_expanded && elapsed >= EXPANSION_STATUS_SIGNAL_GRACE && !post_grace_wait_logged {
+            eprintln!(
+                "[autoscale-localnet] {context}: storage expansion reached grace window; continuing status probe for {:?} before fallback",
+                EXPANSION_POST_STORAGE_STATUS_WINDOW
+            );
+            post_grace_wait_logged = true;
         }
         last_storage_snapshot = storage_snapshot;
         last_status_snapshot = status_snapshot;
@@ -576,7 +875,8 @@ fn wait_for_expanded_lanes_with_heartbeat(
         }
         heartbeat_seq = heartbeat_seq.saturating_add(1);
 
-        let top_up_tx_count = expansion_top_up_tx_count(heartbeat_seq);
+        let top_up_tx_count =
+            expansion_probe_top_up_tx_count(heartbeat_seq, storage_expanded, elapsed);
         if top_up_tx_count > 0 {
             if let Err(err) = submit_load_round_robin(top_up_clients, top_up_tx_count) {
                 last_top_up_error = Some(err.to_string());
@@ -586,8 +886,9 @@ fn wait_for_expanded_lanes_with_heartbeat(
     }
 
     Err(eyre!(
-        "{context}: timed out waiting for expanded lane profile (lane {ELASTIC_LANE_ID} active via status `capacity>0 || committed>0`, sumeragi lane commitment `tx_count>0 || teu_total>0`, or lane declaration transition vs baseline on >= {quorum_required}/{TOTAL_PEERS} peers; storage lane count={EXPANDED_PROVISIONED_LANES} accepted only as fallback after grace {:?}); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last status error: {last_status_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
-        EXPANSION_STATUS_SIGNAL_GRACE
+        "{context}: timed out waiting for expanded lane profile (lane {ELASTIC_LANE_ID} active via status `capacity>0 || committed>0`, sumeragi lane commitment `tx_count>0 || teu_total>0`, public-lane validator lifecycle activity (`active || pending_activation`), or baseline transition via lane declaration/progress on >= {quorum_required}/{TOTAL_PEERS} peers; storage lane count={EXPANDED_PROVISIONED_LANES} accepted only as fallback after grace {:?} + post-storage status window {:?}); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last status error: {last_status_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
+        EXPANSION_STATUS_SIGNAL_GRACE,
+        EXPANSION_POST_STORAGE_STATUS_WINDOW
     ))
 }
 
@@ -925,22 +1226,44 @@ fn nexus_autoscale_repeats_expand_contract_cycles_in_localnet() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::{
-        LaneCommitmentSnapshot, LaneStatusSnapshot, PeerStatusSnapshot,
+        LaneCommitmentSnapshot, LaneStatusSnapshot, LaneValidatorSnapshot, PeerStatusSnapshot,
         contraction_observed_on_quorum_peers, expansion_observed_on_quorum_peers,
-        expansion_observed_on_storage, expansion_top_up_tx_count,
+        expansion_observed_on_storage, expansion_probe_top_up_tx_count, expansion_top_up_tx_count,
     };
 
     #[test]
     fn expansion_top_up_profile_is_deterministic() {
         assert_eq!(expansion_top_up_tx_count(0), 0);
         assert_eq!(expansion_top_up_tx_count(1), 0);
-        assert_eq!(expansion_top_up_tx_count(9), 0);
-        assert_eq!(expansion_top_up_tx_count(10), 16);
-        assert_eq!(expansion_top_up_tx_count(20), 16);
-        assert_eq!(expansion_top_up_tx_count(29), 0);
-        assert_eq!(expansion_top_up_tx_count(30), 32);
-        assert_eq!(expansion_top_up_tx_count(60), 32);
+        assert_eq!(expansion_top_up_tx_count(3), 0);
+        assert_eq!(expansion_top_up_tx_count(4), 16);
+        assert_eq!(expansion_top_up_tx_count(8), 16);
+        assert_eq!(expansion_top_up_tx_count(11), 0);
+        assert_eq!(expansion_top_up_tx_count(12), 32);
+        assert_eq!(expansion_top_up_tx_count(24), 32);
+    }
+
+    #[test]
+    fn expansion_probe_top_up_intensifies_after_storage_grace() {
+        assert_eq!(
+            expansion_probe_top_up_tx_count(4, false, Duration::from_secs(8)),
+            expansion_top_up_tx_count(4)
+        );
+        assert_eq!(
+            expansion_probe_top_up_tx_count(4, true, Duration::from_secs(7)),
+            expansion_top_up_tx_count(4)
+        );
+        assert_eq!(
+            expansion_probe_top_up_tx_count(1, true, Duration::from_secs(8)),
+            16
+        );
+        assert_eq!(
+            expansion_probe_top_up_tx_count(7, true, Duration::from_secs(15)),
+            16
+        );
     }
 
     #[test]
@@ -961,6 +1284,8 @@ mod tests {
                 ],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -982,6 +1307,8 @@ mod tests {
                 ],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1003,6 +1330,8 @@ mod tests {
                 ],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1017,6 +1346,8 @@ mod tests {
                 }],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1093,10 +1424,13 @@ mod tests {
                 ],
                 lane_commitments: vec![LaneCommitmentSnapshot {
                     lane_id: 1,
+                    block_height: 10,
                     tx_count: 4,
                     teu_total: 128,
                 }],
                 lane_governance_ids: vec![],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1118,10 +1452,13 @@ mod tests {
                 ],
                 lane_commitments: vec![LaneCommitmentSnapshot {
                     lane_id: 1,
+                    block_height: 10,
                     tx_count: 2,
                     teu_total: 64,
                 }],
                 lane_governance_ids: vec![],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1143,10 +1480,13 @@ mod tests {
                 ],
                 lane_commitments: vec![LaneCommitmentSnapshot {
                     lane_id: 1,
+                    block_height: 10,
                     tx_count: 1,
                     teu_total: 32,
                 }],
                 lane_governance_ids: vec![],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1161,6 +1501,8 @@ mod tests {
                 }],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1209,6 +1551,8 @@ mod tests {
                 }],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![0],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1223,6 +1567,8 @@ mod tests {
                 }],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![0],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1237,6 +1583,8 @@ mod tests {
                 }],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![0],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1251,6 +1599,8 @@ mod tests {
                 }],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![0],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1268,6 +1618,8 @@ mod tests {
                 }],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![0, 1],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 11,
@@ -1282,6 +1634,8 @@ mod tests {
                 }],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![0, 1],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 11,
@@ -1296,6 +1650,8 @@ mod tests {
                 }],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![0, 1],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 11,
@@ -1310,6 +1666,8 @@ mod tests {
                 }],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![0],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 11,
@@ -1325,6 +1683,382 @@ mod tests {
         ));
         assert!(!expansion_observed_on_quorum_peers(
             &declaration_transition_snapshot,
+            None,
+            3
+        ));
+    }
+
+    #[test]
+    fn expansion_accepts_lane_progress_transition_on_quorum_peers() {
+        let baseline_snapshot = vec![
+            PeerStatusSnapshot {
+                lanes: vec![
+                    LaneStatusSnapshot {
+                        lane_id: 0,
+                        capacity: 6000,
+                        committed: 12,
+                    },
+                    LaneStatusSnapshot {
+                        lane_id: 1,
+                        capacity: 0,
+                        committed: 0,
+                    },
+                ],
+                lane_commitments: vec![LaneCommitmentSnapshot {
+                    lane_id: 1,
+                    block_height: 10,
+                    tx_count: 0,
+                    teu_total: 0,
+                }],
+                lane_governance_ids: vec![0, 1],
+                lane_relay: vec![],
+                lane_validators: vec![],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 10,
+                txs_rejected: 0,
+                blocks_non_empty: 10,
+            },
+            PeerStatusSnapshot {
+                lanes: vec![
+                    LaneStatusSnapshot {
+                        lane_id: 0,
+                        capacity: 6000,
+                        committed: 12,
+                    },
+                    LaneStatusSnapshot {
+                        lane_id: 1,
+                        capacity: 0,
+                        committed: 0,
+                    },
+                ],
+                lane_commitments: vec![LaneCommitmentSnapshot {
+                    lane_id: 1,
+                    block_height: 10,
+                    tx_count: 0,
+                    teu_total: 0,
+                }],
+                lane_governance_ids: vec![0, 1],
+                lane_relay: vec![],
+                lane_validators: vec![],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 10,
+                txs_rejected: 0,
+                blocks_non_empty: 10,
+            },
+            PeerStatusSnapshot {
+                lanes: vec![
+                    LaneStatusSnapshot {
+                        lane_id: 0,
+                        capacity: 6000,
+                        committed: 12,
+                    },
+                    LaneStatusSnapshot {
+                        lane_id: 1,
+                        capacity: 0,
+                        committed: 0,
+                    },
+                ],
+                lane_commitments: vec![LaneCommitmentSnapshot {
+                    lane_id: 1,
+                    block_height: 10,
+                    tx_count: 0,
+                    teu_total: 0,
+                }],
+                lane_governance_ids: vec![0, 1],
+                lane_relay: vec![],
+                lane_validators: vec![],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 10,
+                txs_rejected: 0,
+                blocks_non_empty: 10,
+            },
+            PeerStatusSnapshot {
+                lanes: vec![
+                    LaneStatusSnapshot {
+                        lane_id: 0,
+                        capacity: 6000,
+                        committed: 12,
+                    },
+                    LaneStatusSnapshot {
+                        lane_id: 1,
+                        capacity: 0,
+                        committed: 0,
+                    },
+                ],
+                lane_commitments: vec![LaneCommitmentSnapshot {
+                    lane_id: 1,
+                    block_height: 10,
+                    tx_count: 0,
+                    teu_total: 0,
+                }],
+                lane_governance_ids: vec![0, 1],
+                lane_relay: vec![],
+                lane_validators: vec![],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 10,
+                txs_rejected: 0,
+                blocks_non_empty: 10,
+            },
+        ];
+
+        let progress_transition_snapshot = vec![
+            PeerStatusSnapshot {
+                lanes: baseline_snapshot[0].lanes.clone(),
+                lane_commitments: vec![LaneCommitmentSnapshot {
+                    lane_id: 1,
+                    block_height: 11,
+                    tx_count: 0,
+                    teu_total: 0,
+                }],
+                lane_governance_ids: baseline_snapshot[0].lane_governance_ids.clone(),
+                lane_relay: vec![],
+                lane_validators: vec![],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 11,
+                txs_rejected: 0,
+                blocks_non_empty: 11,
+            },
+            PeerStatusSnapshot {
+                lanes: baseline_snapshot[1].lanes.clone(),
+                lane_commitments: vec![LaneCommitmentSnapshot {
+                    lane_id: 1,
+                    block_height: 11,
+                    tx_count: 0,
+                    teu_total: 0,
+                }],
+                lane_governance_ids: baseline_snapshot[1].lane_governance_ids.clone(),
+                lane_relay: vec![],
+                lane_validators: vec![],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 11,
+                txs_rejected: 0,
+                blocks_non_empty: 11,
+            },
+            PeerStatusSnapshot {
+                lanes: baseline_snapshot[2].lanes.clone(),
+                lane_commitments: vec![LaneCommitmentSnapshot {
+                    lane_id: 1,
+                    block_height: 11,
+                    tx_count: 0,
+                    teu_total: 0,
+                }],
+                lane_governance_ids: baseline_snapshot[2].lane_governance_ids.clone(),
+                lane_relay: vec![],
+                lane_validators: vec![],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 11,
+                txs_rejected: 0,
+                blocks_non_empty: 11,
+            },
+            PeerStatusSnapshot {
+                lanes: baseline_snapshot[3].lanes.clone(),
+                lane_commitments: baseline_snapshot[3].lane_commitments.clone(),
+                lane_governance_ids: baseline_snapshot[3].lane_governance_ids.clone(),
+                lane_relay: vec![],
+                lane_validators: vec![],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 11,
+                txs_rejected: 0,
+                blocks_non_empty: 11,
+            },
+        ];
+
+        assert!(expansion_observed_on_quorum_peers(
+            &progress_transition_snapshot,
+            Some(&baseline_snapshot),
+            3
+        ));
+        assert!(!expansion_observed_on_quorum_peers(
+            &progress_transition_snapshot,
+            None,
+            3
+        ));
+    }
+
+    #[test]
+    fn expansion_accepts_lane_validator_transition_on_quorum_peers() {
+        let baseline_snapshot = vec![
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                    committed: 12,
+                }],
+                lane_commitments: vec![],
+                lane_governance_ids: vec![0, 1],
+                lane_relay: vec![],
+                lane_validators: vec![LaneValidatorSnapshot {
+                    lane_id: 1,
+                    total: 4,
+                    active: 0,
+                    pending_activation: 0,
+                    max_activation_epoch: 1,
+                    max_activation_height: 100,
+                }],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 10,
+                txs_rejected: 0,
+                blocks_non_empty: 10,
+            },
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                    committed: 12,
+                }],
+                lane_commitments: vec![],
+                lane_governance_ids: vec![0, 1],
+                lane_relay: vec![],
+                lane_validators: vec![LaneValidatorSnapshot {
+                    lane_id: 1,
+                    total: 4,
+                    active: 0,
+                    pending_activation: 0,
+                    max_activation_epoch: 1,
+                    max_activation_height: 100,
+                }],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 10,
+                txs_rejected: 0,
+                blocks_non_empty: 10,
+            },
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                    committed: 12,
+                }],
+                lane_commitments: vec![],
+                lane_governance_ids: vec![0, 1],
+                lane_relay: vec![],
+                lane_validators: vec![LaneValidatorSnapshot {
+                    lane_id: 1,
+                    total: 4,
+                    active: 0,
+                    pending_activation: 0,
+                    max_activation_epoch: 1,
+                    max_activation_height: 100,
+                }],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 10,
+                txs_rejected: 0,
+                blocks_non_empty: 10,
+            },
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                    committed: 12,
+                }],
+                lane_commitments: vec![],
+                lane_governance_ids: vec![0, 1],
+                lane_relay: vec![],
+                lane_validators: vec![LaneValidatorSnapshot {
+                    lane_id: 1,
+                    total: 4,
+                    active: 0,
+                    pending_activation: 0,
+                    max_activation_epoch: 1,
+                    max_activation_height: 100,
+                }],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 10,
+                txs_rejected: 0,
+                blocks_non_empty: 10,
+            },
+        ];
+
+        let validator_transition_snapshot = vec![
+            PeerStatusSnapshot {
+                lanes: baseline_snapshot[0].lanes.clone(),
+                lane_commitments: baseline_snapshot[0].lane_commitments.clone(),
+                lane_governance_ids: baseline_snapshot[0].lane_governance_ids.clone(),
+                lane_relay: vec![],
+                lane_validators: vec![LaneValidatorSnapshot {
+                    lane_id: 1,
+                    total: 4,
+                    active: 3,
+                    pending_activation: 0,
+                    max_activation_epoch: 1,
+                    max_activation_height: 100,
+                }],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 11,
+                txs_rejected: 0,
+                blocks_non_empty: 11,
+            },
+            PeerStatusSnapshot {
+                lanes: baseline_snapshot[1].lanes.clone(),
+                lane_commitments: baseline_snapshot[1].lane_commitments.clone(),
+                lane_governance_ids: baseline_snapshot[1].lane_governance_ids.clone(),
+                lane_relay: vec![],
+                lane_validators: vec![LaneValidatorSnapshot {
+                    lane_id: 1,
+                    total: 4,
+                    active: 2,
+                    pending_activation: 1,
+                    max_activation_epoch: 1,
+                    max_activation_height: 101,
+                }],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 11,
+                txs_rejected: 0,
+                blocks_non_empty: 11,
+            },
+            PeerStatusSnapshot {
+                lanes: baseline_snapshot[2].lanes.clone(),
+                lane_commitments: baseline_snapshot[2].lane_commitments.clone(),
+                lane_governance_ids: baseline_snapshot[2].lane_governance_ids.clone(),
+                lane_relay: vec![],
+                lane_validators: vec![LaneValidatorSnapshot {
+                    lane_id: 1,
+                    total: 4,
+                    active: 1,
+                    pending_activation: 0,
+                    max_activation_epoch: 2,
+                    max_activation_height: 102,
+                }],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 11,
+                txs_rejected: 0,
+                blocks_non_empty: 11,
+            },
+            PeerStatusSnapshot {
+                lanes: baseline_snapshot[3].lanes.clone(),
+                lane_commitments: baseline_snapshot[3].lane_commitments.clone(),
+                lane_governance_ids: baseline_snapshot[3].lane_governance_ids.clone(),
+                lane_relay: vec![],
+                lane_validators: baseline_snapshot[3].lane_validators.clone(),
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 11,
+                txs_rejected: 0,
+                blocks_non_empty: 11,
+            },
+        ];
+
+        assert!(expansion_observed_on_quorum_peers(
+            &validator_transition_snapshot,
+            Some(&baseline_snapshot),
+            3
+        ));
+        assert!(!expansion_observed_on_quorum_peers(
+            &validator_transition_snapshot,
             None,
             3
         ));
@@ -1402,6 +2136,8 @@ mod tests {
                 }],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1423,6 +2159,8 @@ mod tests {
                 ],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1437,6 +2175,8 @@ mod tests {
                 }],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![],
+                lane_relay: vec![],
+                lane_validators: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1462,6 +2202,8 @@ mod tests {
             ],
             lane_commitments: vec![],
             lane_governance_ids: vec![],
+            lane_relay: vec![],
+            lane_validators: vec![],
             commit_signatures_required: 3,
             commit_qc_validator_set_len: 4,
             txs_approved: 10,

@@ -1095,7 +1095,7 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
         );
         if max == 0 {
             eprintln!(
-                "[registration-perf] note: lifecycle visibility completed without observed commit-height advancement on any peer"
+                "[registration-perf] note: lifecycle visibility completed without commit-height advancement on any peer (expected for control-plane /v1/nexus/lifecycle state mutation)"
             );
         }
     }
