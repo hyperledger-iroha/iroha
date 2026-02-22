@@ -1686,7 +1686,7 @@ mod tests {
 
     const TEST_SCAN_BUDGET_MARGIN_BYTES: u64 = 1024;
 
-    fn init_test_cfg() {
+    fn configure_test_cfg(allowed_circuits: Vec<String>) {
         let fixture_len = fixture_attachment_bytes().len() as u64;
         let max_scan_bytes = fixture_len.saturating_add(TEST_SCAN_BUDGET_MARGIN_BYTES);
         let _ = super::configure(
@@ -1698,12 +1698,16 @@ mod tests {
             5_000,
             iroha_config::parameters::defaults::torii::zk_prover_keys_dir(),
             iroha_config::parameters::defaults::torii::zk_prover_allowed_backends(),
-            iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits(),
+            allowed_circuits,
             None,
             MaybeTelemetry::disabled(),
         );
         super::TEST_PROCESSING_DELAY_MS.store(0, AtomicOrdering::SeqCst);
         super::MAX_INFLIGHT_OBSERVED.store(0, AtomicOrdering::SeqCst);
+    }
+
+    fn init_test_cfg() {
+        configure_test_cfg(iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits());
     }
 
     fn fixture_attachment_bytes() -> Vec<u8> {
@@ -1854,7 +1858,7 @@ mod tests {
 
     #[test]
     fn scan_and_report_single_attachment() {
-        init_test_cfg();
+        configure_test_cfg(Vec::new());
         let _env = TestDataDirGuard::new();
         // Create an attachment manually
         let id = "deadbeef".repeat(8);

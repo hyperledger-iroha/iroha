@@ -2377,6 +2377,8 @@ async fn actor_should_tick_tracks_missing_block_requests() {
             view_change_window: None,
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -2456,6 +2458,8 @@ async fn actor_next_tick_deadline_tracks_missing_block_windows() {
             view_change_window: Some(Duration::from_millis(500)),
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -5035,6 +5039,8 @@ async fn block_sync_update_accepts_uncertified_next_height_in_permissioned_mode(
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -5161,6 +5167,8 @@ async fn block_sync_update_ignored_when_local_removed_from_world() {
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -5327,6 +5335,8 @@ async fn block_sync_update_accepts_uncertified_missing_block_when_behind() {
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -5446,6 +5456,8 @@ async fn block_sync_update_accepts_uncertified_missing_block_in_npos() {
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -6097,6 +6109,8 @@ async fn block_sync_update_defers_signature_mismatch_when_parent_missing() {
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -6180,6 +6194,8 @@ async fn block_sync_update_defers_while_commit_inflight_and_replays() {
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -6479,6 +6495,8 @@ async fn block_sync_update_accepts_pre_activation_signature_after_mode_flip() {
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -10135,6 +10153,8 @@ async fn block_sync_update_drops_mismatched_commit_votes() {
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -19486,6 +19506,8 @@ async fn clear_missing_block_view_change_resets_window_and_trigger() {
             view_change_window: Some(Duration::from_secs(2)),
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: Some(1),
             attempts: 1,
         },
@@ -32866,6 +32888,8 @@ async fn retry_missing_block_requests_triggers_view_change_after_dwell() {
             view_change_window: Some(retry_window),
             first_seen: dwell_start,
             last_requested: dwell_start,
+            last_dependency_progress: dwell_start,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -32922,6 +32946,8 @@ async fn retry_missing_block_requests_respects_tick_budget() {
             view_change_window: Some(retry_window),
             first_seen: dwell_start,
             last_requested: dwell_start,
+            last_dependency_progress: dwell_start,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -32972,6 +32998,8 @@ async fn retry_missing_block_requests_relaxes_aggressive_retry_window_after_firs
             view_change_window: None,
             first_seen: dwell_start,
             last_requested: dwell_start,
+            last_dependency_progress: dwell_start,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 1,
         },
@@ -33024,6 +33052,8 @@ async fn retry_missing_block_requests_applies_configured_backoff_before_retrying
             view_change_window: Some(Duration::from_secs(1)),
             first_seen: last_requested,
             last_requested,
+            last_dependency_progress: last_requested,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 1,
         },
@@ -33131,6 +33161,8 @@ async fn retry_missing_block_requests_defers_view_change_when_rbc_pending() {
             view_change_window: Some(retry_window),
             first_seen: dwell_start,
             last_requested: dwell_start,
+            last_dependency_progress: dwell_start,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -33196,6 +33228,8 @@ async fn retry_missing_block_requests_forces_view_change_on_attempt_cap_even_wit
             view_change_window: Some(retry_window),
             first_seen: dwell_start,
             last_requested: dwell_start,
+            last_dependency_progress: dwell_start,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -33334,6 +33368,181 @@ async fn missing_block_height_hard_cap_survives_view_churn() {
             .view_change_causes
             .missing_payload_total
             .saturating_add(1)
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_block_height_hard_cap_defers_with_recent_dependency_progress_after_retry() {
+    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let _guard = super::status::view_change_proof_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+    let actor = &mut harness.actor;
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view, now);
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD5; Hash::LENGTH]));
+    let ttl = actor
+        .recovery_missing_block_height_ttl()
+        .max(Duration::from_millis(1));
+    let stale = now - ttl - Duration::from_millis(1);
+    let recent_dependency_progress = now - ttl / 2;
+
+    actor.note_missing_block_height_attempt(
+        block_hash,
+        height,
+        view,
+        super::MissingBlockRecoveryStage::HashFetch,
+        None,
+        stale,
+    );
+    let key = actor.missing_block_recovery_key_for_height(height);
+    let attempt_cap = actor.recovery_missing_block_height_attempt_cap().max(1);
+    {
+        let budget = actor
+            .missing_block_height_recovery
+            .get_mut(&key)
+            .expect("height budget should exist");
+        budget.attempts = attempt_cap;
+        budget.first_seen = stale;
+        budget.last_seen = now;
+        budget.range_pull.last_progress = stale;
+    }
+
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(10),
+            view_change_window: Some(Duration::from_millis(10)),
+            first_seen: stale,
+            last_requested: now,
+            last_dependency_progress: recent_dependency_progress,
+            last_rbc_observed: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    let before = super::status::snapshot();
+    let escalated =
+        actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, now);
+    assert!(
+        !escalated,
+        "recent dependency progress should defer hard-cap escalation even after retry timestamp advanced"
+    );
+    let after = super::status::snapshot();
+    assert_eq!(
+        after.view_change_causes.missing_payload_total,
+        before.view_change_causes.missing_payload_total,
+        "deferral should not force MissingPayload view change"
+    );
+    assert!(
+        after.consensus_missing_block_height_progress_deferred_total
+            >= before
+                .consensus_missing_block_height_progress_deferred_total
+                .saturating_add(1),
+        "hard-cap deferral counter should increment when dependency progress keeps converging"
+    );
+    let budget = actor
+        .missing_block_height_recovery
+        .get(&key)
+        .expect("height budget should remain tracked");
+    assert_eq!(
+        budget.escalated_view, None,
+        "deferred hard-cap should not record escalation for the view"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_block_height_hard_cap_skips_when_view_change_already_triggered() {
+    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let _guard = super::status::view_change_proof_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+    let actor = &mut harness.actor;
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view, now);
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD4; Hash::LENGTH]));
+    let ttl = actor
+        .recovery_missing_block_height_ttl()
+        .max(Duration::from_millis(1));
+    let stale = now - ttl - Duration::from_millis(1);
+
+    actor.note_missing_block_height_attempt(
+        block_hash,
+        height,
+        view,
+        super::MissingBlockRecoveryStage::HashFetch,
+        None,
+        stale,
+    );
+    let key = actor.missing_block_recovery_key_for_height(height);
+    let attempt_cap = actor.recovery_missing_block_height_attempt_cap().max(1);
+    {
+        let budget = actor
+            .missing_block_height_recovery
+            .get_mut(&key)
+            .expect("height budget should exist");
+        budget.attempts = attempt_cap;
+        budget.first_seen = stale;
+        budget.last_seen = now;
+        budget.range_pull.last_progress = stale;
+    }
+
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(10),
+            view_change_window: Some(Duration::from_millis(10)),
+            first_seen: stale,
+            last_requested: stale,
+            last_dependency_progress: stale,
+            last_rbc_observed: None,
+            view_change_triggered_view: Some(view),
+            attempts: 2,
+        },
+    );
+
+    let before = super::status::snapshot();
+    let escalated =
+        actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, now);
+    assert!(
+        !escalated,
+        "hard-cap path should not re-trigger MissingPayload after same-view view-change trigger"
+    );
+    let after = super::status::snapshot();
+    assert_eq!(
+        after.view_change_causes.missing_payload_total,
+        before.view_change_causes.missing_payload_total,
+        "duplicate same-view hard-cap escalation must be suppressed"
+    );
+    let budget = actor
+        .missing_block_height_recovery
+        .get(&key)
+        .expect("height budget should remain tracked");
+    assert_eq!(
+        budget.escalated_view,
+        Some(view),
+        "suppressed duplicate escalation should still seal the per-view hard-cap budget"
     );
 
     harness.shutdown.send();
@@ -33876,6 +34085,8 @@ async fn retry_missing_block_requests_defers_view_change_when_rbc_backlog_near_h
             view_change_window: Some(retry_window),
             first_seen: dwell_start,
             last_requested: dwell_start,
+            last_dependency_progress: dwell_start,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -33952,6 +34163,8 @@ async fn retry_missing_block_requests_defers_view_change_when_rbc_ready_deferral
             view_change_window: Some(retry_window),
             first_seen: dwell_start,
             last_requested: dwell_start,
+            last_dependency_progress: dwell_start,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -34009,6 +34222,8 @@ async fn retry_missing_block_requests_defers_view_change_when_pending_block_near
             view_change_window: Some(retry_window),
             first_seen: dwell_start,
             last_requested: dwell_start,
+            last_dependency_progress: dwell_start,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -34067,6 +34282,8 @@ async fn retry_missing_block_requests_defers_view_change_when_queue_drops_seen()
             view_change_window: Some(retry_window),
             first_seen: dwell_start,
             last_requested: dwell_start,
+            last_dependency_progress: dwell_start,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -34128,6 +34345,8 @@ async fn retry_missing_block_requests_forces_view_change_after_backlog_extension
             view_change_window: Some(base_window),
             first_seen: dwell_start,
             last_requested: dwell_start,
+            last_dependency_progress: dwell_start,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -34190,6 +34409,8 @@ async fn retry_missing_block_requests_defers_view_change_when_queue_blocks_seen(
             view_change_window: Some(retry_window),
             first_seen: dwell_start,
             last_requested: dwell_start,
+            last_dependency_progress: dwell_start,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -34257,6 +34478,8 @@ async fn retry_missing_block_requests_uses_active_roster_when_commit_topology_em
             view_change_window: Some(retry_window),
             first_seen: last_requested,
             last_requested,
+            last_dependency_progress: last_requested,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -34347,6 +34570,8 @@ async fn retry_missing_block_requests_uses_commit_roster_snapshot_without_valida
             view_change_window: Some(retry_window),
             first_seen: last_requested,
             last_requested,
+            last_dependency_progress: last_requested,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -34498,6 +34723,8 @@ fn plan_missing_block_fetch_falls_back_after_signer_attempts() {
             view_change_window: Some(window),
             first_seen: now - window,
             last_requested: now - window,
+            last_dependency_progress: now - window,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: fallback_after,
         },
@@ -34904,6 +35131,8 @@ fn defer_qc_for_missing_block_records_backoff_metrics() {
             view_change_window: Some(window),
             first_seen,
             last_requested,
+            last_dependency_progress: last_requested,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -36204,6 +36433,8 @@ async fn trigger_view_change_retains_aborted_pending_payloads_with_da() {
         view_change_window: Some(retry_window),
         first_seen: now,
         last_requested: now,
+        last_dependency_progress: now,
+        last_rbc_observed: None,
         view_change_triggered_view: None,
         attempts: 0,
     };
@@ -36330,6 +36561,8 @@ async fn prune_stale_view_state_prunes_delivered_rbc_when_payload_available() {
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -37277,6 +37510,8 @@ async fn apply_commit_outcome_updates_view_change_install() {
             view_change_window: Some(Duration::from_secs(1)),
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -37292,6 +37527,8 @@ async fn apply_commit_outcome_updates_view_change_install() {
             view_change_window: Some(Duration::from_secs(1)),
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -37641,6 +37878,8 @@ async fn force_view_change_if_idle_reacquires_missing_qc_once_before_rotating() 
             view_change_window: Some(Duration::from_secs(1)),
             first_seen: start,
             last_requested: start,
+            last_dependency_progress: start,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -37918,6 +38157,8 @@ async fn force_view_change_if_idle_triggers_even_when_missing_blocks_pending() {
             view_change_window: Some(Duration::from_secs(1)),
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -48547,6 +48788,8 @@ async fn block_created_drops_empty_payload() {
             view_change_window: None,
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -48820,6 +49063,8 @@ async fn block_created_revives_aborted_pending() {
             view_change_window: None,
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -48875,6 +49120,8 @@ async fn block_created_clears_missing_request_on_duplicate() {
             view_change_window: None,
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -48930,6 +49177,8 @@ async fn block_created_clears_missing_request_when_processing_or_inflight() {
             view_change_window: None,
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -49000,6 +49249,8 @@ async fn block_created_clears_missing_request_when_processing_or_inflight() {
             view_change_window: None,
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -62837,6 +63088,8 @@ async fn stale_view_accepts_precommit_vote_when_missing_block_requested() {
             view_change_window: None,
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },
@@ -62928,6 +63181,8 @@ async fn block_sync_update_accepts_stale_view_when_missing_block_requested() {
             view_change_window: None,
             first_seen: now,
             last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
             view_change_triggered_view: None,
             attempts: 0,
         },

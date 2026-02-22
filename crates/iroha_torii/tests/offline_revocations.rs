@@ -26,12 +26,15 @@ use iroha_data_model::{
     asset::{AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
     domain::Domain,
-    isi::offline::{RegisterOfflineAllowance, RegisterOfflineVerdictRevocation},
+    isi::{
+        Mint,
+        offline::{RegisterOfflineAllowance, RegisterOfflineVerdictRevocation},
+    },
     metadata::Metadata,
     name::Name,
     offline::{
-        OfflineAllowanceCommitment, OfflineVerdictRevocation, OfflineVerdictRevocationReason,
-        OfflineWalletCertificate, OfflineWalletPolicy,
+        OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineAllowanceCommitment, OfflineVerdictRevocation,
+        OfflineVerdictRevocationReason, OfflineWalletCertificate, OfflineWalletPolicy,
     },
 };
 use iroha_primitives::{
@@ -238,6 +241,12 @@ fn seed_offline_revocations(state: &Arc<State>, seeds: &[RevocationSeed]) -> Vec
         let mut block = state.block(header_one);
         let mut tx = block.transaction();
         for seed in seeds {
+            Mint::asset_numeric(
+                seed.certificate.allowance.amount.clone(),
+                seed.certificate.allowance.asset.clone(),
+            )
+            .execute(&seed.certificate.controller, &mut tx)
+            .expect("allowance prefund");
             RegisterOfflineAllowance {
                 certificate: seed.certificate.clone(),
             }
@@ -305,12 +314,17 @@ fn world_from_revocation_seeds(seeds: &[RevocationSeed]) -> World {
     accounts.sort_by(|a, b| a.id.cmp(&b.id));
     accounts.dedup_by(|a, b| a.id == b.id);
 
+    let mut asset_definition_metadata = Metadata::default();
+    asset_definition_metadata.insert(
+        Name::from_str(OFFLINE_ASSET_ENABLED_METADATA_KEY).expect("offline enabled metadata key"),
+        true,
+    );
     let asset_definition = AssetDefinition {
         id: first.certificate.allowance.asset.definition().clone(),
         spec: NumericSpec::integer(),
         mintable: Default::default(),
         logo: None,
-        metadata: Metadata::default(),
+        metadata: asset_definition_metadata,
         owned_by: first.certificate.controller.clone(),
         total_quantity: Numeric::zero(),
         confidential_policy: Default::default(),

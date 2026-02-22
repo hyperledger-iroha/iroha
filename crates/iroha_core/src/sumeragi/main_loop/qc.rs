@@ -1463,17 +1463,32 @@ impl Actor {
         view: u64,
     ) -> bool {
         let now = Instant::now();
-        let (base_window, dwell) = self
+        let ttl = self
+            .recovery_missing_block_height_ttl()
+            .max(Duration::from_millis(1));
+        let (base_window, dwell, recent_rbc_progress) = self
             .pending
             .missing_block_requests
             .get(block_hash)
             .filter(|stats| stats.height == height && stats.view == view)
-            .map_or((self.recovery_deferred_qc_ttl(), Duration::ZERO), |stats| {
-                let base = stats
-                    .view_change_window
-                    .unwrap_or(self.recovery_deferred_qc_ttl());
-                (base, now.saturating_duration_since(stats.first_seen))
-            });
+            .map_or(
+                (self.recovery_deferred_qc_ttl(), Duration::ZERO, false),
+                |stats| {
+                    let base = stats
+                        .view_change_window
+                        .unwrap_or(self.recovery_deferred_qc_ttl());
+                    (
+                        base,
+                        now.saturating_duration_since(stats.first_seen),
+                        stats
+                            .last_rbc_observed
+                            .is_some_and(|observed| now.saturating_duration_since(observed) < ttl),
+                    )
+                },
+            );
+        if recent_rbc_progress {
+            return true;
+        }
         let within_backlog_extension =
             |actor: &Self| dwell < actor.backlog_extended_view_change_timeout(base_window, true);
         if self.queue_drop_backpressure_active(now, self.payload_rebroadcast_cooldown()) {

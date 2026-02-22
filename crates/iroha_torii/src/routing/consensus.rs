@@ -2870,6 +2870,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.qc_rebuild_successes_total,
         ),
         json_entry(
+            "consensus_missing_block_height_progress_deferred_total",
+            snap.consensus_missing_block_height_progress_deferred_total,
+        ),
+        json_entry(
             "consensus_missing_qc_reacquire_attempt_total",
             snap.consensus_missing_qc_reacquire_attempt_total,
         ),
@@ -3628,6 +3632,7 @@ mod status_tests {
     #[test]
     fn status_snapshot_json_includes_recovery_reacquire_fields() {
         let snap = sumeragi::StatusSnapshot {
+            consensus_missing_block_height_progress_deferred_total: 10,
             consensus_missing_qc_reacquire_attempt_total: 2,
             consensus_missing_qc_reacquire_success_total: 1,
             consensus_missing_qc_reacquire_exhausted_total: 3,
@@ -3643,6 +3648,12 @@ mod status_tests {
             ..Default::default()
         };
         let payload = status_snapshot_json(&snap);
+        assert_eq!(
+            payload
+                .get("consensus_missing_block_height_progress_deferred_total")
+                .and_then(Value::as_u64),
+            Some(10)
+        );
         assert_eq!(
             payload
                 .get("consensus_missing_qc_reacquire_attempt_total")

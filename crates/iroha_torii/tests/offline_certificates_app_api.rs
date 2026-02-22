@@ -26,12 +26,12 @@ use iroha_data_model::{
     asset::{AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
     domain::Domain,
-    isi::offline::RegisterOfflineAllowance,
+    isi::{Mint, offline::RegisterOfflineAllowance},
     metadata::Metadata,
     name::Name,
     offline::{
-        OfflineAllowanceCommitment, OfflineVerdictRevocationReason, OfflineWalletCertificate,
-        OfflineWalletPolicy,
+        OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineAllowanceCommitment,
+        OfflineVerdictRevocationReason, OfflineWalletCertificate, OfflineWalletPolicy,
     },
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec};
@@ -410,12 +410,17 @@ fn world_from_cert_fixtures(fixtures: &CertFixtures) -> World {
         uaid: None,
         opaque_ids: Vec::new(),
     };
+    let mut asset_definition_metadata = Metadata::default();
+    asset_definition_metadata.insert(
+        Name::from_str(OFFLINE_ASSET_ENABLED_METADATA_KEY).expect("offline enabled metadata key"),
+        true,
+    );
     let asset_definition = AssetDefinition {
         id: fixtures.certificate.allowance.asset.definition().clone(),
         spec: NumericSpec::integer(),
         mintable: Default::default(),
         logo: None,
-        metadata: Metadata::default(),
+        metadata: asset_definition_metadata,
         owned_by: fixtures.controller.clone(),
         total_quantity: Numeric::zero(),
         confidential_policy: Default::default(),
@@ -430,6 +435,12 @@ fn seed_allowance(state: &Arc<State>, certificate: &OfflineWalletCertificate) {
     let header_one = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_321, 0);
     let mut block = state.block(header_one);
     let mut tx = block.transaction();
+    Mint::asset_numeric(
+        certificate.allowance.amount.clone(),
+        certificate.allowance.asset.clone(),
+    )
+    .execute(&certificate.controller, &mut tx)
+    .expect("allowance prefund");
     RegisterOfflineAllowance {
         certificate: certificate.clone(),
     }

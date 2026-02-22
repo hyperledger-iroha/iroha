@@ -3338,7 +3338,15 @@ impl Actor {
             return Ok(());
         };
         if accepted_chunk {
-            self.touch_pending_progress(chunk_block, chunk_height, chunk_view, Instant::now());
+            let now = Instant::now();
+            self.touch_pending_progress(chunk_block, chunk_height, chunk_view, now);
+            let _ = self.note_missing_block_request_dependency_progress(
+                chunk_block,
+                chunk_height,
+                chunk_view,
+                now,
+                true,
+            );
         }
         if chunk_digest_mismatch {
             let log_outcome = sender.as_ref().map(|peer| {
@@ -4024,7 +4032,15 @@ impl Actor {
             .is_some_and(|session| session.delivered);
         let deliver_emitted = !delivered_before && delivered_after;
         if recorded_ready {
-            self.touch_pending_progress(ready.block_hash, ready.height, ready.view, Instant::now());
+            let now = Instant::now();
+            self.touch_pending_progress(ready.block_hash, ready.height, ready.view, now);
+            let _ = self.note_missing_block_request_dependency_progress(
+                ready.block_hash,
+                ready.height,
+                ready.view,
+                now,
+                true,
+            );
         }
         let telemetry_ref = self.telemetry_handle();
         self.publish_rbc_backlog_snapshot();
@@ -5114,6 +5130,13 @@ impl Actor {
             return Ok(());
         }
         self.touch_pending_progress(deliver.block_hash, deliver.height, deliver.view, now);
+        let _ = self.note_missing_block_request_dependency_progress(
+            deliver.block_hash,
+            deliver.height,
+            deliver.view,
+            now,
+            true,
+        );
         if first_deliver {
             if let Some(telemetry) = self.telemetry_handle() {
                 telemetry.inc_rbc_deliver_broadcasts();
