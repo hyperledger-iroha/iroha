@@ -5717,6 +5717,18 @@ pub struct SumeragiRecovery {
         default = "defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS"
     )]
     pub missing_block_signer_fallback_attempts: u32,
+    /// Per-attempt multiplier applied to missing-block retry windows (>=1).
+    #[config(
+        env = "SUMERAGI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER",
+        default = "defaults::sumeragi::RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER"
+    )]
+    pub missing_block_retry_backoff_multiplier: u32,
+    /// Ceiling applied to missing-block retry windows after backoff (milliseconds).
+    #[config(
+        env = "SUMERAGI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS",
+        default = "defaults::sumeragi::RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS"
+    )]
+    pub missing_block_retry_backoff_cap_ms: u64,
     /// Backlog-aware multiplier applied to quorum-reschedule grace windows.
     #[config(
         env = "SUMERAGI_VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR",
@@ -7073,6 +7085,12 @@ impl Sumeragi {
                 no_roster_fallback_views: recovery.no_roster_fallback_views,
                 missing_block_signer_fallback_attempts: recovery
                     .missing_block_signer_fallback_attempts,
+                missing_block_retry_backoff_multiplier: recovery
+                    .missing_block_retry_backoff_multiplier
+                    .max(1),
+                missing_block_retry_backoff_cap: std::time::Duration::from_millis(
+                    recovery.missing_block_retry_backoff_cap_ms.max(1),
+                ),
                 view_change_backlog_extension_factor: recovery.view_change_backlog_extension_factor,
                 view_change_backlog_extension_cap: std::time::Duration::from_millis(
                     recovery.view_change_backlog_extension_cap_ms,

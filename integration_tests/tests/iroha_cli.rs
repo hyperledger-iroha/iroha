@@ -1,7 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests of the Iroha Client CLI
 
-use std::{path::PathBuf, sync::Once, time::Duration};
+use std::{
+    num::NonZeroU32, path::PathBuf, process::Command as ProcessCommand, sync::Once, time::Duration,
+};
 
 use integration_tests::sandbox;
 use iroha::{
@@ -10,7 +12,10 @@ use iroha::{
     crypto::{ExposedPrivateKey, Hash, KeyPair},
     data_model::{
         Encode,
-        soracloud::{AgentApartmentManifestV1, SoraContainerManifestV1, SoraServiceManifestV1},
+        soracloud::{
+            AgentApartmentManifestV1, SoraContainerManifestV1, SoraServiceManifestV1,
+            SoraStateMutabilityV1,
+        },
     },
 };
 use iroha_config_base::toml::WriteExt;
@@ -22,6 +27,7 @@ use reqwest::Url;
 
 fn program() -> PathBuf {
     enable_reentrant_builds_for_tests();
+    configure_cli_program_override_from_existing_binary();
     iroha_test_network::Program::Iroha.resolve().unwrap()
 }
 
@@ -31,7 +37,85 @@ fn enable_reentrant_builds_for_tests() {
         // Cargo sets `CARGO` for test binaries, which disables reentrant builds by default.
         // Allow nested builds so the CLI binary can be compiled on-demand in fresh workspaces.
         set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1");
+        if std::env::var_os("IROHA_TEST_BUILD_PROFILE").is_none() {
+            set_env_var("IROHA_TEST_BUILD_PROFILE", "debug");
+        }
     });
+}
+
+fn configure_cli_program_override_from_existing_binary() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        const TEST_NETWORK_BIN_IROHA: &str = "TEST_NETWORK_BIN_IROHA";
+        if std::env::var_os(TEST_NETWORK_BIN_IROHA).is_some() {
+            return;
+        }
+        if let Some(path) = find_existing_cli_binary_path() {
+            let value = path.to_string_lossy().into_owned();
+            set_env_var(TEST_NETWORK_BIN_IROHA, &value);
+        }
+    });
+}
+
+fn find_existing_cli_binary_path() -> Option<PathBuf> {
+    const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
+    let mut target_roots = Vec::new();
+    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
+        let target_dir = PathBuf::from(target_dir);
+        target_roots.push(target_dir.join(IROHA_TEST_TARGET_SUBDIR));
+        target_roots.push(target_dir);
+    }
+    let workspace_target = workspace_root().join("target");
+    target_roots.push(workspace_target.join(IROHA_TEST_TARGET_SUBDIR));
+    target_roots.push(workspace_target);
+
+    let mut profiles = Vec::new();
+    if let Ok(profile) = std::env::var("PROFILE")
+        && !profile.trim().is_empty()
+    {
+        profiles.push(profile);
+    }
+    if !profiles.iter().any(|value| value == "debug") {
+        profiles.push("debug".to_owned());
+    }
+    if !profiles.iter().any(|value| value == "release") {
+        profiles.push("release".to_owned());
+    }
+
+    find_existing_cli_binary_path_from_roots(&target_roots, &profiles)
+        .filter(|path| binary_supports_training_job_commands(path.as_path()))
+}
+
+fn find_existing_cli_binary_path_from_roots(
+    target_roots: &[PathBuf],
+    profiles: &[String],
+) -> Option<PathBuf> {
+    let binary_name = if cfg!(windows) { "iroha.exe" } else { "iroha" };
+    for target_root in target_roots {
+        for profile in profiles {
+            let candidate = target_root.join(profile).join(binary_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn binary_supports_training_job_commands(path: &std::path::Path) -> bool {
+    let output = ProcessCommand::new(path)
+        .arg("app")
+        .arg("soracloud")
+        .arg("--help")
+        .output();
+    let Ok(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.contains("training-job-start")
 }
 
 #[allow(unsafe_code)]
@@ -54,6 +138,70 @@ fn workspace_root() -> PathBuf {
 
 fn soracloud_fixture(path: &str) -> PathBuf {
     workspace_root().join(path)
+}
+
+#[test]
+fn find_existing_cli_binary_path_from_roots_returns_first_match() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root_a = temp.path().join("target-a");
+    let root_b = temp.path().join("target-b");
+    let binary_name = if cfg!(windows) { "iroha.exe" } else { "iroha" };
+    let expected = root_b.join("debug").join(binary_name);
+    std::fs::create_dir_all(expected.parent().expect("parent dir")).expect("create dirs");
+    std::fs::write(&expected, b"binary").expect("create fake binary");
+
+    let profiles = vec!["debug".to_owned(), "release".to_owned()];
+    let found = find_existing_cli_binary_path_from_roots(&[root_a, root_b], &profiles);
+    assert_eq!(found, Some(expected));
+}
+
+#[test]
+fn find_existing_cli_binary_path_from_roots_returns_none_when_missing() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("target");
+    std::fs::create_dir_all(&root).expect("create dirs");
+
+    let profiles = vec!["debug".to_owned(), "release".to_owned()];
+    let found = find_existing_cli_binary_path_from_roots(&[root], &profiles);
+    assert!(found.is_none());
+}
+
+#[test]
+fn binary_supports_training_job_commands_rejects_missing_binary() {
+    let missing = PathBuf::from("/definitely/missing/iroha");
+    assert!(!binary_supports_training_job_commands(&missing));
+}
+
+#[cfg(unix)]
+#[test]
+fn binary_supports_training_job_commands_rejects_help_without_subcommand() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script = temp.path().join("fake_iroha.sh");
+    std::fs::write(&script, "#!/bin/sh\necho 'app soracloud help output'\n").expect("write script");
+    let mut perms = std::fs::metadata(&script).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&script, perms).expect("set permissions");
+    assert!(!binary_supports_training_job_commands(&script));
+}
+
+#[cfg(unix)]
+#[test]
+fn binary_supports_training_job_commands_accepts_help_with_subcommand() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script = temp.path().join("fake_iroha.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho 'Commands:\\n  training-job-start\\n  model-weight-register'\n",
+    )
+    .expect("write script");
+    let mut perms = std::fs::metadata(&script).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&script, perms).expect("set permissions");
+    assert!(binary_supports_training_job_commands(&script));
 }
 
 fn local_program_config() -> ProgramConfig {
@@ -548,6 +696,749 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
     assert_eq!(
         services[0].get("current_version").and_then(Value::as_str),
         Some("1.0.0")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_control_plane()
+-> eyre::Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_min_peers(4)
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full");
+        });
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_control_plane),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let config = ProgramConfig::from(&network.client());
+    let dir = tempfile::tempdir()?;
+    tokio::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&config.toml())?.as_bytes(),
+    )
+    .await?;
+
+    let container_fixture = soracloud_fixture("fixtures/soracloud/sora_container_manifest_v1.json");
+    let service_fixture = soracloud_fixture("fixtures/soracloud/sora_service_manifest_v1.json");
+    let container: SoraContainerManifestV1 =
+        norito::json::from_slice(&std::fs::read(&container_fixture)?)?;
+    let mut service: SoraServiceManifestV1 =
+        norito::json::from_slice(&std::fs::read(&service_fixture)?)?;
+    service.service_version = "1.0.0".to_string();
+    service.container.manifest_hash = Hash::new(Encode::encode(&container));
+
+    let mut over_cap_container = container.clone();
+    over_cap_container.resources.cpu_millis = NonZeroU32::new(64_001).expect("non-zero cpu");
+    let mut over_cap_service = service.clone();
+    over_cap_service.container.manifest_hash = Hash::new(Encode::encode(&over_cap_container));
+    let over_cap_container_path = dir.path().join("container_over_cap.json");
+    let over_cap_service_path = dir.path().join("service_over_cap.json");
+    tokio::fs::write(
+        &over_cap_container_path,
+        norito::json::to_vec_pretty(&over_cap_container).expect("encode over-cap container"),
+    )
+    .await?;
+    tokio::fs::write(
+        &over_cap_service_path,
+        norito::json::to_vec_pretty(&over_cap_service).expect("encode over-cap service"),
+    )
+    .await?;
+
+    let over_cap_deploy = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("deploy")
+        .arg("--container")
+        .arg(over_cap_container_path.to_string_lossy().into_owned())
+        .arg("--service")
+        .arg(over_cap_service_path.to_string_lossy().into_owned())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        !over_cap_deploy.status.success(),
+        "deploy with over-cap cpu should fail, stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&over_cap_deploy.stdout),
+        String::from_utf8_lossy(&over_cap_deploy.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&over_cap_deploy.stderr).contains("returned 400"),
+        "{}",
+        String::from_utf8_lossy(&over_cap_deploy.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&over_cap_deploy.stderr)
+            .contains("resources.cpu_millis exceeds SCR cap"),
+        "{}",
+        String::from_utf8_lossy(&over_cap_deploy.stderr)
+    );
+
+    let mut no_write_container = container.clone();
+    no_write_container.capabilities.allow_state_writes = false;
+    assert!(
+        service
+            .state_bindings
+            .iter()
+            .any(|binding| binding.mutability != SoraStateMutabilityV1::ReadOnly),
+        "fixture should include at least one non-readonly state binding"
+    );
+    let no_write_container_hash = Hash::new(Encode::encode(&no_write_container));
+    let no_write_container_path = dir.path().join("container_no_write.json");
+    let no_write_service_path = dir.path().join("service_no_write.json");
+    tokio::fs::write(
+        &no_write_container_path,
+        norito::json::to_vec_pretty(&no_write_container).expect("encode no-write container"),
+    )
+    .await?;
+    let mut no_write_service = service.clone();
+    no_write_service.container.manifest_hash = no_write_container_hash;
+    tokio::fs::write(
+        &no_write_service_path,
+        norito::json::to_vec_pretty(&no_write_service).expect("encode no-write service"),
+    )
+    .await?;
+
+    let no_write_deploy = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("deploy")
+        .arg("--container")
+        .arg(no_write_container_path.to_string_lossy().into_owned())
+        .arg("--service")
+        .arg(no_write_service_path.to_string_lossy().into_owned())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        !no_write_deploy.status.success(),
+        "deploy with allow_state_writes=false should fail, stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&no_write_deploy.stdout),
+        String::from_utf8_lossy(&no_write_deploy.stderr)
+    );
+    let no_write_stderr = String::from_utf8_lossy(&no_write_deploy.stderr);
+    assert!(
+        no_write_stderr.contains("returned 400")
+            || no_write_stderr.contains("Failed to run the command"),
+        "{}",
+        no_write_stderr
+    );
+    assert!(
+        no_write_stderr.contains("bundle field")
+            && no_write_stderr.contains("allow_state_writes")
+            && no_write_stderr.contains("is invalid"),
+        "{}",
+        no_write_stderr
+    );
+    assert!(
+        no_write_stderr.contains("binding `session_store` requires mutable writes (`ReadWrite`)"),
+        "{}",
+        no_write_stderr
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane()
+-> eyre::Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_min_peers(4)
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full");
+        });
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let config = ProgramConfig::from(&network.client());
+    let dir = tempfile::tempdir()?;
+    tokio::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&config.toml())?.as_bytes(),
+    )
+    .await?;
+
+    let container_fixture = soracloud_fixture("fixtures/soracloud/sora_container_manifest_v1.json");
+    let service_fixture = soracloud_fixture("fixtures/soracloud/sora_service_manifest_v1.json");
+    let mut container: SoraContainerManifestV1 =
+        norito::json::from_slice(&std::fs::read(&container_fixture)?)?;
+    let mut service: SoraServiceManifestV1 =
+        norito::json::from_slice(&std::fs::read(&service_fixture)?)?;
+    container.capabilities.allow_model_training = true;
+    service.service_version = "2.0.0".to_string();
+    service.container.manifest_hash = Hash::new(Encode::encode(&container));
+
+    let container_path = dir.path().join("container_training.json");
+    let service_path = dir.path().join("service_training.json");
+    tokio::fs::write(
+        &container_path,
+        norito::json::to_vec_pretty(&container).expect("encode container"),
+    )
+    .await?;
+    tokio::fs::write(
+        &service_path,
+        norito::json::to_vec_pretty(&service).expect("encode service"),
+    )
+    .await?;
+
+    let deploy = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("deploy")
+        .arg("--container")
+        .arg(container_path.to_string_lossy().into_owned())
+        .arg("--service")
+        .arg(service_path.to_string_lossy().into_owned())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        deploy.status.success(),
+        "deploy for training lifecycle failed with status {} and stderr: {}",
+        deploy.status,
+        String::from_utf8_lossy(&deploy.stderr)
+    );
+
+    let service_name = service.service_name.to_string();
+    let model_name = "ops_model";
+    let dataset_ref = "dataset://ops/synthetic-v1";
+
+    let training_start_1 = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("training-job-start")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--model-name")
+        .arg(model_name)
+        .arg("--job-id")
+        .arg("job-001")
+        .arg("--worker-group-size")
+        .arg("2")
+        .arg("--target-steps")
+        .arg("4")
+        .arg("--checkpoint-interval-steps")
+        .arg("2")
+        .arg("--max-retries")
+        .arg("2")
+        .arg("--step-compute-units")
+        .arg("25")
+        .arg("--compute-budget-units")
+        .arg("200")
+        .arg("--storage-budget-bytes")
+        .arg("8192")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        training_start_1.status.success(),
+        "training-job-start #1 failed with status {} and stderr: {}",
+        training_start_1.status,
+        String::from_utf8_lossy(&training_start_1.stderr)
+    );
+
+    let checkpoint_1a = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("training-job-checkpoint")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--job-id")
+        .arg("job-001")
+        .arg("--completed-step")
+        .arg("2")
+        .arg("--checkpoint-size-bytes")
+        .arg("1024")
+        .arg("--metrics-hash")
+        .arg(Hash::new(b"metrics-job-001-step-2").to_string())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        checkpoint_1a.status.success(),
+        "training-job-checkpoint #1a failed with status {} and stderr: {}",
+        checkpoint_1a.status,
+        String::from_utf8_lossy(&checkpoint_1a.stderr)
+    );
+
+    let checkpoint_1b = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("training-job-checkpoint")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--job-id")
+        .arg("job-001")
+        .arg("--completed-step")
+        .arg("4")
+        .arg("--checkpoint-size-bytes")
+        .arg("1536")
+        .arg("--metrics-hash")
+        .arg(Hash::new(b"metrics-job-001-step-4").to_string())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        checkpoint_1b.status.success(),
+        "training-job-checkpoint #1b failed with status {} and stderr: {}",
+        checkpoint_1b.status,
+        String::from_utf8_lossy(&checkpoint_1b.stderr)
+    );
+
+    let training_status_1 = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("training-job-status")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--job-id")
+        .arg("job-001")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        training_status_1.status.success(),
+        "training-job-status #1 failed with status {} and stderr: {}",
+        training_status_1.status,
+        String::from_utf8_lossy(&training_status_1.stderr)
+    );
+    let training_status_payload_1: Value =
+        json::from_slice(&training_status_1.stdout).expect("training-job-status #1 json payload");
+    let job_1 = training_status_payload_1
+        .get("job")
+        .and_then(Value::as_object)
+        .expect("training status job object");
+    assert_eq!(job_1.get("job_id").and_then(Value::as_str), Some("job-001"));
+    assert_eq!(
+        job_1.get("completed_steps").and_then(Value::as_u64),
+        Some(4)
+    );
+
+    let artifact_register_1 = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("model-artifact-register")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--model-name")
+        .arg(model_name)
+        .arg("--training-job-id")
+        .arg("job-001")
+        .arg("--weight-artifact-hash")
+        .arg(Hash::new(b"weight-artifact-v1").to_string())
+        .arg("--dataset-ref")
+        .arg(dataset_ref)
+        .arg("--training-config-hash")
+        .arg(Hash::new(b"training-config-v1").to_string())
+        .arg("--reproducibility-hash")
+        .arg(Hash::new(b"repro-v1").to_string())
+        .arg("--provenance-attestation-hash")
+        .arg(Hash::new(b"attestation-v1").to_string())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        artifact_register_1.status.success(),
+        "model-artifact-register #1 failed with status {} and stderr: {}",
+        artifact_register_1.status,
+        String::from_utf8_lossy(&artifact_register_1.stderr)
+    );
+
+    let weight_register_1 = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("model-weight-register")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--model-name")
+        .arg(model_name)
+        .arg("--weight-version")
+        .arg("1.0.0")
+        .arg("--training-job-id")
+        .arg("job-001")
+        .arg("--weight-artifact-hash")
+        .arg(Hash::new(b"weight-artifact-v1").to_string())
+        .arg("--dataset-ref")
+        .arg(dataset_ref)
+        .arg("--training-config-hash")
+        .arg(Hash::new(b"training-config-v1").to_string())
+        .arg("--reproducibility-hash")
+        .arg(Hash::new(b"repro-v1").to_string())
+        .arg("--provenance-attestation-hash")
+        .arg(Hash::new(b"attestation-v1").to_string())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        weight_register_1.status.success(),
+        "model-weight-register #1 failed with status {} and stderr: {}",
+        weight_register_1.status,
+        String::from_utf8_lossy(&weight_register_1.stderr)
+    );
+
+    let training_start_2 = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("training-job-start")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--model-name")
+        .arg(model_name)
+        .arg("--job-id")
+        .arg("job-002")
+        .arg("--worker-group-size")
+        .arg("2")
+        .arg("--target-steps")
+        .arg("4")
+        .arg("--checkpoint-interval-steps")
+        .arg("2")
+        .arg("--max-retries")
+        .arg("2")
+        .arg("--step-compute-units")
+        .arg("25")
+        .arg("--compute-budget-units")
+        .arg("220")
+        .arg("--storage-budget-bytes")
+        .arg("8192")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        training_start_2.status.success(),
+        "training-job-start #2 failed with status {} and stderr: {}",
+        training_start_2.status,
+        String::from_utf8_lossy(&training_start_2.stderr)
+    );
+
+    let checkpoint_2a = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("training-job-checkpoint")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--job-id")
+        .arg("job-002")
+        .arg("--completed-step")
+        .arg("2")
+        .arg("--checkpoint-size-bytes")
+        .arg("1024")
+        .arg("--metrics-hash")
+        .arg(Hash::new(b"metrics-job-002-step-2").to_string())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        checkpoint_2a.status.success(),
+        "training-job-checkpoint #2a failed with status {} and stderr: {}",
+        checkpoint_2a.status,
+        String::from_utf8_lossy(&checkpoint_2a.stderr)
+    );
+
+    let checkpoint_2b = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("training-job-checkpoint")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--job-id")
+        .arg("job-002")
+        .arg("--completed-step")
+        .arg("4")
+        .arg("--checkpoint-size-bytes")
+        .arg("1536")
+        .arg("--metrics-hash")
+        .arg(Hash::new(b"metrics-job-002-step-4").to_string())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        checkpoint_2b.status.success(),
+        "training-job-checkpoint #2b failed with status {} and stderr: {}",
+        checkpoint_2b.status,
+        String::from_utf8_lossy(&checkpoint_2b.stderr)
+    );
+
+    let artifact_register_2 = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("model-artifact-register")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--model-name")
+        .arg(model_name)
+        .arg("--training-job-id")
+        .arg("job-002")
+        .arg("--weight-artifact-hash")
+        .arg(Hash::new(b"weight-artifact-v2").to_string())
+        .arg("--dataset-ref")
+        .arg(dataset_ref)
+        .arg("--training-config-hash")
+        .arg(Hash::new(b"training-config-v2").to_string())
+        .arg("--reproducibility-hash")
+        .arg(Hash::new(b"repro-v2").to_string())
+        .arg("--provenance-attestation-hash")
+        .arg(Hash::new(b"attestation-v2").to_string())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        artifact_register_2.status.success(),
+        "model-artifact-register #2 failed with status {} and stderr: {}",
+        artifact_register_2.status,
+        String::from_utf8_lossy(&artifact_register_2.stderr)
+    );
+
+    let weight_register_2 = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("model-weight-register")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--model-name")
+        .arg(model_name)
+        .arg("--weight-version")
+        .arg("1.1.0")
+        .arg("--training-job-id")
+        .arg("job-002")
+        .arg("--parent-version")
+        .arg("1.0.0")
+        .arg("--weight-artifact-hash")
+        .arg(Hash::new(b"weight-artifact-v2").to_string())
+        .arg("--dataset-ref")
+        .arg(dataset_ref)
+        .arg("--training-config-hash")
+        .arg(Hash::new(b"training-config-v2").to_string())
+        .arg("--reproducibility-hash")
+        .arg(Hash::new(b"repro-v2").to_string())
+        .arg("--provenance-attestation-hash")
+        .arg(Hash::new(b"attestation-v2").to_string())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        weight_register_2.status.success(),
+        "model-weight-register #2 failed with status {} and stderr: {}",
+        weight_register_2.status,
+        String::from_utf8_lossy(&weight_register_2.stderr)
+    );
+
+    let promote_v2 = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("model-weight-promote")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--model-name")
+        .arg(model_name)
+        .arg("--weight-version")
+        .arg("1.1.0")
+        .arg("--gate-approved")
+        .arg("--gate-report-hash")
+        .arg(Hash::new(b"gate-report-v2").to_string())
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        promote_v2.status.success(),
+        "model-weight-promote failed with status {} and stderr: {}",
+        promote_v2.status,
+        String::from_utf8_lossy(&promote_v2.stderr)
+    );
+
+    let status_after_promote = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("model-weight-status")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--model-name")
+        .arg(model_name)
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        status_after_promote.status.success(),
+        "model-weight-status after promote failed with status {} and stderr: {}",
+        status_after_promote.status,
+        String::from_utf8_lossy(&status_after_promote.stderr)
+    );
+    let status_after_promote_payload: Value =
+        json::from_slice(&status_after_promote.stdout).expect("model-weight-status promote json");
+    let model_after_promote = status_after_promote_payload
+        .get("model")
+        .and_then(Value::as_object)
+        .expect("model object after promote");
+    assert_eq!(
+        model_after_promote
+            .get("current_version")
+            .and_then(Value::as_str),
+        Some("1.1.0")
+    );
+    assert_eq!(
+        model_after_promote
+            .get("version_count")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+
+    let rollback = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("model-weight-rollback")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--model-name")
+        .arg(model_name)
+        .arg("--target-version")
+        .arg("1.0.0")
+        .arg("--reason")
+        .arg("roll back to baseline")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        rollback.status.success(),
+        "model-weight-rollback failed with status {} and stderr: {}",
+        rollback.status,
+        String::from_utf8_lossy(&rollback.stderr)
+    );
+
+    let status_after_rollback = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("model-weight-status")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--model-name")
+        .arg(model_name)
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        status_after_rollback.status.success(),
+        "model-weight-status after rollback failed with status {} and stderr: {}",
+        status_after_rollback.status,
+        String::from_utf8_lossy(&status_after_rollback.stderr)
+    );
+    let status_after_rollback_payload: Value =
+        json::from_slice(&status_after_rollback.stdout).expect("model-weight-status rollback json");
+    let model_after_rollback = status_after_rollback_payload
+        .get("model")
+        .and_then(Value::as_object)
+        .expect("model object after rollback");
+    assert_eq!(
+        model_after_rollback
+            .get("current_version")
+            .and_then(Value::as_str),
+        Some("1.0.0")
+    );
+
+    let artifact_status_2 = tokio::process::Command::new(program())
+        .current_dir(dir.path())
+        .arg("app")
+        .arg("soracloud")
+        .arg("model-artifact-status")
+        .arg("--service-name")
+        .arg(&service_name)
+        .arg("--training-job-id")
+        .arg("job-002")
+        .arg("--torii-url")
+        .arg(network.client().torii_url.to_string())
+        .envs(config.envs())
+        .output()
+        .await?;
+    assert!(
+        artifact_status_2.status.success(),
+        "model-artifact-status #2 failed with status {} and stderr: {}",
+        artifact_status_2.status,
+        String::from_utf8_lossy(&artifact_status_2.stderr)
+    );
+    let artifact_status_payload_2: Value =
+        json::from_slice(&artifact_status_2.stdout).expect("model-artifact-status #2 json");
+    let artifact_2 = artifact_status_payload_2
+        .get("artifact")
+        .and_then(Value::as_object)
+        .expect("artifact object #2");
+    assert_eq!(
+        artifact_2.get("training_job_id").and_then(Value::as_str),
+        Some("job-002")
+    );
+    assert_eq!(
+        artifact_2
+            .get("consumed_by_version")
+            .and_then(Value::as_str),
+        Some("1.1.0")
     );
 
     Ok(())

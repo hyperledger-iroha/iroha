@@ -4,7 +4,8 @@
 //! Soracloud manifests. They validate `SoraDeploymentBundleV1` admission rules
 //! and maintain a machine-readable registry/audit log file that can be used by
 //! scripts and CI checks. `init` also supports Vue3 scaffolding templates for
-//! static sites and dynamic webapps.
+//! static sites, dynamic webapps, and regulated health workloads. Live Torii
+//! mode also exposes model-training and weight-lifecycle control-plane helpers.
 
 use std::{
     collections::BTreeMap,
@@ -24,7 +25,19 @@ use iroha::data_model::{
         SORA_STATE_BINDING_VERSION_V1, SoraContainerManifestV1, SoraContainerRuntimeV1,
         SoraDeploymentBundleV1, SoraNetworkPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
         SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
-        SoraStateScopeV1, SoraTlsModeV1,
+        SoraStateScopeV1, SoraTlsModeV1, encode_agent_artifact_allow_provenance_payload,
+        encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
+        encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
+        encode_agent_message_send_provenance_payload,
+        encode_agent_policy_revoke_provenance_payload, encode_agent_restart_provenance_payload,
+        encode_agent_wallet_approve_provenance_payload,
+        encode_agent_wallet_spend_provenance_payload,
+        encode_model_artifact_register_provenance_payload,
+        encode_model_weight_promote_provenance_payload,
+        encode_model_weight_register_provenance_payload,
+        encode_model_weight_rollback_provenance_payload, encode_rollback_provenance_payload,
+        encode_rollout_provenance_payload, encode_training_job_checkpoint_provenance_payload,
+        encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
     },
 };
 use iroha_crypto::{Hash, KeyPair, Signature};
@@ -89,6 +102,26 @@ pub enum Command {
     AgentAutonomyRun(AgentAutonomyRunArgs),
     /// Show autonomous-run policy state for an apartment.
     AgentAutonomyStatus(AgentAutonomyStatusArgs),
+    /// Start a distributed training job in live Torii control-plane mode.
+    TrainingJobStart(TrainingJobStartArgs),
+    /// Record a training checkpoint in live Torii control-plane mode.
+    TrainingJobCheckpoint(TrainingJobCheckpointArgs),
+    /// Submit a training retry request in live Torii control-plane mode.
+    TrainingJobRetry(TrainingJobRetryArgs),
+    /// Query training job status in live Torii control-plane mode.
+    TrainingJobStatus(TrainingJobStatusArgs),
+    /// Register model-artifact metadata in live Torii control-plane mode.
+    ModelArtifactRegister(ModelArtifactRegisterArgs),
+    /// Query model-artifact status in live Torii control-plane mode.
+    ModelArtifactStatus(ModelArtifactStatusArgs),
+    /// Register a model weight version in live Torii control-plane mode.
+    ModelWeightRegister(ModelWeightRegisterArgs),
+    /// Promote a model weight version in live Torii control-plane mode.
+    ModelWeightPromote(ModelWeightPromoteArgs),
+    /// Roll back a model weight version in live Torii control-plane mode.
+    ModelWeightRollback(ModelWeightRollbackArgs),
+    /// Query model weight status in live Torii control-plane mode.
+    ModelWeightStatus(ModelWeightStatusArgs),
 }
 
 impl Run for Command {
@@ -155,6 +188,37 @@ impl Run for Command {
                 context.print_data(&output)
             }
             Command::AgentAutonomyStatus(args) => context.print_data(&args.run()?),
+            Command::TrainingJobStart(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::TrainingJobCheckpoint(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::TrainingJobRetry(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::TrainingJobStatus(args) => context.print_data(&args.run()?),
+            Command::ModelArtifactRegister(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ModelArtifactStatus(args) => context.print_data(&args.run()?),
+            Command::ModelWeightRegister(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ModelWeightPromote(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ModelWeightRollback(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ModelWeightStatus(args) => context.print_data(&args.run()?),
         }
     }
 }
@@ -188,6 +252,8 @@ enum InitTemplate {
     Site,
     /// Generate a Vue3 SPA + API starter with session/auth and chain-ID hooks.
     Webapp,
+    /// Generate a private health-app starter with consent + retention workflows.
+    HealthApp,
 }
 
 impl InitTemplate {
@@ -196,6 +262,7 @@ impl InitTemplate {
             Self::Baseline => "baseline",
             Self::Site => "site",
             Self::Webapp => "webapp",
+            Self::HealthApp => "health-app",
         }
     }
 }
@@ -1302,6 +1369,531 @@ impl AgentAutonomyStatusArgs {
     }
 }
 
+/// Arguments for `app soracloud training-job-start`.
+#[derive(clap::Args, Debug)]
+pub struct TrainingJobStartArgs {
+    /// Service name that owns the training job.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Model name for the training job.
+    #[arg(long, value_name = "NAME")]
+    model_name: String,
+    /// Deterministic training job identifier.
+    #[arg(long, value_name = "ID")]
+    job_id: String,
+    /// Worker-group size for the distributed training run.
+    #[arg(long, value_name = "COUNT", default_value_t = 1)]
+    worker_group_size: u16,
+    /// Target number of steps to complete the training job.
+    #[arg(long, value_name = "STEPS")]
+    target_steps: u32,
+    /// Step cadence for checkpoint creation.
+    #[arg(long, value_name = "STEPS")]
+    checkpoint_interval_steps: u32,
+    /// Maximum allowed retries for the training job.
+    #[arg(long, value_name = "COUNT", default_value_t = 3)]
+    max_retries: u8,
+    /// Compute units charged per step.
+    #[arg(long, value_name = "UNITS")]
+    step_compute_units: u64,
+    /// Total compute budget units for the training job.
+    #[arg(long, value_name = "UNITS")]
+    compute_budget_units: u64,
+    /// Total storage budget bytes for checkpoints.
+    #[arg(long, value_name = "BYTES")]
+    storage_budget_bytes: u64,
+    /// Torii base URL for live control-plane mutation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl TrainingJobStartArgs {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        if self.worker_group_size == 0 {
+            return Err(eyre!("--worker-group-size must be greater than zero"));
+        }
+        if self.target_steps == 0 {
+            return Err(eyre!("--target-steps must be greater than zero"));
+        }
+        if self.checkpoint_interval_steps == 0 {
+            return Err(eyre!(
+                "--checkpoint-interval-steps must be greater than zero"
+            ));
+        }
+        if self.step_compute_units == 0 {
+            return Err(eyre!("--step-compute-units must be greater than zero"));
+        }
+        if self.compute_budget_units == 0 {
+            return Err(eyre!("--compute-budget-units must be greater than zero"));
+        }
+        if self.storage_budget_bytes == 0 {
+            return Err(eyre!("--storage-budget-bytes must be greater than zero"));
+        }
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_training_job_start_request(
+            &self.service_name,
+            &self.model_name,
+            &self.job_id,
+            self.worker_group_size,
+            self.target_steps,
+            self.checkpoint_interval_steps,
+            self.max_retries,
+            self.step_compute_units,
+            self.compute_budget_units,
+            self.storage_budget_bytes,
+            key_pair,
+        )?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/training/job/start",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud training-job-checkpoint`.
+#[derive(clap::Args, Debug)]
+pub struct TrainingJobCheckpointArgs {
+    /// Service name that owns the training job.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Training job identifier.
+    #[arg(long, value_name = "ID")]
+    job_id: String,
+    /// Completed step represented by this checkpoint.
+    #[arg(long, value_name = "STEP")]
+    completed_step: u32,
+    /// Checkpoint payload size in bytes.
+    #[arg(long, value_name = "BYTES")]
+    checkpoint_size_bytes: u64,
+    /// Hash of metrics/telemetry emitted for this checkpoint.
+    #[arg(long, value_name = "HASH")]
+    metrics_hash: Hash,
+    /// Torii base URL for live control-plane mutation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl TrainingJobCheckpointArgs {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        if self.completed_step == 0 {
+            return Err(eyre!("--completed-step must be greater than zero"));
+        }
+        if self.checkpoint_size_bytes == 0 {
+            return Err(eyre!("--checkpoint-size-bytes must be greater than zero"));
+        }
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_training_job_checkpoint_request(
+            &self.service_name,
+            &self.job_id,
+            self.completed_step,
+            self.checkpoint_size_bytes,
+            self.metrics_hash,
+            key_pair,
+        )?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/training/job/checkpoint",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud training-job-retry`.
+#[derive(clap::Args, Debug)]
+pub struct TrainingJobRetryArgs {
+    /// Service name that owns the training job.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Training job identifier.
+    #[arg(long, value_name = "ID")]
+    job_id: String,
+    /// Human-readable retry reason recorded in audit logs.
+    #[arg(long, value_name = "TEXT")]
+    reason: String,
+    /// Torii base URL for live control-plane mutation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl TrainingJobRetryArgs {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_training_job_retry_request(
+            &self.service_name,
+            &self.job_id,
+            &self.reason,
+            key_pair,
+        )?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/training/job/retry",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud training-job-status`.
+#[derive(clap::Args, Debug)]
+pub struct TrainingJobStatusArgs {
+    /// Service name that owns the training job.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Training job identifier.
+    #[arg(long, value_name = "ID")]
+    job_id: String,
+    /// Torii base URL for live control-plane query.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane query.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl TrainingJobStatusArgs {
+    fn run(self) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let (_, payload) = fetch_torii_soracloud_training_job_status(
+            torii_url,
+            &self.service_name,
+            &self.job_id,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-artifact-register`.
+#[derive(clap::Args, Debug)]
+pub struct ModelArtifactRegisterArgs {
+    /// Service name that owns the model.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Model name.
+    #[arg(long, value_name = "NAME")]
+    model_name: String,
+    /// Training job identifier backing this artifact registration.
+    #[arg(long, value_name = "ID")]
+    training_job_id: String,
+    /// Weight artifact hash.
+    #[arg(long, value_name = "HASH")]
+    weight_artifact_hash: Hash,
+    /// Dataset reference identifier.
+    #[arg(long, value_name = "REF")]
+    dataset_ref: String,
+    /// Hash of training config used for the run.
+    #[arg(long, value_name = "HASH")]
+    training_config_hash: Hash,
+    /// Reproducibility metadata hash.
+    #[arg(long, value_name = "HASH")]
+    reproducibility_hash: Hash,
+    /// Provenance attestation hash.
+    #[arg(long, value_name = "HASH")]
+    provenance_attestation_hash: Hash,
+    /// Torii base URL for live control-plane mutation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelArtifactRegisterArgs {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_model_artifact_register_request(
+            &self.service_name,
+            &self.model_name,
+            &self.training_job_id,
+            self.weight_artifact_hash,
+            &self.dataset_ref,
+            self.training_config_hash,
+            self.reproducibility_hash,
+            self.provenance_attestation_hash,
+            key_pair,
+        )?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/model/artifact/register",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-artifact-status`.
+#[derive(clap::Args, Debug)]
+pub struct ModelArtifactStatusArgs {
+    /// Service name that owns the model artifact.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Training job identifier associated with the artifact.
+    #[arg(long, value_name = "ID")]
+    training_job_id: String,
+    /// Torii base URL for live control-plane query.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane query.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelArtifactStatusArgs {
+    fn run(self) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let (_, payload) = fetch_torii_soracloud_model_artifact_status(
+            torii_url,
+            &self.service_name,
+            &self.training_job_id,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-weight-register`.
+#[derive(clap::Args, Debug)]
+pub struct ModelWeightRegisterArgs {
+    /// Service name that owns the model.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Model name.
+    #[arg(long, value_name = "NAME")]
+    model_name: String,
+    /// New weight version identifier.
+    #[arg(long, value_name = "VERSION")]
+    weight_version: String,
+    /// Training job identifier backing this weight version.
+    #[arg(long, value_name = "ID")]
+    training_job_id: String,
+    /// Optional lineage parent version.
+    #[arg(long, value_name = "VERSION")]
+    parent_version: Option<String>,
+    /// Weight artifact hash.
+    #[arg(long, value_name = "HASH")]
+    weight_artifact_hash: Hash,
+    /// Dataset reference identifier.
+    #[arg(long, value_name = "REF")]
+    dataset_ref: String,
+    /// Hash of training config used for the run.
+    #[arg(long, value_name = "HASH")]
+    training_config_hash: Hash,
+    /// Reproducibility metadata hash.
+    #[arg(long, value_name = "HASH")]
+    reproducibility_hash: Hash,
+    /// Provenance attestation hash.
+    #[arg(long, value_name = "HASH")]
+    provenance_attestation_hash: Hash,
+    /// Torii base URL for live control-plane mutation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelWeightRegisterArgs {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_model_weight_register_request(
+            &self.service_name,
+            &self.model_name,
+            &self.weight_version,
+            &self.training_job_id,
+            self.parent_version.as_deref(),
+            self.weight_artifact_hash,
+            &self.dataset_ref,
+            self.training_config_hash,
+            self.reproducibility_hash,
+            self.provenance_attestation_hash,
+            key_pair,
+        )?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/model/weight/register",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-weight-promote`.
+#[derive(clap::Args, Debug)]
+pub struct ModelWeightPromoteArgs {
+    /// Service name that owns the model.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Model name.
+    #[arg(long, value_name = "NAME")]
+    model_name: String,
+    /// Weight version to promote.
+    #[arg(long, value_name = "VERSION")]
+    weight_version: String,
+    /// Gate approval flag.
+    #[arg(long)]
+    gate_approved: bool,
+    /// Hash of gate report/evidence for this promotion decision.
+    #[arg(long, value_name = "HASH")]
+    gate_report_hash: Hash,
+    /// Torii base URL for live control-plane mutation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelWeightPromoteArgs {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_model_weight_promote_request(
+            &self.service_name,
+            &self.model_name,
+            &self.weight_version,
+            self.gate_approved,
+            self.gate_report_hash,
+            key_pair,
+        )?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/model/weight/promote",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-weight-rollback`.
+#[derive(clap::Args, Debug)]
+pub struct ModelWeightRollbackArgs {
+    /// Service name that owns the model.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Model name.
+    #[arg(long, value_name = "NAME")]
+    model_name: String,
+    /// Target version to roll back to.
+    #[arg(long, value_name = "VERSION")]
+    target_version: String,
+    /// Human-readable rollback reason.
+    #[arg(long, value_name = "TEXT")]
+    reason: String,
+    /// Torii base URL for live control-plane mutation.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelWeightRollbackArgs {
+    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_model_weight_rollback_request(
+            &self.service_name,
+            &self.model_name,
+            &self.target_version,
+            &self.reason,
+            key_pair,
+        )?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/model/weight/rollback",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-weight-status`.
+#[derive(clap::Args, Debug)]
+pub struct ModelWeightStatusArgs {
+    /// Service name that owns the model.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Model name.
+    #[arg(long, value_name = "NAME")]
+    model_name: String,
+    /// Torii base URL for live control-plane query.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane query.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelWeightStatusArgs {
+    fn run(self) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let (_, payload) = fetch_torii_soracloud_model_weight_status(
+            torii_url,
+            &self.service_name,
+            &self.model_name,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MutationMode {
     Deploy,
@@ -2224,6 +2816,172 @@ struct AgentAutonomyRunPayload {
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedAgentAutonomyRunRequest {
     payload: AgentAutonomyRunPayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct TrainingJobStartPayload {
+    service_name: String,
+    model_name: String,
+    job_id: String,
+    worker_group_size: u16,
+    target_steps: u32,
+    checkpoint_interval_steps: u32,
+    max_retries: u8,
+    step_compute_units: u64,
+    compute_budget_units: u64,
+    storage_budget_bytes: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedTrainingJobStartRequest {
+    payload: TrainingJobStartPayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct TrainingJobCheckpointPayload {
+    service_name: String,
+    job_id: String,
+    completed_step: u32,
+    checkpoint_size_bytes: u64,
+    metrics_hash: Hash,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedTrainingJobCheckpointRequest {
+    payload: TrainingJobCheckpointPayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct TrainingJobRetryPayload {
+    service_name: String,
+    job_id: String,
+    reason: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedTrainingJobRetryRequest {
+    payload: TrainingJobRetryPayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct ModelArtifactRegisterPayload {
+    service_name: String,
+    model_name: String,
+    training_job_id: String,
+    weight_artifact_hash: Hash,
+    dataset_ref: String,
+    training_config_hash: Hash,
+    reproducibility_hash: Hash,
+    provenance_attestation_hash: Hash,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedModelArtifactRegisterRequest {
+    payload: ModelArtifactRegisterPayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct ModelWeightRegisterPayload {
+    service_name: String,
+    model_name: String,
+    weight_version: String,
+    training_job_id: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    parent_version: Option<String>,
+    weight_artifact_hash: Hash,
+    dataset_ref: String,
+    training_config_hash: Hash,
+    reproducibility_hash: Hash,
+    provenance_attestation_hash: Hash,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedModelWeightRegisterRequest {
+    payload: ModelWeightRegisterPayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct ModelWeightPromotePayload {
+    service_name: String,
+    model_name: String,
+    weight_version: String,
+    gate_approved: bool,
+    gate_report_hash: Hash,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedModelWeightPromoteRequest {
+    payload: ModelWeightPromotePayload,
+    provenance: ManifestProvenance,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct ModelWeightRollbackPayload {
+    service_name: String,
+    model_name: String,
+    target_version: String,
+    reason: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedModelWeightRollbackRequest {
+    payload: ModelWeightRollbackPayload,
     provenance: ManifestProvenance,
 }
 
@@ -3947,10 +4705,10 @@ fn signed_rollback_request(
 }
 
 fn encode_rollback_signature_payload(payload: &RollbackPayload) -> Result<Vec<u8>> {
-    norito::to_bytes(&(
+    encode_rollback_provenance_payload(
         payload.service_name.as_str(),
         payload.target_version.as_deref(),
-    ))
+    )
     .wrap_err("failed to encode rollback signature payload tuple")
 }
 
@@ -4290,104 +5048,530 @@ fn signed_agent_autonomy_run_request(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn signed_training_job_start_request(
+    service_name: &str,
+    model_name: &str,
+    job_id: &str,
+    worker_group_size: u16,
+    target_steps: u32,
+    checkpoint_interval_steps: u32,
+    max_retries: u8,
+    step_compute_units: u64,
+    compute_budget_units: u64,
+    storage_budget_bytes: u64,
+    key_pair: &KeyPair,
+) -> Result<SignedTrainingJobStartRequest> {
+    if service_name.trim().is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    if model_name.trim().is_empty() {
+        return Err(eyre!("--model-name must not be empty"));
+    }
+    if job_id.trim().is_empty() {
+        return Err(eyre!("--job-id must not be empty"));
+    }
+    if worker_group_size == 0 {
+        return Err(eyre!("--worker-group-size must be greater than zero"));
+    }
+    if target_steps == 0 {
+        return Err(eyre!("--target-steps must be greater than zero"));
+    }
+    if checkpoint_interval_steps == 0 {
+        return Err(eyre!(
+            "--checkpoint-interval-steps must be greater than zero"
+        ));
+    }
+    if step_compute_units == 0 {
+        return Err(eyre!("--step-compute-units must be greater than zero"));
+    }
+    if compute_budget_units == 0 {
+        return Err(eyre!("--compute-budget-units must be greater than zero"));
+    }
+    if storage_budget_bytes == 0 {
+        return Err(eyre!("--storage-budget-bytes must be greater than zero"));
+    }
+    let payload = TrainingJobStartPayload {
+        service_name: service_name.to_owned(),
+        model_name: model_name.to_owned(),
+        job_id: job_id.to_owned(),
+        worker_group_size,
+        target_steps,
+        checkpoint_interval_steps,
+        max_retries,
+        step_compute_units,
+        compute_budget_units,
+        storage_budget_bytes,
+    };
+    let encoded = encode_training_job_start_signature_payload(&payload)
+        .wrap_err("failed to encode training job start payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedTrainingJobStartRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_training_job_checkpoint_request(
+    service_name: &str,
+    job_id: &str,
+    completed_step: u32,
+    checkpoint_size_bytes: u64,
+    metrics_hash: Hash,
+    key_pair: &KeyPair,
+) -> Result<SignedTrainingJobCheckpointRequest> {
+    if service_name.trim().is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    if job_id.trim().is_empty() {
+        return Err(eyre!("--job-id must not be empty"));
+    }
+    if completed_step == 0 {
+        return Err(eyre!("--completed-step must be greater than zero"));
+    }
+    if checkpoint_size_bytes == 0 {
+        return Err(eyre!("--checkpoint-size-bytes must be greater than zero"));
+    }
+    let payload = TrainingJobCheckpointPayload {
+        service_name: service_name.to_owned(),
+        job_id: job_id.to_owned(),
+        completed_step,
+        checkpoint_size_bytes,
+        metrics_hash,
+    };
+    let encoded = encode_training_job_checkpoint_signature_payload(&payload)
+        .wrap_err("failed to encode training job checkpoint payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedTrainingJobCheckpointRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_training_job_retry_request(
+    service_name: &str,
+    job_id: &str,
+    reason: &str,
+    key_pair: &KeyPair,
+) -> Result<SignedTrainingJobRetryRequest> {
+    if service_name.trim().is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    if job_id.trim().is_empty() {
+        return Err(eyre!("--job-id must not be empty"));
+    }
+    if reason.trim().is_empty() {
+        return Err(eyre!("--reason must not be empty"));
+    }
+    let payload = TrainingJobRetryPayload {
+        service_name: service_name.to_owned(),
+        job_id: job_id.to_owned(),
+        reason: reason.to_owned(),
+    };
+    let encoded = encode_training_job_retry_signature_payload(&payload)
+        .wrap_err("failed to encode training job retry payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedTrainingJobRetryRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn signed_model_artifact_register_request(
+    service_name: &str,
+    model_name: &str,
+    training_job_id: &str,
+    weight_artifact_hash: Hash,
+    dataset_ref: &str,
+    training_config_hash: Hash,
+    reproducibility_hash: Hash,
+    provenance_attestation_hash: Hash,
+    key_pair: &KeyPair,
+) -> Result<SignedModelArtifactRegisterRequest> {
+    if service_name.trim().is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    if model_name.trim().is_empty() {
+        return Err(eyre!("--model-name must not be empty"));
+    }
+    if training_job_id.trim().is_empty() {
+        return Err(eyre!("--training-job-id must not be empty"));
+    }
+    if dataset_ref.trim().is_empty() {
+        return Err(eyre!("--dataset-ref must not be empty"));
+    }
+    let payload = ModelArtifactRegisterPayload {
+        service_name: service_name.to_owned(),
+        model_name: model_name.to_owned(),
+        training_job_id: training_job_id.to_owned(),
+        weight_artifact_hash,
+        dataset_ref: dataset_ref.to_owned(),
+        training_config_hash,
+        reproducibility_hash,
+        provenance_attestation_hash,
+    };
+    let encoded = encode_model_artifact_register_signature_payload(&payload)
+        .wrap_err("failed to encode model artifact register payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedModelArtifactRegisterRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn signed_model_weight_register_request(
+    service_name: &str,
+    model_name: &str,
+    weight_version: &str,
+    training_job_id: &str,
+    parent_version: Option<&str>,
+    weight_artifact_hash: Hash,
+    dataset_ref: &str,
+    training_config_hash: Hash,
+    reproducibility_hash: Hash,
+    provenance_attestation_hash: Hash,
+    key_pair: &KeyPair,
+) -> Result<SignedModelWeightRegisterRequest> {
+    if service_name.trim().is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    if model_name.trim().is_empty() {
+        return Err(eyre!("--model-name must not be empty"));
+    }
+    if weight_version.trim().is_empty() {
+        return Err(eyre!("--weight-version must not be empty"));
+    }
+    if training_job_id.trim().is_empty() {
+        return Err(eyre!("--training-job-id must not be empty"));
+    }
+    if parent_version.is_some_and(|value| value.trim().is_empty()) {
+        return Err(eyre!("--parent-version must not be empty when provided"));
+    }
+    if dataset_ref.trim().is_empty() {
+        return Err(eyre!("--dataset-ref must not be empty"));
+    }
+    let payload = ModelWeightRegisterPayload {
+        service_name: service_name.to_owned(),
+        model_name: model_name.to_owned(),
+        weight_version: weight_version.to_owned(),
+        training_job_id: training_job_id.to_owned(),
+        parent_version: parent_version.map(ToOwned::to_owned),
+        weight_artifact_hash,
+        dataset_ref: dataset_ref.to_owned(),
+        training_config_hash,
+        reproducibility_hash,
+        provenance_attestation_hash,
+    };
+    let encoded = encode_model_weight_register_signature_payload(&payload)
+        .wrap_err("failed to encode model weight register payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedModelWeightRegisterRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_model_weight_promote_request(
+    service_name: &str,
+    model_name: &str,
+    weight_version: &str,
+    gate_approved: bool,
+    gate_report_hash: Hash,
+    key_pair: &KeyPair,
+) -> Result<SignedModelWeightPromoteRequest> {
+    if service_name.trim().is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    if model_name.trim().is_empty() {
+        return Err(eyre!("--model-name must not be empty"));
+    }
+    if weight_version.trim().is_empty() {
+        return Err(eyre!("--weight-version must not be empty"));
+    }
+    let payload = ModelWeightPromotePayload {
+        service_name: service_name.to_owned(),
+        model_name: model_name.to_owned(),
+        weight_version: weight_version.to_owned(),
+        gate_approved,
+        gate_report_hash,
+    };
+    let encoded = encode_model_weight_promote_signature_payload(&payload)
+        .wrap_err("failed to encode model weight promote payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedModelWeightPromoteRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
+fn signed_model_weight_rollback_request(
+    service_name: &str,
+    model_name: &str,
+    target_version: &str,
+    reason: &str,
+    key_pair: &KeyPair,
+) -> Result<SignedModelWeightRollbackRequest> {
+    if service_name.trim().is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    if model_name.trim().is_empty() {
+        return Err(eyre!("--model-name must not be empty"));
+    }
+    if target_version.trim().is_empty() {
+        return Err(eyre!("--target-version must not be empty"));
+    }
+    if reason.trim().is_empty() {
+        return Err(eyre!("--reason must not be empty"));
+    }
+    let payload = ModelWeightRollbackPayload {
+        service_name: service_name.to_owned(),
+        model_name: model_name.to_owned(),
+        target_version: target_version.to_owned(),
+        reason: reason.to_owned(),
+    };
+    let encoded = encode_model_weight_rollback_signature_payload(&payload)
+        .wrap_err("failed to encode model weight rollback payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedModelWeightRollbackRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+    })
+}
+
 fn encode_rollout_signature_payload(payload: &RolloutAdvancePayload) -> Result<Vec<u8>> {
-    norito::to_bytes(&(
+    encode_rollout_provenance_payload(
         payload.service_name.as_str(),
         payload.rollout_handle.as_str(),
         payload.healthy,
         payload.promote_to_percent,
-        payload.governance_tx_hash,
-    ))
+        payload.governance_tx_hash.clone(),
+    )
     .wrap_err("failed to encode rollout signature payload tuple")
 }
 
 fn encode_agent_deploy_signature_payload(payload: &AgentDeployPayload) -> Result<Vec<u8>> {
-    norito::to_bytes(&(
+    encode_agent_deploy_provenance_payload(
         payload.manifest.clone(),
         payload.lease_ticks,
         payload.autonomy_budget_units,
-    ))
+    )
     .wrap_err("failed to encode agent deploy signature payload tuple")
 }
 
 fn encode_agent_lease_renew_signature_payload(payload: &AgentLeaseRenewPayload) -> Result<Vec<u8>> {
-    norito::to_bytes(&(payload.apartment_name.as_str(), payload.lease_ticks))
-        .wrap_err("failed to encode agent lease renew signature payload tuple")
+    encode_agent_lease_renew_provenance_payload(
+        payload.apartment_name.as_str(),
+        payload.lease_ticks,
+    )
+    .wrap_err("failed to encode agent lease renew signature payload tuple")
 }
 
 fn encode_agent_restart_signature_payload(payload: &AgentRestartPayload) -> Result<Vec<u8>> {
-    norito::to_bytes(&(payload.apartment_name.as_str(), payload.reason.as_str()))
-        .wrap_err("failed to encode agent restart signature payload tuple")
+    encode_agent_restart_provenance_payload(
+        payload.apartment_name.as_str(),
+        payload.reason.as_str(),
+    )
+    .wrap_err("failed to encode agent restart signature payload tuple")
 }
 
 fn encode_agent_policy_revoke_signature_payload(
     payload: &AgentPolicyRevokePayload,
 ) -> Result<Vec<u8>> {
-    norito::to_bytes(&(
+    encode_agent_policy_revoke_provenance_payload(
         payload.apartment_name.as_str(),
         payload.capability.as_str(),
         payload.reason.as_deref(),
-    ))
+    )
     .wrap_err("failed to encode agent policy revoke signature payload tuple")
 }
 
 fn encode_agent_wallet_spend_signature_payload(
     payload: &AgentWalletSpendPayload,
 ) -> Result<Vec<u8>> {
-    norito::to_bytes(&(
+    encode_agent_wallet_spend_provenance_payload(
         payload.apartment_name.as_str(),
         payload.asset_definition.as_str(),
         payload.amount_nanos,
-    ))
+    )
     .wrap_err("failed to encode agent wallet spend signature payload tuple")
 }
 
 fn encode_agent_wallet_approve_signature_payload(
     payload: &AgentWalletApprovePayload,
 ) -> Result<Vec<u8>> {
-    norito::to_bytes(&(payload.apartment_name.as_str(), payload.request_id.as_str()))
-        .wrap_err("failed to encode agent wallet approve signature payload tuple")
+    encode_agent_wallet_approve_provenance_payload(
+        payload.apartment_name.as_str(),
+        payload.request_id.as_str(),
+    )
+    .wrap_err("failed to encode agent wallet approve signature payload tuple")
 }
 
 fn encode_agent_message_send_signature_payload(
     payload: &AgentMessageSendPayload,
 ) -> Result<Vec<u8>> {
-    norito::to_bytes(&(
+    encode_agent_message_send_provenance_payload(
         payload.from_apartment.as_str(),
         payload.to_apartment.as_str(),
         payload.channel.as_str(),
         payload.payload.as_str(),
-    ))
+    )
     .wrap_err("failed to encode agent message send signature payload tuple")
 }
 
 fn encode_agent_message_ack_signature_payload(payload: &AgentMessageAckPayload) -> Result<Vec<u8>> {
-    norito::to_bytes(&(payload.apartment_name.as_str(), payload.message_id.as_str()))
-        .wrap_err("failed to encode agent message ack signature payload tuple")
+    encode_agent_message_ack_provenance_payload(
+        payload.apartment_name.as_str(),
+        payload.message_id.as_str(),
+    )
+    .wrap_err("failed to encode agent message ack signature payload tuple")
 }
 
 fn encode_agent_artifact_allow_signature_payload(
     payload: &AgentArtifactAllowPayload,
 ) -> Result<Vec<u8>> {
-    norito::to_bytes(&(
+    encode_agent_artifact_allow_provenance_payload(
         payload.apartment_name.as_str(),
         payload.artifact_hash.as_str(),
         payload.provenance_hash.as_deref(),
-    ))
+    )
     .wrap_err("failed to encode agent artifact allow signature payload tuple")
 }
 
 fn encode_agent_autonomy_run_signature_payload(
     payload: &AgentAutonomyRunPayload,
 ) -> Result<Vec<u8>> {
-    norito::to_bytes(&(
+    encode_agent_autonomy_run_provenance_payload(
         payload.apartment_name.as_str(),
         payload.artifact_hash.as_str(),
         payload.provenance_hash.as_deref(),
         payload.budget_units,
         payload.run_label.as_str(),
-    ))
+    )
     .wrap_err("failed to encode agent autonomy run signature payload tuple")
+}
+
+fn encode_training_job_start_signature_payload(
+    payload: &TrainingJobStartPayload,
+) -> Result<Vec<u8>> {
+    encode_training_job_start_provenance_payload(
+        payload.service_name.as_str(),
+        payload.model_name.as_str(),
+        payload.job_id.as_str(),
+        payload.worker_group_size,
+        payload.target_steps,
+        payload.checkpoint_interval_steps,
+        payload.max_retries,
+        payload.step_compute_units,
+        payload.compute_budget_units,
+        payload.storage_budget_bytes,
+    )
+    .wrap_err("failed to encode training job start signature payload tuple")
+}
+
+fn encode_training_job_checkpoint_signature_payload(
+    payload: &TrainingJobCheckpointPayload,
+) -> Result<Vec<u8>> {
+    encode_training_job_checkpoint_provenance_payload(
+        payload.service_name.as_str(),
+        payload.job_id.as_str(),
+        payload.completed_step,
+        payload.checkpoint_size_bytes,
+        payload.metrics_hash,
+    )
+    .wrap_err("failed to encode training job checkpoint signature payload tuple")
+}
+
+fn encode_training_job_retry_signature_payload(
+    payload: &TrainingJobRetryPayload,
+) -> Result<Vec<u8>> {
+    encode_training_job_retry_provenance_payload(
+        payload.service_name.as_str(),
+        payload.job_id.as_str(),
+        payload.reason.as_str(),
+    )
+    .wrap_err("failed to encode training job retry signature payload tuple")
+}
+
+fn encode_model_artifact_register_signature_payload(
+    payload: &ModelArtifactRegisterPayload,
+) -> Result<Vec<u8>> {
+    encode_model_artifact_register_provenance_payload(
+        payload.service_name.as_str(),
+        payload.model_name.as_str(),
+        payload.training_job_id.as_str(),
+        payload.weight_artifact_hash,
+        payload.dataset_ref.as_str(),
+        payload.training_config_hash,
+        payload.reproducibility_hash,
+        payload.provenance_attestation_hash,
+    )
+    .wrap_err("failed to encode model artifact register signature payload tuple")
+}
+
+fn encode_model_weight_register_signature_payload(
+    payload: &ModelWeightRegisterPayload,
+) -> Result<Vec<u8>> {
+    encode_model_weight_register_provenance_payload(
+        payload.service_name.as_str(),
+        payload.model_name.as_str(),
+        payload.weight_version.as_str(),
+        payload.training_job_id.as_str(),
+        payload.parent_version.as_deref(),
+        payload.weight_artifact_hash,
+        payload.dataset_ref.as_str(),
+        payload.training_config_hash,
+        payload.reproducibility_hash,
+        payload.provenance_attestation_hash,
+    )
+    .wrap_err("failed to encode model weight register signature payload tuple")
+}
+
+fn encode_model_weight_promote_signature_payload(
+    payload: &ModelWeightPromotePayload,
+) -> Result<Vec<u8>> {
+    encode_model_weight_promote_provenance_payload(
+        payload.service_name.as_str(),
+        payload.model_name.as_str(),
+        payload.weight_version.as_str(),
+        payload.gate_approved,
+        payload.gate_report_hash,
+    )
+    .wrap_err("failed to encode model weight promote signature payload tuple")
+}
+
+fn encode_model_weight_rollback_signature_payload(
+    payload: &ModelWeightRollbackPayload,
+) -> Result<Vec<u8>> {
+    encode_model_weight_rollback_provenance_payload(
+        payload.service_name.as_str(),
+        payload.model_name.as_str(),
+        payload.target_version.as_str(),
+        payload.reason.as_str(),
+    )
+    .wrap_err("failed to encode model weight rollback signature payload tuple")
 }
 
 fn post_torii_soracloud_mutation<T>(
@@ -4652,6 +5836,188 @@ fn fetch_torii_soracloud_agent_autonomy_status(
     Ok((endpoint.to_string(), payload))
 }
 
+fn fetch_torii_soracloud_training_job_status(
+    torii_url: &str,
+    service_name: &str,
+    job_id: &str,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)> {
+    let service_name = service_name.trim();
+    let job_id = job_id.trim();
+    if service_name.is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    if job_id.is_empty() {
+        return Err(eyre!("--job-id must not be empty"));
+    }
+
+    let mut endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join("v1/soracloud/training/job/status")
+        .wrap_err("failed to derive /v1/soracloud/training/job/status URL from --torii-url")?;
+    endpoint
+        .query_pairs_mut()
+        .append_pair("service_name", service_name)
+        .append_pair("job_id", job_id);
+
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for soracloud training job status")?;
+
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii training job status response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /v1/soracloud/training/job/status returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+
+    let payload: norito::json::Value = json::from_slice(&body)
+        .wrap_err("failed to decode Torii training job status JSON payload")?;
+    Ok((endpoint.to_string(), payload))
+}
+
+fn fetch_torii_soracloud_model_artifact_status(
+    torii_url: &str,
+    service_name: &str,
+    training_job_id: &str,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)> {
+    let service_name = service_name.trim();
+    let training_job_id = training_job_id.trim();
+    if service_name.is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    if training_job_id.is_empty() {
+        return Err(eyre!("--training-job-id must not be empty"));
+    }
+
+    let mut endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join("v1/soracloud/model/artifact/status")
+        .wrap_err("failed to derive /v1/soracloud/model/artifact/status URL from --torii-url")?;
+    endpoint
+        .query_pairs_mut()
+        .append_pair("service_name", service_name)
+        .append_pair("training_job_id", training_job_id);
+
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for soracloud model artifact status")?;
+
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii model artifact status response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /v1/soracloud/model/artifact/status returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+
+    let payload: norito::json::Value = json::from_slice(&body)
+        .wrap_err("failed to decode Torii model artifact status JSON payload")?;
+    Ok((endpoint.to_string(), payload))
+}
+
+fn fetch_torii_soracloud_model_weight_status(
+    torii_url: &str,
+    service_name: &str,
+    model_name: &str,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)> {
+    let service_name = service_name.trim();
+    let model_name = model_name.trim();
+    if service_name.is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    if model_name.is_empty() {
+        return Err(eyre!("--model-name must not be empty"));
+    }
+
+    let mut endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join("v1/soracloud/model/weight/status")
+        .wrap_err("failed to derive /v1/soracloud/model/weight/status URL from --torii-url")?;
+    endpoint
+        .query_pairs_mut()
+        .append_pair("service_name", service_name)
+        .append_pair("model_name", model_name);
+
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for soracloud model weight status")?;
+
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii model weight status response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /v1/soracloud/model/weight/status returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+
+    let payload: norito::json::Value = json::from_slice(&body)
+        .wrap_err("failed to decode Torii model weight status JSON payload")?;
+    Ok((endpoint.to_string(), payload))
+}
+
+fn require_torii_url<'a>(torii_url: Option<&'a str>) -> Result<&'a str> {
+    torii_url.ok_or_else(|| {
+        eyre!(
+            "--torii-url is required for this command (local Soracloud simulation does not implement this operation)"
+        )
+    })
+}
+
 fn load_json<T>(path: &Path) -> Result<T>
 where
     T: JsonDeserialize,
@@ -4770,6 +6136,76 @@ fn apply_init_template_defaults(
             }];
             Ok(())
         }
+        InitTemplate::HealthApp => {
+            container.runtime = SoraContainerRuntimeV1::NativeProcess;
+            container.bundle_path = "/bundles/health-app-api.car".to_owned();
+            container.entrypoint = "/app/api/server.mjs".to_owned();
+            container.args = vec!["--port=8788".to_owned()];
+            container
+                .env
+                .insert("SORACLOUD_TEMPLATE".to_owned(), "health-app".to_owned());
+            container
+                .env
+                .insert("HEALTH_JURISDICTION".to_owned(), "us".to_owned());
+            container.env.insert(
+                "CONSENT_POLICY_NAMESPACE".to_owned(),
+                "health.consent.v1".to_owned(),
+            );
+            container.capabilities.network =
+                SoraNetworkPolicyV1::Allowlist(vec!["torii.sora.internal".to_owned()]);
+            container.capabilities.allow_wallet_signing = false;
+            container.capabilities.allow_state_writes = true;
+            container.capabilities.allow_model_training = false;
+            container.lifecycle.healthcheck_path = Some("/health/api/healthz".to_owned());
+
+            service.route = Some(SoraRouteTargetV1 {
+                host,
+                path_prefix: "/health/api".to_owned(),
+                service_port: NonZeroU16::new(8788).expect("nonzero literal"),
+                visibility: SoraRouteVisibilityV1::Public,
+                tls_mode: SoraTlsModeV1::Required,
+            });
+            service.replicas = NonZeroU16::new(3).expect("nonzero literal");
+            service.state_bindings = vec![
+                SoraStateBindingV1 {
+                    schema_version: SORA_STATE_BINDING_VERSION_V1,
+                    binding_name: "patient_records"
+                        .parse()
+                        .expect("literal binding name is valid"),
+                    scope: SoraStateScopeV1::ConfidentialState,
+                    mutability: SoraStateMutabilityV1::AppendOnly,
+                    encryption: SoraStateEncryptionV1::FheCiphertext,
+                    key_prefix: "/state/health/patient".to_owned(),
+                    max_item_bytes: NonZeroU64::new(65_536).expect("nonzero literal"),
+                    max_total_bytes: NonZeroU64::new(33_554_432).expect("nonzero literal"),
+                },
+                SoraStateBindingV1 {
+                    schema_version: SORA_STATE_BINDING_VERSION_V1,
+                    binding_name: "consent_events"
+                        .parse()
+                        .expect("literal binding name is valid"),
+                    scope: SoraStateScopeV1::ServiceState,
+                    mutability: SoraStateMutabilityV1::AppendOnly,
+                    encryption: SoraStateEncryptionV1::ClientCiphertext,
+                    key_prefix: "/state/health/consent".to_owned(),
+                    max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
+                    max_total_bytes: NonZeroU64::new(8_388_608).expect("nonzero literal"),
+                },
+                SoraStateBindingV1 {
+                    schema_version: SORA_STATE_BINDING_VERSION_V1,
+                    binding_name: "retention_jobs"
+                        .parse()
+                        .expect("literal binding name is valid"),
+                    scope: SoraStateScopeV1::ServiceState,
+                    mutability: SoraStateMutabilityV1::ReadWrite,
+                    encryption: SoraStateEncryptionV1::ClientCiphertext,
+                    key_prefix: "/state/health/retention".to_owned(),
+                    max_item_bytes: NonZeroU64::new(4_096).expect("nonzero literal"),
+                    max_total_bytes: NonZeroU64::new(2_097_152).expect("nonzero literal"),
+                },
+            ];
+            Ok(())
+        }
     }
 }
 
@@ -4783,6 +6219,9 @@ fn scaffold_init_template(
         InitTemplate::Baseline => Ok(Vec::new()),
         InitTemplate::Site => scaffold_site_template(output_dir, service_name, overwrite),
         InitTemplate::Webapp => scaffold_webapp_template(output_dir, service_name, overwrite),
+        InitTemplate::HealthApp => {
+            scaffold_health_app_template(output_dir, service_name, overwrite)
+        }
     }
 }
 
@@ -4866,6 +6305,70 @@ fn scaffold_webapp_template(
         (
             project_dir.join(".gitignore"),
             "node_modules/\nfrontend/node_modules/\nfrontend/dist/\n".to_owned(),
+        ),
+    ];
+    write_template_files(files, overwrite)
+}
+
+fn scaffold_health_app_template(
+    output_dir: &Path,
+    service_name: &str,
+    overwrite: bool,
+) -> Result<Vec<String>> {
+    let project_dir = output_dir.join("health-app");
+    let package_name = normalized_service_label(service_name);
+    let files = vec![
+        (
+            project_dir.join("package.json"),
+            health_app_root_package_json(&package_name),
+        ),
+        (
+            project_dir.join("frontend/package.json"),
+            health_app_frontend_package_json(&package_name),
+        ),
+        (
+            project_dir.join("frontend/tsconfig.json"),
+            site_tsconfig_json().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/vite.config.ts"),
+            health_app_frontend_vite_config().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/index.html"),
+            site_index_html().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/src/main.ts"),
+            site_main_ts().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/src/App.vue"),
+            health_app_frontend_app_vue(service_name),
+        ),
+        (
+            project_dir.join("api/server.mjs"),
+            health_app_api_server_mjs().to_owned(),
+        ),
+        (
+            project_dir.join("policy/consent_policy_template.json"),
+            health_app_consent_policy_template(),
+        ),
+        (
+            project_dir.join("policy/retention_policy_template.json"),
+            health_app_retention_policy_template(),
+        ),
+        (
+            project_dir.join("policy/deletion_workflow_template.json"),
+            health_app_deletion_workflow_template(),
+        ),
+        (
+            project_dir.join(".gitignore"),
+            "node_modules/\nfrontend/node_modules/\nfrontend/dist/\n".to_owned(),
+        ),
+        (
+            project_dir.join("README.md"),
+            health_app_readme(service_name),
         ),
     ];
     write_template_files(files, overwrite)
@@ -4979,6 +6482,48 @@ fn webapp_frontend_package_json(package_name: &str) -> String {
     )
 }
 
+fn health_app_root_package_json(package_name: &str) -> String {
+    format!(
+        r#"{{
+  "name": "{package_name}-health-app",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {{
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:api": "node api/server.mjs",
+    "build": "npm --prefix frontend run build",
+    "start": "node api/server.mjs"
+  }}
+}}
+"#
+    )
+}
+
+fn health_app_frontend_package_json(package_name: &str) -> String {
+    format!(
+        r#"{{
+  "name": "{package_name}-health-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {{
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }},
+  "dependencies": {{
+    "vue": "^3.5.0"
+  }},
+  "devDependencies": {{
+    "@vitejs/plugin-vue": "^5.2.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }}
+}}
+"#
+    )
+}
+
 fn site_tsconfig_json() -> &'static str {
     r#"{
   "compilerOptions": {
@@ -5033,6 +6578,23 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": "http://127.0.0.1:8787"
+    }
+  }
+});
+"#
+}
+
+fn health_app_frontend_vite_config() -> &'static str {
+    r#"import { defineConfig } from "vite";
+import vue from "@vitejs/plugin-vue";
+
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    host: "0.0.0.0",
+    port: 5173,
+    proxy: {
+      "/health/api": "http://127.0.0.1:8788"
     }
   }
 });
@@ -5162,6 +6724,139 @@ input {{
     )
 }
 
+fn health_app_frontend_app_vue(service_name: &str) -> String {
+    format!(
+        r#"<template>
+  <main class="shell">
+    <h1>{service_name} Health Control Panel</h1>
+    <section>
+      <h2>Consent</h2>
+      <form @submit.prevent="grantConsent">
+        <label>
+          Subject ID
+          <input v-model="subjectId" placeholder="patient-001" />
+        </label>
+        <label>
+          Scope
+          <input v-model="scope" placeholder="care-team.read" />
+        </label>
+        <button type="submit">Grant Consent</button>
+      </form>
+      <button @click="revokeConsent">Revoke Consent</button>
+    </section>
+
+    <section>
+      <h2>Retention / Deletion</h2>
+      <button @click="runRetention">Run Retention Sweep</button>
+      <button @click="requestDeletion">Request Subject Deletion</button>
+    </section>
+
+    <p v-if="message">{{{{ message }}}}</p>
+    <p v-if="error" class="error">{{{{ error }}}}</p>
+  </main>
+</template>
+
+<script setup lang="ts">
+import {{ ref }} from "vue";
+
+const subjectId = ref("patient-001");
+const scope = ref("care-team.read");
+const message = ref("");
+const error = ref("");
+
+async function post(path: string, body: Record<string, string>) {{
+  error.value = "";
+  const response = await fetch(path, {{
+    method: "POST",
+    headers: {{ "content-type": "application/json" }},
+    body: JSON.stringify(body)
+  }});
+  if (!response.ok) {{
+    error.value = await response.text();
+    return null;
+  }}
+  return response.json();
+}}
+
+async function grantConsent() {{
+  const payload = await post("/health/api/consent/grant", {{
+    subject_id: subjectId.value,
+    scope: scope.value
+  }});
+  if (payload) {{
+    message.value = `consent granted for ${{payload.subject_id}}`;
+  }}
+}}
+
+async function revokeConsent() {{
+  const payload = await post("/health/api/consent/revoke", {{
+    subject_id: subjectId.value,
+    scope: scope.value
+  }});
+  if (payload) {{
+    message.value = `consent revoked for ${{payload.subject_id}}`;
+  }}
+}}
+
+async function runRetention() {{
+  const payload = await post("/health/api/records/retention/sweep", {{
+    jurisdiction: "us",
+    policy_version: "retention-v1"
+  }});
+  if (payload) {{
+    message.value = `retention sweep planned=${{payload.planned_actions}}`;
+  }}
+}}
+
+async function requestDeletion() {{
+  const payload = await post("/health/api/records/delete", {{
+    subject_id: subjectId.value,
+    reason: "subject request"
+  }});
+  if (payload) {{
+    message.value = `deletion ticket ${{payload.ticket_id}}`;
+  }}
+}}
+</script>
+
+<style scoped>
+.shell {{
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  max-width: 780px;
+  margin: 3rem auto;
+  padding: 0 1.25rem;
+}}
+
+section {{
+  margin: 1.5rem 0;
+  padding: 1rem;
+  border: 1px solid #dde4ec;
+  border-radius: 0.5rem;
+}}
+
+form {{
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}}
+
+input {{
+  width: 100%;
+  padding: 0.5rem;
+}}
+
+button {{
+  margin-right: 0.75rem;
+}}
+
+.error {{
+  color: #b42318;
+}}
+</style>
+"#
+    )
+}
+
 fn webapp_api_server_mjs() -> &'static str {
     r#"import http from "node:http";
 import crypto from "node:crypto";
@@ -5277,6 +6972,191 @@ server.listen(port, "0.0.0.0", () => {
 "#
 }
 
+fn health_app_api_server_mjs() -> &'static str {
+    r#"import http from "node:http";
+
+const portArg = process.argv.find((value) => value.startsWith("--port="));
+const port = Number(portArg?.slice("--port=".length) ?? process.env.PORT ?? "8788");
+
+const consentState = new Map();
+const retentionRuns = [];
+
+async function readJson(req) {
+  let body = "";
+  for await (const chunk of req) {
+    body += chunk.toString("utf8");
+  }
+  return JSON.parse(body);
+}
+
+function writeJson(res, status, body) {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(body));
+}
+
+function requireNonEmpty(value, field) {
+  if (!value || typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${field} must not be empty`);
+  }
+  return value.trim();
+}
+
+const server = http.createServer(async (req, res) => {
+  if (req.url === "/health/api/healthz") {
+    writeJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/health/api/consent/grant") {
+    try {
+      const body = await readJson(req);
+      const subjectId = requireNonEmpty(body.subject_id, "subject_id");
+      const scope = requireNonEmpty(body.scope, "scope");
+      const key = `${subjectId}:${scope}`;
+      consentState.set(key, {
+        status: "granted",
+        updated_at_unix_ms: Date.now()
+      });
+      writeJson(res, 200, { subject_id: subjectId, scope, status: "granted" });
+    } catch (error) {
+      res.writeHead(400, { "content-type": "text/plain" });
+      res.end(`invalid request: ${error.message}`);
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/health/api/consent/revoke") {
+    try {
+      const body = await readJson(req);
+      const subjectId = requireNonEmpty(body.subject_id, "subject_id");
+      const scope = requireNonEmpty(body.scope, "scope");
+      const key = `${subjectId}:${scope}`;
+      consentState.set(key, {
+        status: "revoked",
+        updated_at_unix_ms: Date.now()
+      });
+      writeJson(res, 200, { subject_id: subjectId, scope, status: "revoked" });
+    } catch (error) {
+      res.writeHead(400, { "content-type": "text/plain" });
+      res.end(`invalid request: ${error.message}`);
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/health/api/records/retention/sweep") {
+    try {
+      const body = await readJson(req);
+      const jurisdiction = requireNonEmpty(body.jurisdiction, "jurisdiction");
+      const policyVersion = requireNonEmpty(body.policy_version, "policy_version");
+      const run = {
+        run_id: `retention-${Date.now()}`,
+        jurisdiction,
+        policy_version: policyVersion,
+        planned_actions: 0
+      };
+      retentionRuns.push(run);
+      writeJson(res, 200, run);
+    } catch (error) {
+      res.writeHead(400, { "content-type": "text/plain" });
+      res.end(`invalid request: ${error.message}`);
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/health/api/records/delete") {
+    try {
+      const body = await readJson(req);
+      const subjectId = requireNonEmpty(body.subject_id, "subject_id");
+      const reason = requireNonEmpty(body.reason, "reason");
+      const ticketId = `delete-${Date.now()}`;
+      writeJson(res, 202, {
+        ticket_id: ticketId,
+        subject_id: subjectId,
+        reason,
+        status: "accepted"
+      });
+    } catch (error) {
+      res.writeHead(400, { "content-type": "text/plain" });
+      res.end(`invalid request: ${error.message}`);
+    }
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/health/api/consent/state") {
+    writeJson(res, 200, { entries: Array.from(consentState.entries()) });
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/health/api/retention/runs") {
+    writeJson(res, 200, { runs: retentionRuns });
+    return;
+  }
+
+  res.writeHead(404, { "content-type": "text/plain" });
+  res.end("not found");
+});
+
+server.listen(port, "0.0.0.0", () => {
+  // eslint-disable-next-line no-console
+  console.log(`health api listening on :${port}`);
+});
+"#
+}
+
+fn health_app_consent_policy_template() -> String {
+    r#"{
+  "schema_version": 1,
+  "policy_name": "health.consent.v1",
+  "jurisdiction": "us",
+  "required_capabilities": [
+    "health.consent.grant",
+    "health.consent.revoke"
+  ],
+  "allowed_scopes": [
+    "care-team.read",
+    "care-team.write",
+    "billing.read"
+  ],
+  "audit_tag": "health.consent.audit"
+}
+"#
+    .to_owned()
+}
+
+fn health_app_retention_policy_template() -> String {
+    r#"{
+  "schema_version": 1,
+  "policy_name": "health.retention.v1",
+  "jurisdiction": "us",
+  "default_retention_days": 2555,
+  "deletion_grace_days": 30,
+  "bindings": [
+    "patient_records",
+    "consent_events"
+  ],
+  "audit_tag": "health.retention.audit"
+}
+"#
+    .to_owned()
+}
+
+fn health_app_deletion_workflow_template() -> String {
+    r#"{
+  "schema_version": 1,
+  "workflow_name": "health.subject.deletion.v1",
+  "steps": [
+    "validate-subject-request",
+    "freeze-read-access",
+    "enqueue-redaction-job",
+    "emit-deletion-attestation"
+  ],
+  "requires_break_glass_approval": false,
+  "audit_tag": "health.deletion.audit"
+}
+"#
+    .to_owned()
+}
+
 fn site_readme(service_name: &str, dns_host: &str) -> String {
     format!(
         r#"# {service_name} Static Site Template
@@ -5362,6 +7242,57 @@ iroha app sorafs toolkit pack ./frontend/dist \
 ```
 
 Update `api/server.mjs` `verifyChainIdentity` with your chain signature-verification policy before production use.
+"#
+    )
+}
+
+fn health_app_readme(service_name: &str) -> String {
+    format!(
+        r#"# {service_name} Health-App Template
+
+This template provides a private workload starter for regulated health data:
+
+- `frontend/` Vue3 control panel for consent + retention/deletion actions.
+- `api/server.mjs` health API starter with consent and retention/deletion endpoints.
+- `policy/*.json` governance templates for consent, retention, and deletion workflows.
+- Soracloud manifests in the parent init directory (`container_manifest.json`, `service_manifest.json`).
+
+## Local dev
+
+```bash
+npm install
+npm --prefix frontend install
+npm run dev:api
+npm run dev:frontend
+```
+
+## Policy templates
+
+- `policy/consent_policy_template.json`
+- `policy/retention_policy_template.json`
+- `policy/deletion_workflow_template.json`
+
+Populate these templates with jurisdiction-specific values and submit through
+your governance flow before production rollout.
+
+## Deploy API service on Soracloud
+
+```bash
+iroha app soracloud deploy \
+  --container ../container_manifest.json \
+  --service ../service_manifest.json \
+  --torii-url http://127.0.0.1:8080
+```
+
+## Publish frontend bundle
+
+```bash
+npm run build
+iroha app sorafs toolkit pack ./frontend/dist \
+  --manifest-out ../sorafs/health_frontend_manifest.to \
+  --car-out ../sorafs/health_frontend_payload.car \
+  --json-out ../sorafs/health_frontend_pack_report.json
+```
 "#
     )
 }
@@ -5672,6 +7603,40 @@ mod tests {
     }
 
     #[test]
+    fn fetch_torii_training_job_status_rejects_invalid_url() {
+        let err =
+            fetch_torii_soracloud_training_job_status("not-a-url", "web_portal", "job-1", None, 5)
+                .expect_err("invalid URL must fail");
+        assert!(err.to_string().contains("invalid --torii-url"));
+    }
+
+    #[test]
+    fn fetch_torii_model_artifact_status_rejects_invalid_url() {
+        let err = fetch_torii_soracloud_model_artifact_status(
+            "not-a-url",
+            "web_portal",
+            "job-1",
+            None,
+            5,
+        )
+        .expect_err("invalid URL must fail");
+        assert!(err.to_string().contains("invalid --torii-url"));
+    }
+
+    #[test]
+    fn fetch_torii_model_weight_status_rejects_invalid_url() {
+        let err = fetch_torii_soracloud_model_weight_status(
+            "not-a-url",
+            "web_portal",
+            "model-v1",
+            None,
+            5,
+        )
+        .expect_err("invalid URL must fail");
+        assert!(err.to_string().contains("invalid --torii-url"));
+    }
+
+    #[test]
     fn signed_bundle_request_uses_verifiable_signature() {
         let container = fixture_container();
         let mut service = fixture_service();
@@ -5891,6 +7856,551 @@ mod tests {
     }
 
     #[test]
+    fn signed_training_job_start_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_training_job_start_request(
+            "web_portal",
+            "model-1",
+            "job-1",
+            4,
+            100,
+            20,
+            3,
+            500,
+            50_000,
+            4_000,
+            &key_pair,
+        )
+        .expect("signed training start request");
+        let payload =
+            encode_training_job_start_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_training_job_checkpoint_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_training_job_checkpoint_request(
+            "web_portal",
+            "job-1",
+            20,
+            1_024,
+            Hash::new(b"metrics"),
+            &key_pair,
+        )
+        .expect("signed training checkpoint request");
+        let payload = encode_training_job_checkpoint_signature_payload(&request.payload)
+            .expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_training_job_retry_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_training_job_retry_request(
+            "web_portal",
+            "job-1",
+            "worker unavailable",
+            &key_pair,
+        )
+        .expect("signed training retry request");
+        let payload =
+            encode_training_job_retry_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_model_artifact_register_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_model_artifact_register_request(
+            "web_portal",
+            "model-1",
+            "job-1",
+            Hash::new(b"weight-artifact"),
+            "dataset://synthetic/v1",
+            Hash::new(b"train-config"),
+            Hash::new(b"repro"),
+            Hash::new(b"attestation"),
+            &key_pair,
+        )
+        .expect("signed model artifact request");
+        let payload = encode_model_artifact_register_signature_payload(&request.payload)
+            .expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_model_weight_register_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_model_weight_register_request(
+            "web_portal",
+            "model-1",
+            "1.0.0",
+            "job-1",
+            Some("0.9.0"),
+            Hash::new(b"weight-artifact"),
+            "dataset://synthetic/v1",
+            Hash::new(b"train-config"),
+            Hash::new(b"repro"),
+            Hash::new(b"attestation"),
+            &key_pair,
+        )
+        .expect("signed model weight register request");
+        let payload = encode_model_weight_register_signature_payload(&request.payload)
+            .expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_model_weight_promote_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_model_weight_promote_request(
+            "web_portal",
+            "model-1",
+            "1.0.0",
+            true,
+            Hash::new(b"gate-report"),
+            &key_pair,
+        )
+        .expect("signed model weight promote request");
+        let payload = encode_model_weight_promote_signature_payload(&request.payload)
+            .expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn signed_model_weight_rollback_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let request = signed_model_weight_rollback_request(
+            "web_portal",
+            "model-1",
+            "0.9.0",
+            "gate regression",
+            &key_pair,
+        )
+        .expect("signed model weight rollback request");
+        let payload = encode_model_weight_rollback_signature_payload(&request.payload)
+            .expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn rollback_signature_payload_layout_is_canonical_tuple() {
+        let payload = RollbackPayload {
+            service_name: "web_portal".to_owned(),
+            target_version: Some("1.0.0".to_owned()),
+        };
+        let encoded =
+            encode_rollback_signature_payload(&payload).expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.target_version.as_deref(),
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn rollout_signature_payload_layout_is_canonical_tuple() {
+        let governance_tx_hash = Hash::new(b"governance");
+        let payload = RolloutAdvancePayload {
+            service_name: "web_portal".to_owned(),
+            rollout_handle: "web_portal:rollout:2".to_owned(),
+            healthy: true,
+            promote_to_percent: Some(100),
+            governance_tx_hash: governance_tx_hash.clone(),
+        };
+        let encoded = encode_rollout_signature_payload(&payload).expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.rollout_handle.as_str(),
+            payload.healthy,
+            payload.promote_to_percent,
+            governance_tx_hash,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_deploy_signature_payload_layout_is_canonical_tuple() {
+        let manifest = fixture_agent_apartment();
+        let payload = AgentDeployPayload {
+            manifest: manifest.clone(),
+            lease_ticks: 120,
+            autonomy_budget_units: Some(500),
+        };
+        let encoded =
+            encode_agent_deploy_signature_payload(&payload).expect("encode signature payload");
+        let expected =
+            norito::to_bytes(&(manifest, 120u64, Some(500u64))).expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_lease_renew_signature_payload_layout_is_canonical_tuple() {
+        let payload = AgentLeaseRenewPayload {
+            apartment_name: "ops_agent".to_owned(),
+            lease_ticks: 120,
+        };
+        let encoded =
+            encode_agent_lease_renew_signature_payload(&payload).expect("encode signature payload");
+        let expected = norito::to_bytes(&(payload.apartment_name.as_str(), payload.lease_ticks))
+            .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_restart_signature_payload_layout_is_canonical_tuple() {
+        let payload = AgentRestartPayload {
+            apartment_name: "ops_agent".to_owned(),
+            reason: "manual-restart".to_owned(),
+        };
+        let encoded =
+            encode_agent_restart_signature_payload(&payload).expect("encode signature payload");
+        let expected =
+            norito::to_bytes(&(payload.apartment_name.as_str(), payload.reason.as_str()))
+                .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_policy_revoke_signature_payload_layout_is_canonical_tuple() {
+        let payload = AgentPolicyRevokePayload {
+            apartment_name: "ops_agent".to_owned(),
+            capability: "agent.autonomy.run".to_owned(),
+            reason: Some("manual-review".to_owned()),
+        };
+        let encoded = encode_agent_policy_revoke_signature_payload(&payload)
+            .expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.apartment_name.as_str(),
+            payload.capability.as_str(),
+            payload.reason.as_deref(),
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_wallet_spend_signature_payload_layout_is_canonical_tuple() {
+        let payload = AgentWalletSpendPayload {
+            apartment_name: "ops_agent".to_owned(),
+            asset_definition: "xor#sora".to_owned(),
+            amount_nanos: 1_000_000,
+        };
+        let encoded = encode_agent_wallet_spend_signature_payload(&payload)
+            .expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.apartment_name.as_str(),
+            payload.asset_definition.as_str(),
+            payload.amount_nanos,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_wallet_approve_signature_payload_layout_is_canonical_tuple() {
+        let payload = AgentWalletApprovePayload {
+            apartment_name: "ops_agent".to_owned(),
+            request_id: "ops_agent:wallet:7".to_owned(),
+        };
+        let encoded = encode_agent_wallet_approve_signature_payload(&payload)
+            .expect("encode signature payload");
+        let expected =
+            norito::to_bytes(&(payload.apartment_name.as_str(), payload.request_id.as_str()))
+                .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_message_send_signature_payload_layout_is_canonical_tuple() {
+        let payload = AgentMessageSendPayload {
+            from_apartment: "ops_agent".to_owned(),
+            to_apartment: "worker_agent".to_owned(),
+            channel: "ops.sync".to_owned(),
+            payload: "rotate-key-42".to_owned(),
+        };
+        let encoded = encode_agent_message_send_signature_payload(&payload)
+            .expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.from_apartment.as_str(),
+            payload.to_apartment.as_str(),
+            payload.channel.as_str(),
+            payload.payload.as_str(),
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_message_ack_signature_payload_layout_is_canonical_tuple() {
+        let payload = AgentMessageAckPayload {
+            apartment_name: "worker_agent".to_owned(),
+            message_id: "worker_agent:mail:3".to_owned(),
+        };
+        let encoded =
+            encode_agent_message_ack_signature_payload(&payload).expect("encode signature payload");
+        let expected =
+            norito::to_bytes(&(payload.apartment_name.as_str(), payload.message_id.as_str()))
+                .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_artifact_allow_signature_payload_layout_is_canonical_tuple() {
+        let payload = AgentArtifactAllowPayload {
+            apartment_name: "ops_agent".to_owned(),
+            artifact_hash: "hash:ABCD0123#01".to_owned(),
+            provenance_hash: Some("hash:PROV0001#01".to_owned()),
+        };
+        let encoded = encode_agent_artifact_allow_signature_payload(&payload)
+            .expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.apartment_name.as_str(),
+            payload.artifact_hash.as_str(),
+            payload.provenance_hash.as_deref(),
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_autonomy_run_signature_payload_layout_is_canonical_tuple() {
+        let payload = AgentAutonomyRunPayload {
+            apartment_name: "ops_agent".to_owned(),
+            artifact_hash: "hash:ABCD0123#01".to_owned(),
+            provenance_hash: Some("hash:PROV0001#01".to_owned()),
+            budget_units: 120,
+            run_label: "nightly-train-step-1".to_owned(),
+        };
+        let encoded = encode_agent_autonomy_run_signature_payload(&payload)
+            .expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.apartment_name.as_str(),
+            payload.artifact_hash.as_str(),
+            payload.provenance_hash.as_deref(),
+            payload.budget_units,
+            payload.run_label.as_str(),
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn training_job_start_signature_payload_layout_is_canonical_tuple() {
+        let payload = TrainingJobStartPayload {
+            service_name: "web_portal".to_owned(),
+            model_name: "model-1".to_owned(),
+            job_id: "job-1".to_owned(),
+            worker_group_size: 4,
+            target_steps: 100,
+            checkpoint_interval_steps: 20,
+            max_retries: 3,
+            step_compute_units: 500,
+            compute_budget_units: 50_000,
+            storage_budget_bytes: 4_096,
+        };
+        let encoded = encode_training_job_start_signature_payload(&payload)
+            .expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.model_name.as_str(),
+            payload.job_id.as_str(),
+            payload.worker_group_size,
+            payload.target_steps,
+            payload.checkpoint_interval_steps,
+            payload.max_retries,
+            payload.step_compute_units,
+            payload.compute_budget_units,
+            payload.storage_budget_bytes,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn training_job_checkpoint_signature_payload_layout_is_canonical_tuple() {
+        let metrics_hash = Hash::new(b"metrics");
+        let payload = TrainingJobCheckpointPayload {
+            service_name: "web_portal".to_owned(),
+            job_id: "job-1".to_owned(),
+            completed_step: 20,
+            checkpoint_size_bytes: 1_024,
+            metrics_hash: metrics_hash.clone(),
+        };
+        let encoded = encode_training_job_checkpoint_signature_payload(&payload)
+            .expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.job_id.as_str(),
+            payload.completed_step,
+            payload.checkpoint_size_bytes,
+            metrics_hash,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn training_job_retry_signature_payload_layout_is_canonical_tuple() {
+        let payload = TrainingJobRetryPayload {
+            service_name: "web_portal".to_owned(),
+            job_id: "job-1".to_owned(),
+            reason: "worker unavailable".to_owned(),
+        };
+        let encoded = encode_training_job_retry_signature_payload(&payload)
+            .expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.job_id.as_str(),
+            payload.reason.as_str(),
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn model_artifact_register_signature_payload_layout_is_canonical_tuple() {
+        let weight_artifact_hash = Hash::new(b"weight-artifact");
+        let training_config_hash = Hash::new(b"train-config");
+        let reproducibility_hash = Hash::new(b"repro");
+        let provenance_attestation_hash = Hash::new(b"attestation");
+        let payload = ModelArtifactRegisterPayload {
+            service_name: "web_portal".to_owned(),
+            model_name: "model-1".to_owned(),
+            training_job_id: "job-1".to_owned(),
+            weight_artifact_hash: weight_artifact_hash.clone(),
+            dataset_ref: "dataset://synthetic/v1".to_owned(),
+            training_config_hash: training_config_hash.clone(),
+            reproducibility_hash: reproducibility_hash.clone(),
+            provenance_attestation_hash: provenance_attestation_hash.clone(),
+        };
+        let encoded = encode_model_artifact_register_signature_payload(&payload)
+            .expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.model_name.as_str(),
+            payload.training_job_id.as_str(),
+            weight_artifact_hash,
+            payload.dataset_ref.as_str(),
+            training_config_hash,
+            reproducibility_hash,
+            provenance_attestation_hash,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn model_weight_register_signature_payload_layout_is_canonical_tuple() {
+        let weight_artifact_hash = Hash::new(b"weight-artifact");
+        let training_config_hash = Hash::new(b"train-config");
+        let reproducibility_hash = Hash::new(b"repro");
+        let provenance_attestation_hash = Hash::new(b"attestation");
+        let payload = ModelWeightRegisterPayload {
+            service_name: "web_portal".to_owned(),
+            model_name: "model-1".to_owned(),
+            weight_version: "1.0.0".to_owned(),
+            training_job_id: "job-1".to_owned(),
+            parent_version: Some("0.9.0".to_owned()),
+            weight_artifact_hash: weight_artifact_hash.clone(),
+            dataset_ref: "dataset://synthetic/v1".to_owned(),
+            training_config_hash: training_config_hash.clone(),
+            reproducibility_hash: reproducibility_hash.clone(),
+            provenance_attestation_hash: provenance_attestation_hash.clone(),
+        };
+        let encoded = encode_model_weight_register_signature_payload(&payload)
+            .expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.model_name.as_str(),
+            payload.weight_version.as_str(),
+            payload.training_job_id.as_str(),
+            payload.parent_version.as_deref(),
+            weight_artifact_hash,
+            payload.dataset_ref.as_str(),
+            training_config_hash,
+            reproducibility_hash,
+            provenance_attestation_hash,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn model_weight_promote_signature_payload_layout_is_canonical_tuple() {
+        let gate_report_hash = Hash::new(b"gate-report");
+        let payload = ModelWeightPromotePayload {
+            service_name: "web_portal".to_owned(),
+            model_name: "model-1".to_owned(),
+            weight_version: "1.0.0".to_owned(),
+            gate_approved: true,
+            gate_report_hash: gate_report_hash.clone(),
+        };
+        let encoded = encode_model_weight_promote_signature_payload(&payload)
+            .expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.model_name.as_str(),
+            payload.weight_version.as_str(),
+            payload.gate_approved,
+            gate_report_hash,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn model_weight_rollback_signature_payload_layout_is_canonical_tuple() {
+        let payload = ModelWeightRollbackPayload {
+            service_name: "web_portal".to_owned(),
+            model_name: "model-1".to_owned(),
+            target_version: "0.9.0".to_owned(),
+            reason: "gate regression".to_owned(),
+        };
+        let encoded = encode_model_weight_rollback_signature_payload(&payload)
+            .expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.model_name.as_str(),
+            payload.target_version.as_str(),
+            payload.reason.as_str(),
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
     fn post_torii_mutation_rejects_invalid_url() {
         let payload = norito::json!({ "noop": true });
         let err =
@@ -5968,6 +8478,67 @@ mod tests {
                 .state_bindings
                 .iter()
                 .any(|binding| binding.key_prefix == "/state/session")
+        );
+    }
+
+    #[test]
+    fn init_health_app_template_scaffolds_private_policy_workflows() {
+        let dir = temp_dir("health_app_template");
+        let output = InitArgs {
+            output_dir: dir.clone(),
+            service_name: "clinic_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HealthApp,
+            overwrite: false,
+        }
+        .run()
+        .expect("health-app init should succeed");
+
+        assert_eq!(output.template, "health-app");
+        assert!(dir.join("health-app/frontend/package.json").exists());
+        assert!(dir.join("health-app/api/server.mjs").exists());
+        assert!(
+            dir.join("health-app/policy/consent_policy_template.json")
+                .exists()
+        );
+        assert!(
+            dir.join("health-app/policy/retention_policy_template.json")
+                .exists()
+        );
+        assert!(
+            dir.join("health-app/policy/deletion_workflow_template.json")
+                .exists()
+        );
+
+        let readme =
+            fs::read_to_string(dir.join("health-app/README.md")).expect("read health app readme");
+        assert!(readme.contains("consent_policy_template.json"));
+        assert!(readme.contains("retention_policy_template.json"));
+        assert!(readme.contains("deletion_workflow_template.json"));
+
+        let service: SoraServiceManifestV1 =
+            load_json(&dir.join("service_manifest.json")).expect("service manifest");
+        assert_eq!(
+            service
+                .route
+                .as_ref()
+                .map(|route| route.path_prefix.as_str()),
+            Some("/health/api")
+        );
+        assert!(
+            service.state_bindings.iter().any(|binding| {
+                binding.binding_name.as_ref() == "patient_records"
+                    && binding.encryption == SoraStateEncryptionV1::FheCiphertext
+                    && binding.key_prefix == "/state/health/patient"
+            }),
+            "patient_records private binding missing from health-app template"
+        );
+        assert!(
+            service.state_bindings.iter().any(|binding| {
+                binding.binding_name.as_ref() == "consent_events"
+                    && binding.key_prefix == "/state/health/consent"
+            }),
+            "consent_events binding missing from health-app template"
         );
     }
 

@@ -14535,6 +14535,62 @@ impl Torii {
                     post(soracloud::handle_fhe_job_run),
                 )
                 .route(
+                    "/v1/soracloud/decrypt/request",
+                    post(soracloud::handle_decryption_request),
+                )
+                .route(
+                    "/v1/soracloud/health/access/request",
+                    post(soracloud::handle_health_access_request),
+                )
+                .route(
+                    "/v1/soracloud/health/compliance/report",
+                    get(soracloud::handle_health_compliance_report),
+                )
+                .route(
+                    "/v1/soracloud/ciphertext/query",
+                    post(soracloud::handle_ciphertext_query),
+                )
+                .route(
+                    "/v1/soracloud/training/job/start",
+                    post(soracloud::handle_training_job_start),
+                )
+                .route(
+                    "/v1/soracloud/training/job/checkpoint",
+                    post(soracloud::handle_training_job_checkpoint),
+                )
+                .route(
+                    "/v1/soracloud/training/job/retry",
+                    post(soracloud::handle_training_job_retry),
+                )
+                .route(
+                    "/v1/soracloud/training/job/status",
+                    get(soracloud::handle_training_job_status),
+                )
+                .route(
+                    "/v1/soracloud/model/weight/register",
+                    post(soracloud::handle_model_weight_register),
+                )
+                .route(
+                    "/v1/soracloud/model/weight/promote",
+                    post(soracloud::handle_model_weight_promote),
+                )
+                .route(
+                    "/v1/soracloud/model/weight/rollback",
+                    post(soracloud::handle_model_weight_rollback),
+                )
+                .route(
+                    "/v1/soracloud/model/weight/status",
+                    get(soracloud::handle_model_weight_status),
+                )
+                .route(
+                    "/v1/soracloud/model/artifact/register",
+                    post(soracloud::handle_model_artifact_register),
+                )
+                .route(
+                    "/v1/soracloud/model/artifact/status",
+                    get(soracloud::handle_model_artifact_status),
+                )
+                .route(
                     "/v1/soracloud/registry",
                     get(soracloud::handle_registry_status),
                 )

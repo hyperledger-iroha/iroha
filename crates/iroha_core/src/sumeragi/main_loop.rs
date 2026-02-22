@@ -4815,6 +4815,8 @@ impl NoRosterFallbackBudget {
 #[derive(Debug, Clone, Copy)]
 struct DeterministicRecoveryProfile {
     signer_fallback_attempts: u32,
+    missing_block_retry_backoff_multiplier: u32,
+    missing_block_retry_backoff_cap: Duration,
     deferred_qc_ttl: Duration,
     missing_block_height_ttl: Duration,
     missing_block_height_attempt_cap: u32,
@@ -14601,8 +14603,19 @@ impl Actor {
             .recovery
             .height_window
             .max(Duration::from_millis(1));
+        let missing_block_retry_backoff_cap = self
+            .config
+            .recovery
+            .missing_block_retry_backoff_cap
+            .max(Duration::from_millis(1));
         DeterministicRecoveryProfile {
             signer_fallback_attempts: self.config.recovery.missing_block_signer_fallback_attempts,
+            missing_block_retry_backoff_multiplier: self
+                .config
+                .recovery
+                .missing_block_retry_backoff_multiplier
+                .max(1),
+            missing_block_retry_backoff_cap,
             deferred_qc_ttl,
             missing_block_height_ttl,
             missing_block_height_attempt_cap: self.config.recovery.height_attempt_cap.max(1),
@@ -14624,6 +14637,16 @@ impl Actor {
     fn recovery_signer_fallback_attempts(&self) -> u32 {
         self.deterministic_recovery_profile()
             .signer_fallback_attempts
+    }
+
+    fn recovery_missing_block_retry_backoff_multiplier(&self) -> u32 {
+        self.deterministic_recovery_profile()
+            .missing_block_retry_backoff_multiplier
+    }
+
+    fn recovery_missing_block_retry_backoff_cap(&self) -> Duration {
+        self.deterministic_recovery_profile()
+            .missing_block_retry_backoff_cap
     }
 
     fn recovery_deferred_qc_ttl(&self) -> Duration {

@@ -84,7 +84,11 @@ const IZANAMI_INGRESS_UNHEALTHY_COOLDOWN_MS: u64 = 5_000;
 const IZANAMI_INGRESS_REPROBE_INTERVAL_MS: u64 = 1_000;
 const IZANAMI_INGRESS_REQUEST_TIMEOUT_MS: u64 = 5_000;
 const IZANAMI_INGRESS_STATUS_TIMEOUT_MS: u64 = 20_000;
+const IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS: u32 = 2;
+const IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS: u64 = 250;
 const IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
+const IZANAMI_WORKER_FAILURE_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
+const IZANAMI_PEER_LOG_BASE_LEVEL: &str = "WARN";
 
 #[derive(Clone, Copy, Debug)]
 struct IngressEndpointPoolConfig {
@@ -400,10 +404,67 @@ fn is_ingress_failover_retryable(error: &color_eyre::Report) -> bool {
     let message = format!("{error:#}").to_ascii_lowercase();
     message.contains("timed out")
         || message.contains("timeout")
+        || message.contains("transaction queued for too long")
         || message.contains("connection refused")
         || message.contains("connection reset")
         || message.contains("broken pipe")
         || contains_http_5xx_status(&message)
+}
+
+fn is_ingress_queue_timeout_retryable(error: &color_eyre::Report) -> bool {
+    format!("{error:#}")
+        .to_ascii_lowercase()
+        .contains("transaction queued for too long")
+}
+
+fn run_with_queue_timeout_retry<F>(plan_label: &'static str, submit: F) -> Result<()>
+where
+    F: FnMut() -> Result<()>,
+{
+    run_with_queue_timeout_retry_with_policy(
+        plan_label,
+        IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS,
+        Duration::from_millis(IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS),
+        submit,
+    )
+}
+
+fn run_with_queue_timeout_retry_with_policy<F>(
+    plan_label: &'static str,
+    max_retry_attempts: u32,
+    initial_backoff: Duration,
+    mut submit: F,
+) -> Result<()>
+where
+    F: FnMut() -> Result<()>,
+{
+    let mut backoff = initial_backoff;
+    for attempt in 0..=max_retry_attempts {
+        match submit() {
+            Ok(()) => return Ok(()),
+            Err(err)
+                if is_ingress_queue_timeout_retryable(&err) && attempt < max_retry_attempts =>
+            {
+                let retry_in = backoff;
+                let next_attempt = attempt.saturating_add(2);
+                warn!(
+                    target: "izanami::workload",
+                    plan = plan_label,
+                    next_attempt,
+                    max_attempts = max_retry_attempts.saturating_add(1),
+                    ?retry_in,
+                    ?err,
+                    "submission queue timeout observed; retrying plan submission"
+                );
+                if !retry_in.is_zero() {
+                    std::thread::sleep(retry_in);
+                }
+                backoff = backoff.saturating_mul(2);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(eyre!("submission retry loop exhausted without a result"))
 }
 
 fn contains_http_5xx_status(message: &str) -> bool {
@@ -543,9 +604,11 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
         let filter = filter.trim();
         if !filter.is_empty() {
             let filter = filter.to_string();
-            // Forward Izanami's RUST_LOG to peer logger filters for targeted debug runs.
+            // Keep peer logs sparse by default, while still allowing targeted directives via RUST_LOG.
             builder = builder.with_config_layer(|layer| {
-                layer.write(["logger", "filter"], filter);
+                layer
+                    .write(["logger", "level"], IZANAMI_PEER_LOG_BASE_LEVEL)
+                    .write(["logger", "filter"], filter);
             });
         }
     }
@@ -928,6 +991,7 @@ impl IzanamiRunner {
             Ok(())
         };
 
+        let mut run_error = None;
         if let Err(err) = target_result {
             warn!(
                 target: "izanami::progress",
@@ -935,34 +999,51 @@ impl IzanamiRunner {
                 "target progress monitoring failed; stopping run"
             );
             run_control.stop();
-            await_worker_shutdown(load_handles, "load").await;
-            await_worker_shutdown(faulty_handles, "fault").await;
-            self.network.shutdown().await;
-            return Err(err);
+            run_error = Some(err);
         }
 
         if self.config.target_blocks.is_some() {
             run_control.stop();
         }
 
-        await_worker_shutdown(load_handles, "load").await;
-        await_worker_shutdown(faulty_handles, "fault").await;
+        let shutdown_timeout = if run_error.is_some() {
+            Duration::from_secs(IZANAMI_WORKER_FAILURE_SHUTDOWN_TIMEOUT_SECS)
+        } else {
+            Duration::from_secs(IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS)
+        };
+        await_worker_shutdown_with_timeout(load_handles, "load", shutdown_timeout).await;
+        await_worker_shutdown_with_timeout(faulty_handles, "fault", shutdown_timeout).await;
 
         self.network.shutdown().await;
 
         let snapshot = metrics.snapshot();
         let ingress_snapshot = ingress_stats.snapshot();
-        info!(
-            target: "izanami::summary",
-            successes = snapshot.successes,
-            failures = snapshot.failures,
-            expected_failures = snapshot.expected_failures,
-            unexpected_successes = snapshot.unexpected_successes,
-            izanami_ingress_failover_total = ingress_snapshot.failover_total,
-            izanami_ingress_endpoint_unhealthy_total = ingress_snapshot.endpoint_unhealthy_total,
-            "izanami run complete"
-        );
-        Ok(())
+        if let Some(err) = run_error {
+            warn!(
+                target: "izanami::summary",
+                successes = snapshot.successes,
+                failures = snapshot.failures,
+                expected_failures = snapshot.expected_failures,
+                unexpected_successes = snapshot.unexpected_successes,
+                izanami_ingress_failover_total = ingress_snapshot.failover_total,
+                izanami_ingress_endpoint_unhealthy_total = ingress_snapshot.endpoint_unhealthy_total,
+                ?err,
+                "izanami run finished with errors"
+            );
+            Err(err)
+        } else {
+            info!(
+                target: "izanami::summary",
+                successes = snapshot.successes,
+                failures = snapshot.failures,
+                expected_failures = snapshot.expected_failures,
+                unexpected_successes = snapshot.unexpected_successes,
+                izanami_ingress_failover_total = ingress_snapshot.failover_total,
+                izanami_ingress_endpoint_unhealthy_total = ingress_snapshot.endpoint_unhealthy_total,
+                "izanami run complete"
+            );
+            Ok(())
+        }
     }
 
     fn seeded_rng(&self) -> StdRng {
@@ -1111,15 +1192,6 @@ fn tune_ingress_client(mut client: Client) -> Client {
     client.torii_request_timeout = Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS);
     client.transaction_status_timeout = Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS);
     client
-}
-
-async fn await_worker_shutdown(handles: Vec<JoinHandle<()>>, worker_kind: &'static str) {
-    await_worker_shutdown_with_timeout(
-        handles,
-        worker_kind,
-        Duration::from_secs(IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS),
-    )
-    .await;
 }
 
 async fn await_worker_shutdown_with_timeout(
@@ -1477,15 +1549,17 @@ async fn submit_plan(
     let instructions_for_submit = instructions.clone();
     let submission_counter_for_submit = Arc::clone(&submission_counter);
     let succeeded = run_submission(plan_label, expect_success, metrics, move || {
-        ingress_pool_for_submit.run_with_failover("submit_all_blocking_with_metadata", |peer| {
-            let client = tune_ingress_client(peer.client_for(
-                &signer_for_submit.id,
-                signer_for_submit.key_pair.private_key().clone(),
-            ));
-            let metadata = submission_metadata(submission_counter_for_submit.as_ref());
-            client
-                .submit_all_blocking_with_metadata(instructions_for_submit.clone(), metadata)
-                .map(|_| ())
+        run_with_queue_timeout_retry(plan_label, || {
+            ingress_pool_for_submit.run_with_failover("submit_all_blocking_with_metadata", |peer| {
+                let client = tune_ingress_client(peer.client_for(
+                    &signer_for_submit.id,
+                    signer_for_submit.key_pair.private_key().clone(),
+                ));
+                let metadata = submission_metadata(submission_counter_for_submit.as_ref());
+                client
+                    .submit_all_blocking_with_metadata(instructions_for_submit.clone(), metadata)
+                    .map(|_| ())
+            })
         })
     })
     .await;
@@ -2144,6 +2218,55 @@ mod tests {
         assert_eq!(snapshot.failures, 0);
         assert_eq!(snapshot.expected_failures, 0);
         assert_eq!(snapshot.unexpected_successes, 1);
+    }
+
+    #[test]
+    fn run_with_queue_timeout_retry_retries_and_succeeds() {
+        let attempts = AtomicU64::new(0);
+        let result =
+            run_with_queue_timeout_retry_with_policy("retry_success", 2, Duration::ZERO, || {
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+                if attempt == 0 {
+                    Err(eyre!("transaction queued for too long"))
+                } else {
+                    Ok(())
+                }
+            });
+        assert!(result.is_ok(), "queue-timeout retries should recover");
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            2,
+            "helper should perform one retry before succeeding"
+        );
+    }
+
+    #[test]
+    fn run_with_queue_timeout_retry_stops_on_non_retryable_error() {
+        let attempts = AtomicU64::new(0);
+        let result = run_with_queue_timeout_retry_with_policy(
+            "retry_non_retryable",
+            2,
+            Duration::ZERO,
+            || {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                Err(eyre!("permission denied"))
+            },
+        );
+        assert!(result.is_err(), "non-retryable errors should bubble up");
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            1,
+            "non-retryable failures must not be retried"
+        );
+    }
+
+    #[test]
+    fn ingress_failover_marks_queue_timeout_retryable() {
+        let err = eyre!("transaction queued for too long");
+        assert!(
+            is_ingress_failover_retryable(&err),
+            "queue timeout errors should trigger endpoint failover"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2856,7 +2979,7 @@ mod tests {
     }
 
     #[test]
-    fn make_network_builder_forwards_rust_log() -> Result<()> {
+    fn make_network_builder_forwards_rust_log_and_sets_peer_base_level() -> Result<()> {
         init_instruction_registry();
         let _env_guard = EnvGuard::set("RUST_LOG", "iroha_p2p=debug,iroha_core=debug");
         let config = ChaosConfig {
@@ -2921,6 +3044,11 @@ mod tests {
             .rev()
             .find_map(|layer| read_str(layer, &["logger", "filter"]));
         assert_eq!(filter.as_deref(), Some("iroha_p2p=debug,iroha_core=debug"));
+        let level = layers
+            .iter()
+            .rev()
+            .find_map(|layer| read_str(layer, &["logger", "level"]));
+        assert_eq!(level.as_deref(), Some(IZANAMI_PEER_LOG_BASE_LEVEL));
 
         Ok(())
     }

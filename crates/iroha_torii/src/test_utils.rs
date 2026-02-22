@@ -733,6 +733,11 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 no_roster_fallback_views: defaults::sumeragi::RECOVERY_NO_ROSTER_FALLBACK_VIEWS,
                 missing_block_signer_fallback_attempts:
                     defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+                missing_block_retry_backoff_multiplier:
+                    defaults::sumeragi::RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER,
+                missing_block_retry_backoff_cap: Duration::from_millis(
+                    defaults::sumeragi::RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS,
+                ),
                 view_change_backlog_extension_factor:
                     defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR,
                 view_change_backlog_extension_cap: Duration::from_millis(

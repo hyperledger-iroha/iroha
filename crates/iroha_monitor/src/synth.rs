@@ -331,7 +331,7 @@ impl ShoVoice {
         envelope.trigger();
         self.notes.push(ShoOsc {
             note,
-            oscillator: Oscillator::new(freq * detune_ratio, Waveform::Sine),
+            oscillator: Oscillator::new(freq * detune_ratio),
             envelope,
             base_gain: gain,
             detune_ratio,
@@ -406,7 +406,7 @@ impl HichirikiVoice {
     fn new(sample_rate: f32) -> Self {
         Self {
             sample_rate,
-            oscillator: Oscillator::new(440.0, Waveform::Square),
+            oscillator: Oscillator::new(440.0),
             envelope: Envelope::with_times(sample_rate, 0.02, 0.35),
             base_gain: 0.0,
             breath_mix: 0.1,
@@ -429,7 +429,7 @@ impl HichirikiVoice {
     fn note_on(&mut self, note: u8, velocity: u8, ornaments: Ornaments, beat: f32) {
         self.current_note = note;
         let freq = midi_note_to_freq(note, SequenceLayer::Hichiriki);
-        self.oscillator = Oscillator::new(freq, Waveform::Square);
+        self.oscillator = Oscillator::new(freq);
         let attack = if ornaments.contains(OrnamentMark::Tataku) {
             0.008
         } else {
@@ -606,7 +606,7 @@ impl RyutekiVoice {
     fn new(sample_rate: f32) -> Self {
         Self {
             sample_rate,
-            oscillator: Oscillator::new(440.0, Waveform::Sine),
+            oscillator: Oscillator::new(440.0),
             envelope: Envelope::with_times(sample_rate, 0.03, 0.26),
             base_gain: 0.0,
             noise_env: 0.0,
@@ -628,7 +628,7 @@ impl RyutekiVoice {
     fn note_on(&mut self, note: u8, velocity: u8, ornaments: Ornaments, beat: f32) {
         self.current_note = note;
         let freq = midi_note_to_freq(note, SequenceLayer::Ryuteki);
-        self.oscillator = Oscillator::new(freq, Waveform::Sine);
+        self.oscillator = Oscillator::new(freq);
         self.envelope.reset_with(self.sample_rate, 0.03, 0.22);
         self.envelope.trigger();
 
@@ -793,10 +793,15 @@ impl KotoVoice {
             return 0.0;
         }
 
-        let mod_signal = (self.mod_phase.sin()) * self.mod_index * self.mod_env;
+        let mod_signal =
+            if self.mod_phase < PI { 1.0 } else { -1.0 } * self.mod_index * self.mod_env;
         let base = self.carrier_phase + mod_signal;
-        let primary = base.sin();
-        let duplex = (base * 1.98).sin() * 0.12;
+        let primary = if base.rem_euclid(TAU) < PI { 1.0 } else { -1.0 };
+        let duplex = if (base * 1.98).rem_euclid(TAU) < PI {
+            0.12
+        } else {
+            -0.12
+        };
 
         let noise_jitter = self.noise.next();
         let freq_step = self
@@ -828,24 +833,16 @@ impl KotoVoice {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Waveform {
-    Sine,
-    Square,
-}
-
 struct Oscillator {
     phase: f32,
     freq: f32,
-    waveform: Waveform,
 }
 
 impl Oscillator {
-    fn new(freq: f32, waveform: Waveform) -> Self {
+    fn new(freq: f32) -> Self {
         Self {
             phase: 0.0,
             freq: freq.max(1.0),
-            waveform,
         }
     }
 
@@ -855,16 +852,7 @@ impl Oscillator {
 
     fn sample(&mut self, sample_rate: f32) -> f32 {
         self.phase = wrap_phase(self.phase + TAU * self.freq / sample_rate);
-        match self.waveform {
-            Waveform::Sine => self.phase.sin(),
-            Waveform::Square => {
-                if self.phase < PI {
-                    1.0
-                } else {
-                    -1.0
-                }
-            }
-        }
+        if self.phase < PI { 1.0 } else { -1.0 }
     }
 }
 

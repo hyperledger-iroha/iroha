@@ -106,6 +106,9 @@ iroha offline petal eval-capture --input-dir ./petal_out/png --channel katakana-
 `eval-capture` applies deterministic perturbations (distance downscale, blur, motion blur,
 jitter, exposure/noise shifts), decodes each perturbed frame, and fails if the success ratio
 drops below the configured threshold.
+When a configured threshold is no longer reachable during evaluation, the gate exits early and
+reports both executed attempts (`attempts`) and total scheduled attempts (`planned_attempts`)
+plus `aborted_early=true`.
 
 `simulate-realtime` example (frame-by-frame live-read simulation):
 
@@ -116,6 +119,8 @@ iroha offline petal simulate-realtime --input-dir ./petal_out/png --channel kata
 `simulate-realtime` replays rendered frames in order and now supports deterministic
 looped playback with `--realtime-loops <n>`, including `loop_index` and `source_index`
 per frame in the JSON report.
+For distance-safe katakana validation, keep encode dimension at `1024` so realtime results
+reflect the larger-box operating point.
 
 `score-styles` example (repeatable style ranking report):
 

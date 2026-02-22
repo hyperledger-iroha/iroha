@@ -6176,9 +6176,6 @@ pub(crate) mod valid {
             let t_stateless_start = Instant::now();
             let mut stateless_rejections: Vec<Option<TransactionRejectionReason>> = {
                 let validate_tx = |(idx, tx): (usize, &&SignedTransaction)| {
-                    if cached_ok[idx] {
-                        return None;
-                    }
                     if !skip_stateless_checks && tx.creation_time() >= block_creation_time {
                         return Some(TransactionRejectionReason::Validation(
                             iroha_data_model::ValidationFail::NotPermitted(format!(
@@ -6207,6 +6204,9 @@ pub(crate) mod valid {
                         ) {
                             return Some(reason);
                         }
+                    }
+                    if cached_ok[idx] {
+                        return None;
                     }
                     if skip_stateless_checks {
                         return None;
@@ -11223,6 +11223,88 @@ pub(crate) mod valid {
                 cache.get_ok(&tx_hash, block_creation_ms),
                 "successful static validation with events should populate stateless cache",
             );
+        }
+
+        #[test]
+        fn validate_keep_voting_block_enforces_fraud_policy_with_stateless_cache() {
+            use std::iter;
+
+            use iroha_config::parameters::actual::{FraudMonitoring, FraudRiskBand};
+            use iroha_data_model::{
+                ValidationFail, account::Account, asset::AssetDefinition, domain::Domain,
+                transaction::error::TransactionRejectionReason,
+            };
+
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let (authority, signer) = gen_account_in("fraud-cache-test");
+            let domain = Domain::new(authority.domain().clone()).build(&authority);
+            let account = Account::new(authority.clone()).build(&authority);
+            let world = World::with([domain], [account], iter::empty::<AssetDefinition>());
+            let mut state = State::new(world, Arc::clone(&kura), query);
+
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.stateless_cache_cap = 64;
+            state.set_pipeline(pipeline);
+            state.set_fraud_monitoring(FraudMonitoring {
+                enabled: true,
+                required_minimum_band: Some(FraudRiskBand::High),
+                missing_assessment_grace: Duration::ZERO,
+                ..Default::default()
+            });
+
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let (leader_public, leader_private) = leader.into_parts();
+            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
+            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
+
+            let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
+            let tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &tx_time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "fraud-check".to_owned())])
+            .with_metadata(Metadata::default())
+            .sign(signer.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+
+            let (_block_handle, block_time_source) =
+                TimeSource::new_mock(Duration::from_millis(10));
+            let builder = BlockBuilder::new_with_time_source(vec![accepted], block_time_source);
+            let new_block = builder
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(&leader_private)
+                .unpack(|_| {});
+            let signed_block = SignedBlock::from(new_block);
+
+            let mut voting_block: Option<super::super::VotingBlock> = None;
+            let (valid_block, _) = ValidBlock::validate_keep_voting_block(
+                signed_block,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &TimeSource::new_system(),
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {})
+            .expect("block validation should complete and record transaction result");
+
+            let committed_block: SignedBlock = valid_block.into();
+            let rejection = committed_block
+                .error(0)
+                .expect("fraud policy rejection should be recorded for missing assessment");
+            match rejection {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
+                    assert!(
+                        msg.contains("fraud monitoring requires an attached assessment"),
+                        "unexpected rejection message: {msg}"
+                    );
+                }
+                other => panic!("unexpected rejection reason: {other:?}"),
+            }
         }
 
         // The executor upgrade is optional; a genesis without it must still pass static checks.

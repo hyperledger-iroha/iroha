@@ -3888,6 +3888,10 @@ pub struct SumeragiRecovery {
     pub no_roster_fallback_views: u32,
     /// Missing-block fetch attempts before falling back to the full commit topology.
     pub missing_block_signer_fallback_attempts: u32,
+    /// Per-attempt multiplier applied to missing-block retry windows (>=1).
+    pub missing_block_retry_backoff_multiplier: u32,
+    /// Ceiling applied to missing-block retry windows after backoff.
+    pub missing_block_retry_backoff_cap: Duration,
     /// Backlog-aware multiplier applied to quorum-reschedule grace windows.
     pub view_change_backlog_extension_factor: f64,
     /// Maximum additional quorum-reschedule grace window applied under backlog.
