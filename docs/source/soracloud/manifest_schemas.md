@@ -12,6 +12,10 @@ deployment on Iroha 3:
 - `FheExecutionPolicyV1`
 - `FheGovernanceBundleV1`
 - `FheJobSpecV1`
+- `DecryptionAuthorityPolicyV1`
+- `DecryptionRequestV1`
+- `CiphertextQuerySpecV1`
+- `CiphertextQueryResponseV1`
 - `SecretEnvelopeV1`
 - `CiphertextStateRecordV1`
 
@@ -46,6 +50,20 @@ These manifests are designed for the `IVM` + custom Sora Container Runtime
 - `FheJobSpecV1` captures deterministic ciphertext job admission/execution
   requests: operation class, ordered input commitments, output key, and bounded
   depth/rotation/bootstrap demand linked to a policy + parameter set.
+- `DecryptionAuthorityPolicyV1` captures governance-managed disclosure policy:
+  authority mode (client-held vs threshold service), approver quorum/members,
+  break-glass allowance, jurisdiction tagging, consent-evidence requirement,
+  TTL bounds, and canonical audit tagging.
+- `DecryptionRequestV1` captures policy-linked disclosure attempts:
+  ciphertext key reference (`binding_name` + `state_key` + commitment),
+  justification, jurisdiction tag, optional consent-evidence hash, TTL,
+  break-glass intent/reason, and governance hash linkage.
+- `CiphertextQuerySpecV1` captures deterministic ciphertext-only query intent:
+  service/binding scope, key-prefix filter, bounded result limit, metadata
+  projection level, and proof inclusion toggle.
+- `CiphertextQueryResponseV1` captures disclosure-minimized query outputs:
+  digest-oriented key references, ciphertext metadata, optional inclusion proofs,
+  and response-level truncation/sequence context.
 - `SecretEnvelopeV1` captures encrypted payload material itself:
   encryption mode, key identifier/version, nonce, ciphertext bytes, and
   integrity commitments.
@@ -64,6 +82,11 @@ These manifests are designed for the `IVM` + custom Sora Container Runtime
 - `FHE_EXECUTION_POLICY_VERSION_V1 = 1`
 - `FHE_GOVERNANCE_BUNDLE_VERSION_V1 = 1`
 - `FHE_JOB_SPEC_VERSION_V1 = 1`
+- `DECRYPTION_AUTHORITY_POLICY_VERSION_V1 = 1`
+- `DECRYPTION_REQUEST_VERSION_V1 = 1`
+- `CIPHERTEXT_QUERY_SPEC_VERSION_V1 = 1`
+- `CIPHERTEXT_QUERY_RESPONSE_VERSION_V1 = 1`
+- `CIPHERTEXT_QUERY_PROOF_VERSION_V1 = 1`
 - `SECRET_ENVELOPE_VERSION_V1 = 1`
 - `CIPHERTEXT_STATE_RECORD_VERSION_V1 = 1`
 
@@ -129,6 +152,34 @@ Validation rejects unsupported versions with
     - policy/param identifiers and versions match.
     - input count/bytes, depth, rotation, and bootstrap limits are within policy caps.
     - deterministic projected output bytes fit policy ciphertext limits.
+- Decryption authority policy:
+  - `approver_ids` must be non-empty, unique, and strictly lexicographically sorted.
+  - `ClientHeld` mode requires exactly one approver, `approver_quorum=1`,
+    and `allow_break_glass=false`.
+  - `ThresholdService` mode requires at least two approvers and
+    `approver_quorum <= approver_ids.len()`.
+  - `jurisdiction_tag` must be non-empty and must not contain control characters.
+  - `audit_tag` must be non-empty and must not contain control characters.
+- Decryption request:
+  - `request_id`, `state_key`, and `justification` must be non-empty
+    (`state_key` starts with `/`).
+  - `jurisdiction_tag` must be non-empty and must not contain control characters.
+  - `break_glass_reason` is required when `break_glass=true` and must be omitted when
+    `break_glass=false`.
+  - policy-linked admission enforces policy-name equality, request TTL not
+    exceeding `policy.max_ttl_blocks`, jurisdiction-tag equality, break-glass
+    gating, and consent-evidence requirements when
+    `policy.require_consent_evidence=true` for non-break-glass requests.
+- Ciphertext query spec:
+  - `state_key_prefix` must be non-empty and start with `/`.
+  - `max_results` is deterministically bounded (`<=256`).
+  - metadata projection is explicit (`Minimal` digest-only vs `Standard` key-visible).
+- Ciphertext query response:
+  - `result_count` must equal serialized row count.
+  - `Minimal` projection must not expose `state_key`; `Standard` must expose it.
+  - rows must never surface plaintext encryption mode.
+  - inclusion proofs (when present) must include non-empty scheme ids and
+    `anchor_sequence >= event_sequence`.
 - Secret envelope:
   - `key_id`, `nonce`, and `ciphertext` must be non-empty.
   - nonce length is bounded (`<=256` bytes).
@@ -152,6 +203,10 @@ Canonical JSON fixtures are stored at:
 - `fixtures/soracloud/fhe_execution_policy_v1.json`
 - `fixtures/soracloud/fhe_governance_bundle_v1.json`
 - `fixtures/soracloud/fhe_job_spec_v1.json`
+- `fixtures/soracloud/decryption_authority_policy_v1.json`
+- `fixtures/soracloud/decryption_request_v1.json`
+- `fixtures/soracloud/ciphertext_query_spec_v1.json`
+- `fixtures/soracloud/ciphertext_query_response_v1.json`
 - `fixtures/soracloud/secret_envelope_v1.json`
 - `fixtures/soracloud/ciphertext_state_record_v1.json`
 

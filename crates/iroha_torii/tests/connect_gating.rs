@@ -488,13 +488,19 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 height_window: core::time::Duration::from_millis(
                     iroha_config::parameters::defaults::sumeragi::RECOVERY_HEIGHT_WINDOW_MS,
                 ),
-                hash_miss_cap_before_range_pull:
-                    iroha_config::parameters::defaults::sumeragi::
-                        RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL,
-                no_roster_fallback_views:
-                    iroha_config::parameters::defaults::sumeragi::RECOVERY_NO_ROSTER_FALLBACK_VIEWS,
+                hash_miss_cap_before_range_pull: iroha_config::parameters::defaults::sumeragi::
+                    RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL,
+                no_roster_fallback_views: iroha_config::parameters::defaults::sumeragi::
+                    RECOVERY_NO_ROSTER_FALLBACK_VIEWS,
                 missing_block_signer_fallback_attempts:
                     iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+                missing_block_retry_backoff_multiplier:
+                    iroha_config::parameters::defaults::sumeragi::
+                        RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER,
+                missing_block_retry_backoff_cap: core::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::
+                        RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS,
+                ),
                 view_change_backlog_extension_factor:
                     iroha_config::parameters::defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR,
                 view_change_backlog_extension_cap: core::time::Duration::from_millis(

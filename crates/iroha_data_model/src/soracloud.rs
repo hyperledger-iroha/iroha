@@ -44,6 +44,16 @@ pub const SECRET_ENVELOPE_VERSION_V1: u16 = 1;
 pub const CIPHERTEXT_STATE_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`FheJobSpecV1`].
 pub const FHE_JOB_SPEC_VERSION_V1: u16 = 1;
+/// Schema version for [`DecryptionAuthorityPolicyV1`].
+pub const DECRYPTION_AUTHORITY_POLICY_VERSION_V1: u16 = 1;
+/// Schema version for [`DecryptionRequestV1`].
+pub const DECRYPTION_REQUEST_VERSION_V1: u16 = 1;
+/// Schema version for [`CiphertextQuerySpecV1`].
+pub const CIPHERTEXT_QUERY_SPEC_VERSION_V1: u16 = 1;
+/// Schema version for [`CiphertextQueryResponseV1`].
+pub const CIPHERTEXT_QUERY_RESPONSE_VERSION_V1: u16 = 1;
+/// Schema version for [`CiphertextInclusionProofV1`].
+pub const CIPHERTEXT_QUERY_PROOF_VERSION_V1: u16 = 1;
 
 /// Validation errors returned by `SoraCloud` manifest helpers.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -220,6 +230,7 @@ impl SoraContainerManifestV1 {
     /// # Errors
     /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
     /// required fields are empty.
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
         if self.schema_version != SORA_CONTAINER_MANIFEST_VERSION_V1 {
             return Err(SoraCloudManifestError::UnsupportedVersion {
@@ -790,7 +801,7 @@ pub enum FheParamLifecycleV1 {
     Withdrawn,
 }
 
-/// Governance-managed FHE parameter-set descriptor for SoraCloud workloads.
+/// Governance-managed FHE parameter-set descriptor for `SoraCloud` workloads.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -841,6 +852,7 @@ impl FheParamSetV1 {
     /// # Errors
     /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
     /// parameter/lifecycle fields violate deterministic governance rules.
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
         if self.schema_version != FHE_PARAM_SET_VERSION_V1 {
             return Err(SoraCloudManifestError::UnsupportedVersion {
@@ -1069,6 +1081,7 @@ impl FheExecutionPolicyV1 {
     /// # Errors
     /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
     /// execution limits violate deterministic admission rules.
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
         if self.schema_version != FHE_EXECUTION_POLICY_VERSION_V1 {
             return Err(SoraCloudManifestError::UnsupportedVersion {
@@ -1539,6 +1552,7 @@ impl FheJobSpecV1 {
     /// # Errors
     /// Returns [`SoraCloudManifestError`] when job identifiers, key paths,
     /// inputs, or operation-specific constraints are invalid.
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
         if self.schema_version != FHE_JOB_SPEC_VERSION_V1 {
             return Err(SoraCloudManifestError::UnsupportedVersion {
@@ -1691,6 +1705,7 @@ impl FheJobSpecV1 {
     /// # Errors
     /// Returns [`SoraCloudManifestError`] when policy linkage mismatches, input
     /// bounds exceed policy limits, or deterministic output bounds are violated.
+    #[allow(clippy::too_many_lines)]
     pub fn validate_for_execution(
         &self,
         policy: &FheExecutionPolicyV1,
@@ -1848,6 +1863,631 @@ impl FheJobSpecV1 {
     }
 }
 
+/// Decryption authority mode enforced for private-state disclosure requests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
+pub enum DecryptionAuthorityModeV1 {
+    /// Ciphertext keys are client-held; network records request/audit only.
+    ClientHeld,
+    /// Decryption requires threshold service approvals from policy members.
+    ThresholdService,
+}
+
+/// Governance-managed policy for decryption authority and request gating.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct DecryptionAuthorityPolicyV1 {
+    /// Schema version; must equal [`DECRYPTION_AUTHORITY_POLICY_VERSION_V1`].
+    pub schema_version: u16,
+    /// Stable decryption policy identifier.
+    pub policy_name: Name,
+    /// Decryption authority mode.
+    pub mode: DecryptionAuthorityModeV1,
+    /// Required approvals for threshold-mode decryption.
+    pub approver_quorum: NonZeroU16,
+    /// Ordered unique approver identities allowed by the policy.
+    #[norito(default)]
+    pub approver_ids: Vec<Name>,
+    /// Whether emergency break-glass requests are allowed.
+    pub allow_break_glass: bool,
+    /// Canonical jurisdiction/compliance tag enforced for requests.
+    pub jurisdiction_tag: String,
+    /// Whether non-break-glass requests must include consent evidence.
+    pub require_consent_evidence: bool,
+    /// Maximum request TTL in blocks.
+    pub max_ttl_blocks: NonZeroU32,
+    /// Canonical audit tag attached to request records.
+    pub audit_tag: String,
+}
+
+impl DecryptionAuthorityPolicyV1 {
+    /// Validate schema version and deterministic decryption-policy constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when quorum, approver ordering,
+    /// mode constraints, or audit-tag rules are violated.
+    #[allow(clippy::too_many_lines)]
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != DECRYPTION_AUTHORITY_POLICY_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "decryption authority policy",
+                expected: DECRYPTION_AUTHORITY_POLICY_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.approver_ids.is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "decryption authority policy",
+                field: "approver_ids",
+            });
+        }
+
+        let mut seen = BTreeSet::new();
+        for approver in &self.approver_ids {
+            if !seen.insert(approver.clone()) {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "decryption authority policy",
+                    field: "approver_ids",
+                    reason: format!("duplicate approver `{approver}`"),
+                });
+            }
+        }
+        if self
+            .approver_ids
+            .windows(2)
+            .any(|pair| pair[0].as_ref() >= pair[1].as_ref())
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "decryption authority policy",
+                field: "approver_ids",
+                reason: "must be strictly sorted in ascending lexical order".to_string(),
+            });
+        }
+
+        let approver_count =
+            u16::try_from(self.approver_ids.len()).expect("approver count always fits into u16");
+        match self.mode {
+            DecryptionAuthorityModeV1::ClientHeld => {
+                if approver_count != 1 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "decryption authority policy",
+                        field: "approver_ids",
+                        reason: "client-held mode requires exactly one approver".to_string(),
+                    });
+                }
+                if self.approver_quorum.get() != 1 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "decryption authority policy",
+                        field: "approver_quorum",
+                        reason: "client-held mode requires approver_quorum=1".to_string(),
+                    });
+                }
+                if self.allow_break_glass {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "decryption authority policy",
+                        field: "allow_break_glass",
+                        reason: "client-held mode must not enable break-glass".to_string(),
+                    });
+                }
+            }
+            DecryptionAuthorityModeV1::ThresholdService => {
+                if approver_count < 2 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "decryption authority policy",
+                        field: "approver_ids",
+                        reason: "threshold mode requires at least two approvers".to_string(),
+                    });
+                }
+                if self.approver_quorum.get() > approver_count {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "decryption authority policy",
+                        field: "approver_quorum",
+                        reason: format!(
+                            "approver_quorum {} exceeds approver count {}",
+                            self.approver_quorum, approver_count
+                        ),
+                    });
+                }
+            }
+        }
+
+        if self.jurisdiction_tag.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "decryption authority policy",
+                field: "jurisdiction_tag",
+            });
+        }
+        if self.jurisdiction_tag.chars().any(char::is_control) {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "decryption authority policy",
+                field: "jurisdiction_tag",
+                reason: "must not contain control characters".to_string(),
+            });
+        }
+
+        if self.audit_tag.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "decryption authority policy",
+                field: "audit_tag",
+            });
+        }
+        if self.audit_tag.chars().any(char::is_control) {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "decryption authority policy",
+                field: "audit_tag",
+                reason: "must not contain control characters".to_string(),
+            });
+        }
+
+        Ok(())
+    }
+}
+
+/// Decryption request envelope gated by a [`DecryptionAuthorityPolicyV1`].
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct DecryptionRequestV1 {
+    /// Schema version; must equal [`DECRYPTION_REQUEST_VERSION_V1`].
+    pub schema_version: u16,
+    /// Stable request identifier.
+    pub request_id: String,
+    /// Referenced decryption policy identifier.
+    pub policy_name: Name,
+    /// Binding owning the ciphertext state.
+    pub binding_name: Name,
+    /// Canonical state key of requested ciphertext material.
+    pub state_key: String,
+    /// Commitment of the ciphertext payload being disclosed.
+    pub ciphertext_commitment: Hash,
+    /// Human-readable justification captured for immutable audit.
+    pub justification: String,
+    /// Jurisdiction/compliance tag for this disclosure request.
+    pub jurisdiction_tag: String,
+    /// Optional consent evidence commitment hash.
+    #[norito(default)]
+    pub consent_evidence_hash: Option<Hash>,
+    /// Requested TTL in blocks before request expiry.
+    pub requested_ttl_blocks: NonZeroU32,
+    /// Break-glass flag for emergency disclosure attempts.
+    pub break_glass: bool,
+    /// Optional break-glass reason, required when `break_glass=true`.
+    #[norito(default)]
+    pub break_glass_reason: Option<String>,
+    /// Governance linkage hash for policy-driven auditability.
+    pub governance_tx_hash: Hash,
+}
+
+impl DecryptionRequestV1 {
+    /// Validate schema version and base request integrity constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when request identifiers, key paths,
+    /// or justification fields violate deterministic requirements.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != DECRYPTION_REQUEST_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "decryption request",
+                expected: DECRYPTION_REQUEST_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.request_id.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "decryption request",
+                field: "request_id",
+            });
+        }
+        if self.state_key.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "decryption request",
+                field: "state_key",
+            });
+        }
+        if !self.state_key.starts_with('/') {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "decryption request",
+                field: "state_key",
+                reason: "must start with '/'".to_string(),
+            });
+        }
+        if self.justification.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "decryption request",
+                field: "justification",
+            });
+        }
+        if self.jurisdiction_tag.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "decryption request",
+                field: "jurisdiction_tag",
+            });
+        }
+        if self.jurisdiction_tag.chars().any(char::is_control) {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "decryption request",
+                field: "jurisdiction_tag",
+                reason: "must not contain control characters".to_string(),
+            });
+        }
+        if self.break_glass {
+            let has_reason = self
+                .break_glass_reason
+                .as_deref()
+                .is_some_and(|reason| !reason.trim().is_empty());
+            if !has_reason {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "decryption request",
+                    field: "break_glass_reason",
+                    reason: "must be provided when break_glass=true".to_string(),
+                });
+            }
+        } else if self.break_glass_reason.is_some() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "decryption request",
+                field: "break_glass_reason",
+                reason: "must be omitted when break_glass=false".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Validate request admission against decryption authority policy rules.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when policy linkage mismatches, TTL
+    /// exceeds policy limits, or consent/break-glass policy gates are violated.
+    pub fn validate_for_policy(
+        &self,
+        policy: &DecryptionAuthorityPolicyV1,
+    ) -> Result<(), SoraCloudManifestError> {
+        self.validate()?;
+        policy.validate()?;
+
+        if self.policy_name != policy.policy_name {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "decryption request",
+                field: "policy_name",
+                reason: format!(
+                    "request references `{}` but policy is `{}`",
+                    self.policy_name, policy.policy_name
+                ),
+            });
+        }
+        if self.requested_ttl_blocks > policy.max_ttl_blocks {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "decryption request",
+                field: "requested_ttl_blocks",
+                reason: format!(
+                    "requested TTL {} exceeds policy max_ttl_blocks {}",
+                    self.requested_ttl_blocks, policy.max_ttl_blocks
+                ),
+            });
+        }
+        if self.jurisdiction_tag != policy.jurisdiction_tag {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "decryption request",
+                field: "jurisdiction_tag",
+                reason: format!(
+                    "request jurisdiction `{}` does not match policy jurisdiction `{}`",
+                    self.jurisdiction_tag, policy.jurisdiction_tag
+                ),
+            });
+        }
+        if policy.require_consent_evidence
+            && !self.break_glass
+            && self.consent_evidence_hash.is_none()
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "decryption request",
+                field: "consent_evidence_hash",
+                reason: "policy requires consent evidence for non-break-glass requests".to_string(),
+            });
+        }
+        if self.break_glass && !policy.allow_break_glass {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "decryption request",
+                field: "break_glass",
+                reason: "policy does not allow break-glass disclosure".to_string(),
+            });
+        }
+
+        Ok(())
+    }
+}
+
+/// Metadata projection level for ciphertext query responses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "metadata_level", content = "value"))]
+pub enum CiphertextQueryMetadataLevelV1 {
+    /// Return only digest-level key references.
+    Minimal,
+    /// Return canonical state keys in addition to digest references.
+    Standard,
+}
+
+/// Deterministic query specification for ciphertext-only state lookups.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CiphertextQuerySpecV1 {
+    /// Schema version; must equal [`CIPHERTEXT_QUERY_SPEC_VERSION_V1`].
+    pub schema_version: u16,
+    /// Service name to query.
+    pub service_name: Name,
+    /// Binding constrained to ciphertext-capable state.
+    pub binding_name: Name,
+    /// Canonical key-prefix filter scoped under binding policy.
+    pub state_key_prefix: String,
+    /// Maximum result count for deterministic bounded scans.
+    pub max_results: NonZeroU16,
+    /// Metadata projection level for non-disclosure behavior.
+    pub metadata_level: CiphertextQueryMetadataLevelV1,
+    /// Whether inclusion proofs should be attached to each result row.
+    pub include_proof: bool,
+}
+
+impl CiphertextQuerySpecV1 {
+    const MAX_RESULTS_LIMIT: u16 = 256;
+
+    /// Validate deterministic ciphertext query constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch, key
+    /// prefixes are invalid, or result limits exceed deterministic bounds.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != CIPHERTEXT_QUERY_SPEC_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "ciphertext query spec",
+                expected: CIPHERTEXT_QUERY_SPEC_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.state_key_prefix.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "ciphertext query spec",
+                field: "state_key_prefix",
+            });
+        }
+        if !self.state_key_prefix.starts_with('/') {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "ciphertext query spec",
+                field: "state_key_prefix",
+                reason: "must start with '/'".to_string(),
+            });
+        }
+        if self.max_results.get() > Self::MAX_RESULTS_LIMIT {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "ciphertext query spec",
+                field: "max_results",
+                reason: format!(
+                    "max_results {} exceeds deterministic limit {}",
+                    self.max_results,
+                    Self::MAX_RESULTS_LIMIT
+                ),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Inclusion proof attached to ciphertext query results.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CiphertextInclusionProofV1 {
+    /// Schema version; must equal [`CIPHERTEXT_QUERY_PROOF_VERSION_V1`].
+    pub schema_version: u16,
+    /// Proof algorithm identifier.
+    pub proof_scheme: String,
+    /// Hash of the referenced audit leaf payload.
+    pub leaf_hash: Hash,
+    /// Hash anchor over audit history up to `anchor_sequence`.
+    pub anchor_hash: Hash,
+    /// Sequence for the anchor checkpoint.
+    pub anchor_sequence: u64,
+    /// Sequence of the leaf event this proof attests to.
+    pub event_sequence: u64,
+}
+
+impl CiphertextInclusionProofV1 {
+    /// Validate inclusion-proof envelope constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
+    /// proof metadata is empty/inconsistent.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != CIPHERTEXT_QUERY_PROOF_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "ciphertext inclusion proof",
+                expected: CIPHERTEXT_QUERY_PROOF_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.proof_scheme.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "ciphertext inclusion proof",
+                field: "proof_scheme",
+            });
+        }
+        if self.anchor_sequence < self.event_sequence {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "ciphertext inclusion proof",
+                field: "anchor_sequence",
+                reason: format!(
+                    "anchor_sequence {} must be >= event_sequence {}",
+                    self.anchor_sequence, self.event_sequence
+                ),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// A single query result row for ciphertext metadata lookups.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CiphertextQueryResultItemV1 {
+    /// Binding owning the ciphertext state row.
+    pub binding_name: Name,
+    /// Canonical state key when `Standard` metadata projection is used.
+    #[norito(default)]
+    pub state_key: Option<String>,
+    /// Digest reference for the state key.
+    pub state_key_digest: Hash,
+    /// Ciphertext payload size in bytes.
+    pub payload_bytes: NonZeroU64,
+    /// Ciphertext commitment hash.
+    pub ciphertext_commitment: Hash,
+    /// Encryption mode for the stored ciphertext.
+    pub encryption: SoraStateEncryptionV1,
+    /// Latest update sequence observed for this state key.
+    pub last_update_sequence: u64,
+    /// Governance linkage hash associated with the ciphertext mutation.
+    pub governance_tx_hash: Hash,
+    /// Optional inclusion proof for this row.
+    #[norito(default)]
+    pub proof: Option<CiphertextInclusionProofV1>,
+}
+
+impl CiphertextQueryResultItemV1 {
+    /// Validate a single ciphertext query result item.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when key/reference fields are invalid
+    /// or plaintext encryption is surfaced in a ciphertext query row.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.encryption == SoraStateEncryptionV1::Plaintext {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "ciphertext query result item",
+                field: "encryption",
+                reason: "plaintext rows must not be returned".to_string(),
+            });
+        }
+        if let Some(state_key) = self.state_key.as_ref() {
+            if state_key.trim().is_empty() {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "ciphertext query result item",
+                    field: "state_key",
+                    reason: "must not be empty when provided".to_string(),
+                });
+            }
+            if !state_key.starts_with('/') {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "ciphertext query result item",
+                    field: "state_key",
+                    reason: "must start with '/'".to_string(),
+                });
+            }
+        }
+        if let Some(proof) = self.proof.as_ref() {
+            proof.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// Deterministic response payload for ciphertext query execution.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CiphertextQueryResponseV1 {
+    /// Schema version; must equal [`CIPHERTEXT_QUERY_RESPONSE_VERSION_V1`].
+    pub schema_version: u16,
+    /// Canonical hash of the query spec used to produce this response.
+    pub query_hash: Hash,
+    /// Service queried by this response.
+    pub service_name: Name,
+    /// Binding queried by this response.
+    pub binding_name: Name,
+    /// Metadata projection level applied in this response.
+    pub metadata_level: CiphertextQueryMetadataLevelV1,
+    /// Registry sequence at which this response was materialized.
+    pub served_sequence: u64,
+    /// Number of results serialized in this response.
+    pub result_count: u16,
+    /// Whether additional rows existed beyond `result_count`.
+    pub truncated: bool,
+    /// Result rows.
+    #[norito(default)]
+    pub results: Vec<CiphertextQueryResultItemV1>,
+}
+
+impl CiphertextQueryResponseV1 {
+    /// Validate ciphertext query response constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch,
+    /// result counts diverge, projection constraints are violated, or any
+    /// nested result/proof item fails validation.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != CIPHERTEXT_QUERY_RESPONSE_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "ciphertext query response",
+                expected: CIPHERTEXT_QUERY_RESPONSE_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if usize::from(self.result_count) != self.results.len() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "ciphertext query response",
+                field: "result_count",
+                reason: format!(
+                    "declared {} results but payload has {} rows",
+                    self.result_count,
+                    self.results.len()
+                ),
+            });
+        }
+        for row in &self.results {
+            row.validate()?;
+            match self.metadata_level {
+                CiphertextQueryMetadataLevelV1::Minimal => {
+                    if row.state_key.is_some() {
+                        return Err(SoraCloudManifestError::InvalidField {
+                            manifest: "ciphertext query response",
+                            field: "results.state_key",
+                            reason: "minimal metadata level must not expose state_key".to_string(),
+                        });
+                    }
+                }
+                CiphertextQueryMetadataLevelV1::Standard => {
+                    if row.state_key.is_none() {
+                        return Err(SoraCloudManifestError::InvalidField {
+                            manifest: "ciphertext query response",
+                            field: "results.state_key",
+                            reason: "standard metadata level requires state_key".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Admission bundle coupling container + service manifests for deterministic checks.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1948,23 +2588,408 @@ impl SoraDeploymentBundleV1 {
     }
 }
 
+/// Encode the canonical provenance signature payload for service rollback.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, target_version)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_rollback_provenance_payload(
+    service_name: &str,
+    target_version: Option<&str>,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(service_name, target_version))
+}
+
+/// Encode the canonical provenance signature payload for rollout advancement.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, rollout_handle, healthy, promote_to_percent, governance_tx_hash)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_rollout_provenance_payload(
+    service_name: &str,
+    rollout_handle: &str,
+    healthy: bool,
+    promote_to_percent: Option<u8>,
+    governance_tx_hash: Hash,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(
+        service_name,
+        rollout_handle,
+        healthy,
+        promote_to_percent,
+        governance_tx_hash,
+    ))
+}
+
+/// Encode the canonical provenance signature payload for apartment deployment.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(manifest, lease_ticks, autonomy_budget_units)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_agent_deploy_provenance_payload(
+    manifest: AgentApartmentManifestV1,
+    lease_ticks: u64,
+    autonomy_budget_units: Option<u64>,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(manifest, lease_ticks, autonomy_budget_units))
+}
+
+/// Encode the canonical provenance signature payload for apartment lease renewal.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(apartment_name, lease_ticks)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_agent_lease_renew_provenance_payload(
+    apartment_name: &str,
+    lease_ticks: u64,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(apartment_name, lease_ticks))
+}
+
+/// Encode the canonical provenance signature payload for apartment restart requests.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(apartment_name, reason)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_agent_restart_provenance_payload(
+    apartment_name: &str,
+    reason: &str,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(apartment_name, reason))
+}
+
+/// Encode the canonical provenance signature payload for apartment policy revocation.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(apartment_name, capability, reason)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_agent_policy_revoke_provenance_payload(
+    apartment_name: &str,
+    capability: &str,
+    reason: Option<&str>,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(apartment_name, capability, reason))
+}
+
+/// Encode the canonical provenance signature payload for apartment wallet spend requests.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(apartment_name, asset_definition, amount_nanos)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_agent_wallet_spend_provenance_payload(
+    apartment_name: &str,
+    asset_definition: &str,
+    amount_nanos: u64,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(apartment_name, asset_definition, amount_nanos))
+}
+
+/// Encode the canonical provenance signature payload for apartment wallet approvals.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(apartment_name, request_id)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_agent_wallet_approve_provenance_payload(
+    apartment_name: &str,
+    request_id: &str,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(apartment_name, request_id))
+}
+
+/// Encode the canonical provenance signature payload for apartment mailbox send requests.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(from_apartment, to_apartment, channel, payload)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_agent_message_send_provenance_payload(
+    from_apartment: &str,
+    to_apartment: &str,
+    channel: &str,
+    payload: &str,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(from_apartment, to_apartment, channel, payload))
+}
+
+/// Encode the canonical provenance signature payload for apartment mailbox acknowledgements.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(apartment_name, message_id)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_agent_message_ack_provenance_payload(
+    apartment_name: &str,
+    message_id: &str,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(apartment_name, message_id))
+}
+
+/// Encode the canonical provenance signature payload for apartment artifact allowlists.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(apartment_name, artifact_hash, provenance_hash)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_agent_artifact_allow_provenance_payload(
+    apartment_name: &str,
+    artifact_hash: &str,
+    provenance_hash: Option<&str>,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(apartment_name, artifact_hash, provenance_hash))
+}
+
+/// Encode the canonical provenance signature payload for apartment autonomy runs.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(apartment_name, artifact_hash, provenance_hash, budget_units, run_label)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_agent_autonomy_run_provenance_payload(
+    apartment_name: &str,
+    artifact_hash: &str,
+    provenance_hash: Option<&str>,
+    budget_units: u64,
+    run_label: &str,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(
+        apartment_name,
+        artifact_hash,
+        provenance_hash,
+        budget_units,
+        run_label,
+    ))
+}
+
+/// Encode the canonical provenance signature payload for training-job start.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, model_name, job_id, worker_group_size, target_steps, checkpoint_interval_steps, max_retries, step_compute_units, compute_budget_units, storage_budget_bytes)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_training_job_start_provenance_payload(
+    service_name: &str,
+    model_name: &str,
+    job_id: &str,
+    worker_group_size: u16,
+    target_steps: u32,
+    checkpoint_interval_steps: u32,
+    max_retries: u8,
+    step_compute_units: u64,
+    compute_budget_units: u64,
+    storage_budget_bytes: u64,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(
+        service_name,
+        model_name,
+        job_id,
+        worker_group_size,
+        target_steps,
+        checkpoint_interval_steps,
+        max_retries,
+        step_compute_units,
+        compute_budget_units,
+        storage_budget_bytes,
+    ))
+}
+
+/// Encode the canonical provenance signature payload for training checkpoint updates.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, job_id, completed_step, checkpoint_size_bytes, metrics_hash)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_training_job_checkpoint_provenance_payload(
+    service_name: &str,
+    job_id: &str,
+    completed_step: u32,
+    checkpoint_size_bytes: u64,
+    metrics_hash: Hash,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(
+        service_name,
+        job_id,
+        completed_step,
+        checkpoint_size_bytes,
+        metrics_hash,
+    ))
+}
+
+/// Encode the canonical provenance signature payload for training retry requests.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, job_id, reason)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_training_job_retry_provenance_payload(
+    service_name: &str,
+    job_id: &str,
+    reason: &str,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(service_name, job_id, reason))
+}
+
+/// Encode the canonical provenance signature payload for model-artifact registration.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, model_name, training_job_id, weight_artifact_hash, dataset_ref, training_config_hash, reproducibility_hash, provenance_attestation_hash)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_model_artifact_register_provenance_payload(
+    service_name: &str,
+    model_name: &str,
+    training_job_id: &str,
+    weight_artifact_hash: Hash,
+    dataset_ref: &str,
+    training_config_hash: Hash,
+    reproducibility_hash: Hash,
+    provenance_attestation_hash: Hash,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(
+        service_name,
+        model_name,
+        training_job_id,
+        weight_artifact_hash,
+        dataset_ref,
+        training_config_hash,
+        reproducibility_hash,
+        provenance_attestation_hash,
+    ))
+}
+
+/// Encode the canonical provenance signature payload for model-weight registration.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, model_name, weight_version, training_job_id, parent_version, weight_artifact_hash, dataset_ref, training_config_hash, reproducibility_hash, provenance_attestation_hash)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_model_weight_register_provenance_payload(
+    service_name: &str,
+    model_name: &str,
+    weight_version: &str,
+    training_job_id: &str,
+    parent_version: Option<&str>,
+    weight_artifact_hash: Hash,
+    dataset_ref: &str,
+    training_config_hash: Hash,
+    reproducibility_hash: Hash,
+    provenance_attestation_hash: Hash,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(
+        service_name,
+        model_name,
+        weight_version,
+        training_job_id,
+        parent_version,
+        weight_artifact_hash,
+        dataset_ref,
+        training_config_hash,
+        reproducibility_hash,
+        provenance_attestation_hash,
+    ))
+}
+
+/// Encode the canonical provenance signature payload for model-weight promotion.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, model_name, weight_version, gate_approved, gate_report_hash)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_model_weight_promote_provenance_payload(
+    service_name: &str,
+    model_name: &str,
+    weight_version: &str,
+    gate_approved: bool,
+    gate_report_hash: Hash,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(
+        service_name,
+        model_name,
+        weight_version,
+        gate_approved,
+        gate_report_hash,
+    ))
+}
+
+/// Encode the canonical provenance signature payload for model-weight rollback.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, model_name, target_version, reason)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_model_weight_rollback_provenance_payload(
+    service_name: &str,
+    model_name: &str,
+    target_version: &str,
+    reason: &str,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(service_name, model_name, target_version, reason))
+}
+
 /// Re-export commonly used `SoraCloud` schema types.
 pub mod prelude {
     pub use super::{
         AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentSpendLimitV1,
-        AgentToolCapabilityV1, AgentUpgradePolicyV1, CIPHERTEXT_STATE_RECORD_VERSION_V1,
-        CiphertextStateMetadataV1, CiphertextStateRecordV1, FHE_EXECUTION_POLICY_VERSION_V1,
-        FHE_GOVERNANCE_BUNDLE_VERSION_V1, FHE_JOB_SPEC_VERSION_V1, FHE_PARAM_SET_VERSION_V1,
-        FheDeterministicRoundingModeV1, FheExecutionPolicyV1, FheGovernanceBundleV1,
-        FheJobInputRefV1, FheJobOperationV1, FheJobSpecV1, FheParamLifecycleV1, FheParamSetV1,
-        FheSchemeV1, SECRET_ENVELOPE_VERSION_V1, SORA_CONTAINER_MANIFEST_VERSION_V1,
-        SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_SERVICE_MANIFEST_VERSION_V1,
-        SORA_STATE_BINDING_VERSION_V1, SecretEnvelopeEncryptionV1, SecretEnvelopeV1,
-        SoraCapabilityPolicyV1, SoraCloudManifestError, SoraContainerManifestRefV1,
-        SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
-        SoraLifecycleHooksV1, SoraNetworkPolicyV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
-        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceManifestV1, SoraStateBindingV1,
-        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
+        AgentToolCapabilityV1, AgentUpgradePolicyV1, CIPHERTEXT_QUERY_PROOF_VERSION_V1,
+        CIPHERTEXT_QUERY_RESPONSE_VERSION_V1, CIPHERTEXT_QUERY_SPEC_VERSION_V1,
+        CIPHERTEXT_STATE_RECORD_VERSION_V1, CiphertextInclusionProofV1,
+        CiphertextQueryMetadataLevelV1, CiphertextQueryResponseV1, CiphertextQueryResultItemV1,
+        CiphertextQuerySpecV1, CiphertextStateMetadataV1, CiphertextStateRecordV1,
+        DECRYPTION_AUTHORITY_POLICY_VERSION_V1, DECRYPTION_REQUEST_VERSION_V1,
+        DecryptionAuthorityModeV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
+        FHE_EXECUTION_POLICY_VERSION_V1, FHE_GOVERNANCE_BUNDLE_VERSION_V1, FHE_JOB_SPEC_VERSION_V1,
+        FHE_PARAM_SET_VERSION_V1, FheDeterministicRoundingModeV1, FheExecutionPolicyV1,
+        FheGovernanceBundleV1, FheJobInputRefV1, FheJobOperationV1, FheJobSpecV1,
+        FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, SECRET_ENVELOPE_VERSION_V1,
+        SORA_CONTAINER_MANIFEST_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        SORA_SERVICE_MANIFEST_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
+        SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraCapabilityPolicyV1,
+        SoraCloudManifestError, SoraContainerManifestRefV1, SoraContainerManifestV1,
+        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraLifecycleHooksV1, SoraNetworkPolicyV1,
+        SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+        SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+        SoraStateScopeV1, SoraTlsModeV1, encode_agent_artifact_allow_provenance_payload,
+        encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
+        encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
+        encode_agent_message_send_provenance_payload,
+        encode_agent_policy_revoke_provenance_payload, encode_agent_restart_provenance_payload,
+        encode_agent_wallet_approve_provenance_payload,
+        encode_agent_wallet_spend_provenance_payload,
+        encode_model_artifact_register_provenance_payload,
+        encode_model_weight_promote_provenance_payload,
+        encode_model_weight_register_provenance_payload,
+        encode_model_weight_rollback_provenance_payload, encode_rollback_provenance_payload,
+        encode_rollout_provenance_payload, encode_training_job_checkpoint_provenance_payload,
+        encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
     };
 }
 
@@ -1979,6 +3004,315 @@ mod tests {
             *byte = seed.wrapping_add(u8::try_from(index).expect("index fits in u8"));
         }
         Hash::prehashed(bytes)
+    }
+
+    #[test]
+    fn rollback_provenance_payload_encodes_canonical_tuple() {
+        let encoded = encode_rollback_provenance_payload("web_portal", Some("1.0.1"))
+            .expect("encode payload");
+        let expected = norito::to_bytes(&("web_portal", Some("1.0.1"))).expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn rollout_provenance_payload_encodes_canonical_tuple() {
+        let governance_tx_hash = sample_hash(1);
+        let encoded = encode_rollout_provenance_payload(
+            "web_portal",
+            "rollout-42",
+            true,
+            Some(50),
+            governance_tx_hash,
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&(
+            "web_portal",
+            "rollout-42",
+            true,
+            Some(50u8),
+            governance_tx_hash,
+        ))
+        .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_deploy_provenance_payload_encodes_canonical_tuple() {
+        let manifest = sample_agent_apartment_manifest();
+        let encoded =
+            encode_agent_deploy_provenance_payload(manifest.clone(), 10_000, Some(500_000))
+                .expect("encode payload");
+        let expected =
+            norito::to_bytes(&(manifest, 10_000u64, Some(500_000u64))).expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_lease_renew_provenance_payload_encodes_canonical_tuple() {
+        let encoded = encode_agent_lease_renew_provenance_payload("agent-apartment", 20_000)
+            .expect("encode payload");
+        let expected = norito::to_bytes(&("agent-apartment", 20_000u64)).expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_restart_provenance_payload_encodes_canonical_tuple() {
+        let encoded =
+            encode_agent_restart_provenance_payload("agent-apartment", "apply patched policy")
+                .expect("encode payload");
+        let expected =
+            norito::to_bytes(&("agent-apartment", "apply patched policy")).expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_policy_revoke_provenance_payload_encodes_canonical_tuple() {
+        let encoded = encode_agent_policy_revoke_provenance_payload(
+            "agent-apartment",
+            "wallet.spend",
+            Some("limit exceeded"),
+        )
+        .expect("encode payload");
+        let expected =
+            norito::to_bytes(&("agent-apartment", "wallet.spend", Some("limit exceeded")))
+                .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_wallet_spend_provenance_payload_encodes_canonical_tuple() {
+        let encoded =
+            encode_agent_wallet_spend_provenance_payload("agent-apartment", "xor#sora", 1_250_000)
+                .expect("encode payload");
+        let expected =
+            norito::to_bytes(&("agent-apartment", "xor#sora", 1_250_000u64)).expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_wallet_approve_provenance_payload_encodes_canonical_tuple() {
+        let encoded =
+            encode_agent_wallet_approve_provenance_payload("agent-apartment", "spend-req-9")
+                .expect("encode payload");
+        let expected = norito::to_bytes(&("agent-apartment", "spend-req-9")).expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_message_send_provenance_payload_encodes_canonical_tuple() {
+        let encoded = encode_agent_message_send_provenance_payload(
+            "apartment-a",
+            "apartment-b",
+            "ops",
+            "{\"ping\":true}",
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&("apartment-a", "apartment-b", "ops", "{\"ping\":true}"))
+            .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_message_ack_provenance_payload_encodes_canonical_tuple() {
+        let encoded = encode_agent_message_ack_provenance_payload("agent-apartment", "msg-1")
+            .expect("encode payload");
+        let expected = norito::to_bytes(&("agent-apartment", "msg-1")).expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_artifact_allow_provenance_payload_encodes_canonical_tuple() {
+        let encoded = encode_agent_artifact_allow_provenance_payload(
+            "agent-apartment",
+            "QmArtifactHash",
+            Some("QmProvenanceHash"),
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&(
+            "agent-apartment",
+            "QmArtifactHash",
+            Some("QmProvenanceHash"),
+        ))
+        .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn agent_autonomy_run_provenance_payload_encodes_canonical_tuple() {
+        let encoded = encode_agent_autonomy_run_provenance_payload(
+            "agent-apartment",
+            "QmArtifactHash",
+            Some("QmProvenanceHash"),
+            42_000,
+            "nightly-retrain",
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&(
+            "agent-apartment",
+            "QmArtifactHash",
+            Some("QmProvenanceHash"),
+            42_000u64,
+            "nightly-retrain",
+        ))
+        .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn training_job_start_provenance_payload_encodes_canonical_tuple() {
+        let encoded = encode_training_job_start_provenance_payload(
+            "web_portal",
+            "model-1",
+            "job-1",
+            4,
+            100,
+            20,
+            3,
+            500,
+            50_000,
+            4_096,
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&(
+            "web_portal",
+            "model-1",
+            "job-1",
+            4u16,
+            100u32,
+            20u32,
+            3u8,
+            500u64,
+            50_000u64,
+            4_096u64,
+        ))
+        .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn training_job_checkpoint_provenance_payload_encodes_canonical_tuple() {
+        let metrics_hash = sample_hash(1);
+        let encoded = encode_training_job_checkpoint_provenance_payload(
+            "web_portal",
+            "job-1",
+            20,
+            1_024,
+            metrics_hash,
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&("web_portal", "job-1", 20u32, 1_024u64, metrics_hash))
+            .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn training_job_retry_provenance_payload_encodes_canonical_tuple() {
+        let encoded = encode_training_job_retry_provenance_payload(
+            "web_portal",
+            "job-1",
+            "worker unavailable",
+        )
+        .expect("encode payload");
+        let expected =
+            norito::to_bytes(&("web_portal", "job-1", "worker unavailable")).expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn model_artifact_register_provenance_payload_encodes_canonical_tuple() {
+        let weight_artifact_hash = sample_hash(2);
+        let training_config_hash = sample_hash(3);
+        let reproducibility_hash = sample_hash(4);
+        let provenance_attestation_hash = sample_hash(5);
+        let encoded = encode_model_artifact_register_provenance_payload(
+            "web_portal",
+            "model-1",
+            "job-1",
+            weight_artifact_hash,
+            "dataset://synthetic/v1",
+            training_config_hash,
+            reproducibility_hash,
+            provenance_attestation_hash,
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&(
+            "web_portal",
+            "model-1",
+            "job-1",
+            weight_artifact_hash,
+            "dataset://synthetic/v1",
+            training_config_hash,
+            reproducibility_hash,
+            provenance_attestation_hash,
+        ))
+        .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn model_weight_register_provenance_payload_encodes_canonical_tuple() {
+        let weight_artifact_hash = sample_hash(6);
+        let training_config_hash = sample_hash(7);
+        let reproducibility_hash = sample_hash(8);
+        let provenance_attestation_hash = sample_hash(9);
+        let encoded = encode_model_weight_register_provenance_payload(
+            "web_portal",
+            "model-1",
+            "1.0.0",
+            "job-1",
+            Some("0.9.0"),
+            weight_artifact_hash,
+            "dataset://synthetic/v1",
+            training_config_hash,
+            reproducibility_hash,
+            provenance_attestation_hash,
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&(
+            "web_portal",
+            "model-1",
+            "1.0.0",
+            "job-1",
+            Some("0.9.0"),
+            weight_artifact_hash,
+            "dataset://synthetic/v1",
+            training_config_hash,
+            reproducibility_hash,
+            provenance_attestation_hash,
+        ))
+        .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn model_weight_promote_provenance_payload_encodes_canonical_tuple() {
+        let gate_report_hash = sample_hash(10);
+        let encoded = encode_model_weight_promote_provenance_payload(
+            "web_portal",
+            "model-1",
+            "1.0.0",
+            true,
+            gate_report_hash,
+        )
+        .expect("encode payload");
+        let expected =
+            norito::to_bytes(&("web_portal", "model-1", "1.0.0", true, gate_report_hash))
+                .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn model_weight_rollback_provenance_payload_encodes_canonical_tuple() {
+        let encoded = encode_model_weight_rollback_provenance_payload(
+            "web_portal",
+            "model-1",
+            "0.9.0",
+            "gate regression",
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&("web_portal", "model-1", "0.9.0", "gate regression"))
+            .expect("encode tuple");
+        assert_eq!(encoded, expected);
     }
 
     fn sample_binding(name: &str) -> SoraStateBindingV1 {
@@ -2163,6 +3497,43 @@ mod tests {
         }
     }
 
+    fn sample_decryption_authority_policy() -> DecryptionAuthorityPolicyV1 {
+        DecryptionAuthorityPolicyV1 {
+            schema_version: DECRYPTION_AUTHORITY_POLICY_VERSION_V1,
+            policy_name: "phi_threshold_policy".parse().expect("valid name"),
+            mode: DecryptionAuthorityModeV1::ThresholdService,
+            approver_quorum: NonZeroU16::new(2).expect("nonzero"),
+            approver_ids: vec![
+                "compliance_council".parse().expect("valid name"),
+                "patient_advocate".parse().expect("valid name"),
+                "privacy_officer".parse().expect("valid name"),
+            ],
+            allow_break_glass: false,
+            jurisdiction_tag: "us_hipaa".to_string(),
+            require_consent_evidence: true,
+            max_ttl_blocks: NonZeroU32::new(1_440).expect("nonzero"),
+            audit_tag: "phi.access.review".to_string(),
+        }
+    }
+
+    fn sample_decryption_request() -> DecryptionRequestV1 {
+        DecryptionRequestV1 {
+            schema_version: DECRYPTION_REQUEST_VERSION_V1,
+            request_id: "decrypt-req-0001".to_string(),
+            policy_name: "phi_threshold_policy".parse().expect("valid name"),
+            binding_name: "patient_records".parse().expect("valid name"),
+            state_key: "/state/health/patient-1".to_string(),
+            ciphertext_commitment: sample_hash(131),
+            justification: "treatment continuity review".to_string(),
+            jurisdiction_tag: "us_hipaa".to_string(),
+            consent_evidence_hash: Some(sample_hash(133)),
+            requested_ttl_blocks: NonZeroU32::new(120).expect("nonzero"),
+            break_glass: false,
+            break_glass_reason: None,
+            governance_tx_hash: sample_hash(132),
+        }
+    }
+
     fn sample_secret_envelope() -> SecretEnvelopeV1 {
         SecretEnvelopeV1 {
             schema_version: SECRET_ENVELOPE_VERSION_V1,
@@ -2191,6 +3562,49 @@ mod tests {
                 tags: vec!["phi".to_string(), "tenant:alpha".to_string()],
             },
             secret,
+        }
+    }
+
+    fn sample_ciphertext_query_spec() -> CiphertextQuerySpecV1 {
+        CiphertextQuerySpecV1 {
+            schema_version: CIPHERTEXT_QUERY_SPEC_VERSION_V1,
+            service_name: "portal".parse().expect("valid name"),
+            binding_name: "private_state".parse().expect("valid name"),
+            state_key_prefix: "/state/private".to_string(),
+            max_results: NonZeroU16::new(16).expect("nonzero"),
+            metadata_level: CiphertextQueryMetadataLevelV1::Minimal,
+            include_proof: true,
+        }
+    }
+
+    fn sample_ciphertext_query_response() -> CiphertextQueryResponseV1 {
+        CiphertextQueryResponseV1 {
+            schema_version: CIPHERTEXT_QUERY_RESPONSE_VERSION_V1,
+            query_hash: sample_hash(141),
+            service_name: "portal".parse().expect("valid name"),
+            binding_name: "private_state".parse().expect("valid name"),
+            metadata_level: CiphertextQueryMetadataLevelV1::Minimal,
+            served_sequence: 42,
+            result_count: 1,
+            truncated: false,
+            results: vec![CiphertextQueryResultItemV1 {
+                binding_name: "private_state".parse().expect("valid name"),
+                state_key: None,
+                state_key_digest: sample_hash(142),
+                payload_bytes: NonZeroU64::new(2_048).expect("nonzero"),
+                ciphertext_commitment: sample_hash(143),
+                encryption: SoraStateEncryptionV1::FheCiphertext,
+                last_update_sequence: 40,
+                governance_tx_hash: sample_hash(144),
+                proof: Some(CiphertextInclusionProofV1 {
+                    schema_version: CIPHERTEXT_QUERY_PROOF_VERSION_V1,
+                    proof_scheme: "soracloud.audit_anchor.v1".to_string(),
+                    leaf_hash: sample_hash(145),
+                    anchor_hash: sample_hash(146),
+                    anchor_sequence: 42,
+                    event_sequence: 40,
+                }),
+            }],
         }
     }
 
@@ -2515,6 +3929,164 @@ mod tests {
         assert!(
             job.deterministic_output_payload_bytes() > 0,
             "deterministic output size must be non-zero"
+        );
+    }
+
+    #[test]
+    fn decryption_authority_policy_validate_rejects_unsorted_approvers() {
+        let mut policy = sample_decryption_authority_policy();
+        policy.approver_ids.swap(0, 1);
+        let error = policy
+            .validate()
+            .expect_err("unsorted approver list must be rejected");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "approver_ids",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn decryption_request_validate_for_policy_rejects_ttl_overflow() {
+        let policy = sample_decryption_authority_policy();
+        let mut request = sample_decryption_request();
+        request.requested_ttl_blocks = NonZeroU32::new(2_000).expect("nonzero");
+        let error = request
+            .validate_for_policy(&policy)
+            .expect_err("ttl overflow must be rejected");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "requested_ttl_blocks",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn decryption_request_validate_for_policy_rejects_break_glass_when_disabled() {
+        let policy = sample_decryption_authority_policy();
+        let mut request = sample_decryption_request();
+        request.break_glass = true;
+        request.break_glass_reason = Some("emergency access".to_string());
+        let error = request
+            .validate_for_policy(&policy)
+            .expect_err("break-glass should fail when policy disallows it");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "break_glass",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn decryption_request_validate_for_policy_accepts_consistent_payload() {
+        let policy = sample_decryption_authority_policy();
+        let request = sample_decryption_request();
+        assert!(
+            request.validate_for_policy(&policy).is_ok(),
+            "consistent decryption request should pass policy admission checks"
+        );
+    }
+
+    #[test]
+    fn decryption_request_validate_for_policy_rejects_jurisdiction_mismatch() {
+        let policy = sample_decryption_authority_policy();
+        let mut request = sample_decryption_request();
+        request.jurisdiction_tag = "eu_gdpr".to_string();
+        let error = request
+            .validate_for_policy(&policy)
+            .expect_err("jurisdiction mismatch should fail policy admission");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "jurisdiction_tag",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn decryption_request_validate_for_policy_rejects_missing_consent_evidence() {
+        let policy = sample_decryption_authority_policy();
+        let mut request = sample_decryption_request();
+        request.consent_evidence_hash = None;
+        let error = request
+            .validate_for_policy(&policy)
+            .expect_err("missing consent evidence should fail when policy requires it");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "consent_evidence_hash",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn decryption_request_validate_rejects_break_glass_without_reason() {
+        let mut request = sample_decryption_request();
+        request.break_glass = true;
+        request.break_glass_reason = None;
+        let error = request
+            .validate()
+            .expect_err("break-glass request without reason must fail");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "break_glass_reason",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn ciphertext_query_spec_validate_rejects_max_results_over_limit() {
+        let mut spec = sample_ciphertext_query_spec();
+        spec.max_results = NonZeroU16::new(500).expect("nonzero");
+        let error = spec
+            .validate()
+            .expect_err("max_results above deterministic bound must fail");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "max_results",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn ciphertext_query_response_validate_rejects_standard_projection_without_state_key() {
+        let mut response = sample_ciphertext_query_response();
+        response.metadata_level = CiphertextQueryMetadataLevelV1::Standard;
+        let error = response
+            .validate()
+            .expect_err("standard projection must require state keys");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "results.state_key",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn ciphertext_query_response_validate_accepts_minimal_projection_with_proof() {
+        let spec = sample_ciphertext_query_spec();
+        let response = sample_ciphertext_query_response();
+        assert!(
+            spec.validate().is_ok(),
+            "consistent ciphertext query spec should validate"
+        );
+        assert!(
+            response.validate().is_ok(),
+            "consistent ciphertext query response should validate"
         );
     }
 

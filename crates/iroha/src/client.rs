@@ -9668,7 +9668,54 @@ where
                                             status = ?block_event.status(),
                                             "transaction applied observed in block event"
                                         );
-                                        return Some(Ok(hash));
+                                        if !poll_enabled {
+                                            return Some(Ok(hash));
+                                        }
+                                        match status_check() {
+                                            Ok(Some(TxConfirmationStatus::Applied)) => {
+                                                return Some(Ok(hash));
+                                            }
+                                            Ok(Some(TxConfirmationStatus::Rejected(Some(
+                                                reason,
+                                            )))) => {
+                                                warn!(
+                                                    %hash,
+                                                    ?reason,
+                                                    "transaction rejected after applied block event"
+                                                );
+                                                return Some(Err(tx_confirmation_final_report(
+                                                    tx_rejection_to_report(&reason),
+                                                )));
+                                            }
+                                            Ok(Some(TxConfirmationStatus::Rejected(None))) => {
+                                                return Some(Err(tx_confirmation_final_report(
+                                                    eyre!("Transaction rejected"),
+                                                )));
+                                            }
+                                            Ok(Some(TxConfirmationStatus::Expired)) => {
+                                                return Some(Err(tx_confirmation_final_report(
+                                                    eyre!("Transaction expired"),
+                                                )));
+                                            }
+                                            Ok(Some(
+                                                TxConfirmationStatus::Queued
+                                                | TxConfirmationStatus::Approved(_)
+                                                | TxConfirmationStatus::Committed,
+                                            )
+                                            | None) => {
+                                                debug!(
+                                                    %hash,
+                                                    "block applied observed before final transaction status; waiting"
+                                                );
+                                            }
+                                            Err(err) => {
+                                                debug!(
+                                                    %hash,
+                                                    ?err,
+                                                    "status check failed after applied block event; waiting"
+                                                );
+                                            }
+                                        }
                                     }
                                     BlockStatus::Committed if !poll_enabled => {
                                         debug!(
@@ -10748,7 +10795,7 @@ mod tx_confirmation_stream_tests {
     }
 
     #[tokio::test]
-    async fn polling_approved_updates_block_height_for_block_events() {
+    async fn polling_block_event_waits_for_final_status() {
         let hash: HashOf<SignedTransaction> =
             HashOf::from_untyped_unchecked(Hash::prehashed([10_u8; Hash::LENGTH]));
         let height = std::num::NonZeroU64::new(12).expect("nonzero height");
@@ -10782,13 +10829,71 @@ mod tx_confirmation_stream_tests {
             Duration::from_millis(1),
             || {
                 checks = checks.saturating_add(1);
-                Ok(Some(super::TxConfirmationStatus::Approved(Some(height))))
+                if checks > 1 {
+                    Ok(Some(super::TxConfirmationStatus::Applied))
+                } else {
+                    Ok(Some(super::TxConfirmationStatus::Approved(Some(height))))
+                }
             },
         )
         .await;
 
         assert_eq!(result.unwrap(), hash);
-        assert!(checks > 0);
+        assert!(checks > 1);
+    }
+
+    #[tokio::test]
+    async fn polling_block_event_respects_rejection_status() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([10_u8; Hash::LENGTH]));
+        let height = std::num::NonZeroU64::new(12).expect("nonzero height");
+        let block_event = EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
+            header: BlockHeader {
+                height,
+                prev_block_hash: None,
+                merkle_root: None,
+                result_merkle_root: None,
+                da_proof_policies_hash: None,
+                da_commitments_hash: None,
+                da_pin_intents_hash: None,
+                creation_time_ms: 0,
+                view_change_index: 0,
+                confidential_features: None,
+            },
+            status: BlockStatus::Applied,
+        }));
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::InternalError(
+            "rejected".to_string(),
+        ));
+        let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
+        let mut events = UnboundedReceiverStream::new(rx);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            let _ = tx.send(Ok(block_event));
+        });
+
+        let mut checks = 0u8;
+        let err = listen_for_tx_confirmation_stream_with_status_check(
+            &mut events,
+            hash,
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+            || {
+                checks = checks.saturating_add(1);
+                if checks > 1 {
+                    Ok(Some(super::TxConfirmationStatus::Rejected(Some(
+                        rejection.clone(),
+                    ))))
+                } else {
+                    Ok(Some(super::TxConfirmationStatus::Approved(Some(height))))
+                }
+            },
+        )
+        .await
+        .expect_err("rejection should win over applied block event");
+
+        assert!(err.to_string().contains("Transaction rejected"));
+        assert!(checks > 1);
     }
 
     #[tokio::test]
