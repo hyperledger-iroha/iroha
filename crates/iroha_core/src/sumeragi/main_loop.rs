@@ -4827,6 +4827,7 @@ struct NoRosterFallbackBudget {
     allowed_views: BTreeSet<u64>,
     escalated_views: BTreeSet<u64>,
     refresh_attempts_by_view: BTreeMap<u64, u32>,
+    bootstrap_by_view: BTreeMap<u64, NoRosterBootstrapEntry>,
     last_seen: Instant,
 }
 
@@ -4836,9 +4837,43 @@ impl NoRosterFallbackBudget {
             allowed_views: BTreeSet::new(),
             escalated_views: BTreeSet::new(),
             refresh_attempts_by_view: BTreeMap::new(),
+            bootstrap_by_view: BTreeMap::new(),
             last_seen: now,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NoRosterBootstrapState {
+    RosterReady,
+    RosterBootstrapPending,
+    RosterBootstrapExhausted,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NoRosterBootstrapEntry {
+    state: NoRosterBootstrapState,
+    first_seen: Instant,
+    last_seen: Instant,
+    refresh_then_fallback_used: bool,
+}
+
+impl NoRosterBootstrapEntry {
+    fn pending(now: Instant) -> Self {
+        Self {
+            state: NoRosterBootstrapState::RosterBootstrapPending,
+            first_seen: now,
+            last_seen: now,
+            refresh_then_fallback_used: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NoRosterFallbackDecision {
+    AllowFallback,
+    BootstrapPending,
+    FailClosed,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -14764,9 +14799,54 @@ impl Actor {
             .range_pull_escalation_after_hash_misses
     }
 
-    fn recovery_no_roster_fallback_views(&self) -> u32 {
+    fn recovery_no_roster_fallback_views_cap(&self) -> u32 {
         self.deterministic_recovery_profile()
             .no_roster_fallback_views
+    }
+
+    fn no_roster_recovery_timings_for_height(&self, height: u64) -> (Duration, Duration) {
+        let world = self.state.world_view();
+        let (mode, _, _) = self.consensus_context_for_height(height);
+        let block_time = self.block_time_for_mode_from_world(&world, mode);
+        let commit_time = self.commit_timeout_for_mode_from_world(&world, mode);
+        let da_enabled = world.parameters().sumeragi().da_enabled();
+        let quorum_timeout = commit_quorum_timeout_from_durations(
+            block_time,
+            commit_time,
+            da_enabled,
+            self.da_quorum_timeout_multiplier(),
+        );
+        let propose_timeout = if matches!(mode, ConsensusMode::Npos) {
+            super::resolve_npos_timeouts_from_world(&world, &self.config.npos).propose
+        } else {
+            SumeragiNposTimeouts::from_block_time(block_time).propose
+        };
+        (
+            quorum_timeout.max(Duration::from_millis(1)),
+            propose_timeout.max(Duration::from_millis(1)),
+        )
+    }
+
+    fn effective_no_roster_fallback_views(&self, height: u64) -> u32 {
+        let cap = self.recovery_no_roster_fallback_views_cap();
+        if cap == 0 {
+            return 0;
+        }
+        let (quorum_timeout, propose_timeout) = self.no_roster_recovery_timings_for_height(height);
+        let ratio = quorum_timeout
+            .as_millis()
+            .saturating_add(propose_timeout.as_millis().saturating_sub(1))
+            .checked_div(propose_timeout.as_millis())
+            .unwrap_or(1);
+        let derived = u32::try_from(ratio).unwrap_or(u32::MAX).max(1);
+        derived.min(cap)
+    }
+
+    fn no_roster_bootstrap_dwell_window(&self, height: u64) -> Duration {
+        let (quorum_timeout, propose_timeout) = self.no_roster_recovery_timings_for_height(height);
+        quorum_timeout
+            .saturating_add(propose_timeout)
+            .max(Duration::from_millis(1))
     }
 
     fn recovery_missing_qc_reacquire_window(&self) -> Duration {
@@ -14978,7 +15058,7 @@ impl Actor {
         now: Instant,
     ) -> (bool, u32) {
         let allowed_views =
-            usize::try_from(self.recovery_no_roster_fallback_views()).unwrap_or(usize::MAX);
+            usize::try_from(self.effective_no_roster_fallback_views(height)).unwrap_or(usize::MAX);
         if allowed_views == 0 {
             return (false, 0);
         }
@@ -14989,12 +15069,24 @@ impl Actor {
             .or_insert_with(|| NoRosterFallbackBudget::new(now));
         budget.last_seen = now;
         if budget.allowed_views.contains(&view) {
+            let bootstrap = budget
+                .bootstrap_by_view
+                .entry(view)
+                .or_insert_with(|| NoRosterBootstrapEntry::pending(now));
+            bootstrap.state = NoRosterBootstrapState::RosterReady;
+            bootstrap.last_seen = now;
             let remaining = allowed_views.saturating_sub(budget.allowed_views.len());
             let remaining = u32::try_from(remaining).unwrap_or(u32::MAX);
             return (true, remaining);
         }
         if budget.allowed_views.len() < allowed_views {
             budget.allowed_views.insert(view);
+            let bootstrap = budget
+                .bootstrap_by_view
+                .entry(view)
+                .or_insert_with(|| NoRosterBootstrapEntry::pending(now));
+            bootstrap.state = NoRosterBootstrapState::RosterReady;
+            bootstrap.last_seen = now;
             super::status::inc_consensus_no_roster_fallback();
             let remaining = allowed_views.saturating_sub(budget.allowed_views.len());
             let remaining = u32::try_from(remaining).unwrap_or(u32::MAX);
@@ -15003,32 +15095,143 @@ impl Actor {
         (false, 0)
     }
 
-    fn try_refresh_no_roster_budget_once(&mut self, height: u64, view: u64, now: Instant) -> bool {
-        let attempt_cap = self.recovery_no_roster_refresh_retry_per_view();
+    fn no_roster_bootstrap_state(
+        &mut self,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> NoRosterBootstrapState {
         let key = self.missing_block_recovery_key_for_height(height);
         let budget = self
             .no_roster_fallback_recovery
             .entry(key)
             .or_insert_with(|| NoRosterFallbackBudget::new(now));
         budget.last_seen = now;
-        let attempt = budget.refresh_attempts_by_view.entry(view).or_insert(0);
-        if !no_roster_refresh_retry_allowed(*attempt, attempt_cap) {
+        let bootstrap = budget
+            .bootstrap_by_view
+            .entry(view)
+            .or_insert_with(|| NoRosterBootstrapEntry::pending(now));
+        bootstrap.last_seen = now;
+        bootstrap.state
+    }
+
+    fn update_no_roster_bootstrap_state_after_attempt(
+        &mut self,
+        height: u64,
+        view: u64,
+        now: Instant,
+        made_progress: bool,
+    ) -> NoRosterBootstrapState {
+        let attempt_cap = self.recovery_no_roster_refresh_retry_per_view();
+        let dwell_window = self.no_roster_bootstrap_dwell_window(height);
+        let key = self.missing_block_recovery_key_for_height(height);
+        let budget = self
+            .no_roster_fallback_recovery
+            .entry(key)
+            .or_insert_with(|| NoRosterFallbackBudget::new(now));
+        budget.last_seen = now;
+        let attempts = budget
+            .refresh_attempts_by_view
+            .get(&view)
+            .copied()
+            .unwrap_or_default();
+        let bootstrap = budget
+            .bootstrap_by_view
+            .entry(view)
+            .or_insert_with(|| NoRosterBootstrapEntry::pending(now));
+        bootstrap.last_seen = now;
+        if matches!(bootstrap.state, NoRosterBootstrapState::RosterReady) {
+            return NoRosterBootstrapState::RosterReady;
+        }
+        if made_progress {
+            bootstrap.state = NoRosterBootstrapState::RosterBootstrapPending;
+            return bootstrap.state;
+        }
+        let attempts_exhausted = !no_roster_refresh_retry_allowed(attempts, attempt_cap);
+        let dwell_exhausted = now.saturating_duration_since(bootstrap.first_seen) >= dwell_window;
+        if attempts_exhausted && dwell_exhausted {
+            bootstrap.state = NoRosterBootstrapState::RosterBootstrapExhausted;
+        } else {
+            bootstrap.state = NoRosterBootstrapState::RosterBootstrapPending;
+        }
+        bootstrap.state
+    }
+
+    fn mark_no_roster_refresh_then_fallback_used(
+        &mut self,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
+        let key = self.missing_block_recovery_key_for_height(height);
+        let budget = self
+            .no_roster_fallback_recovery
+            .entry(key)
+            .or_insert_with(|| NoRosterFallbackBudget::new(now));
+        budget.last_seen = now;
+        let bootstrap = budget
+            .bootstrap_by_view
+            .entry(view)
+            .or_insert_with(|| NoRosterBootstrapEntry::pending(now));
+        bootstrap.last_seen = now;
+        if bootstrap.refresh_then_fallback_used {
             return false;
         }
-        *attempt = attempt.saturating_add(1);
+        bootstrap.refresh_then_fallback_used = true;
+        true
+    }
+
+    fn try_no_roster_bootstrap_recovery_once(
+        &mut self,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
+        let attempt_cap = self.recovery_no_roster_refresh_retry_per_view();
+        let key = self.missing_block_recovery_key_for_height(height);
+        let allowed = {
+            let budget = self
+                .no_roster_fallback_recovery
+                .entry(key)
+                .or_insert_with(|| NoRosterFallbackBudget::new(now));
+            budget.last_seen = now;
+            let attempt = budget.refresh_attempts_by_view.entry(view).or_insert(0);
+            if !no_roster_refresh_retry_allowed(*attempt, attempt_cap) {
+                false
+            } else {
+                *attempt = attempt.saturating_add(1);
+                true
+            }
+        };
+        if !allowed {
+            return false;
+        }
         super::status::inc_consensus_no_roster_refresh_retry();
         super::status::inc_consensus_no_roster_refresh_attempt();
+        let mut made_progress = false;
+        if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
+            made_progress |=
+                self.request_missing_block_for_highest_qc_force(highest, "no_roster_bootstrap");
+        }
+        let missing_before = self.pending.missing_block_requests.len();
+        let roster_hint = self.effective_commit_topology();
+        self.request_missing_parents_for_gap(
+            roster_hint.as_slice(),
+            Some(roster_hint.as_slice()),
+            "no_roster_bootstrap",
+        );
+        made_progress |= self.pending.missing_block_requests.len() > missing_before;
+        made_progress |= self.request_range_pull_from_anchor(height, "no_roster_bootstrap", now);
         let current = self.state.commit_topology_snapshot();
         let refreshed = self.effective_commit_topology();
-        if refreshed == current {
-            return false;
+        if refreshed != current {
+            let refreshed_state = self.refresh_commit_topology_state(&refreshed);
+            made_progress |= !matches!(refreshed_state, CommitTopologyChange::None);
         }
-        let refreshed_state = self.refresh_commit_topology_state(&refreshed);
-        if matches!(refreshed_state, CommitTopologyChange::None) {
-            return false;
+        if made_progress {
+            super::status::inc_consensus_no_roster_refresh_success();
         }
-        super::status::inc_consensus_no_roster_refresh_success();
-        true
+        made_progress
     }
 
     fn escalate_no_roster_fail_closed(
@@ -15046,6 +15249,12 @@ impl Actor {
             .entry(key)
             .or_insert_with(|| NoRosterFallbackBudget::new(now));
         budget.last_seen = now;
+        let bootstrap = budget
+            .bootstrap_by_view
+            .entry(view)
+            .or_insert_with(|| NoRosterBootstrapEntry::pending(now));
+        bootstrap.last_seen = now;
+        bootstrap.state = NoRosterBootstrapState::RosterBootstrapExhausted;
         if !budget.escalated_views.insert(view) {
             return;
         }
@@ -15066,14 +15275,14 @@ impl Actor {
         );
     }
 
-    fn allow_no_roster_fallback_or_fail_closed(
+    fn decide_no_roster_fallback_or_fail_closed(
         &mut self,
         height: u64,
         view: u64,
         block_hash: HashOf<BlockHeader>,
         cause: ViewChangeCause,
         reason: &'static str,
-    ) -> bool {
+    ) -> NoRosterFallbackDecision {
         let now = Instant::now();
         let (allowed, budget_remaining) =
             self.allow_no_roster_fallback_for_round(height, view, now);
@@ -15086,26 +15295,59 @@ impl Actor {
                 reason,
                 "allowing bounded no-roster fallback broadcast"
             );
-            return true;
+            return NoRosterFallbackDecision::AllowFallback;
         }
-        if self.try_refresh_no_roster_budget_once(height, view, now) {
-            self.clear_no_roster_fallback_for_height(height);
-            let (allowed, budget_remaining) =
-                self.allow_no_roster_fallback_for_round(height, view, now);
-            if allowed {
+        let bootstrap_state = self.no_roster_bootstrap_state(height, view, now);
+        if matches!(
+            bootstrap_state,
+            NoRosterBootstrapState::RosterBootstrapPending | NoRosterBootstrapState::RosterReady
+        ) {
+            let made_progress = self.try_no_roster_bootstrap_recovery_once(height, view, now);
+            if made_progress && self.mark_no_roster_refresh_then_fallback_used(height, view, now) {
+                super::status::inc_consensus_no_roster_fallback();
                 debug!(
                     height,
                     view,
                     block = %block_hash,
-                    budget_remaining,
                     reason,
-                    "allowing bounded no-roster fallback broadcast after topology refresh"
+                    "allowing bounded no-roster fallback broadcast after deterministic bootstrap refresh"
                 );
-                return true;
+                return NoRosterFallbackDecision::AllowFallback;
+            }
+            let state = self.update_no_roster_bootstrap_state_after_attempt(
+                height,
+                view,
+                now,
+                made_progress,
+            );
+            if matches!(state, NoRosterBootstrapState::RosterBootstrapPending) {
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    reason,
+                    made_progress,
+                    "deferring no-roster fail-closed escalation while roster bootstrap is pending"
+                );
+                return NoRosterFallbackDecision::BootstrapPending;
             }
         }
         self.escalate_no_roster_fail_closed(height, view, block_hash, cause, reason, now);
-        false
+        NoRosterFallbackDecision::FailClosed
+    }
+
+    fn allow_no_roster_fallback_or_fail_closed(
+        &mut self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        cause: ViewChangeCause,
+        reason: &'static str,
+    ) -> bool {
+        matches!(
+            self.decide_no_roster_fallback_or_fail_closed(height, view, block_hash, cause, reason),
+            NoRosterFallbackDecision::AllowFallback
+        )
     }
 
     fn deterministic_active_set_from_commit_evidence(
@@ -15562,7 +15804,11 @@ impl Actor {
         self.sidecar_mismatch_recovery.insert(height, entry);
         let _ = self.request_range_pull_from_anchor(height, "sidecar_mismatch", now);
         if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
-            self.request_missing_block_for_highest_qc_force(highest, "sidecar_mismatch");
+            // Keep sidecar mismatch recovery non-reentrant to avoid recursive overflow.
+            self.request_missing_block_for_highest_qc_force_skip_sidecar_observation(
+                highest,
+                "sidecar_mismatch",
+            );
         }
         warn!(
             height,

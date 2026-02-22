@@ -30244,6 +30244,54 @@ fn sidecar_quarantine_disables_sidecar_roster_usage() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn sidecar_mismatch_reacquire_does_not_reenter_observation() {
+    let (kura, _kura_dir) = persistent_kura_for_tests();
+    let mut harness = test_actor_harness_with_config_and_height_and_kura(
+        1,
+        test_sumeragi_config(),
+        None,
+        0,
+        Arc::clone(&kura),
+    )
+    .await;
+    let actor = &mut harness.actor;
+    let height = u64::try_from(actor.state.committed_height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(2);
+    let expected = sample_qc_ref(height, 0);
+    let stored_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xF1; Hash::LENGTH]));
+    actor
+        .kura
+        .write_roster_metadata(&crate::kura::RosterSidecar::new_v1(
+            height,
+            stored_hash,
+            None,
+            None,
+            None,
+        ));
+    actor.highest_qc = Some(expected);
+
+    let _ = actor.request_missing_block_for_highest_qc_force(
+        sample_qc_ref(height, 0),
+        "test_sidecar_reentry_guard",
+    );
+
+    let entry = actor
+        .sidecar_mismatch_recovery
+        .get(&height)
+        .copied()
+        .expect("sidecar mismatch should be tracked");
+    assert_eq!(
+        entry.mismatch_count, 1,
+        "sidecar mismatch recovery must not recursively re-enter"
+    );
+    assert!(entry.quarantined);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn sidecar_mismatch_final_drop_trips_after_retry_cap() {
     let mut harness = test_actor_harness_with_config(1, test_sumeragi_config(), None).await;
     let actor = &mut harness.actor;
@@ -33381,6 +33429,36 @@ async fn no_roster_fallback_is_bounded_and_fail_closed_once_per_view() {
     );
 
     assert!(
+        actor.allow_no_roster_fallback_or_fail_closed(
+            height,
+            view.saturating_add(1),
+            block_hash,
+            ViewChangeCause::MissingQc,
+            "test_no_roster_budget",
+        ),
+        "first budget miss should allow one deterministic refresh-then-fallback cycle"
+    );
+    let after_refresh_cycle = super::status::snapshot();
+    assert_eq!(
+        after_refresh_cycle.consensus_no_roster_fallback_total,
+        after_first
+            .consensus_no_roster_fallback_total
+            .saturating_add(1),
+        "refresh-then-fallback cycle should increment fallback counter"
+    );
+    assert_eq!(
+        after_refresh_cycle.consensus_no_roster_fail_closed_total,
+        before.consensus_no_roster_fail_closed_total,
+        "refresh cycle should not fail-closed"
+    );
+    assert_eq!(
+        after_refresh_cycle.consensus_no_roster_refresh_attempt_total,
+        before
+            .consensus_no_roster_refresh_attempt_total
+            .saturating_add(1)
+    );
+
+    assert!(
         !actor.allow_no_roster_fallback_or_fail_closed(
             height,
             view.saturating_add(1),
@@ -33388,7 +33466,48 @@ async fn no_roster_fallback_is_bounded_and_fail_closed_once_per_view() {
             ViewChangeCause::MissingQc,
             "test_no_roster_budget",
         ),
-        "budget exhaustion should fail-closed"
+        "same view should not repeatedly allow refresh-then-fallback"
+    );
+    let after_pending = super::status::snapshot();
+    assert_eq!(
+        after_pending.consensus_no_roster_fail_closed_total,
+        after_refresh_cycle.consensus_no_roster_fail_closed_total,
+        "pending bootstrap should not trigger fail-closed until dwell expires"
+    );
+    assert_eq!(
+        after_pending.consensus_no_roster_refresh_attempt_total,
+        after_refresh_cycle.consensus_no_roster_refresh_attempt_total,
+        "same view should not retry no-roster bootstrap refresh beyond cap"
+    );
+
+    let key = actor.missing_block_recovery_key_for_height(height);
+    let dwell = actor.no_roster_bootstrap_dwell_window(height);
+    let expire_by = Instant::now()
+        .checked_sub(dwell.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(Instant::now());
+    actor
+        .no_roster_fallback_recovery
+        .get_mut(&key)
+        .and_then(|budget| {
+            budget
+                .bootstrap_by_view
+                .get_mut(&view.saturating_add(1))
+                .map(|entry| {
+                    entry.first_seen = expire_by;
+                    entry.last_seen = expire_by;
+                })
+        })
+        .expect("bootstrap slot should be present for second view");
+
+    assert!(
+        !actor.allow_no_roster_fallback_or_fail_closed(
+            height,
+            view.saturating_add(1),
+            block_hash,
+            ViewChangeCause::MissingQc,
+            "test_no_roster_budget",
+        ),
+        "budget exhaustion should fail-closed after pending bootstrap dwell expires"
     );
     let after_fail_closed = super::status::snapshot();
     assert_eq!(
@@ -33399,10 +33518,7 @@ async fn no_roster_fallback_is_bounded_and_fail_closed_once_per_view() {
     );
     assert_eq!(
         after_fail_closed.consensus_no_roster_refresh_attempt_total,
-        before
-            .consensus_no_roster_refresh_attempt_total
-            .saturating_add(1),
-        "budget exhaustion should attempt one topology refresh before fail-closed"
+        after_refresh_cycle.consensus_no_roster_refresh_attempt_total
     );
     assert_eq!(
         after_fail_closed.view_change_causes.missing_qc_total,
@@ -33453,9 +33569,57 @@ async fn no_roster_fallback_is_bounded_and_fail_closed_once_per_view() {
     let after_reset = super::status::snapshot();
     assert_eq!(
         after_reset.consensus_no_roster_fallback_total,
-        after_first
+        after_refresh_cycle
             .consensus_no_roster_fallback_total
             .saturating_add(1)
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn no_roster_bootstrap_prevents_premature_fallback_suppression() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.recovery.no_roster_fallback_views = 0;
+    consensus_cfg.recovery.no_roster_refresh_retry_per_view = 1;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let _missing_guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let actor = &mut harness.actor;
+    let _genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0_u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDE; Hash::LENGTH]));
+    let before = super::status::snapshot();
+
+    let decision = actor.decide_no_roster_fallback_or_fail_closed(
+        height,
+        view,
+        block_hash,
+        ViewChangeCause::MissingQc,
+        "test_no_roster_bootstrap_pending",
+    );
+    assert_eq!(
+        decision,
+        super::NoRosterFallbackDecision::AllowFallback,
+        "bootstrap refresh progress should permit one deterministic fallback broadcast"
+    );
+    let after = super::status::snapshot();
+    assert_eq!(
+        after.consensus_no_roster_fallback_total,
+        before.consensus_no_roster_fallback_total.saturating_add(1)
+    );
+    assert_eq!(
+        after.consensus_no_roster_refresh_attempt_total,
+        before
+            .consensus_no_roster_refresh_attempt_total
+            .saturating_add(1)
+    );
+    assert_eq!(
+        after.consensus_no_roster_fail_closed_total, before.consensus_no_roster_fail_closed_total,
+        "bootstrap window should avoid immediate fail-closed escalation"
     );
 
     harness.shutdown.send();
