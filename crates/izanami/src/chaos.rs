@@ -46,13 +46,13 @@ const IZANAMI_RBC_SESSION_TTL_MS: i64 = 900_000;
 const IZANAMI_RBC_PENDING_MAX_CHUNKS: i64 = 512;
 const IZANAMI_RBC_PENDING_MAX_BYTES: i64 = 32 * 1024 * 1024;
 const IZANAMI_RBC_PENDING_SESSION_LIMIT: i64 = 512;
-const IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK: i64 = 32;
-const IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK: i64 = 256;
+const IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK: i64 = 12;
+const IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK: i64 = 96;
 const IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS: i64 = 1_000;
 const IZANAMI_PACEMAKER_PENDING_STALL_FLOOR_MS: u64 = 100;
-const IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: i64 = 8;
-const IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: i64 = 8;
-const IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: i64 = 128;
+const IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: i64 = 16;
+const IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: i64 = 16;
+const IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: i64 = 256;
 const IZANAMI_PACING_GOVERNOR_MIN_FACTOR_BPS: i64 = 10_000;
 const IZANAMI_PACING_GOVERNOR_MAX_FACTOR_BPS: i64 = 10_000;
 const IZANAMI_COLLECTORS_K: u16 = 4;
@@ -61,8 +61,15 @@ const IZANAMI_PACING_FACTOR_BPS: u32 = 10_000;
 const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 2;
 const IZANAMI_FUTURE_HEIGHT_WINDOW: i64 = 2;
 const IZANAMI_FUTURE_VIEW_WINDOW: i64 = 2;
-const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 500;
-const IZANAMI_NPOS_COMMIT_TIME_MS: i64 = 750;
+const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 400;
+const IZANAMI_NPOS_COMMIT_TIME_MS: i64 = 600;
+const IZANAMI_RECOVERY_HEIGHT_ATTEMPT_CAP: i64 = 24;
+const IZANAMI_RECOVERY_HEIGHT_WINDOW_MS: i64 = 1_500;
+const IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: i64 = 2;
+const IZANAMI_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: i64 = 1;
+const IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER: i64 = 3;
+const IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS: i64 = 20_000;
+const IZANAMI_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: i64 = 2;
 const IZANAMI_PIPELINE_DYNAMIC_PREPASS: bool = true;
 const IZANAMI_PIPELINE_ACCESS_SET_CACHE_ENABLED: bool = true;
 const IZANAMI_PIPELINE_PARALLEL_OVERLAY: bool = true;
@@ -89,6 +96,8 @@ const IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS: u64 = 250;
 const IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 const IZANAMI_WORKER_FAILURE_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
 const IZANAMI_PEER_LOG_BASE_LEVEL: &str = "WARN";
+const IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS: u64 = 2;
+const IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_WINDOW_SECS: u64 = 30;
 
 #[derive(Clone, Copy, Debug)]
 struct IngressEndpointPoolConfig {
@@ -809,6 +818,46 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
                 IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK,
             )
             .write(
+                ["sumeragi", "recovery", "height_attempt_cap"],
+                IZANAMI_RECOVERY_HEIGHT_ATTEMPT_CAP,
+            )
+            .write(
+                ["sumeragi", "recovery", "height_window_ms"],
+                IZANAMI_RECOVERY_HEIGHT_WINDOW_MS,
+            )
+            .write(
+                ["sumeragi", "recovery", "hash_miss_cap_before_range_pull"],
+                IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL,
+            )
+            .write(
+                [
+                    "sumeragi",
+                    "recovery",
+                    "missing_block_signer_fallback_attempts",
+                ],
+                IZANAMI_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+            )
+            .write(
+                [
+                    "sumeragi",
+                    "recovery",
+                    "missing_block_retry_backoff_multiplier",
+                ],
+                IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER,
+            )
+            .write(
+                ["sumeragi", "recovery", "missing_block_retry_backoff_cap_ms"],
+                IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS,
+            )
+            .write(
+                [
+                    "sumeragi",
+                    "recovery",
+                    "range_pull_escalation_after_hash_misses",
+                ],
+                IZANAMI_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES,
+            )
+            .write(
                 ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
                 IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER,
             )
@@ -1285,6 +1334,40 @@ impl ProgressState {
     }
 }
 
+struct HeightDivergenceState {
+    first_seen_above_threshold: Option<Instant>,
+}
+
+impl HeightDivergenceState {
+    fn new() -> Self {
+        Self {
+            first_seen_above_threshold: None,
+        }
+    }
+
+    fn observe(
+        &mut self,
+        now: Instant,
+        divergence_blocks: u64,
+        max_allowed_divergence: u64,
+    ) -> bool {
+        if divergence_blocks > max_allowed_divergence {
+            if self.first_seen_above_threshold.is_none() {
+                self.first_seen_above_threshold = Some(now);
+                return true;
+            }
+        } else {
+            self.first_seen_above_threshold = None;
+        }
+        false
+    }
+
+    fn violated(&self, now: Instant, max_window: Duration) -> bool {
+        self.first_seen_above_threshold
+            .is_some_and(|started| now.saturating_duration_since(started) >= max_window)
+    }
+}
+
 async fn wait_for_target_blocks(
     peers: &[NetworkPeer],
     target_blocks: u64,
@@ -1294,7 +1377,10 @@ async fn wait_for_target_blocks(
 ) -> Result<()> {
     let start = Instant::now();
     let mut progress = ProgressState::new(start);
+    let mut divergence = HeightDivergenceState::new();
     let tolerated_failures = tolerated_peer_failures(peers.len());
+    let strict_divergence_window =
+        Duration::from_secs(IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_WINDOW_SECS);
     loop {
         if run_control.should_stop() {
             return Err(eyre!("izanami run stopped before target blocks reached"));
@@ -1303,10 +1389,38 @@ async fn wait_for_target_blocks(
         let heights = sampled_peer_heights(peers);
         let strict_min_height = heights.iter().copied().min().unwrap_or(0);
         let min_height = quorum_min_height_from_samples(heights);
+        let divergence_blocks = min_height.saturating_sub(strict_min_height);
         if now >= run_control.deadline() {
             return Err(eyre!(
                 "timed out before reaching target blocks (quorum min height {}, strict min {}, target {}, tolerated_failures {})",
                 progress.last_height,
+                strict_min_height,
+                target_blocks,
+                tolerated_failures
+            ));
+        }
+        if divergence.observe(
+            now,
+            divergence_blocks,
+            IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS,
+        ) {
+            warn!(
+                target: "izanami::progress",
+                quorum_min_height = min_height,
+                strict_min_height,
+                divergence_blocks,
+                max_allowed_divergence = IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS,
+                max_window = ?strict_divergence_window,
+                "detected quorum/strict height divergence above safety threshold"
+            );
+        }
+        if divergence.violated(now, strict_divergence_window) {
+            return Err(eyre!(
+                "height divergence exceeded safety window (divergence {}, threshold {}, window {:?}, quorum min {}, strict min {}, target {}, tolerated_failures {})",
+                divergence_blocks,
+                IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS,
+                strict_divergence_window,
+                min_height,
                 strict_min_height,
                 target_blocks,
                 tolerated_failures
@@ -2478,6 +2592,36 @@ mod tests {
     }
 
     #[test]
+    fn divergence_state_trips_after_sustained_window() {
+        let start = Instant::now();
+        let mut state = HeightDivergenceState::new();
+        let threshold = 2;
+        let window = Duration::from_secs(30);
+
+        assert!(state.observe(start, 3, threshold));
+        assert!(!state.violated(start + Duration::from_secs(29), window));
+        assert!(state.violated(start + Duration::from_secs(30), window));
+    }
+
+    #[test]
+    fn divergence_state_resets_when_converged() {
+        let start = Instant::now();
+        let mut state = HeightDivergenceState::new();
+        let threshold = 2;
+        let window = Duration::from_secs(30);
+
+        assert!(state.observe(start, 4, threshold));
+        assert!(!state.observe(start + Duration::from_secs(10), 1, threshold));
+        assert!(!state.violated(start + Duration::from_secs(40), window));
+        assert!(
+            state.observe(start + Duration::from_secs(41), 5, threshold),
+            "fresh divergence window should start after convergence reset"
+        );
+        assert!(!state.violated(start + Duration::from_secs(60), window));
+        assert!(state.violated(start + Duration::from_secs(71), window));
+    }
+
+    #[test]
     fn tolerated_peer_failures_matches_bft_window() {
         assert_eq!(tolerated_peer_failures(0), 0);
         assert_eq!(tolerated_peer_failures(1), 0);
@@ -2938,6 +3082,46 @@ mod tests {
         assert_eq!(
             lookup(&["sumeragi", "advanced", "rbc", "payload_chunks_per_tick"]),
             Some(IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "recovery", "height_attempt_cap"]),
+            Some(IZANAMI_RECOVERY_HEIGHT_ATTEMPT_CAP)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "recovery", "height_window_ms"]),
+            Some(IZANAMI_RECOVERY_HEIGHT_WINDOW_MS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "recovery", "hash_miss_cap_before_range_pull"]),
+            Some(IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL)
+        );
+        assert_eq!(
+            lookup(&[
+                "sumeragi",
+                "recovery",
+                "missing_block_signer_fallback_attempts",
+            ]),
+            Some(IZANAMI_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS)
+        );
+        assert_eq!(
+            lookup(&[
+                "sumeragi",
+                "recovery",
+                "missing_block_retry_backoff_multiplier",
+            ]),
+            Some(IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "recovery", "missing_block_retry_backoff_cap_ms",]),
+            Some(IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS)
+        );
+        assert_eq!(
+            lookup(&[
+                "sumeragi",
+                "recovery",
+                "range_pull_escalation_after_hash_misses",
+            ]),
+            Some(IZANAMI_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES)
         );
         assert_eq!(
             lookup(&["sumeragi", "advanced", "da", "quorum_timeout_multiplier"]),

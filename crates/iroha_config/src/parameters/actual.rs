@@ -3884,8 +3884,16 @@ pub struct SumeragiRecovery {
     pub height_window: Duration,
     /// Hash-miss threshold before escalating dependency recovery to range pull.
     pub hash_miss_cap_before_range_pull: u32,
+    /// Deterministic wait window before rotating after a missing-QC recovery attempt.
+    pub missing_qc_reacquire_window: Duration,
+    /// Maximum forced self-proposal attempts allowed for a single (height, view).
+    pub max_forced_proposal_attempts_per_view: u32,
     /// Number of views where no-roster fallback broadcasts remain allowed.
     pub no_roster_fallback_views: u32,
+    /// Number of deterministic no-roster topology refresh retries allowed per view.
+    pub no_roster_refresh_retry_per_view: u32,
+    /// Rotate immediately when the missing-QC reacquire window is exhausted.
+    pub rotate_after_reacquire_exhausted: bool,
     /// Missing-block fetch attempts before falling back to the full commit topology.
     pub missing_block_signer_fallback_attempts: u32,
     /// Per-attempt multiplier applied to missing-block retry windows (>=1).
