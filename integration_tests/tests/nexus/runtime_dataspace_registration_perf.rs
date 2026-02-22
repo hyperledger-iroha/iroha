@@ -666,6 +666,7 @@ struct RegistrationIterationMetrics {
     manifest_uaid: String,
     submitter_peer_index: usize,
     submitter_height_delta: u64,
+    cluster_height_delta: u64,
     lane_submit_latency: Duration,
     lane_commit_apply_latency: Duration,
     lane_all_peer_visibility_latency: Duration,
@@ -825,6 +826,17 @@ fn run_registration_iteration(
         .wrap_err("fetch submitter baseline height")?
         .commit_qc
         .height;
+    let baseline_cluster_height = network
+        .peers()
+        .iter()
+        .map(|peer| {
+            peer.client()
+                .get_sumeragi_status_wire()
+                .map(|status| status.commit_qc.height)
+                .unwrap_or(0)
+        })
+        .max()
+        .unwrap_or(0);
 
     let lane_started = Instant::now();
     let lane_submit_started = Instant::now();
@@ -862,6 +874,18 @@ fn run_registration_iteration(
     )
     .wrap_err_with(|| format!("wait for lane {} visibility on all peers", lane_id.as_u32()))?;
     let lane_all_peer_visibility_latency = lane_visibility_started.elapsed();
+    let cluster_height_delta = network
+        .peers()
+        .iter()
+        .map(|peer| {
+            peer.client()
+                .get_sumeragi_status_wire()
+                .map(|status| status.commit_qc.height)
+                .unwrap_or(0)
+        })
+        .max()
+        .unwrap_or(0)
+        .saturating_sub(baseline_cluster_height);
     let lane_total_latency = lane_started.elapsed();
 
     let retire_plan = LaneLifecyclePlan {
@@ -901,6 +925,7 @@ fn run_registration_iteration(
         manifest_uaid: manifest_uaid_literal,
         submitter_peer_index,
         submitter_height_delta,
+        cluster_height_delta,
         lane_submit_latency,
         lane_commit_apply_latency,
         lane_all_peer_visibility_latency,
@@ -967,7 +992,8 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
     let mut revoke_visibility_samples = Vec::with_capacity(BENCH_ITERATIONS);
     let mut revoke_total_samples = Vec::with_capacity(BENCH_ITERATIONS);
     let mut workflow_total_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut height_delta_samples = Vec::with_capacity(BENCH_ITERATIONS);
+    let mut submitter_height_delta_samples = Vec::with_capacity(BENCH_ITERATIONS);
+    let mut cluster_height_delta_samples = Vec::with_capacity(BENCH_ITERATIONS);
     let mut passes = 0usize;
     let mut failure: Option<eyre::Report> = None;
 
@@ -989,16 +1015,18 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
                 revoke_visibility_samples.push(metrics.manifest_revoke_all_peer_visibility_latency);
                 revoke_total_samples.push(metrics.manifest_revoke_total_latency);
                 workflow_total_samples.push(metrics.total_latency);
-                height_delta_samples.push(metrics.submitter_height_delta);
+                submitter_height_delta_samples.push(metrics.submitter_height_delta);
+                cluster_height_delta_samples.push(metrics.cluster_height_delta);
 
                 eprintln!(
-                    "[registration-perf] iter={}/{} lane={} uaid={} submitter_peer={} height_delta={} lane_submit={} lane_commit/apply={} lane_visibility={} lane_total={} publish_submit={} publish_commit/apply={} publish_visibility={} publish_total={} revoke_submit={} revoke_commit/apply={} revoke_visibility={} revoke_total={} total={}",
+                    "[registration-perf] iter={}/{} lane={} uaid={} submitter_peer={} submitter_height_delta={} cluster_height_delta={} lane_submit={} lane_commit/apply={} lane_visibility={} lane_total={} publish_submit={} publish_commit/apply={} publish_visibility={} publish_total={} revoke_submit={} revoke_commit/apply={} revoke_visibility={} revoke_total={} total={}",
                     iteration + 1,
                     BENCH_ITERATIONS,
                     metrics.lane_id,
                     metrics.manifest_uaid,
                     metrics.submitter_peer_index,
                     metrics.submitter_height_delta,
+                    metrics.cluster_height_delta,
                     format_duration(metrics.lane_submit_latency),
                     format_duration(metrics.lane_commit_apply_latency),
                     format_duration(metrics.lane_all_peer_visibility_latency),
@@ -1048,17 +1076,26 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
     );
     emit_latency_stats("manifest revoke workflow latency", &revoke_total_samples);
     emit_latency_stats("total workflow latency", &workflow_total_samples);
-    if !height_delta_samples.is_empty() {
-        let min = *height_delta_samples.iter().min().unwrap_or(&0);
-        let max = *height_delta_samples.iter().max().unwrap_or(&0);
-        let avg =
-            height_delta_samples.iter().sum::<u64>() as f64 / height_delta_samples.len() as f64;
+    if !submitter_height_delta_samples.is_empty() {
+        let min = *submitter_height_delta_samples.iter().min().unwrap_or(&0);
+        let max = *submitter_height_delta_samples.iter().max().unwrap_or(&0);
+        let avg = submitter_height_delta_samples.iter().sum::<u64>() as f64
+            / submitter_height_delta_samples.len() as f64;
         eprintln!(
             "[registration-perf] submitter commit height delta min/avg/max = {min}/{avg:.2}/{max}"
         );
+    }
+    if !cluster_height_delta_samples.is_empty() {
+        let min = *cluster_height_delta_samples.iter().min().unwrap_or(&0);
+        let max = *cluster_height_delta_samples.iter().max().unwrap_or(&0);
+        let avg = cluster_height_delta_samples.iter().sum::<u64>() as f64
+            / cluster_height_delta_samples.len() as f64;
+        eprintln!(
+            "[registration-perf] cluster max commit height delta min/avg/max = {min}/{avg:.2}/{max}"
+        );
         if max == 0 {
             eprintln!(
-                "[registration-perf] note: lifecycle visibility completed without observed commit-height advancement on submitter"
+                "[registration-perf] note: lifecycle visibility completed without observed commit-height advancement on any peer"
             );
         }
     }

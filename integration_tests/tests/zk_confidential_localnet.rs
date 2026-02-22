@@ -539,6 +539,114 @@ async fn confidential_zknative_asset_three_hop_localnet() -> Result<()> {
 }
 
 #[tokio::test]
+async fn confidential_zknative_rejects_transparent_mint_localnet() -> Result<()> {
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) = start_confidential_localnet(stringify!(
+        confidential_zknative_rejects_transparent_mint_localnet
+    ))
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let source = tx_builder_client.account.clone();
+    let asset_def: AssetDefinitionId = "zkzknativemintdeny#wonderland".parse().unwrap();
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            iroha_data_model::isi::zk::RegisterZkAsset::new(
+                asset_def.clone(),
+                iroha_data_model::isi::zk::ZkAssetMode::ZkNative,
+                false,
+                false,
+                None,
+                None,
+                None,
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "prepare zknative mint-rejection asset",
+    )
+    .await?;
+
+    let denied_mint_tx = tx_builder_client.build_transaction_from_items(
+        vec![InstructionBox::from(Mint::asset_numeric(
+            10_u64,
+            AssetId::new(asset_def.clone(), source.clone()),
+        ))],
+        iroha_data_model::metadata::Metadata::default(),
+    );
+
+    let mint_result = submit_transaction_on_any_peer(
+        &peer_clients,
+        &denied_mint_tx,
+        "zknative transparent mint unexpectedly accepted",
+    );
+    match mint_result {
+        Ok(_) => {
+            return Err(eyre!(
+                "zknative transparent mint unexpectedly accepted on at least one peer"
+            ));
+        }
+        Err(err) => {
+            assert!(
+                err.chain().any(|cause| {
+                    let text = cause.to_string().to_lowercase();
+                    text.contains("mint")
+                        || text.contains("transparent")
+                        || text.contains("policy")
+                        || text.contains("permitted")
+                }),
+                "expected zknative mint policy rejection, got: {err:?}"
+            );
+        }
+    }
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Log::new(
+                Level::INFO,
+                "post zknative denied transparent mint barrier".to_owned(),
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "post zknative denied transparent mint barrier failed",
+    )
+    .await?;
+
+    let transparent_balance =
+        numeric_balance(&tx_builder_client, AssetId::new(asset_def, source.clone()));
+    match transparent_balance {
+        Ok(balance) => {
+            return Err(eyre!(
+                "zknative asset unexpectedly exposed transparent balance: {balance:?}"
+            ));
+        }
+        Err(err) => {
+            assert!(
+                !is_transient_client_error(&err),
+                "zknative transparent balance check failed due transient query error: {err:?}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
     let Some(ConfidentialLocalnetCtx {
         network,
