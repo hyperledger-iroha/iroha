@@ -103,6 +103,20 @@ const SOAK_BARRIER_TICK_EVERY_POLLS: u64 = 5;
 const SOAK_FALLBACK_LOG_LIMIT: usize = 3;
 const SOAK_ITERATION_ATTEMPTS: usize = 3;
 const SOAK_ITERATIONS: usize = 10;
+const SOAK_ITERATIONS_ENV: &str = "IROHA_NEXUS_CROSS_SOAK_ITERATIONS";
+
+fn parse_positive_usize_override(raw: Option<&str>, default: usize) -> usize {
+    raw.and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn soak_iterations() -> usize {
+    parse_positive_usize_override(
+        std::env::var(SOAK_ITERATIONS_ENV).ok().as_deref(),
+        SOAK_ITERATIONS,
+    )
+}
 
 fn localnet_builder() -> NetworkBuilder {
     let gas_account_str = format!("{}@ivm", SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key());
@@ -1693,6 +1707,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         }
     }
 
+    let soak_iterations = soak_iterations();
     let soak_baseline = [
         (&alice_ds1_asset, Numeric::from(60_u32)),
         (&bob_ds1_asset, Numeric::from(40_u32)),
@@ -1701,23 +1716,25 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     ];
     let mut last_soak_synced_height: Option<u64> = None;
     let mut soak_passes = 0usize;
-    let mut soak_iteration_durations = Vec::with_capacity(SOAK_ITERATIONS);
-    let mut soak_target_durations = Vec::with_capacity(SOAK_ITERATIONS);
-    let mut soak_submit_durations = Vec::with_capacity(SOAK_ITERATIONS);
-    let mut soak_barrier_durations = Vec::with_capacity(SOAK_ITERATIONS);
-    let mut soak_query_durations = Vec::with_capacity(SOAK_ITERATIONS);
+    let mut soak_iteration_durations = Vec::with_capacity(soak_iterations);
+    let mut soak_target_durations = Vec::with_capacity(soak_iterations);
+    let mut soak_submit_durations = Vec::with_capacity(soak_iterations);
+    let mut soak_barrier_durations = Vec::with_capacity(soak_iterations);
+    let mut soak_query_durations = Vec::with_capacity(soak_iterations);
     let mut soak_failures = Vec::new();
     let mut soak_outcome_fallbacks = 0usize;
     let mut soak_iteration_retries_used = 0usize;
     {
-        let _phase = phase_timings.phase("soak 10 iterations: paired swap throughput");
+        let _phase = phase_timings.phase(format!(
+            "soak {soak_iterations} iterations: paired swap throughput"
+        ));
         let mut soak_submitter = leader_targeted_client_for_account(
             &network,
             &alice,
             &ALICE_ID,
             ALICE_KEYPAIR.private_key(),
         );
-        for iteration in 0..SOAK_ITERATIONS {
+        for iteration in 0..soak_iterations {
             let iteration_started = Instant::now();
             let mut run_result = Err(eyre!("iteration {} exceeded retry budget", iteration + 1));
             for attempt in 0..SOAK_ITERATION_ATTEMPTS {
@@ -1908,11 +1925,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         );
     }
     if let Some((min, avg, max)) = duration_min_avg_max_secs(&soak_iteration_durations) {
-        let pass_rate = (soak_passes as f64 / SOAK_ITERATIONS as f64) * 100.0;
+        let pass_rate = (soak_passes as f64 / soak_iterations as f64) * 100.0;
         eprintln!("[soak] strict metrics (gating enabled)");
         eprintln!(
             "[soak] iterations={} pass_rate={:.1}% min={:.3}s avg={:.3}s max={:.3}s",
-            SOAK_ITERATIONS, pass_rate, min, avg, max
+            soak_iterations, pass_rate, min, avg, max
         );
         if let Some((target_min, target_avg, target_max)) =
             duration_min_avg_max_secs(&soak_target_durations)
@@ -1953,7 +1970,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             eprintln!("[soak] failure detail: {failure}");
         }
         return Err(eyre!(
-            "soak must pass all {SOAK_ITERATIONS} iterations; passed {soak_passes}, failed {}",
+            "soak must pass all {soak_iterations} iterations; passed {soak_passes}, failed {}",
             soak_failures.len()
         ));
     }
@@ -2120,7 +2137,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     eprintln!(
         "[health] soak_passed={}/{} setup_retries={} swap_fallbacks={} swap_nonconverged_fallbacks={} soak_fallbacks={} soak_retries={}",
         soak_passes,
-        SOAK_ITERATIONS,
+        soak_iterations,
         setup_register_mint_retries_used,
         swap_outcome_fallbacks,
         swap_nonconverged_fallbacks,
@@ -2131,4 +2148,23 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     phase_timings.emit_summary();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_positive_usize_override;
+
+    #[test]
+    fn parse_positive_usize_override_uses_positive_input() {
+        assert_eq!(parse_positive_usize_override(Some("12"), 10), 12);
+        assert_eq!(parse_positive_usize_override(Some(" 7 "), 10), 7);
+    }
+
+    #[test]
+    fn parse_positive_usize_override_falls_back_on_invalid_input() {
+        assert_eq!(parse_positive_usize_override(None, 10), 10);
+        assert_eq!(parse_positive_usize_override(Some("0"), 10), 10);
+        assert_eq!(parse_positive_usize_override(Some("not-a-number"), 10), 10);
+        assert_eq!(parse_positive_usize_override(Some(""), 10), 10);
+    }
 }
