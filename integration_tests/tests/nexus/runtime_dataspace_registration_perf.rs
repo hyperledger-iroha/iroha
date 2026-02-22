@@ -49,6 +49,7 @@ use toml::{Table, Value as TomlValue};
 
 const TOTAL_PEERS: usize = 4;
 const BENCH_ITERATIONS: usize = 5;
+const BENCH_ITERATIONS_ENV: &str = "IROHA_NEXUS_RUNTIME_BENCH_ITERATIONS";
 const BASE_LANE_ID: u32 = 10;
 const NEXUS_ALIAS: &str = "nexus";
 const BENCH_MANIFEST_DATASPACE: DataSpaceId = DataSpaceId::new(4_096);
@@ -61,6 +62,19 @@ const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
+
+fn parse_positive_usize_override(raw: Option<&str>, default: usize) -> usize {
+    raw.and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn benchmark_iterations() -> usize {
+    parse_positive_usize_override(
+        std::env::var(BENCH_ITERATIONS_ENV).ok().as_deref(),
+        BENCH_ITERATIONS,
+    )
+}
 
 fn runtime_registration_builder() -> NetworkBuilder {
     NetworkBuilder::new()
@@ -965,6 +979,7 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
     let http = reqwest::Client::builder()
         .build()
         .wrap_err("build reqwest client for lifecycle benchmark")?;
+    let bench_iterations = benchmark_iterations();
     eprintln!("[registration-perf] report-only lane+dataspace metrics (no threshold gating)");
 
     let grant_probe_client = network.peer().client();
@@ -979,25 +994,25 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
         },
     )?;
 
-    let mut lane_submit_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut lane_commit_apply_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut lane_visibility_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut lane_total_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut publish_submit_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut publish_commit_apply_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut publish_visibility_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut publish_total_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut revoke_submit_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut revoke_commit_apply_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut revoke_visibility_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut revoke_total_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut workflow_total_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut submitter_height_delta_samples = Vec::with_capacity(BENCH_ITERATIONS);
-    let mut cluster_height_delta_samples = Vec::with_capacity(BENCH_ITERATIONS);
+    let mut lane_submit_samples = Vec::with_capacity(bench_iterations);
+    let mut lane_commit_apply_samples = Vec::with_capacity(bench_iterations);
+    let mut lane_visibility_samples = Vec::with_capacity(bench_iterations);
+    let mut lane_total_samples = Vec::with_capacity(bench_iterations);
+    let mut publish_submit_samples = Vec::with_capacity(bench_iterations);
+    let mut publish_commit_apply_samples = Vec::with_capacity(bench_iterations);
+    let mut publish_visibility_samples = Vec::with_capacity(bench_iterations);
+    let mut publish_total_samples = Vec::with_capacity(bench_iterations);
+    let mut revoke_submit_samples = Vec::with_capacity(bench_iterations);
+    let mut revoke_commit_apply_samples = Vec::with_capacity(bench_iterations);
+    let mut revoke_visibility_samples = Vec::with_capacity(bench_iterations);
+    let mut revoke_total_samples = Vec::with_capacity(bench_iterations);
+    let mut workflow_total_samples = Vec::with_capacity(bench_iterations);
+    let mut submitter_height_delta_samples = Vec::with_capacity(bench_iterations);
+    let mut cluster_height_delta_samples = Vec::with_capacity(bench_iterations);
     let mut passes = 0usize;
     let mut failure: Option<eyre::Report> = None;
 
-    for iteration in 0..BENCH_ITERATIONS {
+    for iteration in 0..bench_iterations {
         match run_registration_iteration(&rt, &http, &network, iteration) {
             Ok(metrics) => {
                 passes += 1;
@@ -1021,7 +1036,7 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
                 eprintln!(
                     "[registration-perf] iter={}/{} lane={} uaid={} submitter_peer={} submitter_height_delta={} cluster_height_delta={} lane_submit={} lane_commit/apply={} lane_visibility={} lane_total={} publish_submit={} publish_commit/apply={} publish_visibility={} publish_total={} revoke_submit={} revoke_commit/apply={} revoke_visibility={} revoke_total={} total={}",
                     iteration + 1,
-                    BENCH_ITERATIONS,
+                    bench_iterations,
                     metrics.lane_id,
                     metrics.manifest_uaid,
                     metrics.submitter_peer_index,
@@ -1050,7 +1065,7 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
         }
     }
 
-    let pass_rate = (passes as f64 / BENCH_ITERATIONS as f64) * 100.0;
+    let pass_rate = (passes as f64 / bench_iterations as f64) * 100.0;
     emit_latency_stats("lane submit latency", &lane_submit_samples);
     emit_latency_stats("lane commit/apply latency", &lane_commit_apply_samples);
     emit_latency_stats("lane all-peer visibility latency", &lane_visibility_samples);
@@ -1101,14 +1116,14 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
     }
     eprintln!(
         "[registration-perf] iterations={} pass_rate={:.1}%",
-        BENCH_ITERATIONS, pass_rate
+        bench_iterations, pass_rate
     );
 
     if let Some(err) = failure {
         return Err(err);
     }
     ensure!(
-        passes == BENCH_ITERATIONS,
+        passes == bench_iterations,
         "registration benchmark did not complete all iterations"
     );
 
@@ -1117,7 +1132,7 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{duration_min_avg_max, format_duration};
+    use super::{duration_min_avg_max, format_duration, parse_positive_usize_override};
     use std::time::Duration;
 
     #[test]
@@ -1138,5 +1153,19 @@ mod tests {
         assert_eq!(format_duration(Duration::from_secs(2)), "2.000s");
         assert_eq!(format_duration(Duration::from_millis(10)), "10.000ms");
         assert_eq!(format_duration(Duration::from_nanos(500)), "0.500us");
+    }
+
+    #[test]
+    fn parse_positive_usize_override_uses_positive_input() {
+        assert_eq!(parse_positive_usize_override(Some("8"), 5), 8);
+        assert_eq!(parse_positive_usize_override(Some(" 3 "), 5), 3);
+    }
+
+    #[test]
+    fn parse_positive_usize_override_falls_back_on_invalid_input() {
+        assert_eq!(parse_positive_usize_override(None, 5), 5);
+        assert_eq!(parse_positive_usize_override(Some("0"), 5), 5);
+        assert_eq!(parse_positive_usize_override(Some("bad"), 5), 5);
+        assert_eq!(parse_positive_usize_override(Some(""), 5), 5);
     }
 }

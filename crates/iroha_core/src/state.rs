@@ -11477,6 +11477,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             repo_agreements,
             zk_assets,
             elections,
+            citizens,
             governance_proposals,
             governance_referenda,
             governance_stage_approvals,
@@ -11554,6 +11555,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         repo_agreements.apply();
         zk_assets.apply();
         elections.apply();
+        citizens.apply();
         governance_proposals.apply();
         governance_referenda.apply();
         governance_stage_approvals.apply();
