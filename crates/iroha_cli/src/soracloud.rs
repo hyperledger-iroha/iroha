@@ -31,7 +31,7 @@ use iroha::data_model::{
         encode_agent_message_send_provenance_payload,
         encode_agent_policy_revoke_provenance_payload, encode_agent_restart_provenance_payload,
         encode_agent_wallet_approve_provenance_payload,
-        encode_agent_wallet_spend_provenance_payload,
+        encode_agent_wallet_spend_provenance_payload, encode_bundle_provenance_payload,
         encode_model_artifact_register_provenance_payload,
         encode_model_weight_promote_provenance_payload,
         encode_model_weight_register_provenance_payload,
@@ -4668,8 +4668,8 @@ fn signed_bundle_request(
     bundle: SoraDeploymentBundleV1,
     key_pair: &KeyPair,
 ) -> Result<SignedBundleRequest> {
-    let payload =
-        norito::to_bytes(&bundle).wrap_err("failed to encode deployment bundle for signing")?;
+    let payload = encode_bundle_provenance_payload(&bundle)
+        .wrap_err("failed to encode deployment bundle payload for signing")?;
     let signature = Signature::new(key_pair.private_key(), &payload);
     Ok(SignedBundleRequest {
         bundle,
@@ -7648,7 +7648,7 @@ mod tests {
         };
         let key_pair = KeyPair::random();
         let request = signed_bundle_request(bundle, &key_pair).expect("signed request");
-        let payload = norito::to_bytes(&request.bundle).expect("encode payload");
+        let payload = encode_bundle_provenance_payload(&request.bundle).expect("encode payload");
         request
             .provenance
             .signature
@@ -8010,6 +8010,21 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+    }
+
+    #[test]
+    fn bundle_signature_payload_layout_is_canonical_layout() {
+        let container = fixture_container();
+        let mut service = fixture_service();
+        service.container.manifest_hash = Hash::new(Encode::encode(&container));
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+        let encoded = encode_bundle_provenance_payload(&bundle).expect("encode signature payload");
+        let expected = norito::to_bytes(&bundle).expect("encode canonical layout");
+        assert_eq!(encoded, expected);
     }
 
     #[test]

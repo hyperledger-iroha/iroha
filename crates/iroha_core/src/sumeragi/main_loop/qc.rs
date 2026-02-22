@@ -162,7 +162,7 @@ impl Actor {
         retry_window.max(widened)
     }
 
-    fn missing_block_retry_window_with_backoff(
+    pub(super) fn missing_block_retry_window_with_backoff(
         &self,
         base_retry_window: Duration,
         attempts: u32,
@@ -179,7 +179,14 @@ impl Actor {
             return base_retry_window.min(cap);
         }
 
-        super::saturating_mul_duration(base_retry_window, multiplier).min(cap)
+        let mut effective = base_retry_window.min(cap);
+        for _ in 0..attempts {
+            if effective >= cap {
+                break;
+            }
+            effective = super::saturating_mul_duration(effective, multiplier).min(cap);
+        }
+        effective
     }
 
     fn maybe_validate_pending_for_commit_qc(

@@ -4129,8 +4129,10 @@ impl Iroha {
                     && bytes.len() == 32
                     && bytes[..] != consensus_caps.consensus_fingerprint
                 {
-                    return Err(Report::new(GenesisManifestError::ConsensusFingerprintMismatch)
-                        .change_context(StartError::InitKura));
+                    return Err(
+                        Report::new(GenesisManifestError::ConsensusFingerprintMismatch)
+                            .change_context(StartError::InitKura),
+                    );
                 }
             }
         }
@@ -4520,6 +4522,7 @@ impl Iroha {
         let fraud_cfg = config.fraud_monitoring.clone();
         let zk_cfg = config.zk.clone();
         let settlement_cfg = config.settlement.clone();
+        let gov_cfg = config.gov.clone();
         let oracle_cfg = config.oracle.clone();
         let streaming_cfg = config.streaming.clone();
         let merge_cache_capacity = config.kura.merge_ledger_cache_capacity;
@@ -4532,6 +4535,7 @@ impl Iroha {
         state.set_fraud_monitoring(fraud_cfg);
         state.set_zk(zk_cfg.clone());
         state.set_settlement(settlement_cfg);
+        state.set_gov(gov_cfg);
         state.set_merge_ledger_cache_capacity(merge_cache_capacity);
         // Recovery: scan recent persisted pipeline sidecars and log DAG fingerprint mismatches (best-effort).
         #[cfg(feature = "dag-recovery-verify")]

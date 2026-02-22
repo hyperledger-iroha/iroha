@@ -282,6 +282,35 @@ mutations under declared `state_bindings` and enforces:
 Each accepted mutation appends an audit event carrying signer identity and
 `governance_tx_hash` linkage for deterministic policy review.
 
+State-mutation provenance signatures are verified against a canonical tuple
+payload in this exact field order:
+`(service_name, binding_name, key, operation, value_size_bytes, encryption, governance_tx_hash)`.
+Torii also accepts the legacy struct-layout signature payload for backward
+compatibility during signer migration.
+
+FHE job-run provenance signatures are verified against canonical tuple payloads:
+`(service_name, binding_name, job, policy, param_set, governance_tx_hash)`.
+Decryption-request provenance signatures are verified against canonical tuple
+payloads:
+`(service_name, policy, request)`.
+Torii also accepts legacy struct-layout signature payloads for both FHE
+job-run and decryption-request mutations during signer migration.
+
+Training/model provenance signatures are also verified against canonical tuple
+payloads for:
+`training/job/start`, `training/job/checkpoint`, `training/job/retry`,
+`model/artifact/register`, `model/weight/register`,
+`model/weight/promote`, and `model/weight/rollback`.
+Torii accepts legacy struct-layout signature payloads for these endpoints
+during signer migration.
+
+Rollback/rollout and agent-control provenance signatures are also verified
+against canonical tuple payloads (`rollback`, `rollout`, `agent/deploy`,
+`agent/lease/renew`, `agent/restart`, `agent/policy/revoke`,
+`agent/wallet/spend`, `agent/wallet/approve`, `agent/message/send`,
+`agent/message/ack`, `agent/artifact/allow`, `agent/autonomy/run`), with
+legacy struct-layout signatures accepted during signer migration.
+
 ## SCR host admission + lifecycle
 
 `deploy`/`upgrade`/`rollback` admission now applies deterministic SCR host

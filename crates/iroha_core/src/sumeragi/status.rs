@@ -407,14 +407,24 @@ static CONSENSUS_EMPTY_COMMIT_TOPOLOGY_ESCALATION_TOTAL: AtomicU64 = AtomicU64::
 static CONSENSUS_RECOVERY_STATE_TRANSITIONS: OnceLock<Mutex<BTreeMap<&'static str, u64>>> =
     OnceLock::new();
 static CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_MISSING_QC_REACQUIRE_ATTEMPT_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_MISSING_QC_REACQUIRE_SUCCESS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_MISSING_QC_REACQUIRE_EXHAUSTED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_MISSING_QC_ROTATION_DEFERRED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_FORCED_PROPOSAL_ATTEMPT_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_FORCED_PROPOSAL_SUCCESS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_SIDECAR_QUARANTINE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_SIDECAR_FINAL_DROP_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_NO_ROSTER_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_NO_ROSTER_FAIL_CLOSED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_NO_ROSTER_REFRESH_RETRY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_NO_ROSTER_REFRESH_ATTEMPT_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_NO_ROSTER_REFRESH_SUCCESS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_DETERMINISTIC_COMMITTEE_SIZE: AtomicU64 = AtomicU64::new(0);
 static BLOCKSYNC_RANGE_PULL_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCKSYNC_RANGE_PULL_SUCCESS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCKSYNC_RANGE_PULL_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BLOCKSYNC_RANGE_PULL_CANDIDATE_EXHAUSTED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_RECOVERY_STUCK_ROUND_SECONDS_LAST: AtomicU64 = AtomicU64::new(0);
 static VALIDATION_REJECT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VALIDATION_REJECT_REASON: OnceLock<Mutex<Option<&'static str>>> = OnceLock::new();
@@ -3379,6 +3389,18 @@ pub struct StatusSnapshot {
     pub consensus_recovery_state_transitions: BTreeMap<&'static str, u64>,
     /// Height-scoped missing-block recoveries escalated via deterministic hard cap.
     pub consensus_missing_block_height_escalation_total: u64,
+    /// Bounded pre-rotation reacquire attempts before missing-QC view changes.
+    pub consensus_missing_qc_reacquire_attempt_total: u64,
+    /// Bounded pre-rotation reacquire attempts that triggered a recovery action before rotation.
+    pub consensus_missing_qc_reacquire_success_total: u64,
+    /// Missing-QC reacquire windows exhausted before a controlled rotation.
+    pub consensus_missing_qc_reacquire_exhausted_total: u64,
+    /// Missing-QC rotations deferred while waiting for deterministic proposal liveness windows.
+    pub consensus_missing_qc_rotation_deferred_total: u64,
+    /// Forced leader self-proposal attempts under missing-QC liveness watchdog.
+    pub consensus_forced_proposal_attempt_total: u64,
+    /// Forced leader self-proposal attempts that resulted in proposal assembly.
+    pub consensus_forced_proposal_success_total: u64,
     /// Sidecar mismatches quarantined in fail-closed mode.
     pub consensus_sidecar_quarantine_total: u64,
     /// Sidecar mismatches final-dropped after retry/TTL bounds.
@@ -3387,6 +3409,12 @@ pub struct StatusSnapshot {
     pub consensus_no_roster_fallback_total: u64,
     /// Fail-closed no-roster escalations after fallback budget exhaustion.
     pub consensus_no_roster_fail_closed_total: u64,
+    /// Per-view no-roster topology refresh retries before fail-closed escalation.
+    pub consensus_no_roster_refresh_retry_total: u64,
+    /// One-shot no-roster topology refresh attempts before fail-closed escalation.
+    pub consensus_no_roster_refresh_attempt_total: u64,
+    /// One-shot no-roster topology refresh attempts that observed topology change.
+    pub consensus_no_roster_refresh_success_total: u64,
     /// Last selected deterministic transport committee size.
     pub consensus_deterministic_committee_size: u64,
     /// Range-pull escalations requested by dependency recovery.
@@ -3395,6 +3423,8 @@ pub struct StatusSnapshot {
     pub blocksync_range_pull_success_total: u64,
     /// Range-pull recoveries that expired without progress.
     pub blocksync_range_pull_failure_total: u64,
+    /// Range-pull recovery tiers exhausted before escalating to broader deterministic peers.
+    pub blocksync_range_pull_candidate_exhausted_total: u64,
     /// Last observed stuck-round duration in seconds.
     pub consensus_recovery_stuck_round_seconds_last: u64,
     /// Total blocks rejected by the validation gate before voting.
@@ -4273,6 +4303,18 @@ pub fn snapshot() -> StatusSnapshot {
         consensus_recovery_state_transitions: consensus_recovery_state_transition_snapshot(),
         consensus_missing_block_height_escalation_total:
             CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL.load(Ordering::Relaxed),
+        consensus_missing_qc_reacquire_attempt_total: CONSENSUS_MISSING_QC_REACQUIRE_ATTEMPT_TOTAL
+            .load(Ordering::Relaxed),
+        consensus_missing_qc_reacquire_success_total: CONSENSUS_MISSING_QC_REACQUIRE_SUCCESS_TOTAL
+            .load(Ordering::Relaxed),
+        consensus_missing_qc_reacquire_exhausted_total:
+            CONSENSUS_MISSING_QC_REACQUIRE_EXHAUSTED_TOTAL.load(Ordering::Relaxed),
+        consensus_missing_qc_rotation_deferred_total: CONSENSUS_MISSING_QC_ROTATION_DEFERRED_TOTAL
+            .load(Ordering::Relaxed),
+        consensus_forced_proposal_attempt_total: CONSENSUS_FORCED_PROPOSAL_ATTEMPT_TOTAL
+            .load(Ordering::Relaxed),
+        consensus_forced_proposal_success_total: CONSENSUS_FORCED_PROPOSAL_SUCCESS_TOTAL
+            .load(Ordering::Relaxed),
         consensus_sidecar_quarantine_total: CONSENSUS_SIDECAR_QUARANTINE_TOTAL
             .load(Ordering::Relaxed),
         consensus_sidecar_final_drop_total: CONSENSUS_SIDECAR_FINAL_DROP_TOTAL
@@ -4280,6 +4322,12 @@ pub fn snapshot() -> StatusSnapshot {
         consensus_no_roster_fallback_total: CONSENSUS_NO_ROSTER_FALLBACK_TOTAL
             .load(Ordering::Relaxed),
         consensus_no_roster_fail_closed_total: CONSENSUS_NO_ROSTER_FAIL_CLOSED_TOTAL
+            .load(Ordering::Relaxed),
+        consensus_no_roster_refresh_retry_total: CONSENSUS_NO_ROSTER_REFRESH_RETRY_TOTAL
+            .load(Ordering::Relaxed),
+        consensus_no_roster_refresh_attempt_total: CONSENSUS_NO_ROSTER_REFRESH_ATTEMPT_TOTAL
+            .load(Ordering::Relaxed),
+        consensus_no_roster_refresh_success_total: CONSENSUS_NO_ROSTER_REFRESH_SUCCESS_TOTAL
             .load(Ordering::Relaxed),
         consensus_deterministic_committee_size: CONSENSUS_DETERMINISTIC_COMMITTEE_SIZE
             .load(Ordering::Relaxed),
@@ -4289,6 +4337,8 @@ pub fn snapshot() -> StatusSnapshot {
             .load(Ordering::Relaxed),
         blocksync_range_pull_failure_total: BLOCKSYNC_RANGE_PULL_FAILURE_TOTAL
             .load(Ordering::Relaxed),
+        blocksync_range_pull_candidate_exhausted_total:
+            BLOCKSYNC_RANGE_PULL_CANDIDATE_EXHAUSTED_TOTAL.load(Ordering::Relaxed),
         consensus_recovery_stuck_round_seconds_last: CONSENSUS_RECOVERY_STUCK_ROUND_SECONDS_LAST
             .load(Ordering::Relaxed),
         validation_reject_total: validation_rejects.total,
@@ -4853,6 +4903,48 @@ pub fn inc_consensus_missing_block_height_escalation() {
     CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Increment counter for bounded pre-rotation missing-QC reacquire attempts.
+pub fn inc_consensus_missing_qc_reacquire_attempt() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_MISSING_QC_REACQUIRE_ATTEMPT_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when bounded pre-rotation missing-QC reacquire triggered recovery action.
+pub fn inc_consensus_missing_qc_reacquire_success() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_MISSING_QC_REACQUIRE_SUCCESS_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when missing-QC reacquire window is exhausted.
+pub fn inc_consensus_missing_qc_reacquire_exhausted() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_MISSING_QC_REACQUIRE_EXHAUSTED_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when missing-QC rotation is deferred for liveness recovery.
+pub fn inc_consensus_missing_qc_rotation_deferred() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_MISSING_QC_ROTATION_DEFERRED_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter for forced leader self-proposal attempts.
+pub fn inc_consensus_forced_proposal_attempt() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_FORCED_PROPOSAL_ATTEMPT_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter for successful forced leader self-proposal attempts.
+pub fn inc_consensus_forced_proposal_success() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_FORCED_PROPOSAL_SUCCESS_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Increment counter when sidecar mismatch is quarantined.
 pub fn inc_consensus_sidecar_quarantine() {
     #[cfg(test)]
@@ -4881,6 +4973,27 @@ pub fn inc_consensus_no_roster_fail_closed() {
     CONSENSUS_NO_ROSTER_FAIL_CLOSED_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Increment counter for per-view no-roster refresh retry attempts.
+pub fn inc_consensus_no_roster_refresh_retry() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_NO_ROSTER_REFRESH_RETRY_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when no-roster fail-closed path attempts a one-shot topology refresh.
+pub fn inc_consensus_no_roster_refresh_attempt() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_NO_ROSTER_REFRESH_ATTEMPT_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when no-roster refresh attempt observes topology change.
+pub fn inc_consensus_no_roster_refresh_success() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_NO_ROSTER_REFRESH_SUCCESS_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Record the deterministic transport committee size selected for fanout.
 pub fn set_consensus_deterministic_committee_size(size: u64) {
     CONSENSUS_DETERMINISTIC_COMMITTEE_SIZE.store(size, Ordering::Relaxed);
@@ -4905,6 +5018,13 @@ pub fn inc_blocksync_range_pull_failure() {
     #[cfg(test)]
     let _guard = missing_block_fetch_test_guard();
     BLOCKSYNC_RANGE_PULL_FAILURE_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when range-pull recovery advances to a broader deterministic target tier.
+pub fn inc_blocksync_range_pull_candidate_exhausted() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    BLOCKSYNC_RANGE_PULL_CANDIDATE_EXHAUSTED_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Record the last observed stuck-round duration in seconds.
@@ -5242,11 +5362,21 @@ pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
     CONSENSUS_EMPTY_COMMIT_TOPOLOGY_DEFER_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_EMPTY_COMMIT_TOPOLOGY_ESCALATION_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_MISSING_QC_REACQUIRE_ATTEMPT_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_MISSING_QC_REACQUIRE_SUCCESS_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_MISSING_QC_REACQUIRE_EXHAUSTED_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_MISSING_QC_ROTATION_DEFERRED_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_FORCED_PROPOSAL_ATTEMPT_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_FORCED_PROPOSAL_SUCCESS_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_SIDECAR_QUARANTINE_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_SIDECAR_FINAL_DROP_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_NO_ROSTER_FALLBACK_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_NO_ROSTER_FAIL_CLOSED_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_NO_ROSTER_REFRESH_RETRY_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_NO_ROSTER_REFRESH_ATTEMPT_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_NO_ROSTER_REFRESH_SUCCESS_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_DETERMINISTIC_COMMITTEE_SIZE.store(0, Ordering::Relaxed);
+    BLOCKSYNC_RANGE_PULL_CANDIDATE_EXHAUSTED_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_RECOVERY_STUCK_ROUND_SECONDS_LAST.store(0, Ordering::Relaxed);
     if let Ok(mut guard) = CONSENSUS_RECOVERY_STATE_TRANSITIONS
         .get_or_init(|| Mutex::new(BTreeMap::new()))
@@ -5279,6 +5409,7 @@ pub(crate) fn reset_block_sync_counters_for_tests() {
     BLOCKSYNC_RANGE_PULL_ESCALATION_TOTAL.store(0, Ordering::Relaxed);
     BLOCKSYNC_RANGE_PULL_SUCCESS_TOTAL.store(0, Ordering::Relaxed);
     BLOCKSYNC_RANGE_PULL_FAILURE_TOTAL.store(0, Ordering::Relaxed);
+    BLOCKSYNC_RANGE_PULL_CANDIDATE_EXHAUSTED_TOTAL.store(0, Ordering::Relaxed);
     if let Ok(mut guard) = BLOCKSYNC_QC_FINAL_DROP_LAST_REASON
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -7958,9 +8089,19 @@ mod tests {
         super::inc_qc_deferred_expired();
         super::inc_consensus_empty_commit_topology_defer();
         super::inc_consensus_empty_commit_topology_escalation();
+        super::inc_consensus_missing_qc_reacquire_attempt();
+        super::inc_consensus_missing_qc_reacquire_success();
+        super::inc_consensus_missing_qc_reacquire_exhausted();
+        super::inc_consensus_missing_qc_rotation_deferred();
+        super::inc_consensus_forced_proposal_attempt();
+        super::inc_consensus_forced_proposal_success();
         super::inc_consensus_recovery_state_transition("refresh_topology");
         super::inc_consensus_recovery_state_transition("block_sync");
         super::inc_consensus_recovery_state_transition("block_sync");
+        super::inc_consensus_no_roster_refresh_retry();
+        super::inc_consensus_no_roster_refresh_attempt();
+        super::inc_consensus_no_roster_refresh_success();
+        super::inc_blocksync_range_pull_candidate_exhausted();
         let snapshot = super::snapshot();
         assert_eq!(snapshot.missing_block_fetch_total, 1);
         assert_eq!(snapshot.missing_block_fetch_last_targets, 3);
@@ -7971,6 +8112,16 @@ mod tests {
         assert_eq!(snapshot.qc_deferred_expired_total, 1);
         assert_eq!(snapshot.consensus_empty_commit_topology_defer_total, 1);
         assert_eq!(snapshot.consensus_empty_commit_topology_escalation_total, 1);
+        assert_eq!(snapshot.consensus_missing_qc_reacquire_attempt_total, 1);
+        assert_eq!(snapshot.consensus_missing_qc_reacquire_success_total, 1);
+        assert_eq!(snapshot.consensus_missing_qc_reacquire_exhausted_total, 1);
+        assert_eq!(snapshot.consensus_missing_qc_rotation_deferred_total, 1);
+        assert_eq!(snapshot.consensus_forced_proposal_attempt_total, 1);
+        assert_eq!(snapshot.consensus_forced_proposal_success_total, 1);
+        assert_eq!(snapshot.consensus_no_roster_refresh_retry_total, 1);
+        assert_eq!(snapshot.consensus_no_roster_refresh_attempt_total, 1);
+        assert_eq!(snapshot.consensus_no_roster_refresh_success_total, 1);
+        assert_eq!(snapshot.blocksync_range_pull_candidate_exhausted_total, 1);
         assert_eq!(
             snapshot
                 .consensus_recovery_state_transitions

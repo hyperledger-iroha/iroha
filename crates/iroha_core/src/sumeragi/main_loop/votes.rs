@@ -1048,16 +1048,16 @@ impl Actor {
         &mut self,
         highest: crate::sumeragi::consensus::QcHeaderRef,
         source: &'static str,
-    ) {
-        self.request_missing_block_for_highest_qc_inner(highest, source, false);
+    ) -> bool {
+        self.request_missing_block_for_highest_qc_inner(highest, source, false)
     }
 
     pub(super) fn request_missing_block_for_highest_qc_force(
         &mut self,
         highest: crate::sumeragi::consensus::QcHeaderRef,
         source: &'static str,
-    ) {
-        self.request_missing_block_for_highest_qc_inner(highest, source, true);
+    ) -> bool {
+        self.request_missing_block_for_highest_qc_inner(highest, source, true)
     }
 
     fn consensus_missing_block_retry_window(
@@ -1081,7 +1081,7 @@ impl Actor {
         highest: crate::sumeragi::consensus::QcHeaderRef,
         source: &'static str,
         force_fetch: bool,
-    ) {
+    ) -> bool {
         let payload_available =
             self.block_payload_available_for_progress(highest.subject_block_hash);
         let local_known = self
@@ -1097,7 +1097,7 @@ impl Actor {
                 &highest.subject_block_hash,
                 MissingBlockClearReason::PayloadAvailable,
             );
-            return;
+            return false;
         }
         let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(highest.height);
         let mut roster = self.roster_for_vote_with_mode(
@@ -1196,7 +1196,7 @@ impl Actor {
                 source,
                 "skipping highest QC fetch: no roster available"
             );
-            return;
+            return false;
         }
         if roster_source != "commit topology" {
             debug!(
@@ -1306,6 +1306,7 @@ impl Actor {
                     source,
                     "requested missing block payload from highest QC"
                 );
+                true
             }
             MissingBlockFetchDecision::NoTargets => {
                 iroha_logger::warn!(
@@ -1318,6 +1319,7 @@ impl Actor {
                     source,
                     "unable to request missing block payload from highest QC: no peers available"
                 );
+                false
             }
             MissingBlockFetchDecision::Backoff => {
                 iroha_logger::info!(
@@ -1330,6 +1332,7 @@ impl Actor {
                     source,
                     "skipping missing-block fetch from highest QC during backoff"
                 );
+                false
             }
         }
     }

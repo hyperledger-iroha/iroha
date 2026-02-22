@@ -171,6 +171,12 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<governance::ApproveGovernanceProposal>,
     #[cfg(feature = "governance")]
     InstructionRegistry::register::<governance::PersistCouncilForEpoch>,
+    #[cfg(feature = "governance")]
+    InstructionRegistry::register::<governance::RecordCitizenServiceOutcome>,
+    #[cfg(feature = "governance")]
+    InstructionRegistry::register::<governance::RegisterCitizen>,
+    #[cfg(feature = "governance")]
+    InstructionRegistry::register::<governance::UnregisterCitizen>,
     InstructionRegistry::register::<runtime_upgrade::ProposeRuntimeUpgrade>,
     InstructionRegistry::register::<runtime_upgrade::ActivateRuntimeUpgrade>,
     InstructionRegistry::register::<runtime_upgrade::CancelRuntimeUpgrade>,
@@ -274,6 +280,21 @@ mod tests {
         let registry = default();
         assert!(registry.contains(std::any::type_name::<
             crate::isi::kaigi::ReportKaigiRelayHealth,
+        >()));
+    }
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn default_registry_registers_citizenship_instructions() {
+        let registry = default();
+        assert!(
+            registry.contains(std::any::type_name::<crate::isi::governance::RegisterCitizen>())
+        );
+        assert!(registry.contains(std::any::type_name::<
+            crate::isi::governance::UnregisterCitizen,
+        >()));
+        assert!(registry.contains(std::any::type_name::<
+            crate::isi::governance::RecordCitizenServiceOutcome,
         >()));
     }
 }

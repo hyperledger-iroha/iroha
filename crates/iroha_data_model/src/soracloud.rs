@@ -2588,6 +2588,19 @@ impl SoraDeploymentBundleV1 {
     }
 }
 
+/// Encode the canonical provenance signature payload for deployment bundles.
+///
+/// The payload layout is the canonical Norito encoding of
+/// [`SoraDeploymentBundleV1`].
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_bundle_provenance_payload(
+    bundle: &SoraDeploymentBundleV1,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(bundle)
+}
+
 /// Encode the canonical provenance signature payload for service rollback.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -2600,6 +2613,36 @@ pub fn encode_rollback_provenance_payload(
     target_version: Option<&str>,
 ) -> Result<Vec<u8>, norito::Error> {
     norito::to_bytes(&(service_name, target_version))
+}
+
+/// Encode the canonical provenance signature payload for state mutations.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, binding_name, key, operation, value_size_bytes, encryption, governance_tx_hash)`.
+///
+/// `operation` is expected to be a deterministic symbolic label such as
+/// `"upsert"` or `"delete"`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_state_mutation_provenance_payload(
+    service_name: &str,
+    binding_name: &str,
+    key: &str,
+    operation: &str,
+    value_size_bytes: Option<u64>,
+    encryption: SoraStateEncryptionV1,
+    governance_tx_hash: Hash,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(
+        service_name,
+        binding_name,
+        key,
+        operation,
+        value_size_bytes,
+        encryption,
+        governance_tx_hash,
+    ))
 }
 
 /// Encode the canonical provenance signature payload for rollout advancement.
@@ -2955,6 +2998,58 @@ pub fn encode_model_weight_rollback_provenance_payload(
     norito::to_bytes(&(service_name, model_name, target_version, reason))
 }
 
+/// Encode the canonical provenance signature payload for FHE job execution.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, binding_name, job, policy, param_set, governance_tx_hash)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_fhe_job_run_provenance_payload(
+    service_name: &str,
+    binding_name: &str,
+    job: FheJobSpecV1,
+    policy: FheExecutionPolicyV1,
+    param_set: FheParamSetV1,
+    governance_tx_hash: Hash,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(
+        service_name,
+        binding_name,
+        job,
+        policy,
+        param_set,
+        governance_tx_hash,
+    ))
+}
+
+/// Encode the canonical provenance signature payload for decryption requests.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, policy, request)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_decryption_request_provenance_payload(
+    service_name: &str,
+    policy: DecryptionAuthorityPolicyV1,
+    request: DecryptionRequestV1,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(service_name, policy, request))
+}
+
+/// Encode the canonical provenance signature payload for ciphertext queries.
+///
+/// The payload layout is the canonical Norito encoding of `CiphertextQuerySpecV1`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_ciphertext_query_provenance_payload(
+    query: CiphertextQuerySpecV1,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&query)
+}
+
 /// Re-export commonly used `SoraCloud` schema types.
 pub mod prelude {
     pub use super::{
@@ -2983,12 +3078,14 @@ pub mod prelude {
         encode_agent_message_send_provenance_payload,
         encode_agent_policy_revoke_provenance_payload, encode_agent_restart_provenance_payload,
         encode_agent_wallet_approve_provenance_payload,
-        encode_agent_wallet_spend_provenance_payload,
-        encode_model_artifact_register_provenance_payload,
+        encode_agent_wallet_spend_provenance_payload, encode_bundle_provenance_payload,
+        encode_ciphertext_query_provenance_payload, encode_decryption_request_provenance_payload,
+        encode_fhe_job_run_provenance_payload, encode_model_artifact_register_provenance_payload,
         encode_model_weight_promote_provenance_payload,
         encode_model_weight_register_provenance_payload,
         encode_model_weight_rollback_provenance_payload, encode_rollback_provenance_payload,
-        encode_rollout_provenance_payload, encode_training_job_checkpoint_provenance_payload,
+        encode_rollout_provenance_payload, encode_state_mutation_provenance_payload,
+        encode_training_job_checkpoint_provenance_payload,
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
     };
 }
@@ -3011,6 +3108,32 @@ mod tests {
         let encoded = encode_rollback_provenance_payload("web_portal", Some("1.0.1"))
             .expect("encode payload");
         let expected = norito::to_bytes(&("web_portal", Some("1.0.1"))).expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn state_mutation_provenance_payload_encodes_canonical_tuple() {
+        let governance_tx_hash = sample_hash(11);
+        let encoded = encode_state_mutation_provenance_payload(
+            "health_portal",
+            "private_state",
+            "/state/private/records/1",
+            "upsert",
+            Some(512),
+            SoraStateEncryptionV1::ClientCiphertext,
+            governance_tx_hash,
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&(
+            "health_portal",
+            "private_state",
+            "/state/private/records/1",
+            "upsert",
+            Some(512u64),
+            SoraStateEncryptionV1::ClientCiphertext,
+            governance_tx_hash,
+        ))
+        .expect("encode tuple");
         assert_eq!(encoded, expected);
     }
 
@@ -3312,6 +3435,71 @@ mod tests {
         .expect("encode payload");
         let expected = norito::to_bytes(&("web_portal", "model-1", "0.9.0", "gate regression"))
             .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn fhe_job_run_provenance_payload_encodes_canonical_tuple() {
+        let job = sample_fhe_job_spec();
+        let policy = sample_fhe_execution_policy();
+        let param_set = sample_fhe_param_set();
+        let governance_tx_hash = sample_hash(21);
+        let encoded = encode_fhe_job_run_provenance_payload(
+            "health_portal",
+            "private_state",
+            job.clone(),
+            policy.clone(),
+            param_set.clone(),
+            governance_tx_hash,
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&(
+            "health_portal",
+            "private_state",
+            job,
+            policy,
+            param_set,
+            governance_tx_hash,
+        ))
+        .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn decryption_request_provenance_payload_encodes_canonical_tuple() {
+        let policy = sample_decryption_authority_policy();
+        let request = sample_decryption_request();
+        let encoded = encode_decryption_request_provenance_payload(
+            "health_portal",
+            policy.clone(),
+            request.clone(),
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&("health_portal", policy, request)).expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn ciphertext_query_provenance_payload_encodes_canonical_layout() {
+        let query = sample_ciphertext_query_spec();
+        let encoded =
+            encode_ciphertext_query_provenance_payload(query.clone()).expect("encode payload");
+        let expected = norito::to_bytes(&query).expect("encode query");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn bundle_provenance_payload_encodes_canonical_layout() {
+        let container = sample_container();
+        let mut service = sample_service(vec![sample_binding("private_state")]);
+        service.container.manifest_hash = Hash::new(Encode::encode(&container));
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+        let encoded = encode_bundle_provenance_payload(&bundle).expect("encode payload");
+        let expected = norito::to_bytes(&bundle).expect("encode canonical layout");
         assert_eq!(encoded, expected);
     }
 

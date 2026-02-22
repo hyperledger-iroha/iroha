@@ -36,12 +36,14 @@ use iroha_data_model::{
         encode_agent_message_send_provenance_payload,
         encode_agent_policy_revoke_provenance_payload, encode_agent_restart_provenance_payload,
         encode_agent_wallet_approve_provenance_payload,
-        encode_agent_wallet_spend_provenance_payload,
-        encode_model_artifact_register_provenance_payload,
+        encode_agent_wallet_spend_provenance_payload, encode_bundle_provenance_payload,
+        encode_ciphertext_query_provenance_payload, encode_decryption_request_provenance_payload,
+        encode_fhe_job_run_provenance_payload, encode_model_artifact_register_provenance_payload,
         encode_model_weight_promote_provenance_payload,
         encode_model_weight_register_provenance_payload,
         encode_model_weight_rollback_provenance_payload, encode_rollback_provenance_payload,
-        encode_rollout_provenance_payload, encode_training_job_checkpoint_provenance_payload,
+        encode_rollout_provenance_payload, encode_state_mutation_provenance_payload,
+        encode_training_job_checkpoint_provenance_payload,
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
     },
 };
@@ -6734,9 +6736,7 @@ fn build_ciphertext_inclusion_proof(
 }
 
 fn verify_bundle_signature(request: &SignedBundleRequest) -> Result<(), SoracloudError> {
-    let payload = norito::to_bytes(&request.bundle).map_err(|err| {
-        SoracloudError::internal(format!("failed to encode bundle payload: {err}"))
-    })?;
+    let payload = encode_bundle_signature_payload(&request.bundle)?;
     request
         .provenance
         .signature
@@ -6747,12 +6747,32 @@ fn verify_bundle_signature(request: &SignedBundleRequest) -> Result<(), Soraclou
     Ok(())
 }
 
+fn encode_bundle_signature_payload(
+    bundle: &SoraDeploymentBundleV1,
+) -> Result<Vec<u8>, SoracloudError> {
+    encode_bundle_provenance_payload(bundle)
+        .map_err(|err| SoracloudError::internal(format!("failed to encode bundle payload: {err}")))
+}
+
 fn verify_rollback_signature(request: &SignedRollbackRequest) -> Result<(), SoracloudError> {
     let payload = encode_rollback_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_rollback_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized("rollback provenance signature verification failed")
         })?;
@@ -6767,28 +6787,94 @@ fn encode_rollback_signature_payload(payload: &RollbackPayload) -> Result<Vec<u8
     .map_err(|err| SoracloudError::internal(format!("failed to encode rollback payload: {err}")))
 }
 
+fn encode_rollback_signature_payload_legacy(
+    payload: &RollbackPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!("failed to encode legacy rollback payload: {err}"))
+    })
+}
+
 fn verify_state_mutation_signature(
     request: &SignedStateMutationRequest,
 ) -> Result<(), SoracloudError> {
-    let payload = norito::to_bytes(&request.payload).map_err(|err| {
-        SoracloudError::internal(format!("failed to encode state mutation payload: {err}"))
-    })?;
-    request
+    let payload = encode_state_mutation_signature_payload(&request.payload)?;
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_state_mutation_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized("state mutation provenance signature verification failed")
         })?;
     Ok(())
 }
 
+fn encode_state_mutation_signature_payload(
+    payload: &StateMutationRequest,
+) -> Result<Vec<u8>, SoracloudError> {
+    encode_state_mutation_provenance_payload(
+        payload.service_name.as_str(),
+        payload.binding_name.as_str(),
+        payload.key.as_str(),
+        state_mutation_operation_label(payload.operation),
+        payload.value_size_bytes,
+        payload.encryption,
+        payload.governance_tx_hash,
+    )
+    .map_err(|err| {
+        SoracloudError::internal(format!("failed to encode state mutation payload: {err}"))
+    })
+}
+
+fn encode_state_mutation_signature_payload_legacy(
+    payload: &StateMutationRequest,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy state mutation payload: {err}"
+        ))
+    })
+}
+
+fn state_mutation_operation_label(operation: StateMutationOperation) -> &'static str {
+    match operation {
+        StateMutationOperation::Upsert => "upsert",
+        StateMutationOperation::Delete => "delete",
+    }
+}
+
 fn verify_fhe_job_run_signature(request: &SignedFheJobRunRequest) -> Result<(), SoracloudError> {
     let payload = encode_fhe_job_run_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_fhe_job_run_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized("fhe job run provenance signature verification failed")
         })?;
@@ -6799,10 +6885,23 @@ fn verify_training_job_start_signature(
     request: &SignedTrainingJobStartRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_training_job_start_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_training_job_start_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "training job start provenance signature verification failed",
@@ -6815,10 +6914,23 @@ fn verify_training_job_checkpoint_signature(
     request: &SignedTrainingJobCheckpointRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_training_job_checkpoint_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_training_job_checkpoint_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "training checkpoint provenance signature verification failed",
@@ -6831,10 +6943,23 @@ fn verify_training_job_retry_signature(
     request: &SignedTrainingJobRetryRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_training_job_retry_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_training_job_retry_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized("training retry provenance signature verification failed")
         })?;
@@ -6845,10 +6970,23 @@ fn verify_model_weight_register_signature(
     request: &SignedModelWeightRegisterRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_model_weight_register_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_model_weight_register_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "model weight register provenance signature verification failed",
@@ -6861,10 +6999,23 @@ fn verify_model_weight_promote_signature(
     request: &SignedModelWeightPromoteRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_model_weight_promote_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_model_weight_promote_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "model weight promote provenance signature verification failed",
@@ -6877,10 +7028,23 @@ fn verify_model_weight_rollback_signature(
     request: &SignedModelWeightRollbackRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_model_weight_rollback_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_model_weight_rollback_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "model weight rollback provenance signature verification failed",
@@ -6893,10 +7057,23 @@ fn verify_model_artifact_register_signature(
     request: &SignedModelArtifactRegisterRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_model_artifact_register_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_model_artifact_register_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "model artifact register provenance signature verification failed",
@@ -6909,10 +7086,23 @@ fn verify_decryption_request_signature(
     request: &SignedDecryptionRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_decryption_request_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_decryption_request_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "decryption request provenance signature verification failed",
@@ -6939,10 +7129,23 @@ fn verify_ciphertext_query_signature(
 
 fn verify_rollout_signature(request: &SignedRolloutAdvanceRequest) -> Result<(), SoracloudError> {
     let payload = encode_rollout_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_rollout_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized("rollout provenance signature verification failed")
         })?;
@@ -6951,10 +7154,23 @@ fn verify_rollout_signature(request: &SignedRolloutAdvanceRequest) -> Result<(),
 
 fn verify_agent_deploy_signature(request: &SignedAgentDeployRequest) -> Result<(), SoracloudError> {
     let payload = encode_agent_deploy_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_agent_deploy_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized("agent deploy provenance signature verification failed")
         })?;
@@ -6965,10 +7181,23 @@ fn verify_agent_lease_renew_signature(
     request: &SignedAgentLeaseRenewRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_agent_lease_renew_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_agent_lease_renew_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "agent lease renew provenance signature verification failed",
@@ -6981,10 +7210,23 @@ fn verify_agent_restart_signature(
     request: &SignedAgentRestartRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_agent_restart_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_agent_restart_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized("agent restart provenance signature verification failed")
         })?;
@@ -6995,10 +7237,23 @@ fn verify_agent_policy_revoke_signature(
     request: &SignedAgentPolicyRevokeRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_agent_policy_revoke_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_agent_policy_revoke_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "agent policy revoke provenance signature verification failed",
@@ -7011,10 +7266,23 @@ fn verify_agent_wallet_spend_signature(
     request: &SignedAgentWalletSpendRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_agent_wallet_spend_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_agent_wallet_spend_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "agent wallet spend provenance signature verification failed",
@@ -7027,10 +7295,23 @@ fn verify_agent_wallet_approve_signature(
     request: &SignedAgentWalletApproveRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_agent_wallet_approve_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_agent_wallet_approve_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "agent wallet approve provenance signature verification failed",
@@ -7043,10 +7324,23 @@ fn verify_agent_message_send_signature(
     request: &SignedAgentMessageSendRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_agent_message_send_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_agent_message_send_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "agent message send provenance signature verification failed",
@@ -7059,10 +7353,23 @@ fn verify_agent_message_ack_signature(
     request: &SignedAgentMessageAckRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_agent_message_ack_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_agent_message_ack_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "agent message ack provenance signature verification failed",
@@ -7075,10 +7382,23 @@ fn verify_agent_artifact_allow_signature(
     request: &SignedAgentArtifactAllowRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_agent_artifact_allow_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_agent_artifact_allow_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "agent artifact allow provenance signature verification failed",
@@ -7091,10 +7411,23 @@ fn verify_agent_autonomy_run_signature(
     request: &SignedAgentAutonomyRunRequest,
 ) -> Result<(), SoracloudError> {
     let payload = encode_agent_autonomy_run_signature_payload(&request.payload)?;
-    request
+    let verifies = request
         .provenance
         .signature
         .verify(&request.provenance.signer, &payload)
+        .is_ok();
+    if verifies {
+        return Ok(());
+    }
+    // Backward compatibility: accept the legacy struct layout while signers
+    // migrate to the canonical tuple payload.
+    // TODO: Remove legacy struct-layout verification after all signers are
+    // migrated to canonical tuple payloads.
+    let legacy_payload = encode_agent_autonomy_run_signature_payload_legacy(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &legacy_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
                 "agent autonomy run provenance signature verification failed",
@@ -7116,11 +7449,34 @@ fn encode_rollout_signature_payload(
     .map_err(|err| SoracloudError::internal(format!("failed to encode rollout payload: {err}")))
 }
 
+fn encode_rollout_signature_payload_legacy(
+    payload: &RolloutAdvancePayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!("failed to encode legacy rollout payload: {err}"))
+    })
+}
+
 fn encode_fhe_job_run_signature_payload(
     payload: &FheJobRunPayload,
 ) -> Result<Vec<u8>, SoracloudError> {
-    norito::to_bytes(payload)
-        .map_err(|err| SoracloudError::internal(format!("failed to encode fhe job payload: {err}")))
+    encode_fhe_job_run_provenance_payload(
+        payload.service_name.as_str(),
+        payload.binding_name.as_str(),
+        payload.job.clone(),
+        payload.policy.clone(),
+        payload.param_set.clone(),
+        payload.governance_tx_hash.clone(),
+    )
+    .map_err(|err| SoracloudError::internal(format!("failed to encode fhe job payload: {err}")))
+}
+
+fn encode_fhe_job_run_signature_payload_legacy(
+    payload: &FheJobRunPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!("failed to encode legacy fhe job payload: {err}"))
+    })
 }
 
 fn encode_training_job_start_signature_payload(
@@ -7143,6 +7499,16 @@ fn encode_training_job_start_signature_payload(
     })
 }
 
+fn encode_training_job_start_signature_payload_legacy(
+    payload: &TrainingJobStartPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy training start payload: {err}"
+        ))
+    })
+}
+
 fn encode_training_job_checkpoint_signature_payload(
     payload: &TrainingJobCheckpointPayload,
 ) -> Result<Vec<u8>, SoracloudError> {
@@ -7160,6 +7526,16 @@ fn encode_training_job_checkpoint_signature_payload(
     })
 }
 
+fn encode_training_job_checkpoint_signature_payload_legacy(
+    payload: &TrainingJobCheckpointPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy training checkpoint payload: {err}"
+        ))
+    })
+}
+
 fn encode_training_job_retry_signature_payload(
     payload: &TrainingJobRetryPayload,
 ) -> Result<Vec<u8>, SoracloudError> {
@@ -7170,6 +7546,16 @@ fn encode_training_job_retry_signature_payload(
     )
     .map_err(|err| {
         SoracloudError::internal(format!("failed to encode training retry payload: {err}"))
+    })
+}
+
+fn encode_training_job_retry_signature_payload_legacy(
+    payload: &TrainingJobRetryPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy training retry payload: {err}"
+        ))
     })
 }
 
@@ -7195,6 +7581,16 @@ fn encode_model_weight_register_signature_payload(
     })
 }
 
+fn encode_model_weight_register_signature_payload_legacy(
+    payload: &ModelWeightRegisterPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy model weight register payload: {err}"
+        ))
+    })
+}
+
 fn encode_model_weight_promote_signature_payload(
     payload: &ModelWeightPromotePayload,
 ) -> Result<Vec<u8>, SoracloudError> {
@@ -7212,6 +7608,16 @@ fn encode_model_weight_promote_signature_payload(
     })
 }
 
+fn encode_model_weight_promote_signature_payload_legacy(
+    payload: &ModelWeightPromotePayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy model weight promote payload: {err}"
+        ))
+    })
+}
+
 fn encode_model_weight_rollback_signature_payload(
     payload: &ModelWeightRollbackPayload,
 ) -> Result<Vec<u8>, SoracloudError> {
@@ -7224,6 +7630,16 @@ fn encode_model_weight_rollback_signature_payload(
     .map_err(|err| {
         SoracloudError::internal(format!(
             "failed to encode model weight rollback payload: {err}"
+        ))
+    })
+}
+
+fn encode_model_weight_rollback_signature_payload_legacy(
+    payload: &ModelWeightRollbackPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy model weight rollback payload: {err}"
         ))
     })
 }
@@ -7248,12 +7664,37 @@ fn encode_model_artifact_register_signature_payload(
     })
 }
 
+fn encode_model_artifact_register_signature_payload_legacy(
+    payload: &ModelArtifactRegisterPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy model artifact register payload: {err}"
+        ))
+    })
+}
+
 fn encode_decryption_request_signature_payload(
+    payload: &DecryptionRequestPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    encode_decryption_request_provenance_payload(
+        payload.service_name.as_str(),
+        payload.policy.clone(),
+        payload.request.clone(),
+    )
+    .map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode decryption request payload: {err}"
+        ))
+    })
+}
+
+fn encode_decryption_request_signature_payload_legacy(
     payload: &DecryptionRequestPayload,
 ) -> Result<Vec<u8>, SoracloudError> {
     norito::to_bytes(payload).map_err(|err| {
         SoracloudError::internal(format!(
-            "failed to encode decryption request payload: {err}"
+            "failed to encode legacy decryption request payload: {err}"
         ))
     })
 }
@@ -7261,7 +7702,7 @@ fn encode_decryption_request_signature_payload(
 fn encode_ciphertext_query_signature_payload(
     payload: &CiphertextQuerySpecV1,
 ) -> Result<Vec<u8>, SoracloudError> {
-    norito::to_bytes(payload).map_err(|err| {
+    encode_ciphertext_query_provenance_payload(payload.clone()).map_err(|err| {
         SoracloudError::internal(format!("failed to encode ciphertext query payload: {err}"))
     })
 }
@@ -7279,6 +7720,16 @@ fn encode_agent_deploy_signature_payload(
     })
 }
 
+fn encode_agent_deploy_signature_payload_legacy(
+    payload: &AgentDeployPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy agent deploy payload: {err}"
+        ))
+    })
+}
+
 fn encode_agent_lease_renew_signature_payload(
     payload: &AgentLeaseRenewPayload,
 ) -> Result<Vec<u8>, SoracloudError> {
@@ -7288,6 +7739,16 @@ fn encode_agent_lease_renew_signature_payload(
     )
     .map_err(|err| {
         SoracloudError::internal(format!("failed to encode agent lease renew payload: {err}"))
+    })
+}
+
+fn encode_agent_lease_renew_signature_payload_legacy(
+    payload: &AgentLeaseRenewPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy agent lease renew payload: {err}"
+        ))
     })
 }
 
@@ -7303,6 +7764,16 @@ fn encode_agent_restart_signature_payload(
     })
 }
 
+fn encode_agent_restart_signature_payload_legacy(
+    payload: &AgentRestartPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy agent restart payload: {err}"
+        ))
+    })
+}
+
 fn encode_agent_policy_revoke_signature_payload(
     payload: &AgentPolicyRevokePayload,
 ) -> Result<Vec<u8>, SoracloudError> {
@@ -7314,6 +7785,16 @@ fn encode_agent_policy_revoke_signature_payload(
     .map_err(|err| {
         SoracloudError::internal(format!(
             "failed to encode agent policy revoke payload: {err}"
+        ))
+    })
+}
+
+fn encode_agent_policy_revoke_signature_payload_legacy(
+    payload: &AgentPolicyRevokePayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy agent policy revoke payload: {err}"
         ))
     })
 }
@@ -7333,6 +7814,16 @@ fn encode_agent_wallet_spend_signature_payload(
     })
 }
 
+fn encode_agent_wallet_spend_signature_payload_legacy(
+    payload: &AgentWalletSpendPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy agent wallet spend payload: {err}"
+        ))
+    })
+}
+
 fn encode_agent_wallet_approve_signature_payload(
     payload: &AgentWalletApprovePayload,
 ) -> Result<Vec<u8>, SoracloudError> {
@@ -7343,6 +7834,16 @@ fn encode_agent_wallet_approve_signature_payload(
     .map_err(|err| {
         SoracloudError::internal(format!(
             "failed to encode agent wallet approve payload: {err}"
+        ))
+    })
+}
+
+fn encode_agent_wallet_approve_signature_payload_legacy(
+    payload: &AgentWalletApprovePayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy agent wallet approve payload: {err}"
         ))
     })
 }
@@ -7363,6 +7864,16 @@ fn encode_agent_message_send_signature_payload(
     })
 }
 
+fn encode_agent_message_send_signature_payload_legacy(
+    payload: &AgentMessageSendPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy agent message send payload: {err}"
+        ))
+    })
+}
+
 fn encode_agent_message_ack_signature_payload(
     payload: &AgentMessageAckPayload,
 ) -> Result<Vec<u8>, SoracloudError> {
@@ -7372,6 +7883,16 @@ fn encode_agent_message_ack_signature_payload(
     )
     .map_err(|err| {
         SoracloudError::internal(format!("failed to encode agent message ack payload: {err}"))
+    })
+}
+
+fn encode_agent_message_ack_signature_payload_legacy(
+    payload: &AgentMessageAckPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy agent message ack payload: {err}"
+        ))
     })
 }
 
@@ -7390,6 +7911,16 @@ fn encode_agent_artifact_allow_signature_payload(
     })
 }
 
+fn encode_agent_artifact_allow_signature_payload_legacy(
+    payload: &AgentArtifactAllowPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy agent artifact allow payload: {err}"
+        ))
+    })
+}
+
 fn encode_agent_autonomy_run_signature_payload(
     payload: &AgentAutonomyRunPayload,
 ) -> Result<Vec<u8>, SoracloudError> {
@@ -7403,6 +7934,16 @@ fn encode_agent_autonomy_run_signature_payload(
     .map_err(|err| {
         SoracloudError::internal(format!(
             "failed to encode agent autonomy run payload: {err}"
+        ))
+    })
+}
+
+fn encode_agent_autonomy_run_signature_payload_legacy(
+    payload: &AgentAutonomyRunPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::to_bytes(payload).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode legacy agent autonomy run payload: {err}"
         ))
     })
 }
@@ -8185,7 +8726,7 @@ mod tests {
         bundle: SoraDeploymentBundleV1,
         key_pair: &KeyPair,
     ) -> SignedBundleRequest {
-        let payload = norito::to_bytes(&bundle).expect("encode bundle");
+        let payload = encode_bundle_signature_payload(&bundle).expect("encode bundle payload");
         let signature = Signature::new(key_pair.private_key(), &payload);
         SignedBundleRequest {
             bundle,
@@ -8216,11 +8757,49 @@ mod tests {
         }
     }
 
+    fn signed_rollback_request_legacy_payload(
+        service_name: &str,
+        target_version: Option<&str>,
+        key_pair: &KeyPair,
+    ) -> SignedRollbackRequest {
+        let payload = RollbackPayload {
+            service_name: service_name.to_string(),
+            target_version: target_version.map(ToOwned::to_owned),
+        };
+        let encoded = encode_rollback_signature_payload_legacy(&payload)
+            .expect("encode legacy rollback payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedRollbackRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
     fn signed_state_mutation_request(
         payload: StateMutationRequest,
         key_pair: &KeyPair,
     ) -> SignedStateMutationRequest {
-        let encoded = norito::to_bytes(&payload).expect("encode state mutation payload");
+        let encoded = encode_state_mutation_signature_payload(&payload)
+            .expect("encode state mutation payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedStateMutationRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn signed_state_mutation_request_legacy_payload(
+        payload: StateMutationRequest,
+        key_pair: &KeyPair,
+    ) -> SignedStateMutationRequest {
+        let encoded = encode_state_mutation_signature_payload_legacy(&payload)
+            .expect("encode legacy state mutation payload");
         let signature = Signature::new(key_pair.private_key(), &encoded);
         SignedStateMutationRequest {
             payload,
@@ -8247,12 +8826,44 @@ mod tests {
         }
     }
 
+    fn signed_fhe_job_run_request_legacy_payload(
+        payload: FheJobRunPayload,
+        key_pair: &KeyPair,
+    ) -> SignedFheJobRunRequest {
+        let encoded = encode_fhe_job_run_signature_payload_legacy(&payload)
+            .expect("encode legacy fhe job run payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedFheJobRunRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
     fn signed_training_job_start_request(
         payload: TrainingJobStartPayload,
         key_pair: &KeyPair,
     ) -> SignedTrainingJobStartRequest {
         let encoded = encode_training_job_start_signature_payload(&payload)
             .expect("encode training start payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedTrainingJobStartRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn signed_training_job_start_request_legacy_payload(
+        payload: TrainingJobStartPayload,
+        key_pair: &KeyPair,
+    ) -> SignedTrainingJobStartRequest {
+        let encoded = encode_training_job_start_signature_payload_legacy(&payload)
+            .expect("encode legacy training start payload");
         let signature = Signature::new(key_pair.private_key(), &encoded);
         SignedTrainingJobStartRequest {
             payload,
@@ -8279,12 +8890,44 @@ mod tests {
         }
     }
 
+    fn signed_training_job_checkpoint_request_legacy_payload(
+        payload: TrainingJobCheckpointPayload,
+        key_pair: &KeyPair,
+    ) -> SignedTrainingJobCheckpointRequest {
+        let encoded = encode_training_job_checkpoint_signature_payload_legacy(&payload)
+            .expect("encode legacy training checkpoint payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedTrainingJobCheckpointRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
     fn signed_training_job_retry_request(
         payload: TrainingJobRetryPayload,
         key_pair: &KeyPair,
     ) -> SignedTrainingJobRetryRequest {
         let encoded = encode_training_job_retry_signature_payload(&payload)
             .expect("encode training retry payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedTrainingJobRetryRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn signed_training_job_retry_request_legacy_payload(
+        payload: TrainingJobRetryPayload,
+        key_pair: &KeyPair,
+    ) -> SignedTrainingJobRetryRequest {
+        let encoded = encode_training_job_retry_signature_payload_legacy(&payload)
+            .expect("encode legacy training retry payload");
         let signature = Signature::new(key_pair.private_key(), &encoded);
         SignedTrainingJobRetryRequest {
             payload,
@@ -8311,12 +8954,44 @@ mod tests {
         }
     }
 
+    fn signed_model_weight_register_request_legacy_payload(
+        payload: ModelWeightRegisterPayload,
+        key_pair: &KeyPair,
+    ) -> SignedModelWeightRegisterRequest {
+        let encoded = encode_model_weight_register_signature_payload_legacy(&payload)
+            .expect("encode legacy model weight register payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedModelWeightRegisterRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
     fn signed_model_weight_promote_request(
         payload: ModelWeightPromotePayload,
         key_pair: &KeyPair,
     ) -> SignedModelWeightPromoteRequest {
         let encoded = encode_model_weight_promote_signature_payload(&payload)
             .expect("encode model weight promote payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedModelWeightPromoteRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn signed_model_weight_promote_request_legacy_payload(
+        payload: ModelWeightPromotePayload,
+        key_pair: &KeyPair,
+    ) -> SignedModelWeightPromoteRequest {
+        let encoded = encode_model_weight_promote_signature_payload_legacy(&payload)
+            .expect("encode legacy model weight promote payload");
         let signature = Signature::new(key_pair.private_key(), &encoded);
         SignedModelWeightPromoteRequest {
             payload,
@@ -8343,6 +9018,22 @@ mod tests {
         }
     }
 
+    fn signed_model_weight_rollback_request_legacy_payload(
+        payload: ModelWeightRollbackPayload,
+        key_pair: &KeyPair,
+    ) -> SignedModelWeightRollbackRequest {
+        let encoded = encode_model_weight_rollback_signature_payload_legacy(&payload)
+            .expect("encode legacy model weight rollback payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedModelWeightRollbackRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
     fn signed_model_artifact_register_request(
         payload: ModelArtifactRegisterPayload,
         key_pair: &KeyPair,
@@ -8359,12 +9050,44 @@ mod tests {
         }
     }
 
+    fn signed_model_artifact_register_request_legacy_payload(
+        payload: ModelArtifactRegisterPayload,
+        key_pair: &KeyPair,
+    ) -> SignedModelArtifactRegisterRequest {
+        let encoded = encode_model_artifact_register_signature_payload_legacy(&payload)
+            .expect("encode legacy model artifact register payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedModelArtifactRegisterRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
     fn signed_decryption_request(
         payload: DecryptionRequestPayload,
         key_pair: &KeyPair,
     ) -> SignedDecryptionRequest {
         let encoded = encode_decryption_request_signature_payload(&payload)
             .expect("encode decryption request payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedDecryptionRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn signed_decryption_request_legacy_payload(
+        payload: DecryptionRequestPayload,
+        key_pair: &KeyPair,
+    ) -> SignedDecryptionRequest {
+        let encoded = encode_decryption_request_signature_payload_legacy(&payload)
+            .expect("encode legacy decryption request payload");
         let signature = Signature::new(key_pair.private_key(), &encoded);
         SignedDecryptionRequest {
             payload,
@@ -8407,6 +9130,33 @@ mod tests {
             governance_tx_hash: Hash::new(governance_seed),
         };
         let encoded = encode_rollout_signature_payload(&payload).expect("encode rollout payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedRolloutAdvanceRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn signed_rollout_request_legacy_payload(
+        service_name: &str,
+        rollout_handle: &str,
+        healthy: bool,
+        promote_to_percent: Option<u8>,
+        governance_seed: &[u8],
+        key_pair: &KeyPair,
+    ) -> SignedRolloutAdvanceRequest {
+        let payload = RolloutAdvancePayload {
+            service_name: service_name.to_string(),
+            rollout_handle: rollout_handle.to_string(),
+            healthy,
+            promote_to_percent,
+            governance_tx_hash: Hash::new(governance_seed),
+        };
+        let encoded = encode_rollout_signature_payload_legacy(&payload)
+            .expect("encode legacy rollout payload");
         let signature = Signature::new(key_pair.private_key(), &encoded);
         SignedRolloutAdvanceRequest {
             payload,
@@ -8467,12 +9217,44 @@ mod tests {
         }
     }
 
+    fn signed_agent_deploy_request_legacy_payload(
+        payload: AgentDeployPayload,
+        key_pair: &KeyPair,
+    ) -> SignedAgentDeployRequest {
+        let encoded = encode_agent_deploy_signature_payload_legacy(&payload)
+            .expect("encode legacy agent deploy payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedAgentDeployRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
     fn signed_agent_lease_renew_request(
         payload: AgentLeaseRenewPayload,
         key_pair: &KeyPair,
     ) -> SignedAgentLeaseRenewRequest {
         let encoded = encode_agent_lease_renew_signature_payload(&payload)
             .expect("encode agent lease renew payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedAgentLeaseRenewRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn signed_agent_lease_renew_request_legacy_payload(
+        payload: AgentLeaseRenewPayload,
+        key_pair: &KeyPair,
+    ) -> SignedAgentLeaseRenewRequest {
+        let encoded = encode_agent_lease_renew_signature_payload_legacy(&payload)
+            .expect("encode legacy agent lease renew payload");
         let signature = Signature::new(key_pair.private_key(), &encoded);
         SignedAgentLeaseRenewRequest {
             payload,
@@ -8499,12 +9281,44 @@ mod tests {
         }
     }
 
+    fn signed_agent_restart_request_legacy_payload(
+        payload: AgentRestartPayload,
+        key_pair: &KeyPair,
+    ) -> SignedAgentRestartRequest {
+        let encoded = encode_agent_restart_signature_payload_legacy(&payload)
+            .expect("encode legacy agent restart payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedAgentRestartRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
     fn signed_agent_policy_revoke_request(
         payload: AgentPolicyRevokePayload,
         key_pair: &KeyPair,
     ) -> SignedAgentPolicyRevokeRequest {
         let encoded = encode_agent_policy_revoke_signature_payload(&payload)
             .expect("encode agent policy revoke payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedAgentPolicyRevokeRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn signed_agent_policy_revoke_request_legacy_payload(
+        payload: AgentPolicyRevokePayload,
+        key_pair: &KeyPair,
+    ) -> SignedAgentPolicyRevokeRequest {
+        let encoded = encode_agent_policy_revoke_signature_payload_legacy(&payload)
+            .expect("encode legacy agent policy revoke payload");
         let signature = Signature::new(key_pair.private_key(), &encoded);
         SignedAgentPolicyRevokeRequest {
             payload,
@@ -8531,12 +9345,44 @@ mod tests {
         }
     }
 
+    fn signed_agent_wallet_spend_request_legacy_payload(
+        payload: AgentWalletSpendPayload,
+        key_pair: &KeyPair,
+    ) -> SignedAgentWalletSpendRequest {
+        let encoded = encode_agent_wallet_spend_signature_payload_legacy(&payload)
+            .expect("encode legacy agent wallet spend payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedAgentWalletSpendRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
     fn signed_agent_wallet_approve_request(
         payload: AgentWalletApprovePayload,
         key_pair: &KeyPair,
     ) -> SignedAgentWalletApproveRequest {
         let encoded = encode_agent_wallet_approve_signature_payload(&payload)
             .expect("encode agent wallet approve payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedAgentWalletApproveRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn signed_agent_wallet_approve_request_legacy_payload(
+        payload: AgentWalletApprovePayload,
+        key_pair: &KeyPair,
+    ) -> SignedAgentWalletApproveRequest {
+        let encoded = encode_agent_wallet_approve_signature_payload_legacy(&payload)
+            .expect("encode legacy agent wallet approve payload");
         let signature = Signature::new(key_pair.private_key(), &encoded);
         SignedAgentWalletApproveRequest {
             payload,
@@ -8563,12 +9409,44 @@ mod tests {
         }
     }
 
+    fn signed_agent_message_send_request_legacy_payload(
+        payload: AgentMessageSendPayload,
+        key_pair: &KeyPair,
+    ) -> SignedAgentMessageSendRequest {
+        let encoded = encode_agent_message_send_signature_payload_legacy(&payload)
+            .expect("encode legacy agent message send payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedAgentMessageSendRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
     fn signed_agent_message_ack_request(
         payload: AgentMessageAckPayload,
         key_pair: &KeyPair,
     ) -> SignedAgentMessageAckRequest {
         let encoded = encode_agent_message_ack_signature_payload(&payload)
             .expect("encode agent message ack payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedAgentMessageAckRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    fn signed_agent_message_ack_request_legacy_payload(
+        payload: AgentMessageAckPayload,
+        key_pair: &KeyPair,
+    ) -> SignedAgentMessageAckRequest {
+        let encoded = encode_agent_message_ack_signature_payload_legacy(&payload)
+            .expect("encode legacy agent message ack payload");
         let signature = Signature::new(key_pair.private_key(), &encoded);
         SignedAgentMessageAckRequest {
             payload,
@@ -8595,6 +9473,22 @@ mod tests {
         }
     }
 
+    fn signed_agent_artifact_allow_request_legacy_payload(
+        payload: AgentArtifactAllowPayload,
+        key_pair: &KeyPair,
+    ) -> SignedAgentArtifactAllowRequest {
+        let encoded = encode_agent_artifact_allow_signature_payload_legacy(&payload)
+            .expect("encode legacy agent artifact allow payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedAgentArtifactAllowRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
     fn signed_agent_autonomy_run_request(
         payload: AgentAutonomyRunPayload,
         key_pair: &KeyPair,
@@ -8609,6 +9503,235 @@ mod tests {
                 signature,
             },
         }
+    }
+
+    fn signed_agent_autonomy_run_request_legacy_payload(
+        payload: AgentAutonomyRunPayload,
+        key_pair: &KeyPair,
+    ) -> SignedAgentAutonomyRunRequest {
+        let encoded = encode_agent_autonomy_run_signature_payload_legacy(&payload)
+            .expect("encode legacy agent autonomy run payload");
+        let signature = Signature::new(key_pair.private_key(), &encoded);
+        SignedAgentAutonomyRunRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature,
+            },
+        }
+    }
+
+    #[test]
+    fn bundle_signature_payload_layout_is_canonical_layout() {
+        let bundle = fixture_bundle("1.0.0");
+        let encoded = encode_bundle_signature_payload(&bundle).expect("encode signature payload");
+        let expected = norito::to_bytes(&bundle).expect("encode canonical layout");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn state_mutation_signature_payload_layout_is_canonical_layout() {
+        let governance_tx_hash = Hash::new(b"governance");
+        let payload = StateMutationRequest {
+            service_name: "health_portal".to_owned(),
+            binding_name: "private_state".to_owned(),
+            key: "/state/private/records/1".to_owned(),
+            operation: StateMutationOperation::Upsert,
+            value_size_bytes: Some(512),
+            encryption: SoraStateEncryptionV1::ClientCiphertext,
+            governance_tx_hash,
+        };
+        let encoded =
+            encode_state_mutation_signature_payload(&payload).expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.binding_name.as_str(),
+            payload.key.as_str(),
+            "upsert",
+            payload.value_size_bytes,
+            payload.encryption,
+            governance_tx_hash,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn state_mutation_signature_payload_uses_delete_operation_label() {
+        let governance_tx_hash = Hash::new(b"delete-governance");
+        let payload = StateMutationRequest {
+            service_name: "health_portal".to_owned(),
+            binding_name: "private_state".to_owned(),
+            key: "/state/private/records/1".to_owned(),
+            operation: StateMutationOperation::Delete,
+            value_size_bytes: None,
+            encryption: SoraStateEncryptionV1::ClientCiphertext,
+            governance_tx_hash,
+        };
+        let encoded =
+            encode_state_mutation_signature_payload(&payload).expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.binding_name.as_str(),
+            payload.key.as_str(),
+            "delete",
+            None::<u64>,
+            payload.encryption,
+            governance_tx_hash,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn state_mutation_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_state_mutation_request_legacy_payload(
+            StateMutationRequest {
+                service_name: "health_portal".to_owned(),
+                binding_name: "private_state".to_owned(),
+                key: "/state/private/records/1".to_owned(),
+                operation: StateMutationOperation::Upsert,
+                value_size_bytes: Some(256),
+                encryption: SoraStateEncryptionV1::ClientCiphertext,
+                governance_tx_hash: Hash::new(b"legacy-governance"),
+            },
+            &key_pair,
+        );
+        verify_state_mutation_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn state_mutation_canonical_and_legacy_payload_layouts_differ() {
+        let payload = StateMutationRequest {
+            service_name: "health_portal".to_owned(),
+            binding_name: "private_state".to_owned(),
+            key: "/state/private/records/1".to_owned(),
+            operation: StateMutationOperation::Upsert,
+            value_size_bytes: Some(256),
+            encryption: SoraStateEncryptionV1::ClientCiphertext,
+            governance_tx_hash: Hash::new(b"governance-diff-check"),
+        };
+        let canonical =
+            encode_state_mutation_signature_payload(&payload).expect("encode canonical payload");
+        let legacy = encode_state_mutation_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
+    fn fhe_job_run_signature_payload_layout_is_canonical_tuple() {
+        let job = fixture_fhe_job_spec();
+        let policy = fixture_fhe_execution_policy();
+        let param_set = fixture_fhe_param_set();
+        let governance_tx_hash = Hash::new(b"governance");
+        let payload = FheJobRunPayload {
+            service_name: "health_portal".to_owned(),
+            binding_name: "private_state".to_owned(),
+            job: job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            governance_tx_hash: governance_tx_hash.clone(),
+        };
+        let encoded =
+            encode_fhe_job_run_signature_payload(&payload).expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.binding_name.as_str(),
+            job,
+            policy,
+            param_set,
+            governance_tx_hash,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn fhe_job_run_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_fhe_job_run_request_legacy_payload(
+            FheJobRunPayload {
+                service_name: "health_portal".to_owned(),
+                binding_name: "private_state".to_owned(),
+                job: fixture_fhe_job_spec(),
+                policy: fixture_fhe_execution_policy(),
+                param_set: fixture_fhe_param_set(),
+                governance_tx_hash: Hash::new(b"legacy-fhe-governance"),
+            },
+            &key_pair,
+        );
+        verify_fhe_job_run_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn fhe_job_run_canonical_and_legacy_payload_layouts_differ() {
+        let payload = FheJobRunPayload {
+            service_name: "health_portal".to_owned(),
+            binding_name: "private_state".to_owned(),
+            job: fixture_fhe_job_spec(),
+            policy: fixture_fhe_execution_policy(),
+            param_set: fixture_fhe_param_set(),
+            governance_tx_hash: Hash::new(b"fhe-governance-diff-check"),
+        };
+        let canonical =
+            encode_fhe_job_run_signature_payload(&payload).expect("encode canonical payload");
+        let legacy =
+            encode_fhe_job_run_signature_payload_legacy(&payload).expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
+    fn decryption_request_signature_payload_layout_is_canonical_tuple() {
+        let policy = fixture_decryption_authority_policy();
+        let request = fixture_decryption_request();
+        let payload = DecryptionRequestPayload {
+            service_name: "health_portal".to_owned(),
+            policy: policy.clone(),
+            request: request.clone(),
+        };
+        let encoded = encode_decryption_request_signature_payload(&payload)
+            .expect("encode signature payload");
+        let expected = norito::to_bytes(&(payload.service_name.as_str(), policy, request))
+            .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn decryption_request_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_decryption_request_legacy_payload(
+            DecryptionRequestPayload {
+                service_name: "health_portal".to_owned(),
+                policy: fixture_decryption_authority_policy(),
+                request: fixture_decryption_request(),
+            },
+            &key_pair,
+        );
+        verify_decryption_request_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn decryption_request_canonical_and_legacy_payload_layouts_differ() {
+        let payload = DecryptionRequestPayload {
+            service_name: "health_portal".to_owned(),
+            policy: fixture_decryption_authority_policy(),
+            request: fixture_decryption_request(),
+        };
+        let canonical = encode_decryption_request_signature_payload(&payload)
+            .expect("encode canonical payload");
+        let legacy = encode_decryption_request_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
+    fn ciphertext_query_signature_payload_layout_is_canonical_layout() {
+        let query = fixture_ciphertext_query_spec();
+        let encoded =
+            encode_ciphertext_query_signature_payload(&query).expect("encode signature payload");
+        let expected = norito::to_bytes(&query).expect("encode canonical layout");
+        assert_eq!(encoded, expected);
     }
 
     #[test]
@@ -8816,6 +9939,335 @@ mod tests {
     }
 
     #[test]
+    fn rollback_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request =
+            signed_rollback_request_legacy_payload("web_portal", Some("1.0.0"), &key_pair);
+        verify_rollback_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn rollback_canonical_and_legacy_payload_layouts_differ() {
+        let payload = RollbackPayload {
+            service_name: "web_portal".to_owned(),
+            target_version: Some("1.0.0".to_owned()),
+        };
+        let canonical =
+            encode_rollback_signature_payload(&payload).expect("encode canonical payload");
+        let legacy =
+            encode_rollback_signature_payload_legacy(&payload).expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
+    fn rollout_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_rollout_request_legacy_payload(
+            "web_portal",
+            "web_portal:rollout:2",
+            true,
+            Some(100),
+            b"rollout-legacy",
+            &key_pair,
+        );
+        verify_rollout_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn rollout_canonical_and_legacy_payload_layouts_differ() {
+        let payload = RolloutAdvancePayload {
+            service_name: "web_portal".to_owned(),
+            rollout_handle: "web_portal:rollout:2".to_owned(),
+            healthy: true,
+            promote_to_percent: Some(100),
+            governance_tx_hash: Hash::new(b"rollout-diff-check"),
+        };
+        let canonical =
+            encode_rollout_signature_payload(&payload).expect("encode canonical payload");
+        let legacy =
+            encode_rollout_signature_payload_legacy(&payload).expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
+    fn agent_deploy_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_deploy_request_legacy_payload(
+            AgentDeployPayload {
+                manifest: fixture_agent_manifest(),
+                lease_ticks: 120,
+                autonomy_budget_units: Some(500),
+            },
+            &key_pair,
+        );
+        verify_agent_deploy_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn agent_deploy_canonical_and_legacy_payload_layouts_differ() {
+        let payload = AgentDeployPayload {
+            manifest: fixture_agent_manifest(),
+            lease_ticks: 120,
+            autonomy_budget_units: Some(500),
+        };
+        let canonical =
+            encode_agent_deploy_signature_payload(&payload).expect("encode canonical payload");
+        let legacy =
+            encode_agent_deploy_signature_payload_legacy(&payload).expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
+    fn agent_lease_renew_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_lease_renew_request_legacy_payload(
+            AgentLeaseRenewPayload {
+                apartment_name: "ops_agent".to_owned(),
+                lease_ticks: 120,
+            },
+            &key_pair,
+        );
+        verify_agent_lease_renew_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn agent_lease_renew_canonical_and_legacy_payload_layouts_differ() {
+        let payload = AgentLeaseRenewPayload {
+            apartment_name: "ops_agent".to_owned(),
+            lease_ticks: 120,
+        };
+        let canonical =
+            encode_agent_lease_renew_signature_payload(&payload).expect("encode canonical payload");
+        let legacy = encode_agent_lease_renew_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
+    fn agent_restart_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_restart_request_legacy_payload(
+            AgentRestartPayload {
+                apartment_name: "ops_agent".to_owned(),
+                reason: "manual-restart".to_owned(),
+            },
+            &key_pair,
+        );
+        verify_agent_restart_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn agent_restart_canonical_and_legacy_payload_layouts_differ() {
+        let payload = AgentRestartPayload {
+            apartment_name: "ops_agent".to_owned(),
+            reason: "manual-restart".to_owned(),
+        };
+        let canonical =
+            encode_agent_restart_signature_payload(&payload).expect("encode canonical payload");
+        let legacy =
+            encode_agent_restart_signature_payload_legacy(&payload).expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
+    fn agent_policy_revoke_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_policy_revoke_request_legacy_payload(
+            AgentPolicyRevokePayload {
+                apartment_name: "ops_agent".to_owned(),
+                capability: "agent.autonomy.run".to_owned(),
+                reason: Some("manual-review".to_owned()),
+            },
+            &key_pair,
+        );
+        verify_agent_policy_revoke_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn agent_policy_revoke_canonical_and_legacy_payload_layouts_differ() {
+        let payload = AgentPolicyRevokePayload {
+            apartment_name: "ops_agent".to_owned(),
+            capability: "agent.autonomy.run".to_owned(),
+            reason: Some("manual-review".to_owned()),
+        };
+        let canonical = encode_agent_policy_revoke_signature_payload(&payload)
+            .expect("encode canonical payload");
+        let legacy = encode_agent_policy_revoke_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
+    fn agent_wallet_spend_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_wallet_spend_request_legacy_payload(
+            AgentWalletSpendPayload {
+                apartment_name: "ops_agent".to_owned(),
+                asset_definition: "xor#sora".to_owned(),
+                amount_nanos: 1_000_000,
+            },
+            &key_pair,
+        );
+        verify_agent_wallet_spend_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn agent_wallet_spend_canonical_and_legacy_payload_layouts_differ() {
+        let payload = AgentWalletSpendPayload {
+            apartment_name: "ops_agent".to_owned(),
+            asset_definition: "xor#sora".to_owned(),
+            amount_nanos: 1_000_000,
+        };
+        let canonical = encode_agent_wallet_spend_signature_payload(&payload)
+            .expect("encode canonical payload");
+        let legacy = encode_agent_wallet_spend_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
+    fn agent_wallet_approve_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_wallet_approve_request_legacy_payload(
+            AgentWalletApprovePayload {
+                apartment_name: "ops_agent".to_owned(),
+                request_id: "ops_agent:wallet:7".to_owned(),
+            },
+            &key_pair,
+        );
+        verify_agent_wallet_approve_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn agent_wallet_approve_canonical_and_legacy_payload_layouts_differ() {
+        let payload = AgentWalletApprovePayload {
+            apartment_name: "ops_agent".to_owned(),
+            request_id: "ops_agent:wallet:7".to_owned(),
+        };
+        let canonical = encode_agent_wallet_approve_signature_payload(&payload)
+            .expect("encode canonical payload");
+        let legacy = encode_agent_wallet_approve_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
+    fn agent_message_send_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_message_send_request_legacy_payload(
+            AgentMessageSendPayload {
+                from_apartment: "ops_agent".to_owned(),
+                to_apartment: "worker_agent".to_owned(),
+                channel: "ops.sync".to_owned(),
+                payload: "rotate-key-42".to_owned(),
+            },
+            &key_pair,
+        );
+        verify_agent_message_send_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn agent_message_send_canonical_and_legacy_payload_layouts_differ() {
+        let payload = AgentMessageSendPayload {
+            from_apartment: "ops_agent".to_owned(),
+            to_apartment: "worker_agent".to_owned(),
+            channel: "ops.sync".to_owned(),
+            payload: "rotate-key-42".to_owned(),
+        };
+        let canonical = encode_agent_message_send_signature_payload(&payload)
+            .expect("encode canonical payload");
+        let legacy = encode_agent_message_send_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
+    fn agent_message_ack_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_message_ack_request_legacy_payload(
+            AgentMessageAckPayload {
+                apartment_name: "worker_agent".to_owned(),
+                message_id: "worker_agent:mail:3".to_owned(),
+            },
+            &key_pair,
+        );
+        verify_agent_message_ack_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn agent_message_ack_canonical_and_legacy_payload_layouts_differ() {
+        let payload = AgentMessageAckPayload {
+            apartment_name: "worker_agent".to_owned(),
+            message_id: "worker_agent:mail:3".to_owned(),
+        };
+        let canonical =
+            encode_agent_message_ack_signature_payload(&payload).expect("encode canonical payload");
+        let legacy = encode_agent_message_ack_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
+    fn agent_artifact_allow_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_artifact_allow_request_legacy_payload(
+            AgentArtifactAllowPayload {
+                apartment_name: "ops_agent".to_owned(),
+                artifact_hash: "hash:ABCD0123#01".to_owned(),
+                provenance_hash: Some("hash:PROV0001#01".to_owned()),
+            },
+            &key_pair,
+        );
+        verify_agent_artifact_allow_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn agent_artifact_allow_canonical_and_legacy_payload_layouts_differ() {
+        let payload = AgentArtifactAllowPayload {
+            apartment_name: "ops_agent".to_owned(),
+            artifact_hash: "hash:ABCD0123#01".to_owned(),
+            provenance_hash: Some("hash:PROV0001#01".to_owned()),
+        };
+        let canonical = encode_agent_artifact_allow_signature_payload(&payload)
+            .expect("encode canonical payload");
+        let legacy = encode_agent_artifact_allow_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
+    fn agent_autonomy_run_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_agent_autonomy_run_request_legacy_payload(
+            AgentAutonomyRunPayload {
+                apartment_name: "ops_agent".to_owned(),
+                artifact_hash: "hash:ABCD0123#01".to_owned(),
+                provenance_hash: Some("hash:PROV0001#01".to_owned()),
+                budget_units: 120,
+                run_label: "nightly-train-step-1".to_owned(),
+            },
+            &key_pair,
+        );
+        verify_agent_autonomy_run_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn agent_autonomy_run_canonical_and_legacy_payload_layouts_differ() {
+        let payload = AgentAutonomyRunPayload {
+            apartment_name: "ops_agent".to_owned(),
+            artifact_hash: "hash:ABCD0123#01".to_owned(),
+            provenance_hash: Some("hash:PROV0001#01".to_owned()),
+            budget_units: 120,
+            run_label: "nightly-train-step-1".to_owned(),
+        };
+        let canonical = encode_agent_autonomy_run_signature_payload(&payload)
+            .expect("encode canonical payload");
+        let legacy = encode_agent_autonomy_run_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
     fn training_job_start_signature_payload_layout_is_canonical_tuple() {
         let payload = TrainingJobStartPayload {
             service_name: "web_portal".to_owned(),
@@ -8848,6 +10300,48 @@ mod tests {
     }
 
     #[test]
+    fn training_job_start_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_training_job_start_request_legacy_payload(
+            TrainingJobStartPayload {
+                service_name: "web_portal".to_owned(),
+                model_name: "model-1".to_owned(),
+                job_id: "job-legacy".to_owned(),
+                worker_group_size: 4,
+                target_steps: 100,
+                checkpoint_interval_steps: 20,
+                max_retries: 3,
+                step_compute_units: 500,
+                compute_budget_units: 50_000,
+                storage_budget_bytes: 4_096,
+            },
+            &key_pair,
+        );
+        verify_training_job_start_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn training_job_start_canonical_and_legacy_payload_layouts_differ() {
+        let payload = TrainingJobStartPayload {
+            service_name: "web_portal".to_owned(),
+            model_name: "model-1".to_owned(),
+            job_id: "job-diff-check".to_owned(),
+            worker_group_size: 4,
+            target_steps: 100,
+            checkpoint_interval_steps: 20,
+            max_retries: 3,
+            step_compute_units: 500,
+            compute_budget_units: 50_000,
+            storage_budget_bytes: 4_096,
+        };
+        let canonical = encode_training_job_start_signature_payload(&payload)
+            .expect("encode canonical payload");
+        let legacy = encode_training_job_start_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
     fn training_job_checkpoint_signature_payload_layout_is_canonical_tuple() {
         let metrics_hash = Hash::new(b"metrics");
         let payload = TrainingJobCheckpointPayload {
@@ -8871,6 +10365,38 @@ mod tests {
     }
 
     #[test]
+    fn training_job_checkpoint_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_training_job_checkpoint_request_legacy_payload(
+            TrainingJobCheckpointPayload {
+                service_name: "web_portal".to_owned(),
+                job_id: "job-legacy".to_owned(),
+                completed_step: 20,
+                checkpoint_size_bytes: 1_024,
+                metrics_hash: Hash::new(b"metrics-legacy"),
+            },
+            &key_pair,
+        );
+        verify_training_job_checkpoint_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn training_job_checkpoint_canonical_and_legacy_payload_layouts_differ() {
+        let payload = TrainingJobCheckpointPayload {
+            service_name: "web_portal".to_owned(),
+            job_id: "job-diff-check".to_owned(),
+            completed_step: 20,
+            checkpoint_size_bytes: 1_024,
+            metrics_hash: Hash::new(b"metrics-diff-check"),
+        };
+        let canonical = encode_training_job_checkpoint_signature_payload(&payload)
+            .expect("encode canonical payload");
+        let legacy = encode_training_job_checkpoint_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
     fn training_job_retry_signature_payload_layout_is_canonical_tuple() {
         let payload = TrainingJobRetryPayload {
             service_name: "web_portal".to_owned(),
@@ -8886,6 +10412,34 @@ mod tests {
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn training_job_retry_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_training_job_retry_request_legacy_payload(
+            TrainingJobRetryPayload {
+                service_name: "web_portal".to_owned(),
+                job_id: "job-legacy".to_owned(),
+                reason: "worker unavailable".to_owned(),
+            },
+            &key_pair,
+        );
+        verify_training_job_retry_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn training_job_retry_canonical_and_legacy_payload_layouts_differ() {
+        let payload = TrainingJobRetryPayload {
+            service_name: "web_portal".to_owned(),
+            job_id: "job-diff-check".to_owned(),
+            reason: "worker unavailable".to_owned(),
+        };
+        let canonical = encode_training_job_retry_signature_payload(&payload)
+            .expect("encode canonical payload");
+        let legacy = encode_training_job_retry_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
     }
 
     #[test]
@@ -8918,6 +10472,44 @@ mod tests {
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn model_artifact_register_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_model_artifact_register_request_legacy_payload(
+            ModelArtifactRegisterPayload {
+                service_name: "web_portal".to_owned(),
+                model_name: "model-1".to_owned(),
+                training_job_id: "job-legacy".to_owned(),
+                weight_artifact_hash: Hash::new(b"weight-artifact-legacy"),
+                dataset_ref: "dataset://synthetic/v1".to_owned(),
+                training_config_hash: Hash::new(b"train-config-legacy"),
+                reproducibility_hash: Hash::new(b"repro-legacy"),
+                provenance_attestation_hash: Hash::new(b"attestation-legacy"),
+            },
+            &key_pair,
+        );
+        verify_model_artifact_register_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn model_artifact_register_canonical_and_legacy_payload_layouts_differ() {
+        let payload = ModelArtifactRegisterPayload {
+            service_name: "web_portal".to_owned(),
+            model_name: "model-1".to_owned(),
+            training_job_id: "job-diff-check".to_owned(),
+            weight_artifact_hash: Hash::new(b"weight-artifact-diff-check"),
+            dataset_ref: "dataset://synthetic/v1".to_owned(),
+            training_config_hash: Hash::new(b"train-config-diff-check"),
+            reproducibility_hash: Hash::new(b"repro-diff-check"),
+            provenance_attestation_hash: Hash::new(b"attestation-diff-check"),
+        };
+        let canonical = encode_model_artifact_register_signature_payload(&payload)
+            .expect("encode canonical payload");
+        let legacy = encode_model_artifact_register_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
     }
 
     #[test]
@@ -8957,6 +10549,48 @@ mod tests {
     }
 
     #[test]
+    fn model_weight_register_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_model_weight_register_request_legacy_payload(
+            ModelWeightRegisterPayload {
+                service_name: "web_portal".to_owned(),
+                model_name: "model-1".to_owned(),
+                weight_version: "1.0.0".to_owned(),
+                training_job_id: "job-legacy".to_owned(),
+                parent_version: Some("0.9.0".to_owned()),
+                weight_artifact_hash: Hash::new(b"weight-artifact-legacy"),
+                dataset_ref: "dataset://synthetic/v1".to_owned(),
+                training_config_hash: Hash::new(b"train-config-legacy"),
+                reproducibility_hash: Hash::new(b"repro-legacy"),
+                provenance_attestation_hash: Hash::new(b"attestation-legacy"),
+            },
+            &key_pair,
+        );
+        verify_model_weight_register_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn model_weight_register_canonical_and_legacy_payload_layouts_differ() {
+        let payload = ModelWeightRegisterPayload {
+            service_name: "web_portal".to_owned(),
+            model_name: "model-1".to_owned(),
+            weight_version: "1.0.0".to_owned(),
+            training_job_id: "job-diff-check".to_owned(),
+            parent_version: Some("0.9.0".to_owned()),
+            weight_artifact_hash: Hash::new(b"weight-artifact-diff-check"),
+            dataset_ref: "dataset://synthetic/v1".to_owned(),
+            training_config_hash: Hash::new(b"train-config-diff-check"),
+            reproducibility_hash: Hash::new(b"repro-diff-check"),
+            provenance_attestation_hash: Hash::new(b"attestation-diff-check"),
+        };
+        let canonical = encode_model_weight_register_signature_payload(&payload)
+            .expect("encode canonical payload");
+        let legacy = encode_model_weight_register_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
     fn model_weight_promote_signature_payload_layout_is_canonical_tuple() {
         let gate_report_hash = Hash::new(b"gate-report");
         let payload = ModelWeightPromotePayload {
@@ -8980,6 +10614,38 @@ mod tests {
     }
 
     #[test]
+    fn model_weight_promote_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_model_weight_promote_request_legacy_payload(
+            ModelWeightPromotePayload {
+                service_name: "web_portal".to_owned(),
+                model_name: "model-1".to_owned(),
+                weight_version: "1.0.0".to_owned(),
+                gate_approved: true,
+                gate_report_hash: Hash::new(b"gate-report-legacy"),
+            },
+            &key_pair,
+        );
+        verify_model_weight_promote_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn model_weight_promote_canonical_and_legacy_payload_layouts_differ() {
+        let payload = ModelWeightPromotePayload {
+            service_name: "web_portal".to_owned(),
+            model_name: "model-1".to_owned(),
+            weight_version: "1.0.0".to_owned(),
+            gate_approved: true,
+            gate_report_hash: Hash::new(b"gate-report-diff-check"),
+        };
+        let canonical = encode_model_weight_promote_signature_payload(&payload)
+            .expect("encode canonical payload");
+        let legacy = encode_model_weight_promote_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
+    }
+
+    #[test]
     fn model_weight_rollback_signature_payload_layout_is_canonical_tuple() {
         let payload = ModelWeightRollbackPayload {
             service_name: "web_portal".to_owned(),
@@ -8997,6 +10663,36 @@ mod tests {
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn model_weight_rollback_signature_verification_accepts_legacy_struct_layout() {
+        let key_pair = KeyPair::random();
+        let request = signed_model_weight_rollback_request_legacy_payload(
+            ModelWeightRollbackPayload {
+                service_name: "web_portal".to_owned(),
+                model_name: "model-1".to_owned(),
+                target_version: "0.9.0".to_owned(),
+                reason: "gate regression".to_owned(),
+            },
+            &key_pair,
+        );
+        verify_model_weight_rollback_signature(&request).expect("legacy payload should verify");
+    }
+
+    #[test]
+    fn model_weight_rollback_canonical_and_legacy_payload_layouts_differ() {
+        let payload = ModelWeightRollbackPayload {
+            service_name: "web_portal".to_owned(),
+            model_name: "model-1".to_owned(),
+            target_version: "0.9.0".to_owned(),
+            reason: "gate regression".to_owned(),
+        };
+        let canonical = encode_model_weight_rollback_signature_payload(&payload)
+            .expect("encode canonical payload");
+        let legacy = encode_model_weight_rollback_signature_payload_legacy(&payload)
+            .expect("encode legacy payload");
+        assert_ne!(canonical, legacy);
     }
 
     #[tokio::test]
@@ -9058,6 +10754,32 @@ mod tests {
         let first_hash = service.revisions[0].sandbox_profile_hash;
         assert_eq!(service.revisions[1].sandbox_profile_hash, first_hash);
         assert_eq!(service.revisions[2].sandbox_profile_hash, first_hash);
+    }
+
+    #[tokio::test]
+    async fn rollback_accepts_legacy_signature_layout_end_to_end() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+        registry
+            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
+            .await
+            .expect("deploy");
+        registry
+            .apply_upgrade(signed_bundle_request(fixture_bundle("1.1.0"), &key_pair))
+            .await
+            .expect("upgrade");
+
+        let rolled_back = registry
+            .apply_rollback(signed_rollback_request_legacy_payload(
+                "web_portal",
+                Some("1.0.0"),
+                &key_pair,
+            ))
+            .await
+            .expect("legacy rollback");
+        assert_eq!(rolled_back.action, SoracloudAction::Rollback);
+        assert_eq!(rolled_back.current_version, "1.0.0");
+        assert_eq!(rolled_back.audit_event_count, 3);
     }
 
     #[tokio::test]
@@ -9237,6 +10959,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn state_mutation_rejects_invalid_signature() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+        let other = KeyPair::random();
+        registry
+            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
+            .await
+            .expect("deploy");
+
+        let mut request = signed_state_mutation_request(
+            StateMutationRequest {
+                service_name: "web_portal".to_string(),
+                binding_name: "session_store".to_string(),
+                key: "/state/session/user-1".to_string(),
+                operation: StateMutationOperation::Upsert,
+                value_size_bytes: Some(128),
+                encryption: SoraStateEncryptionV1::ClientCiphertext,
+                governance_tx_hash: Hash::new(b"tampered-governance"),
+            },
+            &key_pair,
+        );
+        request.provenance.signature = Signature::new(other.private_key(), b"tampered-payload");
+
+        let err = registry
+            .apply_state_mutation(request)
+            .await
+            .expect_err("invalid signature must fail");
+        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
+    }
+
+    #[tokio::test]
+    async fn state_mutation_accepts_legacy_signature_layout_end_to_end() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+        registry
+            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
+            .await
+            .expect("deploy");
+
+        let request = signed_state_mutation_request_legacy_payload(
+            StateMutationRequest {
+                service_name: "web_portal".to_string(),
+                binding_name: "session_store".to_string(),
+                key: "/state/session/legacy-user".to_string(),
+                operation: StateMutationOperation::Upsert,
+                value_size_bytes: Some(96),
+                encryption: SoraStateEncryptionV1::ClientCiphertext,
+                governance_tx_hash: Hash::new(b"legacy-governance"),
+            },
+            &key_pair,
+        );
+        let response = registry
+            .apply_state_mutation(request)
+            .await
+            .expect("legacy signed mutation should pass");
+        assert_eq!(response.binding_total_bytes, 96);
+        assert_eq!(response.binding_key_count, 1);
+        assert_eq!(response.audit_event_count, 2);
+    }
+
+    #[tokio::test]
+    async fn fhe_job_run_accepts_legacy_signature_layout_end_to_end() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+        registry
+            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
+            .await
+            .expect("deploy");
+
+        let response = registry
+            .apply_fhe_job_run(signed_fhe_job_run_request_legacy_payload(
+                FheJobRunPayload {
+                    service_name: "web_portal".to_owned(),
+                    binding_name: "patient_records".to_owned(),
+                    job: fixture_fhe_job_spec(),
+                    policy: fixture_fhe_execution_policy(),
+                    param_set: fixture_fhe_param_set(),
+                    governance_tx_hash: Hash::new(b"legacy-fhe-governance"),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy signed fhe job run should pass");
+        assert_eq!(response.action, SoracloudAction::FheJobRun);
+        assert_eq!(response.service_name, "web_portal");
+        assert_eq!(response.binding_name, "patient_records");
+        assert_eq!(response.audit_event_count, 2);
+    }
+
+    #[tokio::test]
     async fn fhe_job_run_tracks_ciphertext_binding_usage_and_audit_log() {
         let registry = Registry::default();
         let key_pair = KeyPair::random();
@@ -9409,6 +11221,31 @@ mod tests {
         );
         assert_eq!(audit.consent_evidence_hash, expected_consent_hash);
         assert_eq!(audit.break_glass, Some(false));
+    }
+
+    #[tokio::test]
+    async fn decryption_request_accepts_legacy_signature_layout_end_to_end() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+        registry
+            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
+            .await
+            .expect("deploy");
+
+        let response = registry
+            .apply_decryption_request(signed_decryption_request_legacy_payload(
+                DecryptionRequestPayload {
+                    service_name: "web_portal".to_owned(),
+                    policy: fixture_decryption_authority_policy(),
+                    request: fixture_decryption_request(),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy signed decryption request should pass");
+        assert_eq!(response.action, SoracloudAction::DecryptionRequest);
+        assert_eq!(response.service_name, "web_portal");
+        assert_eq!(response.audit_event_count, 2);
     }
 
     #[tokio::test]
@@ -10004,6 +11841,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rollout_accepts_legacy_signature_layout_end_to_end() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+        registry
+            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
+            .await
+            .expect("deploy");
+        registry
+            .apply_upgrade(signed_bundle_request(fixture_bundle("1.1.0"), &key_pair))
+            .await
+            .expect("upgrade");
+
+        let rollout = registry
+            .apply_rollout(signed_rollout_request_legacy_payload(
+                "web_portal",
+                "web_portal:rollout:2",
+                true,
+                Some(20),
+                b"legacy-rollout",
+                &key_pair,
+            ))
+            .await
+            .expect("legacy rollout");
+        assert_eq!(rollout.action, SoracloudAction::Rollout);
+        assert_eq!(rollout.current_version, "1.1.0");
+        assert_eq!(rollout.stage, RolloutStage::Canary);
+    }
+
+    #[tokio::test]
     async fn rollout_canary_advances_and_closes_on_full_promotion() {
         let registry = Registry::default();
         let key_pair = KeyPair::random();
@@ -10286,6 +12152,148 @@ mod tests {
             .expect("status should still resolve");
         assert_eq!(status.status, AgentRuntimeStatus::LeaseExpired);
         assert_eq!(status.lease_remaining_ticks, 0);
+    }
+
+    #[tokio::test]
+    async fn agent_control_mutations_accept_legacy_signature_layout_end_to_end() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+
+        let deployed = registry
+            .apply_agent_deploy(signed_agent_deploy_request_legacy_payload(
+                AgentDeployPayload {
+                    manifest: fixture_agent_manifest_with_capabilities(
+                        "ops_agent",
+                        &["agent.mailbox.send", "agent.mailbox.receive"],
+                    ),
+                    lease_ticks: 64,
+                    autonomy_budget_units: Some(500),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy deploy");
+        assert_eq!(deployed.action, AgentApartmentAction::Deploy);
+        assert_eq!(deployed.status, AgentRuntimeStatus::Running);
+
+        let renewed = registry
+            .apply_agent_lease_renew(signed_agent_lease_renew_request_legacy_payload(
+                AgentLeaseRenewPayload {
+                    apartment_name: "ops_agent".to_owned(),
+                    lease_ticks: 20,
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy lease renew");
+        assert_eq!(renewed.action, AgentApartmentAction::LeaseRenew);
+
+        let restarted = registry
+            .apply_agent_restart(signed_agent_restart_request_legacy_payload(
+                AgentRestartPayload {
+                    apartment_name: "ops_agent".to_owned(),
+                    reason: "manual-restart".to_owned(),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy restart");
+        assert_eq!(restarted.action, AgentApartmentAction::Restart);
+        assert_eq!(restarted.restart_count, 1);
+
+        let spend = registry
+            .apply_agent_wallet_spend(signed_agent_wallet_spend_request_legacy_payload(
+                AgentWalletSpendPayload {
+                    apartment_name: "ops_agent".to_owned(),
+                    asset_definition: "xor#sora".to_owned(),
+                    amount_nanos: 1_000_000,
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy wallet spend");
+        assert_eq!(spend.action, AgentApartmentAction::WalletSpendRequested);
+        let request_id = spend.request_id.expect("request id");
+
+        let approved = registry
+            .apply_agent_wallet_approve(signed_agent_wallet_approve_request_legacy_payload(
+                AgentWalletApprovePayload {
+                    apartment_name: "ops_agent".to_owned(),
+                    request_id,
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy wallet approve");
+        assert_eq!(approved.action, AgentApartmentAction::WalletSpendApproved);
+
+        let message = registry
+            .apply_agent_message_send(signed_agent_message_send_request_legacy_payload(
+                AgentMessageSendPayload {
+                    from_apartment: "ops_agent".to_owned(),
+                    to_apartment: "ops_agent".to_owned(),
+                    channel: "ops.sync".to_owned(),
+                    payload: "rotate-key-42".to_owned(),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy message send");
+        assert_eq!(message.action, AgentApartmentAction::MessageEnqueued);
+        let message_id = message.message_id;
+
+        let ack = registry
+            .apply_agent_message_ack(signed_agent_message_ack_request_legacy_payload(
+                AgentMessageAckPayload {
+                    apartment_name: "ops_agent".to_owned(),
+                    message_id,
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy message ack");
+        assert_eq!(ack.action, AgentApartmentAction::MessageAcknowledged);
+
+        let allowed = registry
+            .apply_agent_artifact_allow(signed_agent_artifact_allow_request_legacy_payload(
+                AgentArtifactAllowPayload {
+                    apartment_name: "ops_agent".to_owned(),
+                    artifact_hash: "hash:ABCD0123#01".to_owned(),
+                    provenance_hash: None,
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy artifact allow");
+        assert_eq!(allowed.action, AgentApartmentAction::ArtifactAllowed);
+
+        let run = registry
+            .apply_agent_autonomy_run(signed_agent_autonomy_run_request_legacy_payload(
+                AgentAutonomyRunPayload {
+                    apartment_name: "ops_agent".to_owned(),
+                    artifact_hash: "hash:ABCD0123#01".to_owned(),
+                    provenance_hash: None,
+                    budget_units: 120,
+                    run_label: "nightly-train-step-1".to_owned(),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy autonomy run");
+        assert_eq!(run.action, AgentApartmentAction::AutonomyRunApproved);
+
+        let revoked = registry
+            .apply_agent_policy_revoke(signed_agent_policy_revoke_request_legacy_payload(
+                AgentPolicyRevokePayload {
+                    apartment_name: "ops_agent".to_owned(),
+                    capability: "agent.mailbox.send".to_owned(),
+                    reason: Some("manual-review".to_owned()),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy policy revoke");
+        assert_eq!(revoked.action, AgentApartmentAction::PolicyRevoked);
     }
 
     #[tokio::test]
@@ -10680,6 +12688,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn training_job_mutations_accept_legacy_signature_layout_end_to_end() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+        let bundle = fixture_bundle_with_training("2026.03.0", true);
+        let service_name = bundle.service.service_name.to_string();
+
+        registry
+            .apply_deploy(signed_bundle_request(bundle, &key_pair))
+            .await
+            .expect("training-capable service deploy");
+
+        let started = registry
+            .apply_training_job_start(signed_training_job_start_request_legacy_payload(
+                TrainingJobStartPayload {
+                    service_name: service_name.clone(),
+                    model_name: "foundation_model".to_owned(),
+                    job_id: "job-legacy".to_owned(),
+                    worker_group_size: 2,
+                    target_steps: 4,
+                    checkpoint_interval_steps: 2,
+                    max_retries: 2,
+                    step_compute_units: 10,
+                    compute_budget_units: 200,
+                    storage_budget_bytes: 500,
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy training start");
+        assert_eq!(started.action, TrainingJobAction::Start);
+        assert_eq!(started.status, TrainingJobStatus::Running);
+
+        let checkpoint_one = registry
+            .apply_training_job_checkpoint(signed_training_job_checkpoint_request_legacy_payload(
+                TrainingJobCheckpointPayload {
+                    service_name: service_name.clone(),
+                    job_id: "job-legacy".to_owned(),
+                    completed_step: 2,
+                    checkpoint_size_bytes: 100,
+                    metrics_hash: Hash::new(b"checkpoint-legacy-1"),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy checkpoint one");
+        assert_eq!(checkpoint_one.status, TrainingJobStatus::Running);
+        assert_eq!(checkpoint_one.completed_steps, 2);
+
+        let retry = registry
+            .apply_training_job_retry(signed_training_job_retry_request_legacy_payload(
+                TrainingJobRetryPayload {
+                    service_name: service_name.clone(),
+                    job_id: "job-legacy".to_owned(),
+                    reason: "gradient divergence at shard 3".to_owned(),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy retry");
+        assert_eq!(retry.action, TrainingJobAction::Retry);
+        assert_eq!(retry.status, TrainingJobStatus::RetryPending);
+        assert_eq!(retry.retry_count, 1);
+
+        let completed = registry
+            .apply_training_job_checkpoint(signed_training_job_checkpoint_request_legacy_payload(
+                TrainingJobCheckpointPayload {
+                    service_name: service_name.clone(),
+                    job_id: "job-legacy".to_owned(),
+                    completed_step: 4,
+                    checkpoint_size_bytes: 140,
+                    metrics_hash: Hash::new(b"checkpoint-legacy-2"),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("legacy checkpoint completion");
+        assert_eq!(completed.status, TrainingJobStatus::Completed);
+        assert_eq!(completed.completed_steps, 4);
+        assert_eq!(completed.training_event_count, 4);
+    }
+
+    #[tokio::test]
     async fn training_job_start_rejects_services_without_training_capability() {
         let registry = Registry::default();
         let key_pair = KeyPair::random();
@@ -10934,6 +13024,207 @@ mod tests {
             status.model.versions[1].parent_version.as_deref(),
             Some("v1")
         );
+    }
+
+    #[tokio::test]
+    async fn model_weight_mutations_accept_legacy_signature_layout_end_to_end() {
+        let registry = Registry::default();
+        let key_pair = KeyPair::random();
+        let bundle = fixture_bundle_with_training("2026.03.0", true);
+        let service_name = bundle.service.service_name.to_string();
+        let model_name = "foundation_model".to_owned();
+
+        registry
+            .apply_deploy(signed_bundle_request(bundle, &key_pair))
+            .await
+            .expect("training-capable service deploy");
+
+        registry
+            .apply_training_job_start(signed_training_job_start_request(
+                TrainingJobStartPayload {
+                    service_name: service_name.clone(),
+                    model_name: model_name.clone(),
+                    job_id: "job-legacy-1".to_owned(),
+                    worker_group_size: 2,
+                    target_steps: 2,
+                    checkpoint_interval_steps: 1,
+                    max_retries: 1,
+                    step_compute_units: 10,
+                    compute_budget_units: 80,
+                    storage_budget_bytes: 256,
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("training job 1 start");
+        registry
+            .apply_training_job_checkpoint(signed_training_job_checkpoint_request(
+                TrainingJobCheckpointPayload {
+                    service_name: service_name.clone(),
+                    job_id: "job-legacy-1".to_owned(),
+                    completed_step: 2,
+                    checkpoint_size_bytes: 64,
+                    metrics_hash: Hash::new(b"job-legacy-1-metrics"),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("training job 1 complete");
+
+        registry
+            .apply_model_artifact_register(signed_model_artifact_register_request_legacy_payload(
+                ModelArtifactRegisterPayload {
+                    service_name: service_name.clone(),
+                    model_name: model_name.clone(),
+                    training_job_id: "job-legacy-1".to_owned(),
+                    weight_artifact_hash: Hash::new(b"weight-legacy-v1"),
+                    dataset_ref: "sorafs://datasets/health/v1".to_owned(),
+                    training_config_hash: Hash::new(b"config-legacy-v1"),
+                    reproducibility_hash: Hash::new(b"repro-legacy-v1"),
+                    provenance_attestation_hash: Hash::new(b"attest-legacy-v1"),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("artifact register v1 legacy");
+
+        let register_v1 = registry
+            .apply_model_weight_register(signed_model_weight_register_request_legacy_payload(
+                ModelWeightRegisterPayload {
+                    service_name: service_name.clone(),
+                    model_name: model_name.clone(),
+                    weight_version: "v1".to_owned(),
+                    training_job_id: "job-legacy-1".to_owned(),
+                    parent_version: None,
+                    weight_artifact_hash: Hash::new(b"weight-legacy-v1"),
+                    dataset_ref: "sorafs://datasets/health/v1".to_owned(),
+                    training_config_hash: Hash::new(b"config-legacy-v1"),
+                    reproducibility_hash: Hash::new(b"repro-legacy-v1"),
+                    provenance_attestation_hash: Hash::new(b"attest-legacy-v1"),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("register v1 legacy");
+        assert_eq!(register_v1.action, ModelWeightAction::Register);
+        assert_eq!(register_v1.target_version, "v1");
+        assert!(register_v1.current_version.is_none());
+
+        let promote_v1 = registry
+            .apply_model_weight_promote(signed_model_weight_promote_request_legacy_payload(
+                ModelWeightPromotePayload {
+                    service_name: service_name.clone(),
+                    model_name: model_name.clone(),
+                    weight_version: "v1".to_owned(),
+                    gate_approved: true,
+                    gate_report_hash: Hash::new(b"gate-legacy-v1"),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("promote v1 legacy");
+        assert_eq!(promote_v1.current_version.as_deref(), Some("v1"));
+
+        registry
+            .apply_training_job_start(signed_training_job_start_request(
+                TrainingJobStartPayload {
+                    service_name: service_name.clone(),
+                    model_name: model_name.clone(),
+                    job_id: "job-legacy-2".to_owned(),
+                    worker_group_size: 2,
+                    target_steps: 2,
+                    checkpoint_interval_steps: 1,
+                    max_retries: 1,
+                    step_compute_units: 10,
+                    compute_budget_units: 80,
+                    storage_budget_bytes: 256,
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("training job 2 start");
+        registry
+            .apply_training_job_checkpoint(signed_training_job_checkpoint_request(
+                TrainingJobCheckpointPayload {
+                    service_name: service_name.clone(),
+                    job_id: "job-legacy-2".to_owned(),
+                    completed_step: 2,
+                    checkpoint_size_bytes: 64,
+                    metrics_hash: Hash::new(b"job-legacy-2-metrics"),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("training job 2 complete");
+
+        registry
+            .apply_model_artifact_register(signed_model_artifact_register_request_legacy_payload(
+                ModelArtifactRegisterPayload {
+                    service_name: service_name.clone(),
+                    model_name: model_name.clone(),
+                    training_job_id: "job-legacy-2".to_owned(),
+                    weight_artifact_hash: Hash::new(b"weight-legacy-v2"),
+                    dataset_ref: "sorafs://datasets/health/v2".to_owned(),
+                    training_config_hash: Hash::new(b"config-legacy-v2"),
+                    reproducibility_hash: Hash::new(b"repro-legacy-v2"),
+                    provenance_attestation_hash: Hash::new(b"attest-legacy-v2"),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("artifact register v2 legacy");
+
+        let register_v2 = registry
+            .apply_model_weight_register(signed_model_weight_register_request_legacy_payload(
+                ModelWeightRegisterPayload {
+                    service_name: service_name.clone(),
+                    model_name: model_name.clone(),
+                    weight_version: "v2".to_owned(),
+                    training_job_id: "job-legacy-2".to_owned(),
+                    parent_version: Some("v1".to_owned()),
+                    weight_artifact_hash: Hash::new(b"weight-legacy-v2"),
+                    dataset_ref: "sorafs://datasets/health/v2".to_owned(),
+                    training_config_hash: Hash::new(b"config-legacy-v2"),
+                    reproducibility_hash: Hash::new(b"repro-legacy-v2"),
+                    provenance_attestation_hash: Hash::new(b"attest-legacy-v2"),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("register v2 legacy");
+        assert_eq!(register_v2.version_count, 2);
+        assert_eq!(register_v2.current_version.as_deref(), Some("v1"));
+
+        let promote_v2 = registry
+            .apply_model_weight_promote(signed_model_weight_promote_request_legacy_payload(
+                ModelWeightPromotePayload {
+                    service_name: service_name.clone(),
+                    model_name: model_name.clone(),
+                    weight_version: "v2".to_owned(),
+                    gate_approved: true,
+                    gate_report_hash: Hash::new(b"gate-legacy-v2"),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("promote v2 legacy");
+        assert_eq!(promote_v2.current_version.as_deref(), Some("v2"));
+
+        let rollback = registry
+            .apply_model_weight_rollback(signed_model_weight_rollback_request_legacy_payload(
+                ModelWeightRollbackPayload {
+                    service_name: service_name.clone(),
+                    model_name: model_name.clone(),
+                    target_version: "v1".to_owned(),
+                    reason: "regression in validation shard".to_owned(),
+                },
+                &key_pair,
+            ))
+            .await
+            .expect("rollback to v1 legacy");
+        assert_eq!(rollback.action, ModelWeightAction::Rollback);
+        assert_eq!(rollback.current_version.as_deref(), Some("v1"));
+        assert_eq!(rollback.target_version, "v1");
     }
 
     #[tokio::test]
