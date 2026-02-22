@@ -3,6 +3,8 @@
 //! public-origin shield -> 3 shielded hops -> unshield -> public transfer,
 //! plus a second shielded asset with 3 shielded hops.
 
+use std::time::Duration;
+
 use eyre::{Report, Result, WrapErr as _, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -49,6 +51,41 @@ fn numeric_balance_any(clients: &[Client], id: AssetId) -> Result<Numeric> {
     Err(last_err.unwrap_or_else(|| eyre!("no client available for balance query")))
 }
 
+async fn wait_for_numeric_balance(
+    client: &Client,
+    id: AssetId,
+    expected: Numeric,
+    context: &str,
+) -> Result<()> {
+    const ATTEMPTS: usize = 30;
+    const DELAY: Duration = Duration::from_millis(200);
+    let mut last_value: Option<Numeric> = None;
+    let mut last_err: Option<Report> = None;
+
+    for _ in 0..ATTEMPTS {
+        match numeric_balance(client, id.clone()) {
+            Ok(value) if value == expected => return Ok(()),
+            Ok(value) => {
+                last_value = Some(value);
+                last_err = None;
+            }
+            Err(err) => {
+                last_err = Some(err);
+            }
+        }
+        tokio::time::sleep(DELAY).await;
+    }
+
+    if let Some(err) = last_err {
+        Err(err).wrap_err_with(|| format!("{context}: expected balance {expected:?}"))
+    } else {
+        Err(eyre!(
+            "{context}: expected balance {expected:?}, last observed {:?}",
+            last_value
+        ))
+    }
+}
+
 fn is_transient_client_error(err: &Report) -> bool {
     const NEEDLES: [&str; 6] = [
         "Failed to send http",
@@ -72,6 +109,19 @@ fn is_duplicate_tx_error(err: &Report) -> bool {
         "already_enqueued",
         "transaction already committed",
         "transaction already present in the queue",
+    ];
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        NEEDLES.iter().any(|needle| text.contains(needle))
+    })
+}
+
+fn is_transient_localnet_startup_error(err: &Report) -> bool {
+    const NEEDLES: [&str; 4] = [
+        "terminated within 5s post-genesis window",
+        "error sending request for url",
+        "Connection refused",
+        "operation timed out",
     ];
     err.chain().any(|cause| {
         let text = cause.to_string();
@@ -137,35 +187,51 @@ struct ConfidentialLocalnetCtx {
 }
 
 async fn start_confidential_localnet(test_name: &str) -> Result<Option<ConfidentialLocalnetCtx>> {
-    let builder = NetworkBuilder::new()
-        .with_peers(4)
-        .with_auto_populated_trusted_peers()
-        .with_config_layer(|layer| {
-            layer.write(["confidential", "enabled"], true);
-        });
+    const START_ATTEMPTS: usize = 3;
+    const RETRY_DELAY: Duration = Duration::from_millis(500);
 
-    let Some(network) = sandbox::start_network_async_or_skip(builder, test_name).await? else {
-        return Ok(None);
-    };
+    for attempt in 1..=START_ATTEMPTS {
+        let builder = NetworkBuilder::new()
+            .with_peers(4)
+            .with_auto_populated_trusted_peers()
+            .with_config_layer(|layer| {
+                layer.write(["confidential", "enabled"], true);
+            });
 
-    network.ensure_blocks(1).await?;
+        let Some(network) = (match sandbox::start_network_async_or_skip(builder, test_name).await {
+            Ok(network) => network,
+            Err(err) if attempt < START_ATTEMPTS && is_transient_localnet_startup_error(&err) => {
+                tokio::time::sleep(RETRY_DELAY).await;
+                continue;
+            }
+            Err(err) => return Err(err).wrap_err("start confidential localnet"),
+        }) else {
+            return Ok(None);
+        };
 
-    let tx_builder_client = network.client();
-    let mut peer_clients = network
-        .peers()
-        .iter()
-        .map(NetworkPeer::client)
-        .collect::<Vec<_>>();
-    if peer_clients.is_empty() {
-        peer_clients.push(tx_builder_client.clone());
+        network.ensure_blocks(1).await?;
+
+        let tx_builder_client = network.client();
+        let mut peer_clients = network
+            .peers()
+            .iter()
+            .map(NetworkPeer::client)
+            .collect::<Vec<_>>();
+        if peer_clients.is_empty() {
+            peer_clients.push(tx_builder_client.clone());
+        }
+
+        return Ok(Some(ConfidentialLocalnetCtx {
+            network,
+            tx_builder_client,
+            peer_clients,
+            non_empty_target: 1_u64,
+        }));
     }
 
-    Ok(Some(ConfidentialLocalnetCtx {
-        network,
-        tx_builder_client,
-        peer_clients,
-        non_empty_target: 1_u64,
-    }))
+    Err(eyre!(
+        "confidential localnet startup retries exhausted for {test_name}"
+    ))
 }
 
 #[tokio::test]
@@ -539,14 +605,14 @@ async fn confidential_zknative_asset_three_hop_localnet() -> Result<()> {
 }
 
 #[tokio::test]
-async fn confidential_zknative_rejects_transparent_mint_localnet() -> Result<()> {
+async fn confidential_zknative_transparent_mint_creates_public_balance_localnet() -> Result<()> {
     let Some(ConfidentialLocalnetCtx {
         network,
         tx_builder_client,
         peer_clients,
         mut non_empty_target,
     }) = start_confidential_localnet(stringify!(
-        confidential_zknative_rejects_transparent_mint_localnet
+        confidential_zknative_transparent_mint_creates_public_balance_localnet
     ))
     .await?
     else {
@@ -554,7 +620,7 @@ async fn confidential_zknative_rejects_transparent_mint_localnet() -> Result<()>
     };
 
     let source = tx_builder_client.account.clone();
-    let asset_def: AssetDefinitionId = "zkzknativemintdeny#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = "zkzknativemintok#wonderland".parse().unwrap();
 
     submit_and_wait_non_empty_block(
         &network,
@@ -574,74 +640,121 @@ async fn confidential_zknative_rejects_transparent_mint_localnet() -> Result<()>
             .into(),
         ],
         &mut non_empty_target,
-        "prepare zknative mint-rejection asset",
+        "prepare zknative transparent-mint asset",
     )
     .await?;
 
-    let denied_mint_tx = tx_builder_client.build_transaction_from_items(
-        vec![InstructionBox::from(Mint::asset_numeric(
-            10_u64,
-            AssetId::new(asset_def.clone(), source.clone()),
-        ))],
-        iroha_data_model::metadata::Metadata::default(),
-    );
-
-    let mint_result = submit_transaction_on_any_peer(
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
         &peer_clients,
-        &denied_mint_tx,
-        "zknative transparent mint unexpectedly accepted",
-    );
-    match mint_result {
-        Ok(_) => {
-            return Err(eyre!(
-                "zknative transparent mint unexpectedly accepted on at least one peer"
-            ));
-        }
-        Err(err) => {
-            assert!(
-                err.chain().any(|cause| {
-                    let text = cause.to_string().to_lowercase();
-                    text.contains("mint")
-                        || text.contains("transparent")
-                        || text.contains("policy")
-                        || text.contains("permitted")
-                }),
-                "expected zknative mint policy rejection, got: {err:?}"
-            );
-        }
-    }
+        vec![Mint::asset_numeric(10_u64, AssetId::new(asset_def.clone(), source.clone())).into()],
+        &mut non_empty_target,
+        "zknative transparent mint failed",
+    )
+    .await?;
+
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def.clone(), source.clone()),
+        Numeric::from(10_u32),
+        "wait zknative transparent balance after mint",
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn confidential_zknative_transparent_transfer_after_mint_localnet() -> Result<()> {
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) = start_confidential_localnet(stringify!(
+        confidential_zknative_transparent_transfer_after_mint_localnet
+    ))
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let source = tx_builder_client.account.clone();
+    let recipient = BOB_ID.clone();
+    let asset_def: AssetDefinitionId = "zkzknativetransferok#wonderland".parse().unwrap();
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Log::new(
-                Level::INFO,
-                "post zknative denied transparent mint barrier".to_owned(),
+            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            iroha_data_model::isi::zk::RegisterZkAsset::new(
+                asset_def.clone(),
+                iroha_data_model::isi::zk::ZkAssetMode::ZkNative,
+                false,
+                false,
+                None,
+                None,
+                None,
             )
             .into(),
         ],
         &mut non_empty_target,
-        "post zknative denied transparent mint barrier failed",
+        "prepare zknative transparent-transfer asset",
     )
     .await?;
 
-    let transparent_balance =
-        numeric_balance(&tx_builder_client, AssetId::new(asset_def, source.clone()));
-    match transparent_balance {
-        Ok(balance) => {
-            return Err(eyre!(
-                "zknative asset unexpectedly exposed transparent balance: {balance:?}"
-            ));
-        }
-        Err(err) => {
-            assert!(
-                !is_transient_client_error(&err),
-                "zknative transparent balance check failed due transient query error: {err:?}"
-            );
-        }
-    }
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![Mint::asset_numeric(25_u64, AssetId::new(asset_def.clone(), source.clone())).into()],
+        &mut non_empty_target,
+        "zknative transparent mint before transfer failed",
+    )
+    .await?;
+
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def.clone(), source.clone()),
+        Numeric::from(25_u32),
+        "wait zknative source balance before transfer",
+    )
+    .await?;
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Transfer::asset_numeric(
+                AssetId::new(asset_def.clone(), source.clone()),
+                10_u64,
+                recipient.clone(),
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "zknative transparent transfer after mint failed",
+    )
+    .await?;
+
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def.clone(), source.clone()),
+        Numeric::from(15_u32),
+        "wait zknative source balance after transfer",
+    )
+    .await?;
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def, recipient.clone()),
+        Numeric::from(10_u32),
+        "wait zknative recipient balance after transfer",
+    )
+    .await?;
 
     Ok(())
 }
@@ -995,11 +1108,13 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
     )
     .await?;
 
-    let before_balance = numeric_balance_any(
-        &peer_clients,
+    wait_for_numeric_balance(
+        &tx_builder_client,
         AssetId::new(asset_def.clone(), source.clone()),
-    )?;
-    assert_eq!(before_balance, Numeric::from(150_u32));
+        Numeric::from(150_u32),
+        "wait stale-root precondition after shield",
+    )
+    .await?;
 
     let stale_root_unshield_tx = tx_builder_client.build_transaction_from_items(
         vec![InstructionBox::from(
@@ -1040,8 +1155,13 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
     )
     .await?;
 
-    let after_balance = numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
-    assert_eq!(after_balance, Numeric::from(150_u32));
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def, source),
+        Numeric::from(150_u32),
+        "wait stale-root balance after denied unshield",
+    )
+    .await?;
 
     Ok(())
 }
