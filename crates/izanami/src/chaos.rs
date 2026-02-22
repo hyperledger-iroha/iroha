@@ -58,18 +58,28 @@ const IZANAMI_PACING_GOVERNOR_MAX_FACTOR_BPS: i64 = 10_000;
 const IZANAMI_COLLECTORS_K: u16 = 4;
 const IZANAMI_REDUNDANT_SEND_R: u8 = 4;
 const IZANAMI_PACING_FACTOR_BPS: u32 = 10_000;
-const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 2;
+const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 1;
+const IZANAMI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 1;
+const IZANAMI_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 250;
 const IZANAMI_FUTURE_HEIGHT_WINDOW: i64 = 2;
 const IZANAMI_FUTURE_VIEW_WINDOW: i64 = 2;
-const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 400;
-const IZANAMI_NPOS_COMMIT_TIME_MS: i64 = 600;
+const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 180;
+const IZANAMI_NPOS_COMMIT_TIME_MS: i64 = 180;
 const IZANAMI_RECOVERY_HEIGHT_ATTEMPT_CAP: i64 = 24;
-const IZANAMI_RECOVERY_HEIGHT_WINDOW_MS: i64 = 1_500;
+const IZANAMI_RECOVERY_HEIGHT_WINDOW_MS: i64 = 600;
+const IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 450;
+const IZANAMI_RECOVERY_NO_ROSTER_FALLBACK_VIEWS: i64 = 2;
+const IZANAMI_RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW: i64 = 2;
+const IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 600;
+const IZANAMI_RECOVERY_MISSING_BLOCK_HEIGHT_TTL_MS: i64 = 600;
 const IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: i64 = 2;
 const IZANAMI_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: i64 = 1;
 const IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER: i64 = 3;
 const IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS: i64 = 20_000;
 const IZANAMI_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: i64 = 2;
+const IZANAMI_NPOS_TIMEOUT_PROPOSE_MIN_MS: u64 = 40;
+const IZANAMI_NPOS_TIMEOUT_PREVOTE_MIN_MS: u64 = 60;
+const IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 80;
 const IZANAMI_PIPELINE_DYNAMIC_PREPASS: bool = true;
 const IZANAMI_PIPELINE_ACCESS_SET_CACHE_ENABLED: bool = true;
 const IZANAMI_PIPELINE_PARALLEL_OVERLAY: bool = true;
@@ -555,9 +565,12 @@ fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
     let commit_time_ms = clamp_nonzero_ms(commit_time_ms);
     // Derive per-phase timeouts from the scaled block time to keep soak cadence tight.
     let timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(timeout_block_ms));
-    let propose_ms = clamp_nonzero_ms(duration_ms(timeouts.propose));
-    let prevote_ms = clamp_nonzero_ms(duration_ms(timeouts.prevote));
-    let precommit_ms = clamp_nonzero_ms(duration_ms(timeouts.precommit));
+    let propose_ms =
+        clamp_nonzero_ms(duration_ms(timeouts.propose)).max(IZANAMI_NPOS_TIMEOUT_PROPOSE_MIN_MS);
+    let prevote_ms =
+        clamp_nonzero_ms(duration_ms(timeouts.prevote)).max(IZANAMI_NPOS_TIMEOUT_PREVOTE_MIN_MS);
+    let precommit_ms = clamp_nonzero_ms(duration_ms(timeouts.precommit))
+        .max(IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS);
     // Keep commit/DA windows at least as large as the target commit time for DA stability.
     let mut commit_timeout_ms = clamp_nonzero_ms(duration_ms(timeouts.commit));
     let mut da_ms = clamp_nonzero_ms(duration_ms(timeouts.da));
@@ -826,6 +839,26 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
                 IZANAMI_RECOVERY_HEIGHT_WINDOW_MS,
             )
             .write(
+                ["sumeragi", "recovery", "missing_qc_reacquire_window_ms"],
+                IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS,
+            )
+            .write(
+                ["sumeragi", "recovery", "no_roster_fallback_views"],
+                IZANAMI_RECOVERY_NO_ROSTER_FALLBACK_VIEWS,
+            )
+            .write(
+                ["sumeragi", "recovery", "no_roster_refresh_retry_per_view"],
+                IZANAMI_RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW,
+            )
+            .write(
+                ["sumeragi", "recovery", "deferred_qc_ttl_ms"],
+                IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS,
+            )
+            .write(
+                ["sumeragi", "recovery", "missing_block_height_ttl_ms"],
+                IZANAMI_RECOVERY_MISSING_BLOCK_HEIGHT_TTL_MS,
+            )
+            .write(
                 ["sumeragi", "recovery", "hash_miss_cap_before_range_pull"],
                 IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL,
             )
@@ -860,6 +893,24 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             .write(
                 ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
                 IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER,
+            )
+            .write(
+                [
+                    "sumeragi",
+                    "advanced",
+                    "da",
+                    "availability_timeout_multiplier",
+                ],
+                IZANAMI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER,
+            )
+            .write(
+                [
+                    "sumeragi",
+                    "advanced",
+                    "da",
+                    "availability_timeout_floor_ms",
+                ],
+                IZANAMI_DA_AVAILABILITY_TIMEOUT_FLOOR_MS,
             )
             .write(
                 ["sumeragi", "gating", "future_height_window"],
@@ -2190,6 +2241,18 @@ mod tests {
         let expected_da = duration_ms(expected.da).max(timing.commit_time_ms);
         assert_eq!(timing.commit_timeout_ms, expected_commit);
         assert_eq!(timing.da_ms, expected_da);
+        assert!(
+            timing.propose_ms >= IZANAMI_NPOS_TIMEOUT_PROPOSE_MIN_MS,
+            "propose timeout must respect minimum floor"
+        );
+        assert!(
+            timing.prevote_ms >= IZANAMI_NPOS_TIMEOUT_PREVOTE_MIN_MS,
+            "prevote timeout must respect minimum floor"
+        );
+        assert!(
+            timing.precommit_ms >= IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS,
+            "precommit timeout must respect minimum floor"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3092,6 +3155,26 @@ mod tests {
             Some(IZANAMI_RECOVERY_HEIGHT_WINDOW_MS)
         );
         assert_eq!(
+            lookup(&["sumeragi", "recovery", "missing_qc_reacquire_window_ms"]),
+            Some(IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "recovery", "no_roster_fallback_views"]),
+            Some(IZANAMI_RECOVERY_NO_ROSTER_FALLBACK_VIEWS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "recovery", "no_roster_refresh_retry_per_view"]),
+            Some(IZANAMI_RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "recovery", "deferred_qc_ttl_ms"]),
+            Some(IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "recovery", "missing_block_height_ttl_ms"]),
+            Some(IZANAMI_RECOVERY_MISSING_BLOCK_HEIGHT_TTL_MS)
+        );
+        assert_eq!(
             lookup(&["sumeragi", "recovery", "hash_miss_cap_before_range_pull"]),
             Some(IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL)
         );
@@ -3126,6 +3209,24 @@ mod tests {
         assert_eq!(
             lookup(&["sumeragi", "advanced", "da", "quorum_timeout_multiplier"]),
             Some(IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER)
+        );
+        assert_eq!(
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "da",
+                "availability_timeout_multiplier"
+            ]),
+            Some(IZANAMI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER)
+        );
+        assert_eq!(
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "da",
+                "availability_timeout_floor_ms"
+            ]),
+            Some(IZANAMI_DA_AVAILABILITY_TIMEOUT_FLOOR_MS)
         );
         assert_eq!(
             lookup(&["sumeragi", "gating", "future_height_window"]),

@@ -2894,6 +2894,18 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.consensus_forced_proposal_success_total,
         ),
         json_entry(
+            "consensus_no_roster_fallback_total",
+            snap.consensus_no_roster_fallback_total,
+        ),
+        json_entry(
+            "consensus_no_roster_fallback_allowed_total",
+            snap.consensus_no_roster_fallback_total,
+        ),
+        json_entry(
+            "consensus_no_roster_fail_closed_total",
+            snap.consensus_no_roster_fail_closed_total,
+        ),
+        json_entry(
             "consensus_no_roster_refresh_retry_total",
             snap.consensus_no_roster_refresh_retry_total,
         ),
@@ -3622,6 +3634,8 @@ mod status_tests {
             consensus_missing_qc_rotation_deferred_total: 4,
             consensus_forced_proposal_attempt_total: 5,
             consensus_forced_proposal_success_total: 2,
+            consensus_no_roster_fallback_total: 8,
+            consensus_no_roster_fail_closed_total: 9,
             consensus_no_roster_refresh_retry_total: 6,
             consensus_no_roster_refresh_attempt_total: 3,
             consensus_no_roster_refresh_success_total: 1,
@@ -3664,6 +3678,24 @@ mod status_tests {
                 .get("consensus_forced_proposal_success_total")
                 .and_then(Value::as_u64),
             Some(2)
+        );
+        assert_eq!(
+            payload
+                .get("consensus_no_roster_fallback_total")
+                .and_then(Value::as_u64),
+            Some(8)
+        );
+        assert_eq!(
+            payload
+                .get("consensus_no_roster_fallback_allowed_total")
+                .and_then(Value::as_u64),
+            Some(8)
+        );
+        assert_eq!(
+            payload
+                .get("consensus_no_roster_fail_closed_total")
+                .and_then(Value::as_u64),
+            Some(9)
         );
         assert_eq!(
             payload

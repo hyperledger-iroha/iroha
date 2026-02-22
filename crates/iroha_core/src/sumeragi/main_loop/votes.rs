@@ -691,32 +691,45 @@ impl Actor {
                                 targets = topology_peers.len(),
                                 "sending block sync update with cached precommit votes to commit topology after recording vote"
                             );
-                        } else if self.allow_no_roster_fallback_or_fail_closed(
-                            vote.height,
-                            vote.view,
-                            vote.block_hash,
-                            ViewChangeCause::MissingPayload,
-                            "precommit_vote_no_roster",
-                        ) {
-                            self.broadcast_block_created_for_block_sync(
-                                super::message::BlockCreated::from(&block),
-                                &topology_peers,
-                            );
-                            iroha_logger::info!(
-                                height = vote.height,
-                                view = vote.view,
-                                block = %vote.block_hash,
-                                signer = vote.signer,
-                                targets = topology_peers.len(),
-                                "sending BlockCreated payload to commit topology (no verifiable roster yet)"
-                            );
                         } else {
-                            iroha_logger::warn!(
-                                height = vote.height,
-                                view = vote.view,
-                                block = %vote.block_hash,
-                                "skipping BlockCreated fallback broadcast after no-roster fail-closed escalation"
-                            );
+                            match self.decide_no_roster_fallback_or_fail_closed(
+                                vote.height,
+                                vote.view,
+                                vote.block_hash,
+                                ViewChangeCause::MissingPayload,
+                                "precommit_vote_no_roster",
+                            ) {
+                                super::NoRosterFallbackDecision::AllowFallback => {
+                                    self.broadcast_block_created_for_block_sync(
+                                        super::message::BlockCreated::from(&block),
+                                        &topology_peers,
+                                    );
+                                    iroha_logger::info!(
+                                        height = vote.height,
+                                        view = vote.view,
+                                        block = %vote.block_hash,
+                                        signer = vote.signer,
+                                        targets = topology_peers.len(),
+                                        "sending BlockCreated payload to commit topology (no verifiable roster yet)"
+                                    );
+                                }
+                                super::NoRosterFallbackDecision::BootstrapPending => {
+                                    iroha_logger::debug!(
+                                        height = vote.height,
+                                        view = vote.view,
+                                        block = %vote.block_hash,
+                                        "deferring BlockCreated fallback broadcast while no-roster bootstrap is pending"
+                                    );
+                                }
+                                super::NoRosterFallbackDecision::FailClosed => {
+                                    iroha_logger::warn!(
+                                        height = vote.height,
+                                        view = vote.view,
+                                        block = %vote.block_hash,
+                                        "skipping BlockCreated fallback broadcast after no-roster fail-closed escalation"
+                                    );
+                                }
+                            }
                         }
                     } else {
                         iroha_logger::trace!(
@@ -1049,7 +1062,7 @@ impl Actor {
         highest: crate::sumeragi::consensus::QcHeaderRef,
         source: &'static str,
     ) -> bool {
-        self.request_missing_block_for_highest_qc_inner(highest, source, false)
+        self.request_missing_block_for_highest_qc_inner(highest, source, false, true)
     }
 
     pub(super) fn request_missing_block_for_highest_qc_force(
@@ -1057,7 +1070,15 @@ impl Actor {
         highest: crate::sumeragi::consensus::QcHeaderRef,
         source: &'static str,
     ) -> bool {
-        self.request_missing_block_for_highest_qc_inner(highest, source, true)
+        self.request_missing_block_for_highest_qc_inner(highest, source, true, true)
+    }
+
+    pub(super) fn request_missing_block_for_highest_qc_force_skip_sidecar_observation(
+        &mut self,
+        highest: crate::sumeragi::consensus::QcHeaderRef,
+        source: &'static str,
+    ) -> bool {
+        self.request_missing_block_for_highest_qc_inner(highest, source, true, false)
     }
 
     fn consensus_missing_block_retry_window(
@@ -1081,17 +1102,20 @@ impl Actor {
         highest: crate::sumeragi::consensus::QcHeaderRef,
         source: &'static str,
         force_fetch: bool,
+        observe_sidecar_mismatch: bool,
     ) -> bool {
         let payload_available =
             self.block_payload_available_for_progress(highest.subject_block_hash);
         let local_known = self
             .local_block_height_view(highest.subject_block_hash)
             .is_some();
-        self.observe_sidecar_mismatch_for_height(
-            highest.height,
-            highest.subject_block_hash,
-            "highest_qc_missing_block",
-        );
+        if observe_sidecar_mismatch {
+            self.observe_sidecar_mismatch_for_height(
+                highest.height,
+                highest.subject_block_hash,
+                "highest_qc_missing_block",
+            );
+        }
         if payload_available && !force_fetch && local_known {
             self.clear_missing_block_request(
                 &highest.subject_block_hash,
