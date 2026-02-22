@@ -5704,12 +5704,36 @@ pub struct SumeragiRecovery {
         default = "defaults::sumeragi::RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL"
     )]
     pub hash_miss_cap_before_range_pull: u32,
+    /// Deterministic wait window before rotating after a missing-QC recovery attempt (milliseconds).
+    #[config(
+        env = "SUMERAGI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS",
+        default = "defaults::sumeragi::RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS"
+    )]
+    pub missing_qc_reacquire_window_ms: u64,
+    /// Maximum forced self-proposal attempts allowed for a single (height, view).
+    #[config(
+        env = "SUMERAGI_RECOVERY_MAX_FORCED_PROPOSAL_ATTEMPTS_PER_VIEW",
+        default = "defaults::sumeragi::RECOVERY_MAX_FORCED_PROPOSAL_ATTEMPTS_PER_VIEW"
+    )]
+    pub max_forced_proposal_attempts_per_view: u32,
     /// Number of views where no-roster fallback broadcasts remain allowed.
     #[config(
         env = "SUMERAGI_RECOVERY_NO_ROSTER_FALLBACK_VIEWS",
         default = "defaults::sumeragi::RECOVERY_NO_ROSTER_FALLBACK_VIEWS"
     )]
     pub no_roster_fallback_views: u32,
+    /// Number of deterministic no-roster topology refresh retries allowed per view.
+    #[config(
+        env = "SUMERAGI_RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW",
+        default = "defaults::sumeragi::RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW"
+    )]
+    pub no_roster_refresh_retry_per_view: u32,
+    /// Rotate immediately when the missing-QC reacquire window is exhausted.
+    #[config(
+        env = "SUMERAGI_RECOVERY_ROTATE_AFTER_REACQUIRE_EXHAUSTED",
+        default = "defaults::sumeragi::RECOVERY_ROTATE_AFTER_REACQUIRE_EXHAUSTED"
+    )]
+    pub rotate_after_reacquire_exhausted: bool,
     /// Missing-block fetch attempts before falling back to the full commit topology.
     /// A value of 0 disables signer preference.
     #[config(
@@ -5717,6 +5741,18 @@ pub struct SumeragiRecovery {
         default = "defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS"
     )]
     pub missing_block_signer_fallback_attempts: u32,
+    /// Per-attempt multiplier applied to missing-block retry windows (>=1).
+    #[config(
+        env = "SUMERAGI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER",
+        default = "defaults::sumeragi::RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER"
+    )]
+    pub missing_block_retry_backoff_multiplier: u32,
+    /// Ceiling applied to missing-block retry windows after backoff (milliseconds).
+    #[config(
+        env = "SUMERAGI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS",
+        default = "defaults::sumeragi::RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS"
+    )]
+    pub missing_block_retry_backoff_cap_ms: u64,
     /// Backlog-aware multiplier applied to quorum-reschedule grace windows.
     #[config(
         env = "SUMERAGI_VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR",
@@ -6708,6 +6744,32 @@ impl Sumeragi {
         } else {
             true
         };
+        let missing_qc_reacquire_window_ok = if recovery.missing_qc_reacquire_window_ms == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.recovery.missing_qc_reacquire_window_ms must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
+        let max_forced_proposal_attempts_ok = if recovery.max_forced_proposal_attempts_per_view == 0
+        {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.recovery.max_forced_proposal_attempts_per_view must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
+        let no_roster_refresh_retry_per_view_ok = if recovery.no_roster_refresh_retry_per_view == 0
+        {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.recovery.no_roster_refresh_retry_per_view must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
         let backlog_extension_factor_ok =
             if !recovery.view_change_backlog_extension_factor.is_finite()
                 || recovery.view_change_backlog_extension_factor < 1.0
@@ -6896,6 +6958,9 @@ impl Sumeragi {
             && height_attempt_cap_ok
             && height_window_ok
             && hash_miss_cap_ok
+            && missing_qc_reacquire_window_ok
+            && max_forced_proposal_attempts_ok
+            && no_roster_refresh_retry_per_view_ok
             && backlog_extension_factor_ok
             && backlog_extension_cap_ok
             && deferred_qc_ttl_ok
@@ -7070,9 +7135,23 @@ impl Sumeragi {
                 height_attempt_cap: recovery_height_attempt_cap,
                 height_window: std::time::Duration::from_millis(recovery_height_window_ms),
                 hash_miss_cap_before_range_pull: recovery_hash_miss_cap_before_range_pull,
+                missing_qc_reacquire_window: std::time::Duration::from_millis(
+                    recovery.missing_qc_reacquire_window_ms.max(1),
+                ),
+                max_forced_proposal_attempts_per_view: recovery
+                    .max_forced_proposal_attempts_per_view
+                    .max(1),
                 no_roster_fallback_views: recovery.no_roster_fallback_views,
+                no_roster_refresh_retry_per_view: recovery.no_roster_refresh_retry_per_view.max(1),
+                rotate_after_reacquire_exhausted: recovery.rotate_after_reacquire_exhausted,
                 missing_block_signer_fallback_attempts: recovery
                     .missing_block_signer_fallback_attempts,
+                missing_block_retry_backoff_multiplier: recovery
+                    .missing_block_retry_backoff_multiplier
+                    .max(1),
+                missing_block_retry_backoff_cap: std::time::Duration::from_millis(
+                    recovery.missing_block_retry_backoff_cap_ms.max(1),
+                ),
                 view_change_backlog_extension_factor: recovery.view_change_backlog_extension_factor,
                 view_change_backlog_extension_cap: std::time::Duration::from_millis(
                     recovery.view_change_backlog_extension_cap_ms,

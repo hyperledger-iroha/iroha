@@ -2546,6 +2546,10 @@ pub mod sumeragi {
     /// Default number of missing-block fetch attempts before falling back to the full topology.
     /// A value of 0 disables signer preference.
     pub const MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: u32 = 1;
+    /// Multiplier applied per retry attempt for missing-block fetch backoff (>=1).
+    pub const RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER: u32 = 2;
+    /// Ceiling for missing-block fetch retry backoff (milliseconds).
+    pub const RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS: u64 = 5_000;
     /// Backlog-aware multiplier applied to quorum-reschedule grace windows.
     pub const VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR: f64 = 1.5;
     /// Maximum additional quorum-reschedule grace window under backlog (milliseconds).
@@ -2564,6 +2568,14 @@ pub mod sumeragi {
     pub const RECOVERY_HEIGHT_WINDOW_MS: u64 = 2_000;
     /// Hash-miss threshold before escalating dependency recovery to range pull.
     pub const RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: u32 = 3;
+    /// Deterministic wait window before rotating after a missing-QC recovery attempt (milliseconds).
+    pub const RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: u64 = 1_200;
+    /// Maximum forced self-proposal attempts allowed for a single (height, view).
+    pub const RECOVERY_MAX_FORCED_PROPOSAL_ATTEMPTS_PER_VIEW: u32 = 1;
+    /// Number of deterministic no-roster topology refresh retries allowed per view.
+    pub const RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW: u32 = 1;
+    /// Rotate immediately when the missing-QC reacquire window is exhausted.
+    pub const RECOVERY_ROTATE_AFTER_REACQUIRE_EXHAUSTED: bool = true;
     /// Number of views where no-roster fallback broadcasts remain allowed.
     pub const RECOVERY_NO_ROSTER_FALLBACK_VIEWS: u32 = 1;
     /// Sidecar mismatch retries before final-drop and canonical-only rebuild.

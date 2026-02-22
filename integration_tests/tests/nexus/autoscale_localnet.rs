@@ -128,6 +128,7 @@ struct LaneCommitmentSnapshot {
 struct PeerStatusSnapshot {
     lanes: Vec<LaneStatusSnapshot>,
     lane_commitments: Vec<LaneCommitmentSnapshot>,
+    lane_governance_ids: Vec<u32>,
     commit_signatures_required: u64,
     commit_qc_validator_set_len: u64,
     txs_approved: u64,
@@ -154,17 +155,24 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                     committed: lane.committed,
                 })
                 .collect::<Vec<_>>();
-            let lane_commitments = match client.get_sumeragi_status() {
-                Ok(sumeragi_status) => sumeragi_status
-                    .lane_commitments
-                    .into_iter()
-                    .map(|lane| LaneCommitmentSnapshot {
-                        lane_id: lane.lane_id.as_u32(),
-                        tx_count: lane.tx_count,
-                        teu_total: lane.teu_total,
-                    })
-                    .collect::<Vec<_>>(),
-                Err(_) => Vec::new(),
+            let (lane_commitments, lane_governance_ids) = match client.get_sumeragi_status() {
+                Ok(sumeragi_status) => (
+                    sumeragi_status
+                        .lane_commitments
+                        .into_iter()
+                        .map(|lane| LaneCommitmentSnapshot {
+                            lane_id: lane.lane_id.as_u32(),
+                            tx_count: lane.tx_count,
+                            teu_total: lane.teu_total,
+                        })
+                        .collect::<Vec<_>>(),
+                    sumeragi_status
+                        .lane_governance
+                        .into_iter()
+                        .map(|lane| lane.lane_id.as_u32())
+                        .collect::<Vec<_>>(),
+                ),
+                Err(_) => (Vec::new(), Vec::new()),
             };
             let commit_signatures_required = status
                 .sumeragi
@@ -179,6 +187,7 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
             Ok(PeerStatusSnapshot {
                 lanes,
                 lane_commitments,
+                lane_governance_ids,
                 commit_signatures_required,
                 commit_qc_validator_set_len,
                 txs_approved: status.txs_approved,
@@ -210,21 +219,54 @@ fn peer_has_lane_commitment_activity(peer: &PeerStatusSnapshot, lane_id: u32) ->
         .any(|lane| lane.lane_id == lane_id && (lane.tx_count > 0 || lane.teu_total > 0))
 }
 
-fn peers_with_expanded_lane_signal(snapshot: &[PeerStatusSnapshot], lane_id: u32) -> usize {
-    snapshot
-        .iter()
-        .filter(|peer| {
-            peer_has_active_lane_capacity(peer, lane_id)
-                || peer_has_lane_commitment_activity(peer, lane_id)
-        })
-        .count()
+fn peer_has_lane_declaration(peer: &PeerStatusSnapshot, lane_id: u32) -> bool {
+    peer.lanes.iter().any(|lane| lane.lane_id == lane_id)
+        || peer
+            .lane_commitments
+            .iter()
+            .any(|lane| lane.lane_id == lane_id)
+        || peer
+            .lane_governance_ids
+            .iter()
+            .any(|declared_lane| *declared_lane == lane_id)
+}
+
+fn peer_has_lane_declaration_transition(
+    peer: &PeerStatusSnapshot,
+    baseline_peer: Option<&PeerStatusSnapshot>,
+    lane_id: u32,
+) -> bool {
+    let Some(baseline_peer) = baseline_peer else {
+        return false;
+    };
+    !peer_has_lane_declaration(baseline_peer, lane_id) && peer_has_lane_declaration(peer, lane_id)
+}
+
+fn peers_with_expanded_lane_signal(
+    snapshot: &[PeerStatusSnapshot],
+    baseline_snapshot: Option<&[PeerStatusSnapshot]>,
+    lane_id: u32,
+) -> usize {
+    let mut peers_with_signal = 0_usize;
+    for (index, peer) in snapshot.iter().enumerate() {
+        let baseline_peer = baseline_snapshot.and_then(|baseline| baseline.get(index));
+        if peer_has_active_lane_capacity(peer, lane_id)
+            || peer_has_lane_commitment_activity(peer, lane_id)
+            || peer_has_lane_declaration_transition(peer, baseline_peer, lane_id)
+        {
+            peers_with_signal += 1;
+        }
+    }
+    peers_with_signal
 }
 
 fn expansion_observed_on_quorum_peers(
     status_snapshot: &[PeerStatusSnapshot],
+    baseline_snapshot: Option<&[PeerStatusSnapshot]>,
     quorum_required: usize,
 ) -> bool {
-    peers_with_expanded_lane_signal(status_snapshot, ELASTIC_LANE_ID) >= quorum_required
+    peers_with_expanded_lane_signal(status_snapshot, baseline_snapshot, ELASTIC_LANE_ID)
+        >= quorum_required
 }
 
 fn expansion_observed_on_storage(storage_snapshot: &[(usize, Vec<String>)]) -> bool {
@@ -439,6 +481,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
     network: &sandbox::SerializedNetwork,
     heartbeat_client: &Client,
     top_up_clients: &[Client],
+    baseline_status_snapshot: &[PeerStatusSnapshot],
     quorum_required: usize,
     timeout: Duration,
     context: &str,
@@ -499,15 +542,22 @@ fn wait_for_expanded_lanes_with_heartbeat(
             }
         };
 
-        if expansion_observed_on_quorum_peers(&status_snapshot, quorum_required) {
+        if expansion_observed_on_quorum_peers(
+            &status_snapshot,
+            Some(baseline_status_snapshot),
+            quorum_required,
+        ) {
             eprintln!(
                 "[autoscale-localnet] {context}: expansion observed via status lane activity"
             );
             return Ok(());
         }
         if storage_expanded && started.elapsed() >= EXPANSION_STATUS_SIGNAL_GRACE {
-            let peers_with_status_signal =
-                peers_with_expanded_lane_signal(&status_snapshot, ELASTIC_LANE_ID);
+            let peers_with_status_signal = peers_with_expanded_lane_signal(
+                &status_snapshot,
+                Some(baseline_status_snapshot),
+                ELASTIC_LANE_ID,
+            );
             eprintln!(
                 "[autoscale-localnet] {context}: expansion observed via storage lane provisioning fallback after {:.3}s (status signal {peers_with_status_signal}/{quorum_required}, grace {:?})",
                 started.elapsed().as_secs_f64(),
@@ -536,7 +586,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
     }
 
     Err(eyre!(
-        "{context}: timed out waiting for expanded lane profile (lane {ELASTIC_LANE_ID} active via status `capacity>0 || committed>0` OR sumeragi lane commitment `tx_count>0 || teu_total>0` on >= {quorum_required}/{TOTAL_PEERS} peers; storage lane count={EXPANDED_PROVISIONED_LANES} accepted only as fallback after grace {:?}); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last status error: {last_status_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
+        "{context}: timed out waiting for expanded lane profile (lane {ELASTIC_LANE_ID} active via status `capacity>0 || committed>0`, sumeragi lane commitment `tx_count>0 || teu_total>0`, or lane declaration transition vs baseline on >= {quorum_required}/{TOTAL_PEERS} peers; storage lane count={EXPANDED_PROVISIONED_LANES} accepted only as fallback after grace {:?}); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last status error: {last_status_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
         EXPANSION_STATUS_SIGNAL_GRACE
     ))
 }
@@ -718,6 +768,7 @@ fn run_expand_contract_cycle(
         network,
         &expansion_probe_client,
         submitters,
+        &pre_cycle_status,
         quorum_required,
         SCALE_OUT_WAIT_TIMEOUT,
         &expansion_context,
@@ -909,6 +960,7 @@ mod tests {
                     },
                 ],
                 lane_commitments: vec![],
+                lane_governance_ids: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -929,6 +981,7 @@ mod tests {
                     },
                 ],
                 lane_commitments: vec![],
+                lane_governance_ids: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -949,6 +1002,7 @@ mod tests {
                     },
                 ],
                 lane_commitments: vec![],
+                lane_governance_ids: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -962,6 +1016,7 @@ mod tests {
                     committed: 12,
                 }],
                 lane_commitments: vec![],
+                lane_governance_ids: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -970,8 +1025,16 @@ mod tests {
             },
         ];
 
-        assert!(expansion_observed_on_quorum_peers(&status_snapshot, 3));
-        assert!(!expansion_observed_on_quorum_peers(&status_snapshot, 4));
+        assert!(expansion_observed_on_quorum_peers(
+            &status_snapshot,
+            None,
+            3
+        ));
+        assert!(!expansion_observed_on_quorum_peers(
+            &status_snapshot,
+            None,
+            4
+        ));
 
         let zero_capacity_snapshot = status_snapshot
             .iter()
@@ -988,6 +1051,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(!expansion_observed_on_quorum_peers(
             &zero_capacity_snapshot,
+            None,
             3
         ));
 
@@ -1006,6 +1070,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(expansion_observed_on_quorum_peers(
             &committed_only_snapshot,
+            None,
             3
         ));
     }
@@ -1031,6 +1096,7 @@ mod tests {
                     tx_count: 4,
                     teu_total: 128,
                 }],
+                lane_governance_ids: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1055,6 +1121,7 @@ mod tests {
                     tx_count: 2,
                     teu_total: 64,
                 }],
+                lane_governance_ids: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1079,6 +1146,7 @@ mod tests {
                     tx_count: 1,
                     teu_total: 32,
                 }],
+                lane_governance_ids: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1092,6 +1160,7 @@ mod tests {
                     committed: 12,
                 }],
                 lane_commitments: vec![],
+                lane_governance_ids: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1102,10 +1171,12 @@ mod tests {
 
         assert!(expansion_observed_on_quorum_peers(
             &commitment_only_snapshot,
+            None,
             3
         ));
         assert!(!expansion_observed_on_quorum_peers(
             &commitment_only_snapshot,
+            None,
             4
         ));
 
@@ -1122,6 +1193,139 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(!expansion_observed_on_quorum_peers(
             &zero_commitment_activity,
+            None,
+            3
+        ));
+    }
+
+    #[test]
+    fn expansion_accepts_lane_declaration_transition_on_quorum_peers() {
+        let baseline_snapshot = vec![
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                    committed: 12,
+                }],
+                lane_commitments: vec![],
+                lane_governance_ids: vec![0],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 10,
+                txs_rejected: 0,
+                blocks_non_empty: 10,
+            },
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                    committed: 12,
+                }],
+                lane_commitments: vec![],
+                lane_governance_ids: vec![0],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 10,
+                txs_rejected: 0,
+                blocks_non_empty: 10,
+            },
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                    committed: 12,
+                }],
+                lane_commitments: vec![],
+                lane_governance_ids: vec![0],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 10,
+                txs_rejected: 0,
+                blocks_non_empty: 10,
+            },
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                    committed: 12,
+                }],
+                lane_commitments: vec![],
+                lane_governance_ids: vec![0],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 10,
+                txs_rejected: 0,
+                blocks_non_empty: 10,
+            },
+        ];
+
+        let declaration_transition_snapshot = vec![
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                    committed: 12,
+                }],
+                lane_commitments: vec![],
+                lane_governance_ids: vec![0, 1],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 11,
+                txs_rejected: 0,
+                blocks_non_empty: 11,
+            },
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                    committed: 12,
+                }],
+                lane_commitments: vec![],
+                lane_governance_ids: vec![0, 1],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 11,
+                txs_rejected: 0,
+                blocks_non_empty: 11,
+            },
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                    committed: 12,
+                }],
+                lane_commitments: vec![],
+                lane_governance_ids: vec![0, 1],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 11,
+                txs_rejected: 0,
+                blocks_non_empty: 11,
+            },
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                    committed: 12,
+                }],
+                lane_commitments: vec![],
+                lane_governance_ids: vec![0],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 11,
+                txs_rejected: 0,
+                blocks_non_empty: 11,
+            },
+        ];
+
+        assert!(expansion_observed_on_quorum_peers(
+            &declaration_transition_snapshot,
+            Some(&baseline_snapshot),
+            3
+        ));
+        assert!(!expansion_observed_on_quorum_peers(
+            &declaration_transition_snapshot,
+            None,
             3
         ));
     }
@@ -1197,6 +1401,7 @@ mod tests {
                     committed: 10,
                 }],
                 lane_commitments: vec![],
+                lane_governance_ids: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1217,6 +1422,7 @@ mod tests {
                     },
                 ],
                 lane_commitments: vec![],
+                lane_governance_ids: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1230,6 +1436,7 @@ mod tests {
                     committed: 9,
                 }],
                 lane_commitments: vec![],
+                lane_governance_ids: vec![],
                 commit_signatures_required: 3,
                 commit_qc_validator_set_len: 4,
                 txs_approved: 10,
@@ -1254,6 +1461,7 @@ mod tests {
                 },
             ],
             lane_commitments: vec![],
+            lane_governance_ids: vec![],
             commit_signatures_required: 3,
             commit_qc_validator_set_len: 4,
             txs_approved: 10,

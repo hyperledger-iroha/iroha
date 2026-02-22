@@ -1328,10 +1328,29 @@ fn test_sumeragi_config() -> SumeragiConfig {
             ),
             hash_miss_cap_before_range_pull: iroha_config::parameters::defaults::sumeragi::
                 RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL,
+            missing_qc_reacquire_window: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::
+                    RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS,
+            ),
+            max_forced_proposal_attempts_per_view:
+                iroha_config::parameters::defaults::sumeragi::
+                    RECOVERY_MAX_FORCED_PROPOSAL_ATTEMPTS_PER_VIEW,
             no_roster_fallback_views:
                 iroha_config::parameters::defaults::sumeragi::RECOVERY_NO_ROSTER_FALLBACK_VIEWS,
+            no_roster_refresh_retry_per_view:
+                iroha_config::parameters::defaults::sumeragi::
+                    RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW,
+            rotate_after_reacquire_exhausted:
+                iroha_config::parameters::defaults::sumeragi::
+                    RECOVERY_ROTATE_AFTER_REACQUIRE_EXHAUSTED,
             missing_block_signer_fallback_attempts:
                 iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+            missing_block_retry_backoff_multiplier: iroha_config::parameters::defaults::sumeragi::
+                RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER,
+            missing_block_retry_backoff_cap: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::
+                    RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS,
+            ),
             view_change_backlog_extension_factor:
                 iroha_config::parameters::defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR,
             view_change_backlog_extension_cap: Duration::from_millis(
@@ -32926,6 +32945,104 @@ async fn retry_missing_block_requests_relaxes_aggressive_retry_window_after_firs
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn retry_missing_block_requests_applies_configured_backoff_before_retrying() {
+    let mut config = test_sumeragi_config();
+    config.recovery.missing_block_retry_backoff_multiplier = 3;
+    config.recovery.missing_block_retry_backoff_cap = Duration::from_secs(5);
+    let mut harness = test_actor_harness_with_config(4, config, None).await;
+    let actor = &mut harness.actor;
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0;
+    let now = Instant::now();
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB1; Hash::LENGTH]));
+    if actor.block_payload_available_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB2; Hash::LENGTH]));
+    }
+
+    let retry_window = actor.rebroadcast_cooldown() + Duration::from_millis(5);
+    let last_requested = now - retry_window - Duration::from_millis(50);
+    let effective_retry_window = retry_window.saturating_mul(3);
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: Some(Duration::from_secs(1)),
+            first_seen: last_requested,
+            last_requested,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    let progressed = actor.retry_missing_block_requests(now, None);
+    assert!(!progressed, "effective backoff window should delay retry");
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("request entry retained");
+    assert_eq!(
+        stats.attempts, 1,
+        "attempt counter must not increase during backoff"
+    );
+    assert_eq!(
+        stats.last_requested, last_requested,
+        "backoff should keep last_requested unchanged"
+    );
+
+    let retry_at = last_requested + effective_retry_window + Duration::from_millis(10);
+    let _ = actor.retry_missing_block_requests(retry_at, None);
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("request entry retained");
+    assert!(
+        stats.last_requested >= retry_at,
+        "retry state should advance once effective backoff expires"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retry_missing_block_requests_backoff_scales_with_attempts_and_caps() {
+    let mut config = test_sumeragi_config();
+    config.recovery.missing_block_retry_backoff_multiplier = 3;
+    config.recovery.missing_block_retry_backoff_cap = Duration::from_secs(2);
+    let mut harness = test_actor_harness_with_config(4, config, None).await;
+    let actor = &mut harness.actor;
+
+    let base = Duration::from_millis(100);
+    assert_eq!(
+        actor.missing_block_retry_window_with_backoff(base, 0),
+        Duration::from_millis(100)
+    );
+    assert_eq!(
+        actor.missing_block_retry_window_with_backoff(base, 1),
+        Duration::from_millis(300)
+    );
+    assert_eq!(
+        actor.missing_block_retry_window_with_backoff(base, 2),
+        Duration::from_millis(900)
+    );
+    assert_eq!(
+        actor.missing_block_retry_window_with_backoff(base, 3),
+        Duration::from_secs(2),
+        "backoff must clamp at configured cap"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn retry_missing_block_requests_defers_view_change_when_rbc_pending() {
     let mut harness = test_actor_harness(4).await;
     let _guard = super::status::view_change_proof_test_guard();
@@ -33281,6 +33398,13 @@ async fn no_roster_fallback_is_bounded_and_fail_closed_once_per_view() {
             .saturating_add(1)
     );
     assert_eq!(
+        after_fail_closed.consensus_no_roster_refresh_attempt_total,
+        before
+            .consensus_no_roster_refresh_attempt_total
+            .saturating_add(1),
+        "budget exhaustion should attempt one topology refresh before fail-closed"
+    );
+    assert_eq!(
         after_fail_closed.view_change_causes.missing_qc_total,
         before.view_change_causes.missing_qc_total.saturating_add(1),
         "fail-closed escalation should trigger one missing-QC view change"
@@ -33304,6 +33428,11 @@ async fn no_roster_fallback_is_bounded_and_fail_closed_once_per_view() {
     assert_eq!(
         after_repeat.view_change_causes.missing_qc_total,
         after_fail_closed.view_change_causes.missing_qc_total
+    );
+    assert_eq!(
+        after_repeat.consensus_no_roster_refresh_attempt_total,
+        after_fail_closed.consensus_no_roster_refresh_attempt_total,
+        "same view should not retry no-roster refresh before fail-closed escalation"
     );
 
     actor.note_missing_block_height_recovery_success(
@@ -33453,6 +33582,83 @@ async fn missing_block_hash_miss_streak_escalates_to_range_pull() {
         after.consensus_missing_block_height_escalation_total,
         before.consensus_missing_block_height_escalation_total,
         "hash-miss range pull should not count as hard-cap view-change escalation"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_block_attempt_streak_escalates_to_range_pull_before_hard_cap() {
+    let mut config = test_sumeragi_config();
+    config.recovery.missing_block_height_attempt_cap = 12;
+    config.recovery.range_pull_escalation_after_hash_misses = u32::MAX;
+    let mut harness = test_actor_harness_with_config(4, config, None).await;
+    let actor = &mut harness.actor;
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed anchor block");
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(committed_block.hash());
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0;
+    let now = Instant::now();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDB; Hash::LENGTH]));
+    let before = super::status::snapshot();
+
+    let attempt_cap = actor.recovery_missing_block_height_attempt_cap().max(1);
+    let range_pull_attempt_threshold = (attempt_cap / 2).max(2);
+    for idx in 0..range_pull_attempt_threshold {
+        let at = now + Duration::from_millis(u64::from(idx) + 1);
+        actor.note_missing_block_height_attempt(
+            block_hash,
+            height,
+            view,
+            super::MissingBlockRecoveryStage::HashFetch,
+            Some(super::MissingBlockFetchTargetKind::Signers),
+            at,
+        );
+        let escalated =
+            actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, at);
+        if idx + 1 < range_pull_attempt_threshold {
+            assert!(!escalated, "attempt streak should wait for threshold");
+        } else {
+            assert!(
+                escalated,
+                "attempt streak should escalate to range pull before hard cap"
+            );
+        }
+    }
+
+    let key = actor.missing_block_recovery_key_for_height(height);
+    let entry = actor
+        .missing_block_height_recovery
+        .get(&key)
+        .copied()
+        .expect("recovery budget should remain tracked");
+    assert_eq!(
+        entry.range_pull.stage,
+        super::MissingBlockRecoveryStage::RangePullFromAnchor
+    );
+    assert!(
+        entry.attempts < attempt_cap,
+        "range-pull escalation should happen before hard-cap view-change threshold"
+    );
+
+    let after = super::status::snapshot();
+    assert!(
+        after.blocksync_range_pull_escalation_total
+            >= before
+                .blocksync_range_pull_escalation_total
+                .saturating_add(1)
+    );
+    assert_eq!(
+        after.consensus_missing_block_height_escalation_total,
+        before.consensus_missing_block_height_escalation_total,
+        "attempt-streak range pull should not trigger hard-cap view-change escalation"
     );
 
     harness.shutdown.send();
@@ -37112,6 +37318,7 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
     let _guard = super::status::view_change_cause_test_guard();
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -37144,8 +37351,9 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
+    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
     let start = now
-        .checked_sub(timeout + Duration::from_millis(1))
+        .checked_sub(timeout + missing_qc_window + Duration::from_millis(1))
         .unwrap_or(now);
     actor
         .phase_tracker
@@ -37180,6 +37388,7 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
         view: current_view,
         since: start,
     });
+    actor.subsystems.propose.proposals_seen.clear();
     actor.subsystems.propose.last_pacemaker_attempt = Some(now);
 
     assert!(
@@ -37205,11 +37414,137 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_reacquires_missing_qc_once_before_rotating() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+    let _missing_guard = super::status::missing_block_fetch_test_guard();
+    let _view_guard = super::status::view_change_cause_test_guard();
+
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0_u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
+    let start = now
+        .checked_sub(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+
+    let missing_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x9A; Hash::LENGTH]));
+    actor.pending.missing_block_requests.insert(
+        missing_hash,
+        super::MissingBlockRequest {
+            height,
+            view: current_view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(1),
+            view_change_window: Some(Duration::from_secs(1)),
+            first_seen: start,
+            last_requested: start,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+
+    let before = super::status::snapshot();
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "first missing-QC timeout should defer and issue bounded reacquire"
+    );
+    let after_first = super::status::snapshot();
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "reacquire attempt should keep the current view"
+    );
+    assert_eq!(
+        after_first.consensus_missing_qc_reacquire_attempt_total,
+        before
+            .consensus_missing_qc_reacquire_attempt_total
+            .saturating_add(1)
+    );
+    assert_eq!(
+        after_first.consensus_missing_qc_reacquire_success_total,
+        before
+            .consensus_missing_qc_reacquire_success_total
+            .saturating_add(1)
+    );
+    assert_eq!(
+        after_first.view_change_causes.missing_qc_total,
+        before.view_change_causes.missing_qc_total
+    );
+
+    let rotate_at = now
+        .checked_add(missing_qc_window + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_at);
+    assert!(
+        actor.force_view_change_if_idle(rotate_at),
+        "second timeout in the same view should rotate after bounded reacquire"
+    );
+    let after_second = super::status::snapshot();
+    assert_eq!(
+        after_second.view_change_causes.missing_qc_total,
+        before.view_change_causes.missing_qc_total.saturating_add(1)
+    );
+    assert_eq!(
+        after_second.consensus_missing_qc_reacquire_attempt_total,
+        after_first.consensus_missing_qc_reacquire_attempt_total,
+        "reacquire should run once per (height, view)"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1))
+    );
+
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_ignores_aborted_pending() {
     use std::borrow::Cow;
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
 
     super::status::reset_view_change_cause_counters_for_tests();
 
@@ -37239,8 +37574,9 @@ async fn force_view_change_if_idle_ignores_aborted_pending() {
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
+    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
     let start = now
-        .checked_sub(timeout + Duration::from_millis(1))
+        .checked_sub(timeout + missing_qc_window + Duration::from_millis(1))
         .unwrap_or(now);
     actor
         .phase_tracker
@@ -37514,6 +37850,7 @@ async fn force_view_change_if_idle_defers_after_queue_activity() {
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
 
     super::status::reset_view_change_cause_counters_for_tests();
 
@@ -37542,6 +37879,7 @@ async fn force_view_change_if_idle_defers_after_queue_activity() {
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
+    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
         .unwrap_or(now);
@@ -37558,7 +37896,7 @@ async fn force_view_change_if_idle_defers_after_queue_activity() {
     assert!(actor.queue_ready_since.is_some());
 
     let later = now
-        .checked_add(timeout + Duration::from_millis(1))
+        .checked_add(timeout + missing_qc_window + Duration::from_millis(1))
         .unwrap_or(now);
     actor.subsystems.propose.last_pacemaker_attempt = Some(later);
     assert!(
@@ -37580,6 +37918,7 @@ async fn force_view_change_if_idle_waits_for_pacemaker_attempt() {
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
 
     super::status::reset_view_change_cause_counters_for_tests();
 
@@ -37608,8 +37947,9 @@ async fn force_view_change_if_idle_waits_for_pacemaker_attempt() {
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
+    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
     let start = now
-        .checked_sub(timeout + Duration::from_millis(1))
+        .checked_sub(timeout + missing_qc_window + Duration::from_millis(1))
         .unwrap_or(now);
     actor
         .phase_tracker
@@ -37646,6 +37986,7 @@ async fn force_view_change_if_idle_allows_after_timeout_with_rbc_backlog() {
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
 
     super::status::reset_view_change_cause_counters_for_tests();
 
@@ -37674,6 +38015,7 @@ async fn force_view_change_if_idle_allows_after_timeout_with_rbc_backlog() {
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
+    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
         .unwrap_or(now);
@@ -37712,7 +38054,7 @@ async fn force_view_change_if_idle_allows_after_timeout_with_rbc_backlog() {
         .phase_tracker
         .on_view_change(height, current_view, start);
     let later = now
-        .checked_add(timeout + Duration::from_millis(1))
+        .checked_add(timeout + missing_qc_window + Duration::from_millis(1))
         .unwrap_or(now);
     actor.subsystems.propose.last_pacemaker_attempt = Some(later);
     assert!(
@@ -37823,6 +38165,7 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_backlog_until_availa
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
 
     super::status::reset_view_change_cause_counters_for_tests();
 
@@ -37851,6 +38194,7 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_backlog_until_availa
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
+    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
         .unwrap_or(now);
@@ -37893,11 +38237,19 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_backlog_until_availa
     let availability_timeout =
         actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
     let after_availability_grace = now
-        .checked_add(timeout + availability_timeout + Duration::from_millis(1))
+        .checked_add(timeout + availability_timeout + missing_qc_window + Duration::from_millis(1))
         .unwrap_or(after_timeout);
     assert!(
-        actor.force_view_change_if_idle(after_availability_grace),
-        "proposal-gap view change should trigger once availability grace expires"
+        !actor.force_view_change_if_idle(after_availability_grace),
+        "first post-grace timeout should defer once for bounded missing-QC reacquire"
+    );
+    let rotate_after_reacquire = after_availability_grace
+        .checked_add(Duration::from_millis(1))
+        .unwrap_or(after_availability_grace);
+    actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_after_reacquire);
+    assert!(
+        actor.force_view_change_if_idle(rotate_after_reacquire),
+        "proposal-gap view change should trigger after bounded missing-QC reacquire deferral"
     );
     assert_eq!(
         actor.phase_tracker.current_view(height),
@@ -37920,6 +38272,7 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_vote_backlog_until_a
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
 
     super::status::reset_view_change_cause_counters_for_tests();
 
@@ -37948,6 +38301,7 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_vote_backlog_until_a
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
+    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
         .unwrap_or(now);
@@ -37990,11 +38344,19 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_vote_backlog_until_a
     let availability_timeout =
         actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
     let after_availability_grace = now
-        .checked_add(timeout + availability_timeout + Duration::from_millis(1))
+        .checked_add(timeout + availability_timeout + missing_qc_window + Duration::from_millis(1))
         .unwrap_or(after_timeout);
     assert!(
-        actor.force_view_change_if_idle(after_availability_grace),
-        "proposal-gap view change should trigger once availability grace expires"
+        !actor.force_view_change_if_idle(after_availability_grace),
+        "first post-grace timeout should defer once for bounded missing-QC reacquire"
+    );
+    let rotate_after_reacquire = after_availability_grace
+        .checked_add(Duration::from_millis(1))
+        .unwrap_or(after_availability_grace);
+    actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_after_reacquire);
+    assert!(
+        actor.force_view_change_if_idle(rotate_after_reacquire),
+        "proposal-gap view change should trigger after bounded missing-QC reacquire deferral"
     );
     assert_eq!(
         actor.phase_tracker.current_view(height),
@@ -38016,6 +38378,7 @@ async fn force_view_change_if_idle_dampens_repeated_proposal_gap_rotations_with_
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
 
     super::status::reset_view_change_cause_counters_for_tests();
 
@@ -38044,10 +38407,12 @@ async fn force_view_change_if_idle_dampens_repeated_proposal_gap_rotations_with_
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
+    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
     let availability_timeout =
         actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
     let elapsed = timeout
         .saturating_add(availability_timeout)
+        .saturating_add(missing_qc_window)
         .saturating_add(Duration::from_millis(1));
     let start = now.checked_sub(elapsed).unwrap_or(now);
     actor
@@ -38062,8 +38427,14 @@ async fn force_view_change_if_idle_dampens_repeated_proposal_gap_rotations_with_
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
 
     assert!(
-        actor.force_view_change_if_idle(now),
-        "first proposal-gap timeout under backlog should rotate view"
+        !actor.force_view_change_if_idle(now),
+        "first proposal-gap timeout under backlog should defer once for bounded missing-QC reacquire"
+    );
+    let first_rotate_at = now.checked_add(Duration::from_millis(1)).unwrap_or(now);
+    actor.subsystems.propose.last_pacemaker_attempt = Some(first_rotate_at);
+    assert!(
+        actor.force_view_change_if_idle(first_rotate_at),
+        "second pass in the same view should rotate after bounded missing-QC reacquire"
     );
     assert_eq!(
         actor.phase_tracker.current_view(height),
@@ -38071,7 +38442,9 @@ async fn force_view_change_if_idle_dampens_repeated_proposal_gap_rotations_with_
     );
 
     let next_view = current_view.saturating_add(1);
-    let second_now = now.checked_add(Duration::from_millis(1)).unwrap_or(now);
+    let second_now = first_rotate_at
+        .checked_add(Duration::from_millis(1))
+        .unwrap_or(first_rotate_at);
     let second_start = second_now.checked_sub(elapsed).unwrap_or(second_now);
     actor
         .phase_tracker

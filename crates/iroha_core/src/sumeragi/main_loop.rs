@@ -4712,9 +4712,35 @@ enum MissingBlockRecoveryStage {
     ApplyAndRevalidate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RangePullCandidateTier {
+    VoteRoster,
+    CommitTopology,
+    TrustedPeers,
+}
+
+impl RangePullCandidateTier {
+    fn advance(self) -> Option<Self> {
+        match self {
+            Self::VoteRoster => Some(Self::CommitTopology),
+            Self::CommitTopology => Some(Self::TrustedPeers),
+            Self::TrustedPeers => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::VoteRoster => "vote_roster",
+            Self::CommitTopology => "commit_topology",
+            Self::TrustedPeers => "trusted_peers",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct RangePullEscalationState {
     stage: MissingBlockRecoveryStage,
+    candidate_tier: RangePullCandidateTier,
     hash_misses: u32,
     no_progress_windows: u32,
     inflight: bool,
@@ -4726,6 +4752,7 @@ impl RangePullEscalationState {
     fn new(now: Instant) -> Self {
         Self {
             stage: MissingBlockRecoveryStage::HashFetch,
+            candidate_tier: RangePullCandidateTier::VoteRoster,
             hash_misses: 0,
             no_progress_windows: 0,
             inflight: false,
@@ -4799,6 +4826,7 @@ struct FanoutCommittee {
 struct NoRosterFallbackBudget {
     allowed_views: BTreeSet<u64>,
     escalated_views: BTreeSet<u64>,
+    refresh_attempts_by_view: BTreeMap<u64, u32>,
     last_seen: Instant,
 }
 
@@ -4807,6 +4835,7 @@ impl NoRosterFallbackBudget {
         Self {
             allowed_views: BTreeSet::new(),
             escalated_views: BTreeSet::new(),
+            refresh_attempts_by_view: BTreeMap::new(),
             last_seen: now,
         }
     }
@@ -4815,13 +4844,19 @@ impl NoRosterFallbackBudget {
 #[derive(Debug, Clone, Copy)]
 struct DeterministicRecoveryProfile {
     signer_fallback_attempts: u32,
+    missing_block_retry_backoff_multiplier: u32,
+    missing_block_retry_backoff_cap: Duration,
     deferred_qc_ttl: Duration,
     missing_block_height_ttl: Duration,
     missing_block_height_attempt_cap: u32,
     sidecar_mismatch_retry_cap: u32,
     sidecar_mismatch_ttl: Duration,
     range_pull_escalation_after_hash_misses: u32,
+    missing_qc_reacquire_window: Duration,
+    max_forced_proposal_attempts_per_view: u32,
     no_roster_fallback_views: u32,
+    no_roster_refresh_retry_per_view: u32,
+    rotate_after_reacquire_exhausted: bool,
 }
 
 struct QcBuildContext {
@@ -5859,12 +5894,44 @@ struct CachedSlotTimeoutTrigger {
     streak: u8,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProposalLivenessState {
+    Normal,
+    AwaitingProposalAfterMissingQc,
+    RecoveryAcquireDependencies,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ProposalLivenessSlot {
+    height: u64,
+    view: u64,
+    state: ProposalLivenessState,
+    forced_proposal_attempts: u32,
+    rotation_deferred_recorded: bool,
+    reacquire_exhausted_recorded: bool,
+}
+
+impl ProposalLivenessSlot {
+    fn new(height: u64, view: u64, _now: Instant) -> Self {
+        Self {
+            height,
+            view,
+            state: ProposalLivenessState::AwaitingProposalAfterMissingQc,
+            forced_proposal_attempts: 0,
+            rotation_deferred_recorded: false,
+            reacquire_exhausted_recorded: false,
+        }
+    }
+}
+
 struct ProposeState {
     backpressure_gate: BackpressureGate,
     pacemaker: Pacemaker,
     forced_view_after_timeout: Option<(u64, u64)>,
     last_cached_slot_timeout_trigger: Option<CachedSlotTimeoutTrigger>,
     last_missing_qc_timeout_trigger: Option<CachedSlotTimeoutTrigger>,
+    last_missing_qc_reacquire_attempt: Option<(u64, u64)>,
+    proposal_liveness: Option<ProposalLivenessSlot>,
     proposal_cache: ProposalCache,
     collector_plan: Option<CollectorPlan>,
     collector_plan_subject: Option<(u64, u64)>,
@@ -5966,6 +6033,8 @@ fn reset_runtime_state_for_mode_flip(
     pacemaker_backpressure_tracker: &mut pacing::PacemakerBackpressureTracker,
     forced_view_after_timeout: &mut Option<(u64, u64)>,
     last_missing_qc_timeout_trigger: &mut Option<CachedSlotTimeoutTrigger>,
+    last_missing_qc_reacquire_attempt: &mut Option<(u64, u64)>,
+    proposal_liveness: &mut Option<ProposalLivenessSlot>,
     last_pacemaker_attempt: &mut Option<Instant>,
     last_successful_proposal: &mut Option<Instant>,
     tick_counter: &mut u64,
@@ -5985,6 +6054,8 @@ fn reset_runtime_state_for_mode_flip(
     *pacemaker_backpressure_tracker = pacing::PacemakerBackpressureTracker::new();
     *forced_view_after_timeout = None;
     *last_missing_qc_timeout_trigger = None;
+    *last_missing_qc_reacquire_attempt = None;
+    *proposal_liveness = None;
     *last_pacemaker_attempt = None;
     *last_successful_proposal = None;
     *tick_counter = 0;
@@ -9595,6 +9666,8 @@ impl Actor {
             forced_view_after_timeout: None,
             last_cached_slot_timeout_trigger: None,
             last_missing_qc_timeout_trigger: None,
+            last_missing_qc_reacquire_attempt: None,
+            proposal_liveness: None,
             proposal_cache: ProposalCache::new(PROPOSAL_CACHE_LIMIT),
             collector_plan: None,
             collector_plan_subject: None,
@@ -14601,8 +14674,19 @@ impl Actor {
             .recovery
             .height_window
             .max(Duration::from_millis(1));
+        let missing_block_retry_backoff_cap = self
+            .config
+            .recovery
+            .missing_block_retry_backoff_cap
+            .max(Duration::from_millis(1));
         DeterministicRecoveryProfile {
             signer_fallback_attempts: self.config.recovery.missing_block_signer_fallback_attempts,
+            missing_block_retry_backoff_multiplier: self
+                .config
+                .recovery
+                .missing_block_retry_backoff_multiplier
+                .max(1),
+            missing_block_retry_backoff_cap,
             deferred_qc_ttl,
             missing_block_height_ttl,
             missing_block_height_attempt_cap: self.config.recovery.height_attempt_cap.max(1),
@@ -14617,13 +14701,39 @@ impl Actor {
                 .recovery
                 .hash_miss_cap_before_range_pull
                 .max(1),
+            missing_qc_reacquire_window: self
+                .config
+                .recovery
+                .missing_qc_reacquire_window
+                .max(Duration::from_millis(1)),
+            max_forced_proposal_attempts_per_view: self
+                .config
+                .recovery
+                .max_forced_proposal_attempts_per_view
+                .max(1),
             no_roster_fallback_views: self.config.recovery.no_roster_fallback_views,
+            no_roster_refresh_retry_per_view: self
+                .config
+                .recovery
+                .no_roster_refresh_retry_per_view
+                .max(1),
+            rotate_after_reacquire_exhausted: self.config.recovery.rotate_after_reacquire_exhausted,
         }
     }
 
     fn recovery_signer_fallback_attempts(&self) -> u32 {
         self.deterministic_recovery_profile()
             .signer_fallback_attempts
+    }
+
+    fn recovery_missing_block_retry_backoff_multiplier(&self) -> u32 {
+        self.deterministic_recovery_profile()
+            .missing_block_retry_backoff_multiplier
+    }
+
+    fn recovery_missing_block_retry_backoff_cap(&self) -> Duration {
+        self.deterministic_recovery_profile()
+            .missing_block_retry_backoff_cap
     }
 
     fn recovery_deferred_qc_ttl(&self) -> Duration {
@@ -14657,6 +14767,26 @@ impl Actor {
     fn recovery_no_roster_fallback_views(&self) -> u32 {
         self.deterministic_recovery_profile()
             .no_roster_fallback_views
+    }
+
+    fn recovery_missing_qc_reacquire_window(&self) -> Duration {
+        self.deterministic_recovery_profile()
+            .missing_qc_reacquire_window
+    }
+
+    fn recovery_max_forced_proposal_attempts_per_view(&self) -> u32 {
+        self.deterministic_recovery_profile()
+            .max_forced_proposal_attempts_per_view
+    }
+
+    fn recovery_no_roster_refresh_retry_per_view(&self) -> u32 {
+        self.deterministic_recovery_profile()
+            .no_roster_refresh_retry_per_view
+    }
+
+    fn recovery_rotate_after_reacquire_exhausted(&self) -> bool {
+        self.deterministic_recovery_profile()
+            .rotate_after_reacquire_exhausted
     }
 
     fn relay_backpressure_active(&mut self, now: Instant, cooldown: Duration) -> bool {
@@ -14722,6 +14852,7 @@ impl Actor {
         self.dependency_event_seq = self.dependency_event_seq.saturating_add(1);
         for budget in self.missing_block_height_recovery.values_mut() {
             budget.range_pull.last_progress = now;
+            budget.range_pull.candidate_tier = RangePullCandidateTier::VoteRoster;
             if budget.range_pull.stage == MissingBlockRecoveryStage::RangePullFromAnchor {
                 budget.range_pull.stage = MissingBlockRecoveryStage::ApplyAndRevalidate;
             }
@@ -14872,6 +15003,34 @@ impl Actor {
         (false, 0)
     }
 
+    fn try_refresh_no_roster_budget_once(&mut self, height: u64, view: u64, now: Instant) -> bool {
+        let attempt_cap = self.recovery_no_roster_refresh_retry_per_view();
+        let key = self.missing_block_recovery_key_for_height(height);
+        let budget = self
+            .no_roster_fallback_recovery
+            .entry(key)
+            .or_insert_with(|| NoRosterFallbackBudget::new(now));
+        budget.last_seen = now;
+        let attempt = budget.refresh_attempts_by_view.entry(view).or_insert(0);
+        if !no_roster_refresh_retry_allowed(*attempt, attempt_cap) {
+            return false;
+        }
+        *attempt = attempt.saturating_add(1);
+        super::status::inc_consensus_no_roster_refresh_retry();
+        super::status::inc_consensus_no_roster_refresh_attempt();
+        let current = self.state.commit_topology_snapshot();
+        let refreshed = self.effective_commit_topology();
+        if refreshed == current {
+            return false;
+        }
+        let refreshed_state = self.refresh_commit_topology_state(&refreshed);
+        if matches!(refreshed_state, CommitTopologyChange::None) {
+            return false;
+        }
+        super::status::inc_consensus_no_roster_refresh_success();
+        true
+    }
+
     fn escalate_no_roster_fail_closed(
         &mut self,
         height: u64,
@@ -14928,6 +15087,22 @@ impl Actor {
                 "allowing bounded no-roster fallback broadcast"
             );
             return true;
+        }
+        if self.try_refresh_no_roster_budget_once(height, view, now) {
+            self.clear_no_roster_fallback_for_height(height);
+            let (allowed, budget_remaining) =
+                self.allow_no_roster_fallback_for_round(height, view, now);
+            if allowed {
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    budget_remaining,
+                    reason,
+                    "allowing bounded no-roster fallback broadcast after topology refresh"
+                );
+                return true;
+            }
         }
         self.escalate_no_roster_fail_closed(height, view, block_hash, cause, reason, now);
         false
@@ -15055,36 +15230,65 @@ impl Actor {
         }
     }
 
-    fn range_pull_targets_for_height(&self, height: u64) -> Vec<PeerId> {
-        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-        let mut targets = self.roster_for_live_vote_with_mode(height, consensus_mode);
-        if targets.is_empty() {
-            targets = self.effective_commit_topology();
-        }
-        if targets.is_empty() {
-            targets = self
+    fn range_pull_targets_for_height_tier(
+        &self,
+        height: u64,
+        tier: RangePullCandidateTier,
+    ) -> Vec<PeerId> {
+        let mut targets = match tier {
+            RangePullCandidateTier::VoteRoster => {
+                let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+                self.roster_for_live_vote_with_mode(height, consensus_mode)
+            }
+            RangePullCandidateTier::CommitTopology => self.effective_commit_topology(),
+            RangePullCandidateTier::TrustedPeers => self
                 .common_config
                 .trusted_peers
                 .value()
                 .others
                 .iter()
                 .map(|peer| peer.id().clone())
-                .collect();
+                .collect(),
+        };
+        targets.sort_by(|lhs, rhs| {
+            lhs.public_key()
+                .cmp(rhs.public_key())
+                .then_with(|| lhs.cmp(rhs))
+        });
+        targets.dedup();
+        targets
+    }
+
+    fn range_pull_targets_for_height(&self, height: u64) -> Vec<PeerId> {
+        let mut targets =
+            self.range_pull_targets_for_height_tier(height, RangePullCandidateTier::VoteRoster);
+        if targets.is_empty() {
+            targets = self
+                .range_pull_targets_for_height_tier(height, RangePullCandidateTier::CommitTopology);
+        }
+        if targets.is_empty() {
+            targets = self
+                .range_pull_targets_for_height_tier(height, RangePullCandidateTier::TrustedPeers);
         }
         targets
     }
 
-    fn request_range_pull_from_anchor(
+    fn request_range_pull_from_anchor_with_tier(
         &mut self,
         height: u64,
         reason: &'static str,
         now: Instant,
+        tier: Option<RangePullCandidateTier>,
     ) -> bool {
         let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let Some(anchor_hash) = self.state.latest_block_hash_fast() else {
             return false;
         };
-        let targets = self.range_pull_targets_for_height(height);
+        let tier_label = tier.map(RangePullCandidateTier::label).unwrap_or("auto");
+        let targets = tier.map_or_else(
+            || self.range_pull_targets_for_height(height),
+            |tier| self.range_pull_targets_for_height_tier(height, tier),
+        );
         if targets.is_empty() {
             return false;
         }
@@ -15134,10 +15338,20 @@ impl Actor {
             local_height,
             anchor = %anchor_hash,
             targets = sent,
+            tier = tier_label,
             reason,
             "requested block-sync range pull from committed anchor"
         );
         true
+    }
+
+    fn request_range_pull_from_anchor(
+        &mut self,
+        height: u64,
+        reason: &'static str,
+        now: Instant,
+    ) -> bool {
+        self.request_range_pull_from_anchor_with_tier(height, reason, now, None)
     }
 
     fn maybe_escalate_missing_block_height_recovery(
@@ -15155,6 +15369,7 @@ impl Actor {
             .recovery_missing_block_height_ttl()
             .max(Duration::from_millis(1));
         let attempt_cap = self.recovery_missing_block_height_attempt_cap().max(1);
+        let range_pull_attempt_threshold = (attempt_cap / 2).max(2);
         let range_pull_hash_miss_cap = self
             .recovery_range_pull_escalation_after_hash_misses()
             .max(1);
@@ -15182,30 +15397,68 @@ impl Actor {
 
         let dwell = now.saturating_duration_since(budget.first_seen);
         let hard_cap_due = budget.attempts >= attempt_cap || dwell >= ttl;
-        let range_pull_due = budget.range_pull.hash_misses >= range_pull_hash_miss_cap
-            || now.saturating_duration_since(budget.range_pull.last_progress) >= ttl;
+        let attempt_streak_due = budget.attempts >= range_pull_attempt_threshold;
+        let hash_miss_due = budget.range_pull.hash_misses >= range_pull_hash_miss_cap;
+        let no_progress_due = now.saturating_duration_since(budget.range_pull.last_progress) >= ttl;
+        let range_pull_due = attempt_streak_due || hash_miss_due || no_progress_due;
         if !hard_cap_due && !range_pull_due {
             self.missing_block_height_recovery.insert(key, budget);
             return false;
         }
 
+        let mut defer_hard_cap_escalation = false;
+        if no_progress_due {
+            if let Some(next_tier) = budget.range_pull.candidate_tier.advance() {
+                budget.range_pull.candidate_tier = next_tier;
+                super::status::inc_blocksync_range_pull_candidate_exhausted();
+                defer_hard_cap_escalation = true;
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    tier = next_tier.label(),
+                    "range-pull recovery exhausted current targets; advancing deterministic tier"
+                );
+            }
+        }
+
         budget.range_pull.stage = MissingBlockRecoveryStage::RangePullFromAnchor;
         budget.range_pull.last_requested = Some(now);
-        budget.range_pull.inflight = self.request_range_pull_from_anchor(
+        let escalation_reason = if hard_cap_due {
+            "missing_block_height_hard_cap"
+        } else if no_progress_due {
+            "missing_block_range_pull_no_progress"
+        } else if attempt_streak_due {
+            "missing_block_attempt_streak"
+        } else {
+            "missing_block_hash_miss_streak"
+        };
+        let mut inflight = self.request_range_pull_from_anchor_with_tier(
             height,
-            if hard_cap_due {
-                "missing_block_height_hard_cap"
-            } else {
-                "missing_block_hash_miss_streak"
-            },
+            escalation_reason,
             now,
+            Some(budget.range_pull.candidate_tier),
         );
+        while !inflight {
+            let Some(next_tier) = budget.range_pull.candidate_tier.advance() else {
+                break;
+            };
+            budget.range_pull.candidate_tier = next_tier;
+            super::status::inc_blocksync_range_pull_candidate_exhausted();
+            inflight = self.request_range_pull_from_anchor_with_tier(
+                height,
+                escalation_reason,
+                now,
+                Some(next_tier),
+            );
+        }
+        budget.range_pull.inflight = inflight;
         budget.range_pull.hash_misses = 0;
         budget.range_pull.no_progress_windows =
             budget.range_pull.no_progress_windows.saturating_add(1);
 
         let mut progressed = budget.range_pull.inflight;
-        if hard_cap_due && budget.escalated_view != Some(view) {
+        if hard_cap_due && !defer_hard_cap_escalation && budget.escalated_view != Some(view) {
             budget.escalated_view = Some(view);
             super::status::inc_consensus_missing_block_height_escalation();
             #[cfg(feature = "telemetry")]
@@ -15647,6 +15900,205 @@ impl Actor {
         age >= timeout
     }
 
+    fn should_attempt_missing_qc_reacquire(
+        &self,
+        height: u64,
+        current_view: u64,
+        proposal_seen: bool,
+        rbc_backlog: bool,
+        consensus_queue_backlog: bool,
+    ) -> bool {
+        if proposal_seen {
+            return false;
+        }
+        if self.subsystems.propose.last_missing_qc_reacquire_attempt == Some((height, current_view))
+        {
+            return false;
+        }
+        rbc_backlog
+            || consensus_queue_backlog
+            || !self.pending.missing_block_requests.is_empty()
+            || !self.deferred_missing_payload_qcs.is_empty()
+    }
+
+    fn reacquire_missing_qc_dependencies(
+        &mut self,
+        height: u64,
+        current_view: u64,
+        now: Instant,
+    ) -> bool {
+        self.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, current_view));
+        super::status::inc_consensus_missing_qc_reacquire_attempt();
+        let mut requested = false;
+        let mut triggered = false;
+        if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
+            triggered = true;
+            requested |= self
+                .request_missing_block_for_highest_qc_force(highest, "idle_missing_qc_reacquire");
+        }
+        requested |= self.request_range_pull_from_anchor(height, "idle_missing_qc_reacquire", now);
+        if requested || triggered {
+            super::status::inc_consensus_missing_qc_reacquire_success();
+        }
+        requested || triggered
+    }
+
+    fn ensure_proposal_liveness_slot(
+        &mut self,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> ProposalLivenessSlot {
+        let create_new = self
+            .subsystems
+            .propose
+            .proposal_liveness
+            .is_none_or(|slot| slot.height != height || slot.view != view);
+        if create_new {
+            self.subsystems.propose.proposal_liveness =
+                Some(ProposalLivenessSlot::new(height, view, now));
+        }
+        self.subsystems
+            .propose
+            .proposal_liveness
+            .expect("slot initialized")
+    }
+
+    fn mark_proposal_liveness_state(
+        &mut self,
+        height: u64,
+        view: u64,
+        state: ProposalLivenessState,
+        now: Instant,
+    ) {
+        let _ = self.ensure_proposal_liveness_slot(height, view, now);
+        if let Some(slot) = self.subsystems.propose.proposal_liveness.as_mut()
+            && slot.height == height
+            && slot.view == view
+        {
+            slot.state = state;
+        }
+    }
+
+    fn local_is_round_leader(&self, height: u64, view: u64) -> bool {
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let roster = self.roster_for_live_vote_with_mode(height, consensus_mode);
+        if roster.is_empty() {
+            return false;
+        }
+        let mut topology = super::network_topology::Topology::new(roster);
+        let Ok(leader_index) = self.leader_index_for(&mut topology, height, view) else {
+            return false;
+        };
+        topology.position(self.common_config.peer.id().public_key()) == Some(leader_index)
+    }
+
+    fn maybe_force_missing_qc_leader_proposal(
+        &mut self,
+        height: u64,
+        view: u64,
+        age: Duration,
+        now: Instant,
+    ) -> bool {
+        let propose_watchdog =
+            (self.subsystems.propose.pacemaker.propose_interval / 2).max(Duration::from_millis(1));
+        if age < propose_watchdog {
+            return false;
+        }
+        let max_attempts = self.recovery_max_forced_proposal_attempts_per_view();
+        let Some(slot) = self.subsystems.propose.proposal_liveness else {
+            return false;
+        };
+        if slot.height != height || slot.view != view {
+            return false;
+        }
+        if !matches!(
+            slot.state,
+            ProposalLivenessState::AwaitingProposalAfterMissingQc
+                | ProposalLivenessState::RecoveryAcquireDependencies
+        ) {
+            return false;
+        }
+        if !forced_proposal_attempt_allowed(slot.forced_proposal_attempts, max_attempts) {
+            return false;
+        }
+        if self.proposal_gated_by_missing_dependencies(height)
+            || !self.local_is_round_leader(height, view)
+        {
+            return false;
+        }
+        if let Some(active) = self.subsystems.propose.proposal_liveness.as_mut()
+            && active.height == height
+            && active.view == view
+        {
+            active.forced_proposal_attempts = active.forced_proposal_attempts.saturating_add(1);
+        }
+        super::status::inc_consensus_forced_proposal_attempt();
+        let success = self.on_pacemaker_propose_ready(now);
+        if success {
+            super::status::inc_consensus_forced_proposal_success();
+        }
+        debug!(
+            height,
+            view,
+            success,
+            propose_watchdog_ms = propose_watchdog.as_millis(),
+            age_ms = age.as_millis(),
+            "forced leader self-proposal attempt after missing-QC timeout"
+        );
+        true
+    }
+
+    fn maybe_defer_missing_qc_rotation(
+        &mut self,
+        height: u64,
+        view: u64,
+        age: Duration,
+        timeout: Duration,
+    ) -> bool {
+        let Some(slot) = self.subsystems.propose.proposal_liveness else {
+            return false;
+        };
+        if slot.height != height || slot.view != view {
+            return false;
+        }
+        if !matches!(
+            slot.state,
+            ProposalLivenessState::AwaitingProposalAfterMissingQc
+                | ProposalLivenessState::RecoveryAcquireDependencies
+        ) {
+            return false;
+        }
+        if let Some(active) = self.subsystems.propose.proposal_liveness.as_mut()
+            && active.height == height
+            && active.view == view
+            && !active.rotation_deferred_recorded
+        {
+            active.rotation_deferred_recorded = true;
+            super::status::inc_consensus_missing_qc_rotation_deferred();
+        }
+        let reacquire_window = self.recovery_missing_qc_reacquire_window();
+        let rotate_after_exhausted = self.recovery_rotate_after_reacquire_exhausted();
+        let reacquire_deadline = timeout.saturating_add(reacquire_window);
+        let should_defer = should_defer_missing_qc_rotation(
+            age,
+            timeout,
+            reacquire_window,
+            rotate_after_exhausted,
+        );
+        if age >= reacquire_deadline {
+            if let Some(active) = self.subsystems.propose.proposal_liveness.as_mut()
+                && active.height == height
+                && active.view == view
+                && !active.reacquire_exhausted_recorded
+            {
+                active.reacquire_exhausted_recorded = true;
+                super::status::inc_consensus_missing_qc_reacquire_exhausted();
+            }
+        }
+        should_defer
+    }
+
     fn force_view_change_if_idle(&mut self, now: Instant) -> bool {
         if self.has_active_pending_blocks() {
             return false;
@@ -15705,7 +16157,29 @@ impl Actor {
             .proposals_seen
             .contains(&(height, current_view));
         if proposal_seen {
+            if self
+                .subsystems
+                .propose
+                .proposal_liveness
+                .is_some_and(|slot| slot.height == height && slot.view == current_view)
+            {
+                self.mark_proposal_liveness_state(
+                    height,
+                    current_view,
+                    ProposalLivenessState::Normal,
+                    now,
+                );
+            }
+            self.subsystems.propose.proposal_liveness = None;
             self.subsystems.propose.last_missing_qc_timeout_trigger = None;
+            self.subsystems.propose.last_missing_qc_reacquire_attempt = None;
+        } else if self
+            .subsystems
+            .propose
+            .proposal_liveness
+            .is_some_and(|slot| slot.height != height || slot.view != current_view)
+        {
+            self.subsystems.propose.proposal_liveness = None;
         }
         let queue_since = match self.queue_ready_since {
             Some(entry) if entry.height == height && entry.view == current_view => {
@@ -15834,6 +16308,14 @@ impl Actor {
         if !timed_out {
             return false;
         }
+        if !proposal_seen {
+            self.mark_proposal_liveness_state(
+                height,
+                current_view,
+                ProposalLivenessState::AwaitingProposalAfterMissingQc,
+                now,
+            );
+        }
         let backlog_hysteresis_base = timeout.max(proposal_gap_backlog_grace);
         if !proposal_seen
             && backlog_hysteresis_base != Duration::ZERO
@@ -15867,6 +16349,50 @@ impl Actor {
                 );
                 return false;
             }
+        }
+
+        if self.should_attempt_missing_qc_reacquire(
+            height,
+            current_view,
+            proposal_seen,
+            rbc_backlog,
+            consensus_queue_backlog,
+        ) && self.reacquire_missing_qc_dependencies(height, current_view, now)
+        {
+            self.mark_proposal_liveness_state(
+                height,
+                current_view,
+                ProposalLivenessState::RecoveryAcquireDependencies,
+                now,
+            );
+            debug!(
+                height,
+                view = current_view,
+                rbc_backlog,
+                consensus_queue_backlog,
+                "deferred idle view-change after bounded missing-QC reacquire attempt"
+            );
+            return false;
+        }
+        if !proposal_seen
+            && self.maybe_force_missing_qc_leader_proposal(height, current_view, age, now)
+        {
+            return false;
+        }
+        if !proposal_seen
+            && self.maybe_defer_missing_qc_rotation(height, current_view, age, timeout)
+        {
+            debug!(
+                height,
+                view = current_view,
+                age_ms = age.as_millis(),
+                timeout_ms = timeout.as_millis(),
+                missing_qc_reacquire_window_ms =
+                    self.recovery_missing_qc_reacquire_window().as_millis(),
+                rotate_after_exhausted = self.recovery_rotate_after_reacquire_exhausted(),
+                "deferring idle view-change while proposal liveness state machine waits for proposal"
+            );
+            return false;
         }
 
         let next_view = current_view.saturating_add(1);
@@ -16203,6 +16729,7 @@ impl Actor {
             }
         }
         self.subsystems.propose.forced_view_after_timeout = Some((height, next_view));
+        self.subsystems.propose.proposal_liveness = None;
         self.prune_stale_view_state(height, next_view);
         self.consensus_recovery
             .retain(|(entry_height, entry_view), _| {
@@ -16336,6 +16863,37 @@ fn missing_qc_timeout_hysteresis_remaining(
     let hysteresis = saturating_mul_duration(timeout, u32::from(streak) + 1);
     let elapsed = now.saturating_duration_since(last.at);
     (elapsed < hysteresis).then(|| hysteresis.saturating_sub(elapsed))
+}
+
+fn forced_proposal_attempt_allowed(attempts: u32, max_attempts_per_view: u32) -> bool {
+    max_attempts_per_view != 0 && attempts < max_attempts_per_view
+}
+
+fn no_roster_refresh_retry_allowed(attempts: u32, retry_cap_per_view: u32) -> bool {
+    retry_cap_per_view != 0 && attempts < retry_cap_per_view
+}
+
+fn should_defer_missing_qc_rotation(
+    age: Duration,
+    timeout: Duration,
+    reacquire_window: Duration,
+    rotate_after_reacquire_exhausted: bool,
+) -> bool {
+    let reacquire_deadline = timeout.saturating_add(reacquire_window);
+    if age < reacquire_deadline {
+        return true;
+    }
+    if rotate_after_reacquire_exhausted {
+        return false;
+    }
+    age < missing_qc_rotation_hard_cap(timeout, reacquire_window)
+}
+
+fn missing_qc_rotation_hard_cap(timeout: Duration, reacquire_window: Duration) -> Duration {
+    timeout
+        .saturating_add(reacquire_window)
+        .max(reacquire_window.saturating_mul(2))
+        .max(Duration::from_millis(1))
 }
 
 fn saturating_mul_duration(duration: Duration, mul: u32) -> Duration {
@@ -17518,6 +18076,54 @@ mod missing_qc_warning_throttle_tests {
             throttle.allow(10, 0, now + Duration::from_millis(70), cooldown),
             Some(1)
         );
+    }
+}
+
+#[cfg(test)]
+mod proposal_liveness_state_machine_tests {
+    use super::{
+        ProposalLivenessSlot, ProposalLivenessState, forced_proposal_attempt_allowed,
+        no_roster_refresh_retry_allowed, should_defer_missing_qc_rotation,
+    };
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn missing_qc_transition_enters_awaiting_proposal_state() {
+        let slot = ProposalLivenessSlot::new(10, 3, Instant::now());
+        assert_eq!(
+            slot.state,
+            ProposalLivenessState::AwaitingProposalAfterMissingQc
+        );
+    }
+
+    #[test]
+    fn leader_forces_single_proposal_attempt_per_view() {
+        assert!(forced_proposal_attempt_allowed(0, 1));
+        assert!(!forced_proposal_attempt_allowed(1, 1));
+    }
+
+    #[test]
+    fn missing_qc_reacquire_defers_rotation_once_then_rotates() {
+        let timeout = Duration::from_millis(500);
+        let reacquire_window = Duration::from_millis(1200);
+        assert!(should_defer_missing_qc_rotation(
+            Duration::from_millis(600),
+            timeout,
+            reacquire_window,
+            true,
+        ));
+        assert!(!should_defer_missing_qc_rotation(
+            Duration::from_millis(1700),
+            timeout,
+            reacquire_window,
+            true,
+        ));
+    }
+
+    #[test]
+    fn no_roster_refresh_retry_happens_once_before_fail_closed() {
+        assert!(no_roster_refresh_retry_allowed(0, 1));
+        assert!(!no_roster_refresh_retry_allowed(1, 1));
     }
 }
 

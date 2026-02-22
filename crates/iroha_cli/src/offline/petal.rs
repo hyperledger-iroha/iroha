@@ -2752,7 +2752,11 @@ fn infer_katakana_cell_symbol(
 
 fn decode_katakana_symbol_signature(luma: &[u16; 64]) -> u8 {
     const MARKER_ON_THRESHOLD: f64 = 128.0;
-    let mut signature = 0u8;
+    // Avoid adapting on single-polarity marker noise; only adapt when marker
+    // separation is clearly bimodal (e.g. low-light on/off signatures).
+    const MARKER_ADAPTIVE_MIN_RANGE: f64 = 32.0;
+
+    let mut marker_avgs = [0.0f64; KATAKANA_SYMBOL_SIGNATURE_MARKERS.len()];
     for (bit_index, &(mx, my)) in KATAKANA_SYMBOL_SIGNATURE_MARKERS.iter().enumerate() {
         let marker_x = mx.max(0) as usize;
         let marker_y = my.max(0) as usize;
@@ -2767,7 +2771,24 @@ fn decode_katakana_symbol_signature(luma: &[u16; 64]) -> u8 {
             }
         }
         let marker_avg = marker_sum as f64 / marker_count as f64;
-        if marker_avg >= MARKER_ON_THRESHOLD {
+        marker_avgs[bit_index] = marker_avg;
+    }
+
+    let marker_min = marker_avgs.iter().copied().fold(f64::INFINITY, f64::min);
+    let marker_max = marker_avgs
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    let marker_range = marker_max - marker_min;
+    let marker_threshold = if marker_range >= MARKER_ADAPTIVE_MIN_RANGE {
+        ((marker_min + marker_max) * 0.5).clamp(56.0, 200.0)
+    } else {
+        MARKER_ON_THRESHOLD
+    };
+
+    let mut signature = 0u8;
+    for (bit_index, marker_avg) in marker_avgs.iter().copied().enumerate() {
+        if marker_avg >= marker_threshold {
             signature |= 1u8 << bit_index;
         }
     }
@@ -3133,7 +3154,10 @@ fn extract_katakana_base94_digits_with_grid(
     if grid_size == 0 {
         return Err(eyre!("grid size must be > 0"));
     }
-    let _sampled = sample_grid_from_rgba(image, grid_size, options)?;
+    // Katakana decoding uses explicit per-cell symbol-state markers. Keep the
+    // binary sampler as a best-effort alignment sanity probe, but never fail
+    // katakana decode solely because binary thresholding misses.
+    let _ = sample_grid_from_rgba(image, grid_size, options);
     let size = image.width().min(image.height());
     let cell_size = (size / grid_size as u32).max(1);
     let grid_pixels = grid_size as u32 * cell_size;
@@ -4588,6 +4612,32 @@ mod tests {
     }
 
     #[test]
+    fn katakana_signature_threshold_adapts_to_lowlight_marker_range() {
+        let expected_signature = 0b0101_0110u8;
+        let mut luma = [64u16; 64];
+
+        for (bit_index, &(mx, my)) in KATAKANA_SYMBOL_SIGNATURE_MARKERS.iter().enumerate() {
+            let marker_on = expected_signature & (1u8 << bit_index) != 0;
+            let value = if marker_on { 96u16 } else { 34u16 };
+            let marker_x = mx.max(0) as usize;
+            let marker_y = my.max(0) as usize;
+            for dy in 0..=1usize {
+                for dx in 0..=1usize {
+                    let x = (marker_x + dx).min(7);
+                    let y = (marker_y + dy).min(7);
+                    luma[y * 8 + x] = value;
+                }
+            }
+        }
+
+        let decoded = decode_katakana_symbol_signature(&luma);
+        assert_eq!(
+            decoded, expected_signature,
+            "adaptive threshold should decode low-light marker patterns"
+        );
+    }
+
+    #[test]
     fn katakana_base94_symbol_codec_roundtrip() {
         let payload: Vec<u8> = (0u8..=127u8).collect();
         let digits = katakana_base94_encode_digits(&payload, 1024).expect("encode digits");
@@ -4839,7 +4889,7 @@ mod tests {
         let payload = b"petal-realtime-distance-safe-katakana";
         let (images, _frame_bytes, petal_options) = render_katakana_stream(
             payload,
-            640,
+            1024,
             PetalRenderStyle::SoraTempleCommand,
             KATAKANA_DISTANCE_SAFE_DEFAULT_CHUNK_SIZE,
             KatakanaGridSizingMode::DistanceSafe,
@@ -4869,7 +4919,7 @@ mod tests {
         let payload = b"petal-realtime-looped-distance-safe-katakana";
         let (images, _frame_bytes, petal_options) = render_katakana_stream(
             payload,
-            640,
+            1024,
             PetalRenderStyle::SoraTempleCommand,
             KATAKANA_DISTANCE_SAFE_DEFAULT_CHUNK_SIZE,
             KatakanaGridSizingMode::DistanceSafe,
@@ -5205,5 +5255,40 @@ mod tests {
         let json = norito::json::to_string(&report).expect("json");
         assert!(json.contains("\"recommended_style\":\"sora-temple\""));
         assert!(json.contains("\"styles_evaluated\":[\"sora-temple\",\"sora-temple-command\"]"));
+    }
+
+    #[test]
+    fn capture_eval_success_ratio_uses_planned_attempt_budget() {
+        let metrics = CaptureEvalMetrics {
+            frame_count: 4,
+            frame_successes: 2,
+            planned_attempts: 100,
+            attempts: 20,
+            successes: 15,
+            recovered_frames: 2,
+            stream_complete: false,
+            stream_received_chunks: 1,
+            stream_total_chunks: 4,
+            scenario: vec![CaptureScenarioMetrics {
+                name: "sample",
+                attempts: 20,
+                successes: 15,
+            }],
+        };
+
+        assert!(
+            (metrics.success_ratio() - 0.15).abs() < f64::EPSILON,
+            "success ratio should use planned attempts as denominator"
+        );
+        let report = metrics.to_json(
+            PetalDataChannel::KatakanaBase94,
+            PetalCaptureProfile::Aggressive,
+            33,
+            1,
+            0.95,
+            7,
+        );
+        assert_eq!(report["planned_attempts"], Value::from(100u64));
+        assert_eq!(report["aborted_early"], Value::from(true));
     }
 }
