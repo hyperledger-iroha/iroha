@@ -3,7 +3,7 @@
 //! public-origin shield -> 3 shielded hops -> unshield -> public transfer,
 //! plus a second shielded asset with 3 shielded hops.
 
-use std::time::Duration;
+use std::{sync::OnceLock, time::Duration};
 
 use eyre::{Report, Result, WrapErr as _, eyre};
 use integration_tests::sandbox;
@@ -18,19 +18,29 @@ use iroha::{
         transaction::SignedTransaction,
     },
 };
-use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyBox};
+use iroha_core::zk::test_utils::halo2_fixture_envelope;
+use iroha_data_model::proof::ProofAttachment;
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use iroha_test_samples::BOB_ID;
+
+const PROOF_VERIFY_TIMEOUT_MS: i64 = 600_000;
 
 fn marker(byte: u8) -> [u8; 32] {
     [byte; 32]
 }
 
-fn debug_ok_attachment() -> ProofAttachment {
-    let backend = "debug/ok";
-    let proof = ProofBox::new(backend.to_owned(), vec![0x01]);
-    let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0x02]);
-    ProofAttachment::new_inline(backend.to_owned(), proof, vk)
+fn halo2_attachment() -> ProofAttachment {
+    static ATTACHMENT: OnceLock<ProofAttachment> = OnceLock::new();
+    ATTACHMENT
+        .get_or_init(|| {
+            let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+            let vk_box = fixture
+                .vk_box("halo2/ipa")
+                .expect("fixture must include a verifying key");
+            let proof_box = fixture.proof_box("halo2/ipa");
+            ProofAttachment::new_inline("halo2/ipa".into(), proof_box, vk_box)
+        })
+        .clone()
 }
 
 fn numeric_balance(client: &Client, id: AssetId) -> Result<Numeric> {
@@ -171,12 +181,63 @@ async fn submit_and_wait_non_empty_block(
 
     *non_empty_target = non_empty_target.saturating_add(1);
     let target = *non_empty_target;
-    network
+    if let Err(err) = network
         .ensure_blocks_with(|height| height.non_empty >= target)
         .await
-        .wrap_err_with(|| format!("{context}: wait non-empty block {target}"))?;
+    {
+        let quorum = submitters.len().saturating_sub(1).max(1);
+        wait_for_non_empty_quorum(submitters, target, quorum, context)
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "{context}: wait non-empty block {target} (all-peer wait failed first: {err:?})"
+                )
+            })?;
+    }
 
     Ok(())
+}
+
+async fn wait_for_non_empty_quorum(
+    clients: &[Client],
+    target: u64,
+    quorum: usize,
+    context: &str,
+) -> Result<()> {
+    const ATTEMPTS: usize = 100;
+    const DELAY: Duration = Duration::from_millis(300);
+    let mut last_observed = Vec::new();
+
+    for _ in 0..ATTEMPTS {
+        let mut reached = 0usize;
+        last_observed.clear();
+
+        for client in clients {
+            match client.get_status() {
+                Ok(status) => {
+                    let height = status.blocks_non_empty;
+                    if height >= target {
+                        reached += 1;
+                    }
+                    last_observed.push(format!("ok:{height}"));
+                }
+                Err(err) => {
+                    last_observed.push(format!("err:{err}"));
+                }
+            }
+        }
+
+        if reached >= quorum {
+            return Ok(());
+        }
+
+        tokio::time::sleep(DELAY).await;
+    }
+
+    Err(eyre!(
+        "{context}: expected non-empty block {target} on quorum {quorum}, last observed {:?}",
+        last_observed
+    ))
 }
 
 struct ConfidentialLocalnetCtx {
@@ -195,7 +256,13 @@ async fn start_confidential_localnet(test_name: &str) -> Result<Option<Confident
             .with_peers(4)
             .with_auto_populated_trusted_peers()
             .with_config_layer(|layer| {
-                layer.write(["confidential", "enabled"], true);
+                layer
+                    .write(["confidential", "enabled"], true)
+                    .write(["zk", "halo2", "enabled"], true)
+                    .write(
+                        ["confidential", "verify_timeout_ms"],
+                        PROOF_VERIFY_TIMEOUT_MS,
+                    );
             });
 
         let Some(network) = (match sandbox::start_network_async_or_skip(builder, test_name).await {
@@ -330,7 +397,7 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
                     public_asset_def.clone(),
                     Vec::new(),
                     vec![marker(output_commitment)],
-                    debug_ok_attachment(),
+                    halo2_attachment(),
                     None,
                 )
                 .into(),
@@ -351,7 +418,7 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
                 source.clone(),
                 250_u128,
                 vec![marker(31)],
-                debug_ok_attachment(),
+                halo2_attachment(),
                 None,
             )
             .into(),
@@ -408,7 +475,7 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
                     shielded_asset_def.clone(),
                     Vec::new(),
                     vec![marker(output_commitment)],
-                    debug_ok_attachment(),
+                    halo2_attachment(),
                     None,
                 )
                 .into(),
@@ -517,7 +584,7 @@ async fn confidential_shielded_asset_three_hop_localnet() -> Result<()> {
                     shielded_asset_def.clone(),
                     Vec::new(),
                     vec![marker(output_commitment)],
-                    debug_ok_attachment(),
+                    halo2_attachment(),
                     None,
                 )
                 .into(),
@@ -583,7 +650,7 @@ async fn confidential_zknative_asset_three_hop_localnet() -> Result<()> {
                     zknative_asset_def.clone(),
                     Vec::new(),
                     vec![marker(output_commitment)],
-                    debug_ok_attachment(),
+                    halo2_attachment(),
                     None,
                 )
                 .into(),
@@ -831,7 +898,7 @@ async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
                 source.clone(),
                 100_u128,
                 vec![marker(9)],
-                debug_ok_attachment(),
+                halo2_attachment(),
                 None,
             ),
         )],
@@ -1123,7 +1190,7 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
                 source.clone(),
                 100_u128,
                 vec![marker(42)],
-                debug_ok_attachment(),
+                halo2_attachment(),
                 Some(marker(77)),
             ),
         )],
@@ -1211,7 +1278,7 @@ async fn confidential_unshield_rejected_without_zk_registration() -> Result<()> 
                 source.clone(),
                 100_u128,
                 vec![marker(12)],
-                debug_ok_attachment(),
+                halo2_attachment(),
                 None,
             ),
         )],
@@ -1326,7 +1393,7 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
                 source.clone(),
                 120_u128,
                 vec![marker(61)],
-                debug_ok_attachment(),
+                halo2_attachment(),
                 None,
             )
             .into(),
@@ -1349,7 +1416,7 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
                 source.clone(),
                 80_u128,
                 vec![marker(61)],
-                debug_ok_attachment(),
+                halo2_attachment(),
                 None,
             ),
         )],
@@ -1497,7 +1564,7 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
                 source.clone(),
                 100_u128,
                 vec![marker(16)],
-                debug_ok_attachment(),
+                halo2_attachment(),
                 None,
             ),
         )],
@@ -1594,7 +1661,7 @@ async fn confidential_transfer_rejected_in_transparent_only_mode() -> Result<()>
                 asset_def.clone(),
                 Vec::new(),
                 vec![marker(33)],
-                debug_ok_attachment(),
+                halo2_attachment(),
                 None,
             ),
         )],
