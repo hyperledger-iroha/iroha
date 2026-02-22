@@ -3,9 +3,10 @@
 
 use std::{
     fs,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
 use eyre::{Result, ensure, eyre};
@@ -24,14 +25,16 @@ const PRIMARY_LANE_ID: u32 = 0;
 const ELASTIC_LANE_ID: u32 = 1;
 const LOAD_TX_COUNT: usize = 48;
 const LANE_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const EXPANSION_PROBE_INTERVAL: Duration = Duration::from_millis(1000);
+const EXPANSION_PROBE_INTERVAL: Duration = Duration::from_millis(250);
 const EXPANSION_TOP_UP_EVERY_HEARTBEATS: u64 = 4;
 const EXPANSION_TOP_UP_TX_COUNT: usize = 16;
 const EXPANSION_REINFORCE_EVERY_HEARTBEATS: u64 = 12;
 const EXPANSION_REINFORCE_TX_COUNT: usize = 32;
 const EXPANSION_STATUS_SIGNAL_GRACE: Duration = Duration::from_secs(8);
 const EXPANSION_POST_STORAGE_STATUS_WINDOW: Duration = Duration::from_secs(8);
-const EXPANSION_POST_STORAGE_TOP_UP_TX_COUNT: usize = 16;
+const EXPANSION_POST_STORAGE_TOP_UP_TX_COUNT: usize = 64;
+const AUTOSCALE_COOLDOWN_CLEARANCE_BLOCK_DELTA: u64 = 2;
+const AUTOSCALE_COOLDOWN_CLEARANCE_TIMEOUT: Duration = Duration::from_secs(45);
 const CONTRACTION_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
 const SCALE_OUT_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 const SCALE_IN_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -40,6 +43,10 @@ const QUORUM_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const STATUS_SNAPSHOT_RETRY_LIMIT: u32 = 5;
 const STATUS_SNAPSHOT_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 static LOAD_TX_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER: &str =
+    "applied deterministic lane autoscale scale-out transition";
+const AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER: &str =
+    "applied deterministic lane autoscale scale-in transition";
 
 fn autoscale_localnet_builder() -> NetworkBuilder {
     NetworkBuilder::new()
@@ -104,6 +111,223 @@ fn lane_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<(usize, Vec
                 .map_err(|err| eyre!("read active lane segments on peer {index}: {err}"))
         })
         .collect()
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ElasticLaneStorageStats {
+    file_count: u64,
+    total_bytes: u64,
+    newest_modified_unix_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct AutoscaleTransitionStats {
+    scale_out_transitions: u64,
+    scale_in_transitions: u64,
+}
+
+fn collect_directory_tree_stats(root: &Path) -> Result<ElasticLaneStorageStats> {
+    let mut stats = ElasticLaneStorageStats::default();
+    let mut pending = vec![PathBuf::from(root)];
+    while let Some(path) = pending.pop() {
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let entry_type = entry.file_type()?;
+            if entry_type.is_dir() {
+                pending.push(entry.path());
+                continue;
+            }
+            if !entry_type.is_file() {
+                continue;
+            }
+            stats.file_count = stats.file_count.saturating_add(1);
+            stats.total_bytes = stats
+                .total_bytes
+                .saturating_add(entry.metadata().map(|meta| meta.len()).unwrap_or_default());
+            let modified = entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+                .unwrap_or_default();
+            stats.newest_modified_unix_ms = stats.newest_modified_unix_ms.max(modified);
+        }
+    }
+    Ok(stats)
+}
+
+fn peer_elastic_lane_storage_stats(peer: &NetworkPeer) -> Result<Option<ElasticLaneStorageStats>> {
+    let blocks_root = peer.kura_store_dir().join("blocks");
+    if !blocks_root.exists() {
+        return Ok(None);
+    }
+    let elastic_lane_prefix = format!("lane_{ELASTIC_LANE_ID:03}");
+    for entry in fs::read_dir(&blocks_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+        if name.starts_with(&elastic_lane_prefix) {
+            return collect_directory_tree_stats(&entry.path()).map(Some);
+        }
+    }
+    Ok(None)
+}
+
+fn elastic_lane_storage_snapshot(
+    network: &sandbox::SerializedNetwork,
+) -> Result<Vec<Option<ElasticLaneStorageStats>>> {
+    network
+        .peers()
+        .iter()
+        .enumerate()
+        .map(|(index, peer)| {
+            peer_elastic_lane_storage_stats(peer)
+                .map_err(|err| eyre!("read elastic lane storage on peer {index}: {err}"))
+        })
+        .collect()
+}
+
+fn elastic_lane_storage_progressed(
+    current: Option<ElasticLaneStorageStats>,
+    baseline: Option<ElasticLaneStorageStats>,
+) -> bool {
+    match (current, baseline) {
+        (Some(current), Some(baseline)) => {
+            current.file_count > baseline.file_count
+                || current.total_bytes > baseline.total_bytes
+                || current.newest_modified_unix_ms > baseline.newest_modified_unix_ms
+        }
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
+fn peer_run_stdout_log_path(peer: &NetworkPeer) -> Result<Option<PathBuf>> {
+    let peer_dir = peer
+        .kura_store_dir()
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| eyre!("derive peer directory from kura_store_dir"))?;
+    if !peer_dir.exists() {
+        return Ok(None);
+    }
+    let mut latest_run = None::<(u64, PathBuf)>;
+    for entry in fs::read_dir(&peer_dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let Some(file_name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+        let Some(run_segment) = file_name
+            .strip_prefix("run-")
+            .and_then(|name| name.strip_suffix("-stdout.log"))
+        else {
+            continue;
+        };
+        let Ok(run_id) = run_segment.parse::<u64>() else {
+            continue;
+        };
+        match latest_run {
+            Some((latest_run_id, _)) if run_id <= latest_run_id => {}
+            _ => latest_run = Some((run_id, entry.path())),
+        }
+    }
+    Ok(latest_run.map(|(_, path)| path))
+}
+
+fn parse_autoscale_transition_stats(log_contents: &str) -> AutoscaleTransitionStats {
+    let scale_out_transitions = u64::try_from(
+        log_contents
+            .matches(AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER)
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
+    let scale_in_transitions = u64::try_from(
+        log_contents
+            .matches(AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER)
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
+    AutoscaleTransitionStats {
+        scale_out_transitions,
+        scale_in_transitions,
+    }
+}
+
+fn peer_autoscale_transition_stats(peer: &NetworkPeer) -> Result<AutoscaleTransitionStats> {
+    let Some(stdout_log_path) = peer_run_stdout_log_path(peer)? else {
+        return Ok(AutoscaleTransitionStats::default());
+    };
+    let log_contents = match fs::read_to_string(&stdout_log_path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(AutoscaleTransitionStats::default());
+        }
+        Err(err) => {
+            return Err(err).map_err(|error| {
+                eyre!(
+                    "read autoscale transition log {:?}: {error}",
+                    stdout_log_path
+                )
+            });
+        }
+    };
+    Ok(parse_autoscale_transition_stats(&log_contents))
+}
+
+fn autoscale_transition_snapshot(
+    network: &sandbox::SerializedNetwork,
+) -> Result<Vec<AutoscaleTransitionStats>> {
+    network
+        .peers()
+        .iter()
+        .enumerate()
+        .map(|(index, peer)| {
+            peer_autoscale_transition_stats(peer)
+                .map_err(|err| eyre!("read autoscale transition stats on peer {index}: {err}"))
+        })
+        .collect()
+}
+
+fn peers_with_scale_out_transition(
+    current: &[AutoscaleTransitionStats],
+    baseline: &[AutoscaleTransitionStats],
+) -> usize {
+    current
+        .iter()
+        .enumerate()
+        .filter(|(index, current)| {
+            current.scale_out_transitions
+                > baseline
+                    .get(*index)
+                    .map(|stats| stats.scale_out_transitions)
+                    .unwrap_or_default()
+        })
+        .count()
+}
+
+fn peers_with_scale_in_transition(
+    current: &[AutoscaleTransitionStats],
+    baseline: &[AutoscaleTransitionStats],
+) -> usize {
+    current
+        .iter()
+        .enumerate()
+        .filter(|(index, current)| {
+            current.scale_in_transitions
+                > baseline
+                    .get(*index)
+                    .map(|stats| stats.scale_in_transitions)
+                    .unwrap_or_default()
+        })
+        .count()
 }
 
 fn peer_client_with_timeout(peer: &NetworkPeer) -> Client {
@@ -370,7 +594,9 @@ fn peer_lane_validator_snapshot(
 }
 
 fn peer_has_lane_declaration(peer: &PeerStatusSnapshot, lane_id: u32) -> bool {
-    peer.lanes.iter().any(|lane| lane.lane_id == lane_id)
+    peer.lanes
+        .iter()
+        .any(|lane| lane.lane_id == lane_id && (lane.capacity > 0 || lane.committed > 0))
         || peer
             .lane_commitments
             .iter()
@@ -538,15 +764,25 @@ fn peer_has_contracted_profile(status: &PeerStatusSnapshot) -> bool {
         .lanes
         .iter()
         .any(|lane| lane.lane_id == PRIMARY_LANE_ID && lane.capacity > 0);
-    let elastic_lane_deactivated = match status
-        .lanes
-        .iter()
-        .find(|lane| lane.lane_id == ELASTIC_LANE_ID)
-    {
-        Some(lane) => lane.capacity == 0,
+    let elastic_lane_undeclared = !peer_has_lane_declaration(status, ELASTIC_LANE_ID);
+    let elastic_lane_commitments_idle = !peer_has_lane_commitment_activity(status, ELASTIC_LANE_ID);
+    let elastic_lane_relay_idle = peer_lane_relay_height(status, ELASTIC_LANE_ID).is_none();
+    let elastic_lane_validator_idle = match peer_lane_validator_snapshot(status, ELASTIC_LANE_ID) {
+        Some(snapshot) => {
+            snapshot.total == 0
+                && snapshot.active == 0
+                && snapshot.pending_activation == 0
+                && snapshot.max_activation_epoch == 0
+                && snapshot.max_activation_height == 0
+        }
         None => true,
     };
-    primary_lane_active && elastic_lane_deactivated
+
+    primary_lane_active
+        && elastic_lane_undeclared
+        && elastic_lane_commitments_idle
+        && elastic_lane_relay_idle
+        && elastic_lane_validator_idle
 }
 
 fn peers_with_contracted_profile(snapshot: &[PeerStatusSnapshot]) -> usize {
@@ -753,6 +989,8 @@ fn wait_for_expanded_lanes_with_heartbeat(
     heartbeat_client: &Client,
     top_up_clients: &[Client],
     baseline_status_snapshot: &[PeerStatusSnapshot],
+    baseline_elastic_storage_snapshot: &[Option<ElasticLaneStorageStats>],
+    baseline_autoscale_transitions: &[AutoscaleTransitionStats],
     quorum_required: usize,
     timeout: Duration,
     context: &str,
@@ -762,36 +1000,40 @@ fn wait_for_expanded_lanes_with_heartbeat(
     let started = Instant::now();
     let mut heartbeat_seq = 0_u64;
     let mut last_storage_snapshot = Vec::new();
+    let mut last_elastic_storage_snapshot = Vec::new();
     let mut last_status_snapshot = Vec::new();
     let mut last_heartbeat_error = None::<String>;
     let mut last_top_up_error = None::<String>;
     let mut last_status_error = None::<String>;
-    let mut consecutive_status_failures = 0_u32;
     let mut post_grace_wait_logged = false;
 
     while started.elapsed() <= timeout {
         let storage_snapshot = lane_snapshot(network)?;
+        let elastic_storage_snapshot = elastic_lane_storage_snapshot(network)?;
+        let peers_with_storage_progress = elastic_storage_snapshot
+            .iter()
+            .enumerate()
+            .filter(|(index, current)| {
+                let baseline = baseline_elastic_storage_snapshot
+                    .get(*index)
+                    .copied()
+                    .flatten();
+                elastic_lane_storage_progressed(**current, baseline)
+            })
+            .count();
+        let storage_progressed_on_quorum = peers_with_storage_progress >= quorum_required;
         let storage_expanded = expansion_observed_on_storage(&storage_snapshot);
         let elapsed = started.elapsed();
         let fallback_ready_at =
             EXPANSION_STATUS_SIGNAL_GRACE + EXPANSION_POST_STORAGE_STATUS_WINDOW;
         let status_snapshot = match status_snapshot(network) {
-            Ok(snapshot) => {
-                consecutive_status_failures = 0;
-                snapshot
-            }
+            Ok(snapshot) => snapshot,
             Err(err) => {
                 last_status_error = Some(err.to_string());
-                consecutive_status_failures = consecutive_status_failures.saturating_add(1);
-                if consecutive_status_failures >= STATUS_SNAPSHOT_RETRY_LIMIT {
-                    return Err(eyre!(
-                        "{context}: status snapshot failed {} consecutive times while waiting for expansion; last status error: {last_status_error:?}; last storage snapshot: {last_storage_snapshot:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
-                        STATUS_SNAPSHOT_RETRY_LIMIT
-                    ));
-                }
-                if storage_expanded && elapsed >= fallback_ready_at {
+                if storage_expanded && storage_progressed_on_quorum && elapsed >= fallback_ready_at
+                {
                     eprintln!(
-                        "[autoscale-localnet] {context}: expansion observed via storage lane provisioning fallback after status errors (grace {:?} + post-storage status window {:?})",
+                        "[autoscale-localnet] {context}: expansion observed via storage lane provisioning+progress fallback after status errors (storage progress {peers_with_storage_progress}/{quorum_required}, scale-out transitions pending snapshot, grace {:?} + post-storage status window {:?})",
                         EXPANSION_STATUS_SIGNAL_GRACE, EXPANSION_POST_STORAGE_STATUS_WINDOW
                     );
                     return Ok(());
@@ -807,6 +1049,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
                     post_grace_wait_logged = true;
                 }
                 last_storage_snapshot = storage_snapshot;
+                last_elastic_storage_snapshot = elastic_storage_snapshot;
                 if let Err(heartbeat_err) = heartbeat_client.submit(Log::new(
                     Level::INFO,
                     format!("{heartbeat_prefix}-{heartbeat_seq}"),
@@ -838,11 +1081,17 @@ fn wait_for_expanded_lanes_with_heartbeat(
             );
             return Ok(());
         }
-        if storage_expanded && elapsed >= fallback_ready_at {
+        if storage_expanded && storage_progressed_on_quorum && elapsed >= fallback_ready_at {
             let peers_with_status_signal = peers_with_expanded_lane_signal(
                 &status_snapshot,
                 Some(baseline_status_snapshot),
                 ELASTIC_LANE_ID,
+            );
+            let transition_snapshot =
+                autoscale_transition_snapshot(network).unwrap_or_else(|_| Vec::new());
+            let peers_with_scale_out = peers_with_scale_out_transition(
+                &transition_snapshot,
+                baseline_autoscale_transitions,
             );
             let signal_breakdown = expansion_signal_breakdown(
                 &status_snapshot,
@@ -850,7 +1099,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
                 ELASTIC_LANE_ID,
             );
             eprintln!(
-                "[autoscale-localnet] {context}: expansion observed via storage lane provisioning fallback after {:.3}s (status signal {peers_with_status_signal}/{quorum_required}, grace {:?} + post-storage status window {:?}); signal breakdown: {signal_breakdown:?}",
+                "[autoscale-localnet] {context}: expansion observed via storage lane provisioning+progress fallback after {:.3}s (status signal {peers_with_status_signal}/{quorum_required}, storage progress {peers_with_storage_progress}/{quorum_required}, scale-out transitions {peers_with_scale_out}/{quorum_required}, grace {:?} + post-storage status window {:?}); signal breakdown: {signal_breakdown:?}",
                 elapsed.as_secs_f64(),
                 EXPANSION_STATUS_SIGNAL_GRACE,
                 EXPANSION_POST_STORAGE_STATUS_WINDOW
@@ -865,6 +1114,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
             post_grace_wait_logged = true;
         }
         last_storage_snapshot = storage_snapshot;
+        last_elastic_storage_snapshot = elastic_storage_snapshot;
         last_status_snapshot = status_snapshot;
 
         if let Err(err) = heartbeat_client.submit(Log::new(
@@ -886,9 +1136,10 @@ fn wait_for_expanded_lanes_with_heartbeat(
     }
 
     Err(eyre!(
-        "{context}: timed out waiting for expanded lane profile (lane {ELASTIC_LANE_ID} active via status `capacity>0 || committed>0`, sumeragi lane commitment `tx_count>0 || teu_total>0`, public-lane validator lifecycle activity (`active || pending_activation`), or baseline transition via lane declaration/progress on >= {quorum_required}/{TOTAL_PEERS} peers; storage lane count={EXPANDED_PROVISIONED_LANES} accepted only as fallback after grace {:?} + post-storage status window {:?}); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last status error: {last_status_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
+        "{context}: timed out waiting for expanded lane profile (lane {ELASTIC_LANE_ID} active via status `capacity>0 || committed>0`, sumeragi lane commitment `tx_count>0 || teu_total>0`, public-lane validator lifecycle activity (`active || pending_activation`), or baseline transition via lane declaration/progress on >= {quorum_required}/{TOTAL_PEERS} peers; storage lane count={EXPANDED_PROVISIONED_LANES} accepted only as fallback after grace {:?} + post-storage status window {:?} when elastic lane storage progresses on >= {quorum_required}/{TOTAL_PEERS} peers); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last elastic storage snapshot: {last_elastic_storage_snapshot:?}; last autoscale transition snapshot: {:?}; last status error: {last_status_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
         EXPANSION_STATUS_SIGNAL_GRACE,
-        EXPANSION_POST_STORAGE_STATUS_WINDOW
+        EXPANSION_POST_STORAGE_STATUS_WINDOW,
+        autoscale_transition_snapshot(network).unwrap_or_else(|_| Vec::new())
     ))
 }
 
@@ -908,12 +1159,10 @@ fn wait_for_chain_progress_with_heartbeat(
     let mut last_status_snapshot = Vec::new();
     let mut last_status_error = None::<String>;
     let mut last_heartbeat_error = None::<String>;
-    let mut consecutive_status_failures = 0_u32;
 
     while started.elapsed() <= timeout {
         match status_snapshot(network) {
             Ok(snapshot) => {
-                consecutive_status_failures = 0;
                 if chain_progress_advanced(
                     &snapshot,
                     baseline_non_empty,
@@ -926,13 +1175,6 @@ fn wait_for_chain_progress_with_heartbeat(
             }
             Err(err) => {
                 last_status_error = Some(err.to_string());
-                consecutive_status_failures = consecutive_status_failures.saturating_add(1);
-                if consecutive_status_failures >= STATUS_SNAPSHOT_RETRY_LIMIT {
-                    return Err(eyre!(
-                        "{context}: status snapshot failed {} consecutive times while waiting for chain progress; last status error: {last_status_error:?}; last status snapshot: {last_status_snapshot:?}; last heartbeat error: {last_heartbeat_error:?}",
-                        STATUS_SNAPSHOT_RETRY_LIMIT
-                    ));
-                }
             }
         }
 
@@ -951,67 +1193,91 @@ fn wait_for_chain_progress_with_heartbeat(
     ))
 }
 
-fn wait_for_contracted_lanes_with_heartbeat(
+fn wait_for_contracted_lanes(
     network: &sandbox::SerializedNetwork,
-    heartbeat_client: &Client,
+    heartbeat_client: Option<&Client>,
+    heartbeat_prefix: &str,
     quorum_required: usize,
     timeout: Duration,
     context: &str,
-    heartbeat_prefix: &str,
+    baseline_autoscale_transitions: Option<&[AutoscaleTransitionStats]>,
+    require_scale_in_transition: bool,
     heartbeat_interval: Duration,
 ) -> Result<()> {
     let started = Instant::now();
     let mut heartbeat_seq = 0_u64;
     let mut last_storage_snapshot = Vec::new();
     let mut last_status_snapshot = Vec::new();
-    let mut last_heartbeat_error = None::<String>;
+    let mut last_transition_snapshot = Vec::new();
     let mut last_status_error = None::<String>;
-    let mut consecutive_status_failures = 0_u32;
+    let mut last_transition_error = None::<String>;
+    let mut last_heartbeat_error = None::<String>;
+    let mut last_scale_in_transition_peers = 0_usize;
 
     while started.elapsed() <= timeout {
         let status_snapshot = match status_snapshot(network) {
-            Ok(snapshot) => {
-                consecutive_status_failures = 0;
-                snapshot
-            }
+            Ok(snapshot) => snapshot,
             Err(err) => {
                 last_status_error = Some(err.to_string());
-                consecutive_status_failures = consecutive_status_failures.saturating_add(1);
-                if consecutive_status_failures >= STATUS_SNAPSHOT_RETRY_LIMIT {
-                    return Err(eyre!(
-                        "{context}: status snapshot failed {} consecutive times while waiting for contraction; last status error: {last_status_error:?}; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last heartbeat error: {last_heartbeat_error:?}",
-                        STATUS_SNAPSHOT_RETRY_LIMIT
-                    ));
+                if let Some(client) = heartbeat_client {
+                    if let Err(heartbeat_err) = client.submit(Log::new(
+                        Level::INFO,
+                        format!("{heartbeat_prefix}-{heartbeat_seq}"),
+                    )) {
+                        last_heartbeat_error = Some(heartbeat_err.to_string());
+                    }
+                    heartbeat_seq = heartbeat_seq.saturating_add(1);
                 }
-                if let Err(heartbeat_err) = heartbeat_client.submit(Log::new(
-                    Level::INFO,
-                    format!("{heartbeat_prefix}-{heartbeat_seq}"),
-                )) {
-                    last_heartbeat_error = Some(heartbeat_err.to_string());
-                }
-                heartbeat_seq = heartbeat_seq.saturating_add(1);
                 thread::sleep(heartbeat_interval);
                 continue;
             }
         };
-        if contraction_observed_on_quorum_peers(&status_snapshot, quorum_required) {
+
+        let contracted_on_quorum =
+            contraction_observed_on_quorum_peers(&status_snapshot, quorum_required);
+        let scale_in_transition_observed_on_quorum = if require_scale_in_transition {
+            let baseline = baseline_autoscale_transitions.unwrap_or_default();
+            match autoscale_transition_snapshot(network) {
+                Ok(snapshot) => {
+                    let peers_with_scale_in = peers_with_scale_in_transition(&snapshot, baseline);
+                    last_scale_in_transition_peers = peers_with_scale_in;
+                    last_transition_snapshot = snapshot;
+                    peers_with_scale_in >= quorum_required
+                }
+                Err(err) => {
+                    last_transition_error = Some(err.to_string());
+                    false
+                }
+            }
+        } else {
+            true
+        };
+
+        if contracted_on_quorum && scale_in_transition_observed_on_quorum {
             return Ok(());
         }
+
         last_status_snapshot = status_snapshot;
         last_storage_snapshot = lane_snapshot(network).unwrap_or_default();
-
-        if let Err(err) = heartbeat_client.submit(Log::new(
-            Level::INFO,
-            format!("{heartbeat_prefix}-{heartbeat_seq}"),
-        )) {
-            last_heartbeat_error = Some(err.to_string());
+        if let Some(client) = heartbeat_client {
+            if let Err(heartbeat_err) = client.submit(Log::new(
+                Level::INFO,
+                format!("{heartbeat_prefix}-{heartbeat_seq}"),
+            )) {
+                last_heartbeat_error = Some(heartbeat_err.to_string());
+            }
+            heartbeat_seq = heartbeat_seq.saturating_add(1);
         }
-        heartbeat_seq = heartbeat_seq.saturating_add(1);
         thread::sleep(heartbeat_interval);
     }
 
     Err(eyre!(
-        "{context}: timed out waiting for contracted lane profile (lane {PRIMARY_LANE_ID} active; lane {ELASTIC_LANE_ID} removed or capacity=0 on >= {quorum_required}/{TOTAL_PEERS} peers) with heartbeat; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last status error: {last_status_error:?}; last heartbeat error: {last_heartbeat_error:?}"
+        "{context}: timed out waiting for contracted lane profile (lane {PRIMARY_LANE_ID} active; lane {ELASTIC_LANE_ID} undeclared and idle on >= {quorum_required}/{TOTAL_PEERS} peers{}) ; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last autoscale transition snapshot: {last_transition_snapshot:?}; last scale-in transition peers: {last_scale_in_transition_peers}/{TOTAL_PEERS}; last status error: {last_status_error:?}; last transition error: {last_transition_error:?}; last heartbeat error: {last_heartbeat_error:?}",
+        if require_scale_in_transition {
+            " and deterministic autoscale scale-in transitions observed on quorum peers"
+        } else {
+            ""
+        }
     ))
 }
 
@@ -1020,21 +1286,44 @@ fn run_expand_contract_cycle(
     submitters: &[Client],
     quorum_required: usize,
     cycle_index: usize,
+    require_scale_in_transition: bool,
 ) -> Result<()> {
-    let pre_cycle_heartbeat_client = peer_client_with_timeout(network.peer());
     let pre_contraction_context = format!("autoscale contraction pre-check cycle {cycle_index}");
-    let pre_contraction_prefix = format!("autoscale-precheck-heartbeat-cycle-{cycle_index}");
-    wait_for_contracted_lanes_with_heartbeat(
+    wait_for_contracted_lanes(
         network,
-        &pre_cycle_heartbeat_client,
+        None,
+        "",
         quorum_required,
         SCALE_IN_WAIT_TIMEOUT,
         &pre_contraction_context,
-        &pre_contraction_prefix,
+        None,
+        false,
         CONTRACTION_HEARTBEAT_INTERVAL,
     )?;
 
+    if cycle_index > 1 {
+        let cooldown_probe_client = peer_client_with_timeout(network.peer());
+        let cooldown_baseline_status = status_snapshot(network)?;
+        let cooldown_baseline_height = max_non_empty_height(&cooldown_baseline_status);
+        let cooldown_context = format!("autoscale cooldown clearance cycle {cycle_index}");
+        let cooldown_prefix = format!("autoscale-cooldown-heartbeat-cycle-{cycle_index}");
+        wait_for_chain_progress_with_heartbeat(
+            network,
+            &cooldown_probe_client,
+            cooldown_baseline_height
+                .saturating_add(AUTOSCALE_COOLDOWN_CLEARANCE_BLOCK_DELTA.saturating_sub(1)),
+            u64::MAX,
+            u64::MAX,
+            AUTOSCALE_COOLDOWN_CLEARANCE_TIMEOUT,
+            &cooldown_context,
+            &cooldown_prefix,
+            EXPANSION_PROBE_INTERVAL,
+        )?;
+    }
+
     let pre_cycle_status = status_snapshot(network)?;
+    let pre_cycle_elastic_storage = elastic_lane_storage_snapshot(network)?;
+    let pre_cycle_autoscale_transitions = autoscale_transition_snapshot(network)?;
     let pre_cycle_max_non_empty_height = max_non_empty_height(&pre_cycle_status);
     let pre_cycle_max_txs_approved = max_txs_approved(&pre_cycle_status);
     let pre_cycle_max_txs_rejected = max_txs_rejected(&pre_cycle_status);
@@ -1070,6 +1359,8 @@ fn run_expand_contract_cycle(
         &expansion_probe_client,
         submitters,
         &pre_cycle_status,
+        &pre_cycle_elastic_storage,
+        &pre_cycle_autoscale_transitions,
         quorum_required,
         SCALE_OUT_WAIT_TIMEOUT,
         &expansion_context,
@@ -1080,24 +1371,48 @@ fn run_expand_contract_cycle(
         "[autoscale-localnet][cycle {cycle_index}] expansion wait: {:.3}s",
         expansion_started.elapsed().as_secs_f64()
     );
+    let post_expansion_autoscale_transitions = autoscale_transition_snapshot(network)?;
+    let peers_with_scale_out = peers_with_scale_out_transition(
+        &post_expansion_autoscale_transitions,
+        &pre_cycle_autoscale_transitions,
+    );
+    eprintln!(
+        "[autoscale-localnet][cycle {cycle_index}] autoscale transition snapshot after expansion: scale-out peers with new transitions {peers_with_scale_out}/{TOTAL_PEERS}"
+    );
 
-    let heartbeat_client = peer_client_with_timeout(network.peer());
+    let contraction_heartbeat_client = peer_client_with_timeout(network.peer());
     let contraction_started = Instant::now();
     let contraction_context = format!("autoscale contraction cycle {cycle_index}");
     let contraction_prefix = format!("autoscale-heartbeat-cycle-{cycle_index}");
-    wait_for_contracted_lanes_with_heartbeat(
+    wait_for_contracted_lanes(
         network,
-        &heartbeat_client,
+        Some(&contraction_heartbeat_client),
+        &contraction_prefix,
         quorum_required,
         SCALE_IN_WAIT_TIMEOUT,
         &contraction_context,
-        &contraction_prefix,
+        None,
+        false,
         CONTRACTION_HEARTBEAT_INTERVAL,
     )?;
     eprintln!(
         "[autoscale-localnet][cycle {cycle_index}] contraction wait: {:.3}s",
         contraction_started.elapsed().as_secs_f64()
     );
+    let post_contraction_autoscale_transitions = autoscale_transition_snapshot(network)?;
+    let peers_with_scale_in = peers_with_scale_in_transition(
+        &post_contraction_autoscale_transitions,
+        &post_expansion_autoscale_transitions,
+    );
+    eprintln!(
+        "[autoscale-localnet][cycle {cycle_index}] autoscale transition snapshot after contraction: scale-in peers with new transitions {peers_with_scale_in}/{TOTAL_PEERS}"
+    );
+    if require_scale_in_transition {
+        ensure!(
+            peers_with_scale_in >= quorum_required,
+            "autoscale cycle {cycle_index}: contraction profile was observed but deterministic autoscale scale-in transitions were not (scale-in transition peers: {peers_with_scale_in}/{TOTAL_PEERS}; required quorum: {quorum_required})"
+        );
+    }
     let post_cycle_status = status_snapshot(network)?;
     let post_cycle_max_non_empty_height = max_non_empty_height(&post_cycle_status);
     let post_cycle_max_txs_approved = max_txs_approved(&post_cycle_status);
@@ -1160,7 +1475,7 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
     )?;
     eprintln!("[autoscale-localnet] dynamic commit quorum (2f+1): {quorum_required}");
 
-    run_expand_contract_cycle(&network, &submitters, quorum_required, 1)?;
+    run_expand_contract_cycle(&network, &submitters, quorum_required, 1, false)?;
     eprintln!(
         "[autoscale-localnet] total runtime: {:.3}s",
         test_started.elapsed().as_secs_f64()
@@ -1214,8 +1529,8 @@ fn nexus_autoscale_repeats_expand_contract_cycles_in_localnet() -> Result<()> {
     )?;
     eprintln!("[autoscale-localnet][multi-cycle] dynamic commit quorum (2f+1): {quorum_required}");
 
-    run_expand_contract_cycle(&network, &submitters, quorum_required, 1)?;
-    run_expand_contract_cycle(&network, &submitters, quorum_required, 2)?;
+    run_expand_contract_cycle(&network, &submitters, quorum_required, 1, true)?;
+    run_expand_contract_cycle(&network, &submitters, quorum_required, 2, true)?;
 
     eprintln!(
         "[autoscale-localnet][multi-cycle] total runtime: {:.3}s",
@@ -1229,9 +1544,14 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        LaneCommitmentSnapshot, LaneStatusSnapshot, LaneValidatorSnapshot, PeerStatusSnapshot,
-        contraction_observed_on_quorum_peers, expansion_observed_on_quorum_peers,
-        expansion_observed_on_storage, expansion_probe_top_up_tx_count, expansion_top_up_tx_count,
+        AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER, AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
+        AutoscaleTransitionStats, ElasticLaneStorageStats, LaneCommitmentSnapshot,
+        LaneStatusSnapshot, LaneValidatorSnapshot, PeerStatusSnapshot,
+        contraction_observed_on_quorum_peers, elastic_lane_storage_progressed,
+        expansion_observed_on_quorum_peers, expansion_observed_on_storage,
+        expansion_probe_top_up_tx_count, expansion_top_up_tx_count,
+        parse_autoscale_transition_stats, peers_with_scale_in_transition,
+        peers_with_scale_out_transition,
     };
 
     #[test]
@@ -1258,12 +1578,108 @@ mod tests {
         );
         assert_eq!(
             expansion_probe_top_up_tx_count(1, true, Duration::from_secs(8)),
-            16
+            64
         );
         assert_eq!(
             expansion_probe_top_up_tx_count(7, true, Duration::from_secs(15)),
-            16
+            64
         );
+    }
+
+    #[test]
+    fn elastic_lane_storage_progress_detects_growth_or_first_presence() {
+        let baseline = ElasticLaneStorageStats {
+            file_count: 3,
+            total_bytes: 300,
+            newest_modified_unix_ms: 123,
+        };
+
+        assert!(elastic_lane_storage_progressed(
+            Some(ElasticLaneStorageStats {
+                file_count: 4,
+                total_bytes: 300,
+                newest_modified_unix_ms: 123,
+            }),
+            Some(baseline),
+        ));
+        assert!(elastic_lane_storage_progressed(
+            Some(ElasticLaneStorageStats {
+                file_count: 3,
+                total_bytes: 301,
+                newest_modified_unix_ms: 123,
+            }),
+            Some(baseline),
+        ));
+        assert!(elastic_lane_storage_progressed(
+            Some(ElasticLaneStorageStats {
+                file_count: 3,
+                total_bytes: 300,
+                newest_modified_unix_ms: 124,
+            }),
+            Some(baseline),
+        ));
+        assert!(elastic_lane_storage_progressed(Some(baseline), None,));
+    }
+
+    #[test]
+    fn elastic_lane_storage_progress_rejects_static_or_missing_state() {
+        let baseline = ElasticLaneStorageStats {
+            file_count: 3,
+            total_bytes: 300,
+            newest_modified_unix_ms: 123,
+        };
+
+        assert!(!elastic_lane_storage_progressed(
+            Some(baseline),
+            Some(baseline),
+        ));
+        assert!(!elastic_lane_storage_progressed(None, Some(baseline)));
+        assert!(!elastic_lane_storage_progressed(None, None));
+    }
+
+    #[test]
+    fn autoscale_transition_stats_parse_log_markers() {
+        let log = format!(
+            "x\n{}\ny\n{}\n{}\nz",
+            AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
+            AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER,
+            AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER
+        );
+        let stats = parse_autoscale_transition_stats(&log);
+        assert_eq!(stats.scale_out_transitions, 2);
+        assert_eq!(stats.scale_in_transitions, 1);
+    }
+
+    #[test]
+    fn autoscale_transition_delta_uses_peer_baseline() {
+        let baseline = vec![
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 2,
+                scale_in_transitions: 3,
+            },
+            AutoscaleTransitionStats::default(),
+        ];
+        let current = vec![
+            AutoscaleTransitionStats {
+                scale_out_transitions: 2,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 2,
+                scale_in_transitions: 4,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 1,
+            },
+        ];
+
+        assert_eq!(peers_with_scale_out_transition(&current, &baseline), 2);
+        assert_eq!(peers_with_scale_in_transition(&current, &baseline), 2);
     }
 
     #[test]
@@ -2145,18 +2561,11 @@ mod tests {
                 blocks_non_empty: 10,
             },
             PeerStatusSnapshot {
-                lanes: vec![
-                    LaneStatusSnapshot {
-                        lane_id: 0,
-                        capacity: 8000,
-                        committed: 10,
-                    },
-                    LaneStatusSnapshot {
-                        lane_id: 1,
-                        capacity: 0,
-                        committed: 0,
-                    },
-                ],
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 8000,
+                    committed: 10,
+                }],
                 lane_commitments: vec![],
                 lane_governance_ids: vec![],
                 lane_relay: vec![],
@@ -2186,6 +2595,62 @@ mod tests {
         ];
         assert!(contraction_observed_on_quorum_peers(&absent_elastic, 3));
         assert!(!contraction_observed_on_quorum_peers(&absent_elastic, 4));
+
+        let inert_elastic_status_row = vec![PeerStatusSnapshot {
+            lanes: vec![
+                LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 9000,
+                    committed: 10,
+                },
+                LaneStatusSnapshot {
+                    lane_id: 1,
+                    capacity: 0,
+                    committed: 0,
+                },
+            ],
+            lane_commitments: vec![],
+            lane_governance_ids: vec![],
+            lane_relay: vec![],
+            lane_validators: vec![],
+            commit_signatures_required: 3,
+            commit_qc_validator_set_len: 4,
+            txs_approved: 10,
+            txs_rejected: 0,
+            blocks_non_empty: 10,
+        }];
+        assert!(contraction_observed_on_quorum_peers(
+            &inert_elastic_status_row,
+            1
+        ));
+
+        let elastic_still_declared_in_governance = vec![PeerStatusSnapshot {
+            lanes: vec![
+                LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 9000,
+                    committed: 10,
+                },
+                LaneStatusSnapshot {
+                    lane_id: 1,
+                    capacity: 0,
+                    committed: 0,
+                },
+            ],
+            lane_commitments: vec![],
+            lane_governance_ids: vec![0, 1],
+            lane_relay: vec![],
+            lane_validators: vec![],
+            commit_signatures_required: 3,
+            commit_qc_validator_set_len: 4,
+            txs_approved: 10,
+            txs_rejected: 0,
+            blocks_non_empty: 10,
+        }];
+        assert!(!contraction_observed_on_quorum_peers(
+            &elastic_still_declared_in_governance,
+            1
+        ));
 
         let elastic_still_active = vec![PeerStatusSnapshot {
             lanes: vec![
