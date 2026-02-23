@@ -8719,6 +8719,7 @@ mod tests {
 
     #[test]
     fn tx_queue_backpressure_snapshot_tracks_state() {
+        let _guard = super::worker_queue_test_guard();
         let capacity = NonZeroUsize::new(16).expect("non-zero");
         super::set_tx_queue_backpressure(BackpressureState::Healthy {
             queued: 3,

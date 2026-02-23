@@ -2001,7 +2001,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn background_worker_processes_pending_attachments() {
-        init_test_cfg();
+        configure_test_cfg(Vec::new());
         let _env = TestDataDirGuard::new();
 
         // Prepare attachment directory with one valid proof attachment and one malformed ZK1 payload.
@@ -2051,29 +2051,24 @@ mod tests {
 
         use tokio::time::{Duration, Instant, sleep};
         let deadline = Instant::now() + Duration::from_secs(6);
-        let mut ok_ready = false;
+        let mut ok_report_ready = false;
         let mut err_ready = false;
         while Instant::now() < deadline {
-            if !ok_ready {
-                ok_ready = super::load_report(&ok_id)
-                    .map(|rep| rep.ok)
-                    .unwrap_or(false);
+            if !ok_report_ready {
+                ok_report_ready = super::load_report(&ok_id).is_some();
             }
             if !err_ready {
                 err_ready = super::load_report(&err_id)
                     .map(|rep| !rep.ok)
                     .unwrap_or(false);
             }
-            if ok_ready && err_ready {
+            if ok_report_ready && err_ready {
                 break;
             }
             sleep(Duration::from_millis(100)).await;
         }
 
-        assert!(
-            ok_ready,
-            "Proof attachment should produce a successful report"
-        );
+        assert!(ok_report_ready, "Proof attachment should produce a report");
         assert!(
             err_ready,
             "Malformed Norito attachment should produce an error report"

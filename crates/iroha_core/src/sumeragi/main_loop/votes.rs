@@ -479,7 +479,13 @@ impl Actor {
                 consensus_mode,
             )
         } else {
-            self.roster_for_vote_with_mode(vote.block_hash, vote.height, vote.view, consensus_mode)
+            self.roster_for_vote_with_mode_observing_sidecar(
+                vote.block_hash,
+                vote.height,
+                vote.view,
+                consensus_mode,
+                "vote_roster_lookup",
+            )
         };
         if topology_peers.is_empty() && matches!(vote.phase, Phase::Commit) {
             let missing_request = self
@@ -1078,7 +1084,13 @@ impl Actor {
         highest: crate::sumeragi::consensus::QcHeaderRef,
         source: &'static str,
     ) -> bool {
-        self.request_missing_block_for_highest_qc_inner(highest, source, true, false)
+        self.sidecar_observation_suppression_depth =
+            self.sidecar_observation_suppression_depth.saturating_add(1);
+        let requested =
+            self.request_missing_block_for_highest_qc_inner(highest, source, true, false);
+        self.sidecar_observation_suppression_depth =
+            self.sidecar_observation_suppression_depth.saturating_sub(1);
+        requested
     }
 
     fn consensus_missing_block_retry_window(
@@ -2046,23 +2058,37 @@ impl Actor {
             return false;
         }
         let mut resolved = Vec::new();
-        for (block_hash, votes) in &self.deferred_votes {
-            let Some(vote) = votes.values().next() else {
-                continue;
-            };
+        let deferred_samples: Vec<_> = self
+            .deferred_votes
+            .iter()
+            .filter_map(|(block_hash, votes)| {
+                votes
+                    .values()
+                    .next()
+                    .cloned()
+                    .map(|vote| (*block_hash, vote))
+            })
+            .collect();
+        for (block_hash, vote) in deferred_samples {
             let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
             let roster = if matches!(vote.phase, Phase::NewView) {
                 self.roster_for_new_view_with_mode(
-                    *block_hash,
+                    block_hash,
                     vote.height,
                     vote.view,
                     consensus_mode,
                 )
             } else {
-                self.roster_for_vote_with_mode(*block_hash, vote.height, vote.view, consensus_mode)
+                self.roster_for_vote_with_mode_observing_sidecar(
+                    block_hash,
+                    vote.height,
+                    vote.view,
+                    consensus_mode,
+                    "deferred_vote_roster_lookup",
+                )
             };
             if !roster.is_empty() {
-                resolved.push((*block_hash, roster));
+                resolved.push((block_hash, roster));
             }
         }
         let replayed = !resolved.is_empty();
@@ -2380,14 +2406,16 @@ impl Actor {
         let canonicalize =
             |roster| super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
-        if height > committed_height.saturating_add(1) {
+        if height >= committed_height.saturating_add(1) {
             if let Some(roster) = self.roster_from_commit_qc_history_roll_forward(height, None) {
                 return canonicalize(roster);
             }
             if let Some(roster) = self.roster_from_commit_qc_history(height) {
                 return canonicalize(roster);
             }
-            return Vec::new();
+            if height > committed_height.saturating_add(1) {
+                return Vec::new();
+            }
         }
         if let Some(pending) = self.pending_activation_roster_for_height(height, consensus_mode) {
             return canonicalize(pending);
@@ -2421,6 +2449,32 @@ impl Actor {
         if let Some(cached) = self.vote_roster_cache.get(&block_hash) {
             if !cached.roster.is_empty() {
                 return canonicalize(cached.roster.clone());
+            }
+        }
+        let allow_sidecar = !self.sidecar_quarantined_for_height(height);
+        if let Some(selection) = super::persisted_roster_for_block(
+            self.state.as_ref(),
+            &self.kura,
+            consensus_mode,
+            height,
+            block_hash,
+            Some(view),
+            &self.roster_validation_cache,
+            None,
+            allow_sidecar,
+        )
+        .or_else(|| {
+            super::block_sync_history_roster_for_block(
+                consensus_mode,
+                block_hash,
+                height,
+                Some(view),
+                &self.chain_id,
+                &self.roster_validation_cache,
+            )
+        }) {
+            if !selection.roster.is_empty() {
+                return canonicalize(selection.roster);
             }
         }
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
@@ -2468,11 +2522,43 @@ impl Actor {
                 if !prev.is_empty() {
                     return canonicalize(prev);
                 }
+                return self.canonical_round_roster_with_mode(height, view, consensus_mode);
             }
             return Vec::new();
         }
+        if let Some(parent_hash) =
+            self.pending
+                .pending_blocks
+                .get(&block_hash)
+                .and_then(|pending| {
+                    (pending.height == height)
+                        .then(|| pending.block.header().prev_block_hash())
+                        .flatten()
+                })
+        {
+            if let Some(roster) =
+                self.roster_from_commit_qc_history_roll_forward(height, Some(parent_hash))
+            {
+                return canonicalize(roster);
+            }
+            if height > committed_height.saturating_add(1) {
+                return Vec::new();
+            }
+        }
 
         self.canonical_round_roster_with_mode(height, view, consensus_mode)
+    }
+
+    pub(super) fn roster_for_vote_with_mode_observing_sidecar(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        consensus_mode: ConsensusMode,
+        reason: &'static str,
+    ) -> Vec<PeerId> {
+        self.observe_sidecar_mismatch_for_height(height, block_hash, reason);
+        self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
     }
 
     fn pending_activation_roster_for_height(
@@ -2506,6 +2592,14 @@ impl Actor {
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         if height <= committed_height {
             return self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        }
+        if height == committed_height.saturating_add(1) {
+            return self.roster_for_live_vote_with_mode(height, consensus_mode);
+        }
+        if let Some(roster) =
+            self.roster_from_commit_qc_history_roll_forward(height, Some(block_hash))
+        {
+            return super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
         }
         let roster = self.canonical_round_roster_with_mode(height, view, consensus_mode);
         if !roster.is_empty() {

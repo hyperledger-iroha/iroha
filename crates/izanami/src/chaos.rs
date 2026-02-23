@@ -13,7 +13,6 @@ use color_eyre::{
     Result,
     eyre::{WrapErr, eyre},
 };
-use futures::FutureExt;
 use iroha::client::Client;
 use iroha_config::{kura::FsyncMode, parameters::actual::SumeragiNposTimeouts};
 use iroha_data_model::{
@@ -66,11 +65,11 @@ const IZANAMI_FUTURE_VIEW_WINDOW: i64 = 2;
 const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 180;
 const IZANAMI_NPOS_COMMIT_TIME_MS: i64 = 180;
 const IZANAMI_RECOVERY_HEIGHT_ATTEMPT_CAP: i64 = 24;
-const IZANAMI_RECOVERY_HEIGHT_WINDOW_MS: i64 = 1000;
-const IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 700;
+const IZANAMI_RECOVERY_HEIGHT_WINDOW_MS: i64 = 1500;
+const IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 1000;
 const IZANAMI_RECOVERY_NO_ROSTER_FALLBACK_VIEWS: i64 = 2;
 const IZANAMI_RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW: i64 = 2;
-const IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 600;
+const IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 1000;
 const IZANAMI_RECOVERY_MISSING_BLOCK_HEIGHT_TTL_MS: i64 = IZANAMI_RECOVERY_HEIGHT_WINDOW_MS;
 const IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: i64 = 2;
 const IZANAMI_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: i64 = 1;
@@ -1279,12 +1278,8 @@ impl IzanamiRunner {
 }
 
 fn drain_ready_submissions(submissions: &mut JoinSet<()>) {
-    while let Some(joined) = submissions.join_next().now_or_never() {
-        if let Some(result) = joined {
-            let _ = result;
-        } else {
-            break;
-        }
+    while let Some(result) = submissions.try_join_next() {
+        let _ = result;
     }
 }
 
@@ -2812,14 +2807,16 @@ mod tests {
         set.spawn(async {});
         set.spawn(async {});
 
-        for _ in 0..8 {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while set.len() > 0 && Instant::now() < deadline {
             tokio::task::yield_now().await;
             drain_ready_submissions(&mut set);
-            if set.len() == 0 {
-                break;
-            }
         }
-        assert_eq!(set.len(), 0);
+        assert_eq!(
+            set.len(),
+            0,
+            "drain should clear completed submissions within timeout"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

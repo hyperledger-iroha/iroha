@@ -373,11 +373,12 @@ impl Actor {
                 consensus_mode,
             )
         } else {
-            self.roster_for_vote_with_mode(
+            self.roster_for_vote_with_mode_observing_sidecar(
                 qc.subject_block_hash,
                 qc.height,
                 qc.view,
                 consensus_mode,
+                "deferred_qc_targeted_fetch",
             )
         };
         if roster.is_empty() {
@@ -439,13 +440,14 @@ impl Actor {
         }
 
         let mut actions = Vec::new();
-        for key in self
+        let deferred_keys: Vec<_> = self
             .deferred_qcs
             .keys()
             .cloned()
             .take(DEFERRED_MISSING_PAYLOAD_QC_PER_TICK)
-        {
-            let Some(qc) = self.deferred_qcs.get(&key) else {
+            .collect();
+        for key in deferred_keys {
+            let Some(qc) = self.deferred_qcs.get(&key).cloned() else {
                 continue;
             };
             let (consensus_mode, _, _) = self.consensus_context_for_height(qc.height);
@@ -457,11 +459,12 @@ impl Actor {
                     consensus_mode,
                 )
             } else {
-                self.roster_for_vote_with_mode(
+                self.roster_for_vote_with_mode_observing_sidecar(
                     qc.subject_block_hash,
                     qc.height,
                     qc.view,
                     consensus_mode,
+                    "deferred_qc_replay",
                 )
             };
             if !roster.is_empty() {
@@ -894,12 +897,12 @@ impl Actor {
         }
         let defer_view_change =
             self.should_defer_missing_block_view_change(&block_hash, height, view);
-        // Retry missing payload fetches on the rebroadcast cadence while gating escalation with
-        // the configured deferred-QC TTL.
+        // Retry missing payload fetches on the rebroadcast cadence while keeping view-change
+        // arming aligned with the quorum-timeout window.
         let view_change_window = if defer_view_change {
             None
         } else {
-            Some(self.recovery_deferred_qc_ttl())
+            Some(self.quorum_timeout(self.runtime_da_enabled()))
         };
         let peer_id = self.common_config.peer.id.clone();
         let network = self.network.clone();
@@ -977,6 +980,17 @@ impl Actor {
                 }
             } else if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
                 if stats.mark_view_change_if_due(now) {
+                    if self
+                        .phase_tracker
+                        .current_view(height)
+                        .is_some_and(|current| current > view)
+                    {
+                        debug!(
+                            height,
+                            view, "skipping missing-block retry escalation: round already advanced"
+                        );
+                        return deferred;
+                    }
                     let dwell_ms = now.saturating_duration_since(stats.first_seen).as_millis();
                     let since_last_ms = now
                         .saturating_duration_since(stats.last_requested)
@@ -1221,7 +1235,7 @@ impl Actor {
                     super::MissingBlockPriority::Consensus
                 )
             {
-                view_change_window = Some(self.recovery_deferred_qc_ttl());
+                view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
             }
             let decision = if let Some(ref topology) = topology {
                 let since_last_request =
@@ -1399,6 +1413,13 @@ impl Actor {
                 now,
             ) {
                 progress = true;
+                if self
+                    .phase_tracker
+                    .current_view(stats_snapshot.height)
+                    .is_some_and(|current| current > stats_snapshot.view)
+                {
+                    break;
+                }
                 continue;
             }
 
@@ -1431,8 +1452,35 @@ impl Actor {
                         "missing block dwell exceeded view-change window; deferring view change while RBC availability is unresolved"
                     );
                 } else {
+                    let mut record_height_hard_cap_escalation = false;
+                    let recovery_key = self.missing_block_recovery_key_for_height(height);
+                    if let Some(budget) = self.missing_block_height_recovery.get_mut(&recovery_key)
+                    {
+                        if budget.escalated_view != Some(view) {
+                            budget.escalated_view = Some(view);
+                            record_height_hard_cap_escalation = true;
+                        }
+                    }
+                    if record_height_hard_cap_escalation {
+                        super::status::inc_consensus_missing_block_height_escalation();
+                        #[cfg(feature = "telemetry")]
+                        if let Some(telemetry) = self.telemetry_handle() {
+                            telemetry.inc_consensus_missing_block_height_escalation();
+                        }
+                    }
                     if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
                         stats.view_change_triggered_view = Some(view);
+                    }
+                    if self
+                        .phase_tracker
+                        .current_view(height)
+                        .is_some_and(|current| current > view)
+                    {
+                        debug!(
+                            height,
+                            view, "skipping missing-block retry escalation: round already advanced"
+                        );
+                        continue;
                     }
                     warn!(
                         height,
@@ -1448,6 +1496,7 @@ impl Actor {
                         ViewChangeCause::MissingPayload,
                     );
                     progress = true;
+                    break;
                 }
             }
         }
@@ -1466,13 +1515,26 @@ impl Actor {
         let ttl = self
             .recovery_missing_block_height_ttl()
             .max(Duration::from_millis(1));
-        let (base_window, dwell, recent_rbc_progress) = self
+        let recovery_key = self.missing_block_recovery_key_for_height(height);
+        let inflight_range_pull_converging = self
+            .missing_block_height_recovery
+            .get(&recovery_key)
+            .is_some_and(|budget| {
+                budget.range_pull.inflight
+                    && now.saturating_duration_since(budget.range_pull.last_progress) < ttl
+            });
+        let (base_window, dwell, recent_dependency_progress, recent_rbc_progress) = self
             .pending
             .missing_block_requests
             .get(block_hash)
-            .filter(|stats| stats.height == height && stats.view == view)
+            .filter(|stats| stats.height == height)
             .map_or(
-                (self.recovery_deferred_qc_ttl(), Duration::ZERO, false),
+                (
+                    self.recovery_deferred_qc_ttl(),
+                    Duration::ZERO,
+                    false,
+                    false,
+                ),
                 |stats| {
                     let base = stats
                         .view_change_window
@@ -1480,13 +1542,14 @@ impl Actor {
                     (
                         base,
                         now.saturating_duration_since(stats.first_seen),
+                        now.saturating_duration_since(stats.last_dependency_progress) < ttl,
                         stats
                             .last_rbc_observed
                             .is_some_and(|observed| now.saturating_duration_since(observed) < ttl),
                     )
                 },
             );
-        if recent_rbc_progress {
+        if recent_dependency_progress || recent_rbc_progress || inflight_range_pull_converging {
             return true;
         }
         let within_backlog_extension =
@@ -1594,9 +1657,8 @@ impl Actor {
 
     pub(super) fn clear_missing_block_view_change(&mut self, block_hash: &HashOf<BlockHeader>) {
         if let Some(stats) = self.pending.missing_block_requests.get_mut(block_hash) {
-            if stats.view_change_window.is_some() || stats.view_change_triggered_view.is_some() {
+            if stats.view_change_window.is_some() {
                 stats.view_change_window = None;
-                stats.view_change_triggered_view = None;
             }
         }
     }
@@ -1713,7 +1775,13 @@ impl Actor {
         let canonical_roster = if matches!(phase, crate::sumeragi::consensus::Phase::NewView) {
             self.roster_for_new_view_with_mode(block_hash, height, view, consensus_mode)
         } else {
-            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
+            self.roster_for_vote_with_mode_observing_sidecar(
+                block_hash,
+                height,
+                view,
+                consensus_mode,
+                "qc_try_form_from_votes",
+            )
         };
         let canonical_topology = if matches!(consensus_mode, ConsensusMode::Permissioned)
             && !topology.as_ref().is_empty()
@@ -1817,12 +1885,25 @@ impl Actor {
                         }
                     };
                 let world = self.state.world_view();
-                let stake_roster = if !canonical_topology.as_ref().is_empty() {
-                    canonical_topology.as_ref()
+                let baseline_stake_roster = if !canonical_topology.as_ref().is_empty() {
+                    canonical_topology.as_ref().to_vec()
                 } else if !topology.as_ref().is_empty() {
-                    topology.as_ref()
+                    topology.as_ref().to_vec()
                 } else {
-                    signature_topology.as_ref()
+                    signature_topology.as_ref().to_vec()
+                };
+                let active_stake_roster = super::roster::derive_active_topology_for_mode_from_world(
+                    &world,
+                    baseline_stake_roster.as_slice(),
+                    height,
+                    self.common_config.trusted_peers.value(),
+                    self.common_config.peer.id(),
+                    ConsensusMode::Npos,
+                );
+                let stake_roster = if active_stake_roster.is_empty() {
+                    baseline_stake_roster
+                } else {
+                    active_stake_roster
                 };
                 if stake_roster.is_empty() {
                     warn!(
@@ -1836,7 +1917,7 @@ impl Actor {
                 }
                 match super::stake_snapshot::stake_quorum_reached_for_world(
                     &world,
-                    stake_roster,
+                    stake_roster.as_slice(),
                     &signer_peers,
                 ) {
                     Ok(result) => result,
@@ -2312,8 +2393,13 @@ impl Actor {
             |key, signer_count| {
                 let (phase, block_hash, height, view, epoch) = key;
                 let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-                let mut commit_roster =
-                    self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+                let mut commit_roster = self.roster_for_vote_with_mode_observing_sidecar(
+                    block_hash,
+                    height,
+                    view,
+                    consensus_mode,
+                    "qc_rebuild_cached_votes",
+                );
                 if commit_roster.is_empty() && !commit_topology.is_empty() {
                     commit_roster = commit_topology.to_vec();
                 }
@@ -2471,14 +2557,15 @@ impl Actor {
                 );
                 let now = Instant::now();
                 let retry_window = self.rebroadcast_cooldown();
-                let view_change_window = Some(self.recovery_deferred_qc_ttl());
+                let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
                 let (consensus_mode, _mode_tag, _prf_seed) =
                     self.consensus_context_for_height(lock.height);
-                let mut roster = self.roster_for_vote_with_mode(
+                let mut roster = self.roster_for_vote_with_mode_observing_sidecar(
                     locked_hash,
                     lock.height,
                     lock.view,
                     consensus_mode,
+                    "qc_drop_missing_lock",
                 );
                 if roster.is_empty() {
                     roster = self.effective_commit_topology();
@@ -3132,11 +3219,12 @@ impl Actor {
                 consensus_mode,
             )
         } else {
-            self.roster_for_vote_with_mode(
+            self.roster_for_vote_with_mode_observing_sidecar(
                 qc.subject_block_hash,
                 qc.height,
                 qc.view,
                 consensus_mode,
+                "qc_handle_incoming",
             )
         };
         if commit_topology.is_empty() {
@@ -3514,7 +3602,7 @@ impl Actor {
                 hash = %qc.subject_block_hash,
                 "received QC for unknown block; caching without updating locks/highest"
             );
-            let view_change_window = self.recovery_deferred_qc_ttl();
+            let view_change_window = self.quorum_timeout(self.runtime_da_enabled());
             let base_retry_window = self.rebroadcast_cooldown();
             let aggressive_qc_fetch = matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit);
             let existing_attempts = self

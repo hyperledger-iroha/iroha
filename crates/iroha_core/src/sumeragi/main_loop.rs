@@ -2932,8 +2932,13 @@ fn note_missing_block_request_dependency_progress(
     let Some(stats) = requests.get_mut(&block_hash) else {
         return false;
     };
-    if stats.height != height || stats.view != view {
+    if stats.height != height {
         return false;
+    }
+    if stats.view != view {
+        // Keep progress accounting tied to the missing payload identity (hash+height) even if
+        // the local view advanced while RBC/availability signals for this payload are still
+        // arriving. View advancement remains owned by touch_missing_block_request.
     }
     stats.last_dependency_progress = now;
     if observed_via_rbc {
@@ -3340,7 +3345,7 @@ impl Actor {
         if self.block_payload_available_locally(parent_hash) {
             return;
         }
-        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let local_height = self.committed_height_snapshot();
         if block_height <= local_height.saturating_add(1) {
             return;
         }
@@ -3383,7 +3388,7 @@ impl Actor {
         } else {
             let world = self.state.world_view();
             let commit_topology_snapshot = self.state.commit_topology_snapshot();
-            let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+            let committed_height = self.committed_height_snapshot();
             let roster = self.active_topology_with_genesis_fallback_from_world(
                 &world,
                 commit_topology_snapshot.as_slice(),
@@ -3555,7 +3560,7 @@ impl Actor {
         roster_hint: Option<&[PeerId]>,
         trigger: &'static str,
     ) {
-        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let local_height = self.committed_height_snapshot();
         let mut parents = Vec::new();
         let mut seen = BTreeSet::new();
         for pending in self.pending.pending_blocks.values() {
@@ -4458,7 +4463,7 @@ impl Actor {
         if window == Duration::ZERO {
             return false;
         }
-        let tip_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let tip_height = self.committed_height_snapshot();
         let lower = tip_height.saturating_sub(1);
         let upper = tip_height.saturating_add(2);
         if self.pending.pending_blocks.values().any(|pending| {
@@ -4486,8 +4491,8 @@ impl Actor {
             return RbcBacklogSummary::default();
         }
         let tip_height = self.state.committed_height();
-        let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
         let tip_hash = self.state.latest_block_hash_fast();
+        let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
         let mut summary = RbcBacklogSummary::default();
         for (key, session) in &self.subsystems.da_rbc.rbc.sessions {
             if !self.rbc_rebroadcast_active_with_tip_and_session(
@@ -5075,6 +5080,7 @@ pub(super) struct Actor {
         BTreeMap<MissingBlockHeightRecoveryKey, MissingBlockHeightRecoveryBudget>,
     no_roster_fallback_recovery: BTreeMap<MissingBlockHeightRecoveryKey, NoRosterFallbackBudget>,
     sidecar_mismatch_recovery: BTreeMap<u64, SidecarMismatchRecoveryEntry>,
+    sidecar_observation_suppression_depth: u32,
     range_pull_escalation_cooldowns: BTreeMap<(PeerId, u64, u64), Instant>,
     deferred_qcs: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     deferred_qc_roster_state: BTreeMap<QcVoteKey, DeferredRosterQcEntry>,
@@ -7842,6 +7848,16 @@ impl Actor {
         height: u64,
         consensus_mode: ConsensusMode,
     ) -> Vec<PeerId> {
+        if matches!(consensus_mode, ConsensusMode::Npos) {
+            return roster::derive_active_topology_for_mode_from_world(
+                world,
+                commit_topology,
+                height,
+                self.common_config.trusted_peers.value(),
+                self.common_config.peer.id(),
+                consensus_mode,
+            );
+        }
         // Live consensus rounds must derive validator topology from committed chain state.
         // Bootstrap is handled via genesis fallback below when the committed roster is still empty.
         if !commit_topology.is_empty() {
@@ -7857,12 +7873,39 @@ impl Actor {
                 return roster;
             }
         }
+        let trusted_fallback = || {
+            let trusted = roster::canonicalize_roster_for_mode(
+                roster::filter_roster_with_live_consensus_keys_at_height_world(
+                    world,
+                    self.trusted_topology(),
+                    height.saturating_add(1),
+                ),
+                consensus_mode,
+            );
+            (!trusted.is_empty()).then_some(trusted)
+        };
         let mut genesis_roster = self.genesis_roster_from_genesis_block();
         if genesis_roster.is_empty() {
+            if let Some(trusted) = trusted_fallback() {
+                info!(
+                    height,
+                    roster_len = trusted.len(),
+                    "using trusted topology fallback for empty commit/genesis topology"
+                );
+                return trusted;
+            }
             return Vec::new();
         }
         genesis_roster = roster::canonicalize_roster_for_mode(genesis_roster, consensus_mode);
         if genesis_roster.is_empty() {
+            if let Some(trusted) = trusted_fallback() {
+                info!(
+                    height,
+                    roster_len = trusted.len(),
+                    "using trusted topology fallback after genesis roster canonicalization"
+                );
+                return trusted;
+            }
             return Vec::new();
         }
         info!(
@@ -7891,10 +7934,15 @@ impl Actor {
         self.active_topology_with_genesis_fallback(view, self.consensus_mode)
     }
 
+    fn committed_height_snapshot(&self) -> u64 {
+        let state_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        self.last_committed_height.max(state_height)
+    }
+
     fn effective_commit_topology(&self) -> Vec<PeerId> {
         let world = self.state.world_view();
         let commit_topology = self.state.commit_topology_snapshot();
-        let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let height = self.committed_height_snapshot();
         self.active_topology_with_genesis_fallback_from_world(
             &world,
             commit_topology.as_slice(),
@@ -7907,7 +7955,7 @@ impl Actor {
         let (consensus_mode, _mode_tag, _prf_seed) = self.consensus_context_for_height(key.1);
         let mut roster = self.roster_for_vote_with_mode(key.0, key.1, key.2, consensus_mode);
         if roster.is_empty() {
-            let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+            let committed_height = self.committed_height_snapshot();
             let committed_epoch = self.epoch_for_height(committed_height);
             let session_epoch = self.epoch_for_height(key.1);
             let payload_known = self.block_known_locally(key.0);
@@ -8483,7 +8531,7 @@ impl Actor {
     }
 
     fn current_height_and_roster(&self) -> (u64, usize, Vec<u32>) {
-        let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let height = self.committed_height_snapshot();
         let topology = self.effective_commit_topology();
         let indices =
             compute_roster_indices_from_topology(&topology, self.epoch_roster_provider.as_ref());
@@ -8568,7 +8616,7 @@ impl Actor {
 
     fn epoch_for_height(&self, height: u64) -> u64 {
         let world = self.state.world_view();
-        let current_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let current_height = self.committed_height_snapshot();
         self.epoch_for_height_from_world(&world, current_height, height)
     }
 
@@ -8700,7 +8748,7 @@ impl Actor {
         if roster.is_empty() {
             let world = self.state.world_view();
             let commit_topology = self.state.commit_topology_snapshot();
-            let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+            let height = self.committed_height_snapshot();
             roster = self.active_topology_with_genesis_fallback_from_world(
                 &world,
                 commit_topology.as_slice(),
@@ -8767,8 +8815,11 @@ impl Actor {
         );
     }
 
-    fn latest_committed_qc(&self) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
-        let height_usize = self.state.committed_height();
+    fn latest_committed_qc_from_height(
+        &self,
+        height: u64,
+    ) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
+        let height_usize = usize::try_from(height).ok()?;
         let block_height = NonZeroUsize::new(height_usize)?;
         let block = self.kura.get_block(block_height)?;
         let header = block.header();
@@ -8781,6 +8832,15 @@ impl Actor {
             subject_block_hash: block.hash(),
             phase: crate::sumeragi::consensus::Phase::Commit,
         })
+    }
+
+    fn latest_committed_qc_snapshot(&self) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
+        self.latest_committed_qc_from_height(self.committed_height_snapshot())
+    }
+
+    fn latest_committed_qc(&self) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
+        let committed_height = self.committed_height_snapshot();
+        self.latest_committed_qc_from_height(committed_height)
     }
 
     fn record_membership_snapshot(
@@ -9088,7 +9148,7 @@ impl Actor {
     }
 
     fn evidence_horizon_context(&self) -> Option<(u64, u64)> {
-        let current_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let current_height = self.committed_height_snapshot();
         let world = self.state.world_view();
         let from_wsv = world
             .sumeragi_npos_parameters()
@@ -9129,7 +9189,7 @@ impl Actor {
             return Ok(false);
         }
         let (subject_height, _) = super::evidence::evidence_subject_height_view(evidence);
-        let fallback_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let fallback_height = self.committed_height_snapshot();
         let evidence_height = subject_height.unwrap_or(fallback_height);
         let (consensus_mode, mode_tag, prf_seed) =
             self.consensus_context_for_height(evidence_height);
@@ -9830,6 +9890,7 @@ impl Actor {
             missing_block_height_recovery: BTreeMap::new(),
             no_roster_fallback_recovery: BTreeMap::new(),
             sidecar_mismatch_recovery: BTreeMap::new(),
+            sidecar_observation_suppression_depth: 0,
             range_pull_escalation_cooldowns: BTreeMap::new(),
             deferred_qcs: BTreeMap::new(),
             deferred_qc_roster_state: BTreeMap::new(),
@@ -10305,7 +10366,7 @@ impl Actor {
     fn tick_mode_management(&mut self) -> bool {
         let (effective_mode, staged_mode_tag, staged_mode_activation_height, current_height) = {
             let world = self.state.world_view();
-            let current_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+            let current_height = self.committed_height_snapshot();
             let params = world.parameters().sumeragi();
             let (staged_tag, staged_height) = staged_mode_info(params);
             (
@@ -10546,11 +10607,10 @@ impl Actor {
             return None;
         }
 
-        let committed_qc = self.latest_committed_qc();
-        let committed_height = committed_qc.as_ref().map_or_else(
-            || u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX),
-            |qc| qc.height,
-        );
+        let committed_qc = self.latest_committed_qc_snapshot();
+        let committed_height = committed_qc
+            .as_ref()
+            .map_or_else(|| self.committed_height_snapshot(), |qc| qc.height);
         let height = active_round_height(self.highest_qc, committed_qc, committed_height);
         let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
         let Some(age) = self.phase_tracker.view_age(height, now) else {
@@ -10670,7 +10730,7 @@ impl Actor {
 
     pub(super) fn refresh_worker_loop_config(&mut self, cfg: &mut super::WorkerLoopConfig) {
         let world = self.state.world_view();
-        let current_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let current_height = self.committed_height_snapshot();
         let mode = super::effective_consensus_mode_for_height_from_world(
             &world,
             current_height,
@@ -10760,7 +10820,7 @@ impl Actor {
         if self.config.mode_flip.enabled {
             // If the committed height already requires a consensus-mode flip but we have not
             // applied it yet, keep ticking even when idle so the cutover cannot be missed.
-            let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+            let committed_height = self.committed_height_snapshot();
             let effective_mode = {
                 let world = self.state.world_view();
                 super::effective_consensus_mode_for_height_from_world(
@@ -11537,8 +11597,7 @@ impl Actor {
                             super::status::ConsensusMessageReason::FutureWindow,
                         );
                         if let Some(parent_hash) = header.prev_block_hash() {
-                            let local_height =
-                                u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+                            let local_height = self.committed_height_snapshot();
                             let expected_height = local_height.saturating_add(1);
                             let active_commit_topology = self.effective_commit_topology();
                             let (consensus_mode, _, _) = self.consensus_context_for_height(height);
@@ -12527,7 +12586,7 @@ impl Actor {
         }
         let world = self.state.world_view();
         let commit_topology = self.state.commit_topology_snapshot();
-        let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let height = self.committed_height_snapshot();
         derive_local_validator_index_for_mode_from_world(
             &world,
             commit_topology.as_slice(),
@@ -12761,7 +12820,7 @@ impl Actor {
         block_hash: &HashOf<BlockHeader>,
         height: crate::sumeragi::consensus::Height,
     ) -> bool {
-        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let committed_height = self.committed_height_snapshot();
         if height <= committed_height {
             let committed_hash = usize::try_from(height)
                 .ok()
@@ -13894,8 +13953,8 @@ impl Actor {
         }
         let ready_cooldown = self.rebroadcast_cooldown();
         let tip_height = self.state.committed_height();
-        let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
         let tip_hash = self.state.latest_block_hash_fast();
+        let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
         // Rotate through sessions with a per-tick budget so large backlogs do not trigger storms.
         let total_sessions = self.subsystems.da_rbc.rbc.sessions.len();
         let session_budget = self.config.rbc.rebroadcast_sessions_per_tick.max(1);
@@ -14934,14 +14993,20 @@ impl Actor {
 
     /// Compute a bounded timeout extension used to dampen view changes while backlog converges.
     ///
-    /// Recovery timing is deterministic and derived from on-chain block/commit time, so no
-    /// additional backlog extension knobs are applied here.
+    /// The extension is deterministic and derived from existing consensus timing only.
+    /// This gives in-flight RBC/dependency convergence a short bounded grace period
+    /// before fail-closed rotation resumes.
     fn backlog_extended_view_change_timeout(
         &self,
         base_timeout: Duration,
-        _backlog_signals: bool,
+        backlog_signals: bool,
     ) -> Duration {
-        base_timeout
+        if !backlog_signals {
+            return base_timeout;
+        }
+        let backlog_grace =
+            saturating_mul_duration(self.rebroadcast_cooldown(), 8).max(Duration::from_secs(2));
+        base_timeout.saturating_add(backlog_grace)
     }
 
     fn missing_block_recovery_key_for_height(&self, height: u64) -> MissingBlockHeightRecoveryKey {
@@ -15075,7 +15140,7 @@ impl Actor {
     }
 
     fn prune_missing_block_recovery_state(&mut self, now: Instant) {
-        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let committed_height = self.committed_height_snapshot();
         let ttl = self
             .recovery_missing_block_height_ttl()
             .max(Duration::from_millis(1));
@@ -15425,7 +15490,7 @@ impl Actor {
             return DeterministicActiveSet { scored: Vec::new() };
         }
         let tracked: BTreeSet<_> = peers.iter().cloned().collect();
-        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let committed_height = self.committed_height_snapshot();
         let lookback = u64::from(lookback_blocks.max(1));
         let min_height = committed_height.saturating_sub(lookback.saturating_sub(1));
         let snapshots = self.state.commit_roster_journal.read().snapshots();
@@ -15587,7 +15652,7 @@ impl Actor {
         now: Instant,
         tier: Option<RangePullCandidateTier>,
     ) -> bool {
-        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let local_height = self.committed_height_snapshot();
         let Some(anchor_hash) = self.state.latest_block_hash_fast() else {
             return false;
         };
@@ -15684,7 +15749,7 @@ impl Actor {
             .pending
             .missing_block_requests
             .get(&block_hash)
-            .filter(|stats| stats.height == height && stats.view == view)
+            .filter(|stats| stats.height == height)
             .map(|stats| {
                 (
                     stats.last_dependency_progress,
@@ -15702,10 +15767,7 @@ impl Actor {
             request_progress.is_some_and(|(_, _, triggered)| triggered);
 
         if budget.range_pull.inflight
-            && budget
-                .range_pull
-                .last_requested
-                .is_some_and(|requested| now.saturating_duration_since(requested) >= ttl)
+            && now.saturating_duration_since(budget.range_pull.last_progress) >= ttl
             && recent_dependency_progress.is_none()
         {
             budget.range_pull.inflight = false;
@@ -15725,10 +15787,16 @@ impl Actor {
         if let Some(progress_at) = recent_dependency_progress {
             budget.range_pull.last_progress = progress_at;
         }
+        let inflight_range_pull_converging = budget.range_pull.inflight
+            && now.saturating_duration_since(budget.range_pull.last_progress) < ttl;
 
         let dwell = now.saturating_duration_since(budget.first_seen);
         let hard_cap_due = budget.attempts >= attempt_cap || dwell >= ttl;
-        if hard_cap_due && (recent_dependency_progress.is_some() || recent_rbc_progress.is_some()) {
+        if hard_cap_due
+            && (recent_dependency_progress.is_some()
+                || recent_rbc_progress.is_some()
+                || inflight_range_pull_converging)
+        {
             super::status::inc_consensus_missing_block_height_progress_deferred();
             debug!(
                 height,
@@ -15736,7 +15804,10 @@ impl Actor {
                 block = %block_hash,
                 attempts = budget.attempts,
                 ttl_ms = ttl.as_millis(),
-                "deferring missing-block hard-cap escalation due to recent dependency progress"
+                recent_dependency_progress = recent_dependency_progress.is_some(),
+                recent_rbc_progress = recent_rbc_progress.is_some(),
+                inflight_range_pull_converging,
+                "deferring missing-block hard-cap escalation due to in-flight dependency convergence"
             );
             self.missing_block_height_recovery.insert(key, budget);
             return false;
@@ -15800,14 +15871,21 @@ impl Actor {
         budget.range_pull.hash_misses = 0;
         budget.range_pull.no_progress_windows =
             budget.range_pull.no_progress_windows.saturating_add(1);
+        let inflight_range_pull_converging_now = budget.range_pull.inflight
+            && now.saturating_duration_since(budget.range_pull.last_progress) < ttl;
 
-        let defer_view_change =
-            hard_cap_due && self.should_defer_missing_block_view_change(&block_hash, height, view);
+        let defer_view_change = hard_cap_due
+            && (inflight_range_pull_converging_now
+                || self.should_defer_missing_block_view_change(&block_hash, height, view));
         let mut progressed = budget.range_pull.inflight;
         if hard_cap_due
             && !defer_hard_cap_escalation
             && !defer_view_change
             && !view_change_already_triggered
+            && !self
+                .phase_tracker
+                .current_view(height)
+                .is_some_and(|current| current > view)
             && budget.escalated_view != Some(view)
         {
             budget.escalated_view = Some(view);
@@ -15815,6 +15893,9 @@ impl Actor {
             #[cfg(feature = "telemetry")]
             if let Some(telemetry) = self.telemetry_handle() {
                 telemetry.inc_consensus_missing_block_height_escalation();
+            }
+            if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
+                stats.view_change_triggered_view = Some(view);
             }
             warn!(
                 height,
@@ -15838,12 +15919,16 @@ impl Actor {
                 "skipping missing-block hard-cap escalation: view change already triggered in this view"
             );
         } else if hard_cap_due && defer_view_change {
+            if inflight_range_pull_converging_now {
+                super::status::inc_consensus_missing_block_height_progress_deferred();
+            }
             debug!(
                 height,
                 view,
                 block = %block_hash,
                 attempts = budget.attempts,
                 dwell_ms = dwell.as_millis(),
+                inflight_range_pull_converging_now,
                 "deferring missing-block hard-cap view change while dependency backlog converges"
             );
         }
@@ -15960,6 +16045,9 @@ impl Actor {
         expected_hash: HashOf<BlockHeader>,
         reason: &'static str,
     ) {
+        if self.sidecar_observation_suppression_depth > 0 {
+            return;
+        }
         if let Some(meta) = self.kura.read_roster_metadata(height)
             && meta.block_hash != expected_hash
         {
@@ -15992,7 +16080,7 @@ impl Actor {
     }
 
     fn prune_stale_consensus_recovery(&mut self, now: Instant) {
-        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let committed_height = self.committed_height_snapshot();
         let retention = self
             .commit_quorum_timeout()
             .max(self.subsystems.propose.pacemaker.propose_interval)
@@ -16251,10 +16339,9 @@ impl Actor {
             return false;
         }
         let committed_qc = self.latest_committed_qc();
-        let committed_height = committed_qc.as_ref().map_or_else(
-            || u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX),
-            |qc| qc.height,
-        );
+        let committed_height = committed_qc
+            .as_ref()
+            .map_or_else(|| self.committed_height_snapshot(), |qc| qc.height);
         let height = active_round_height(self.highest_qc, committed_qc, committed_height);
         let Some(age) = self.phase_tracker.view_age(height, now) else {
             return false;
@@ -16289,10 +16376,16 @@ impl Actor {
         {
             return false;
         }
+        let repeated_timeout_streak = next_missing_qc_timeout_streak(
+            self.subsystems.propose.last_missing_qc_timeout_trigger,
+            height,
+            current_view,
+        );
         rbc_backlog
             || consensus_queue_backlog
             || !self.pending.missing_block_requests.is_empty()
             || !self.deferred_missing_payload_qcs.is_empty()
+            || repeated_timeout_streak > 0
     }
 
     fn reacquire_missing_qc_dependencies(
@@ -16506,11 +16599,22 @@ impl Actor {
             || queue_depths.consensus_rx > 0;
 
         let committed_qc = self.latest_committed_qc();
-        let committed_height = committed_qc.as_ref().map_or_else(
-            || u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX),
-            |qc| qc.height,
-        );
-        let height = active_round_height(self.highest_qc, committed_qc, committed_height);
+        let committed_height = committed_qc
+            .as_ref()
+            .map_or_else(|| self.committed_height_snapshot(), |qc| qc.height);
+        let derived_height = active_round_height(self.highest_qc, committed_qc, committed_height);
+        let tracked_height = self.phase_tracker.round_height;
+        let height = tracked_height.map_or(derived_height, |tracked| tracked.max(derived_height));
+        if let Some(tracked) = tracked_height
+            && tracked > derived_height
+        {
+            debug!(
+                derived_height,
+                tracked_height = tracked,
+                selected_height = height,
+                "using tracked round height for idle view-change evaluation"
+            );
+        }
 
         let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
 

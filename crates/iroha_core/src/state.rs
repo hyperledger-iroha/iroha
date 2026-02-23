@@ -570,13 +570,16 @@ macro_rules! build_world_transaction {
 #[derive(Default)]
 pub struct BlockHashes {
     inner: parking_lot::RwLock<Vec<HashOf<BlockHeader>>>,
+    committed_height: AtomicUsize,
 }
 
 impl BlockHashes {
     /// Construct a new container from an explicit vector.
     pub fn new(initial: Vec<HashOf<BlockHeader>>) -> Self {
+        let committed_height = initial.len();
         Self {
             inner: parking_lot::RwLock::new(initial),
+            committed_height: AtomicUsize::new(committed_height),
         }
     }
 
@@ -595,6 +598,11 @@ impl BlockHashes {
         BlockHashesView {
             guard: self.inner.read(),
         }
+    }
+
+    /// Return the latest committed height without taking the block-hash read lock.
+    pub fn committed_height(&self) -> usize {
+        self.committed_height.load(Ordering::Acquire)
     }
 }
 
@@ -652,6 +660,15 @@ impl<'a> BlockHashesBlock<'a> {
         self.push(hash);
     }
 
+    /// Drop the long-lived snapshot guard before entering state commit.
+    ///
+    /// Keeping this guard through block execution preserves deterministic snapshot semantics,
+    /// but committing while still holding it can deadlock with `view_lock` contention. Call this
+    /// before acquiring `view_lock` in commit paths.
+    pub(crate) fn prepare_commit(&mut self) {
+        self.guard.take();
+    }
+
     /// Commit all mutations performed in this block scope.
     pub(crate) fn commit(mut self) {
         let pending = std::mem::take(&mut self.pending);
@@ -660,6 +677,9 @@ impl<'a> BlockHashesBlock<'a> {
         let mut guard = self.inner.inner.write();
         guard.truncate(visible_len);
         guard.extend(pending);
+        self.inner
+            .committed_height
+            .store(guard.len(), Ordering::Release);
     }
 
     /// Commit mutations in tests without exposing the block hash log publicly.
@@ -5414,8 +5434,8 @@ impl ConfidentialDigestCacheStore {
 pub struct StateView<'state> {
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: WorldView<'state>,
-    /// Blockchain.
-    pub block_hashes: BlockHashesView<'state>,
+    /// Snapshot of committed block hashes.
+    pub block_hashes: Vec<HashOf<BlockHeader>>,
     /// Merge-ledger cache retaining recent entries for this consistent view.
     pub merge_ledger: &'state MergeLedgerStore,
     /// Hashes of transactions mapped onto block height where they stored
@@ -5474,8 +5494,8 @@ pub struct StateView<'state> {
 pub struct StateQueryView<'state> {
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: WorldView<'state>,
-    /// Blockchain.
-    pub block_hashes: BlockHashesView<'state>,
+    /// Snapshot of committed block hashes.
+    pub block_hashes: Vec<HashOf<BlockHeader>>,
     /// Topology used to commit latest block.
     pub commit_topology: CellView<'state, Vec<PeerId>>,
     /// Topology used to commit previous block.
@@ -5518,7 +5538,7 @@ impl<'state> StateView<'state> {
 
     /// Exposes the cached block hashes captured by this snapshot.
     #[inline]
-    pub fn block_hashes(&self) -> &BlockHashesView<'state> {
+    pub fn block_hashes(&self) -> &[HashOf<BlockHeader>] {
         &self.block_hashes
     }
 
@@ -14250,7 +14270,8 @@ impl State {
         let total_start = Instant::now();
 
         let block_hashes_start = Instant::now();
-        let block_hashes = self.block_hashes.view();
+        let block_hashes: Vec<HashOf<BlockHeader>> =
+            self.block_hashes.view().iter().copied().collect();
         let block_hashes_wait = block_hashes_start.elapsed();
 
         let world_start = Instant::now();
@@ -14338,7 +14359,7 @@ impl State {
     /// world-state components.
     #[track_caller]
     pub fn committed_height(&self) -> usize {
-        self.block_hashes.view().len()
+        self.block_hashes.committed_height()
     }
 
     /// Snapshot committed block hashes from the block-hash journal.
@@ -14564,7 +14585,8 @@ impl State {
         // Acquire inner views before taking the coarse view lock so we don't deadlock
         // with block-scoped writers that already hold those locks and will later try
         // to grab `view_lock` during commit.
-        let block_hashes = self.block_hashes.view();
+        let block_hashes: Vec<HashOf<BlockHeader>> =
+            self.block_hashes.view().iter().copied().collect();
         let block_hashes_wait = block_hashes_start.elapsed();
         let world_start = Instant::now();
         let world = self.world.view();
@@ -17524,7 +17546,7 @@ impl<'state> StateBlock<'state> {
         let Self {
             state_ref,
             world,
-            block_hashes,
+            mut block_hashes,
             transactions,
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
@@ -17543,6 +17565,7 @@ impl<'state> StateBlock<'state> {
         } else {
             (None, Some(world.tiered_snapshot_diff()))
         };
+        block_hashes.prepare_commit();
         {
             let view_lock_wait_start = Instant::now();
             let _view_lock = view_lock.write();
@@ -17563,17 +17586,21 @@ impl<'state> StateBlock<'state> {
                     commit_error = Some(err);
                 }
             }
+            let world_hold = if commit_error.is_none() {
+                let world_start = Instant::now();
+                // Commit world storage before taking the block-hashes write lock.
+                // Validation workers build `StateBlock`s by acquiring block-hash read snapshots
+                // first and then world storage transactions; committing block hashes first can
+                // invert that order and deadlock under contention.
+                world.commit();
+                world_start.elapsed()
+            } else {
+                Duration::ZERO
+            };
             let block_hashes_hold = if commit_error.is_none() {
                 let block_hashes_start = Instant::now();
                 block_hashes.commit();
                 block_hashes_start.elapsed()
-            } else {
-                Duration::ZERO
-            };
-            let world_hold = if commit_error.is_none() {
-                let world_start = Instant::now();
-                world.commit();
-                world_start.elapsed()
             } else {
                 Duration::ZERO
             };
@@ -23759,14 +23786,32 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
 
+        let tx_first = dummy_accepted_transaction();
+        let tx_second = dummy_accepted_transaction();
         let tx = dummy_accepted_transaction();
+        let tx_hash_first = tx_first.hash();
+        let tx_hash_second = tx_second.hash();
         let tx_hash = tx.hash();
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(tx_hash_first, nonzero!(1_usize));
+            transactions
+                .commit()
+                .expect("transactions block 1 should commit");
+        }
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(tx_hash_second, nonzero!(2_usize));
+            transactions
+                .commit()
+                .expect("transactions block 2 should commit");
+        }
         {
             let mut transactions = state.transactions.block();
             transactions.insert_block_with_single_tx(tx_hash, nonzero!(3_usize));
             transactions
                 .commit()
-                .expect("transactions block should commit");
+                .expect("transactions block 3 should commit");
         }
 
         assert_eq!(
@@ -34933,6 +34978,72 @@ mod tests {
         let view = state.block_hashes.view();
         assert_eq!(view.len(), 1);
         assert_eq!(view.iter().last().copied(), Some(replacement_hash));
+    }
+
+    #[test]
+    fn block_hashes_prepare_commit_releases_read_lock() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let mut block_hashes = state.block_hashes.block();
+        assert_eq!(block_hashes.len(), 0);
+        assert!(
+            state.block_hashes.inner.try_write().is_none(),
+            "block-scoped snapshot should pin reads until commit preparation"
+        );
+        block_hashes.prepare_commit();
+        assert!(
+            state.block_hashes.inner.try_write().is_some(),
+            "prepare_commit should release the snapshot read guard before commit"
+        );
+    }
+
+    #[test]
+    fn block_hashes_committed_height_cache_tracks_commits() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        assert_eq!(state.committed_height(), 0);
+        assert_eq!(
+            state.committed_height(),
+            state.block_hashes.view().len(),
+            "cached committed height must match block-hash journal length at genesis"
+        );
+
+        let first_hash =
+            BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0).hash();
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push(first_hash);
+            block_hashes.commit_for_tests();
+        }
+        assert_eq!(
+            state.committed_height(),
+            state.block_hashes.view().len(),
+            "cached committed height must be refreshed after block commit"
+        );
+
+        let replacement_hash = BlockHeader::new(
+            NonZeroU64::new(2).unwrap(),
+            Some(first_hash),
+            None,
+            None,
+            0,
+            0,
+        )
+        .hash();
+        {
+            let mut block_hashes = state.block_hashes.block_and_revert();
+            block_hashes.push(replacement_hash);
+            block_hashes.commit_for_tests();
+        }
+        assert_eq!(
+            state.committed_height(),
+            state.block_hashes.view().len(),
+            "cached committed height must track block-and-revert commits"
+        );
     }
 
     #[test]
