@@ -2420,7 +2420,7 @@ impl Actor {
                             super::pending_block::ValidationStatus::Invalid
                         )
                 });
-        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let committed_height = self.last_committed_height;
         if self.subsystems.da_rbc.rbc.sessions.contains_key(&key)
             || self.block_known_locally(*block_hash)
         {
@@ -2913,13 +2913,13 @@ impl Actor {
         }
 
         let (roster, roster_source) = if derived_roster_missing {
-            let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+            let committed_height = self.last_committed_height;
             let committed_epoch = self.epoch_for_height(committed_height);
             let (consensus_mode, _, _) = self.consensus_context_for_height(init.height);
             let fallback_roster = {
                 let world = self.state.world_view();
                 let commit_topology = self.state.commit_topology_snapshot();
-                let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+                let height = self.last_committed_height;
                 let roster = self.active_topology_with_genesis_fallback_from_world(
                     &world,
                     commit_topology.as_slice(),
@@ -3338,7 +3338,15 @@ impl Actor {
             return Ok(());
         };
         if accepted_chunk {
-            self.touch_pending_progress(chunk_block, chunk_height, chunk_view, Instant::now());
+            let now = Instant::now();
+            self.touch_pending_progress(chunk_block, chunk_height, chunk_view, now);
+            let _ = self.note_missing_block_request_dependency_progress(
+                chunk_block,
+                chunk_height,
+                chunk_view,
+                now,
+                true,
+            );
         }
         if chunk_digest_mismatch {
             let log_outcome = sender.as_ref().map(|peer| {
@@ -3698,7 +3706,7 @@ impl Actor {
             Ok(())
         }
         if topology_peers.is_empty() {
-            let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+            let committed_height = self.last_committed_height;
             let committed_epoch = self.epoch_for_height(committed_height);
             let session_epoch = self.epoch_for_height(key.1);
             let payload_known = self.block_known_locally(key.0);
@@ -4024,7 +4032,15 @@ impl Actor {
             .is_some_and(|session| session.delivered);
         let deliver_emitted = !delivered_before && delivered_after;
         if recorded_ready {
-            self.touch_pending_progress(ready.block_hash, ready.height, ready.view, Instant::now());
+            let now = Instant::now();
+            self.touch_pending_progress(ready.block_hash, ready.height, ready.view, now);
+            let _ = self.note_missing_block_request_dependency_progress(
+                ready.block_hash,
+                ready.height,
+                ready.view,
+                now,
+                true,
+            );
         }
         let telemetry_ref = self.telemetry_handle();
         self.publish_rbc_backlog_snapshot();
@@ -4527,7 +4543,7 @@ impl Actor {
             Ok(())
         }
         if topology_peers.is_empty() {
-            let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+            let committed_height = self.last_committed_height;
             let committed_epoch = self.epoch_for_height(committed_height);
             let session_epoch = self.epoch_for_height(key.1);
             let payload_known = self.block_known_locally(key.0);
@@ -5114,6 +5130,13 @@ impl Actor {
             return Ok(());
         }
         self.touch_pending_progress(deliver.block_hash, deliver.height, deliver.view, now);
+        let _ = self.note_missing_block_request_dependency_progress(
+            deliver.block_hash,
+            deliver.height,
+            deliver.view,
+            now,
+            true,
+        );
         if first_deliver {
             if let Some(telemetry) = self.telemetry_handle() {
                 telemetry.inc_rbc_deliver_broadcasts();

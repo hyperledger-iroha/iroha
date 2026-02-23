@@ -1173,7 +1173,7 @@ mod tests {
     #[test]
     fn quorum_and_collectors_small_topologies() {
         let cases = [
-            (1_usize, 1_usize, Vec::<usize>::new()),
+            (1_usize, 1_usize, vec![0]),
             (2, 2, vec![1]),
             (3, 3, vec![2]),
             (4, 3, vec![2, 3]),

@@ -24,7 +24,9 @@ use iroha::{
     query::QueryError,
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature};
-use iroha_data_model::query::error::QueryExecutionFail;
+use iroha_data_model::query::{
+    error::QueryExecutionFail, offline::FindOfflineAllowanceByCertificateId,
+};
 use iroha_primitives::numeric::NumericSpec;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
@@ -217,7 +219,14 @@ async fn register_topup_expire_then_reclaim_restores_controller_balance() -> Res
         .clone();
     assert_eq!(after_topup, Numeric::new(50, 0));
 
-    let record = client.query_single(FindOfflineAllowanceByCertificateId { certificate_id })?;
+    let mut records = client
+        .query(FindOfflineAllowanceByCertificateId::new(
+            certificate_id.clone(),
+        ))
+        .execute_all()?;
+    let record = records
+        .pop()
+        .expect("offline allowance should exist after top-up");
     assert_eq!(record.remaining_amount, allowance_amount);
 
     if let Some(wait_ms) = expires_at_ms
@@ -230,7 +239,7 @@ async fn register_topup_expire_then_reclaim_restores_controller_balance() -> Res
 
     loop {
         match client.submit_blocking(ReclaimExpiredOfflineAllowance { certificate_id }) {
-            Ok(()) => break,
+            Ok(_) => break,
             Err(err) if err.to_string().contains("allowance_not_expired") => {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
@@ -245,9 +254,16 @@ async fn register_topup_expire_then_reclaim_restores_controller_balance() -> Res
         .clone();
     assert_eq!(after_reclaim, initial_balance);
 
-    match client.query_single(FindOfflineAllowanceByCertificateId { certificate_id }) {
+    match client
+        .query(FindOfflineAllowanceByCertificateId::new(certificate_id))
+        .execute_all()
+    {
+        Ok(records) if records.is_empty() => {}
         Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {}
-        Ok(_) => panic!("offline allowance should be removed after reclaim"),
+        Ok(records) => panic!(
+            "offline allowance should be removed after reclaim, found {} record(s)",
+            records.len()
+        ),
         Err(err) => panic!("unexpected query error after reclaim: {err}"),
     }
 

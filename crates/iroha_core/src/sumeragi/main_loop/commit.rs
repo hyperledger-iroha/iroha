@@ -3273,32 +3273,45 @@ impl Actor {
                     targets = topology_peers.len(),
                     "sending block sync update to commit topology after emitting local precommit vote"
                 );
-            } else if self.allow_no_roster_fallback_or_fail_closed(
-                vote.height,
-                vote.view,
-                vote.block_hash,
-                ViewChangeCause::MissingPayload,
-                "local_precommit_no_roster",
-            ) {
-                self.broadcast_block_created_for_block_sync(
-                    super::message::BlockCreated::from(&pending.block),
-                    &topology_peers,
-                );
-                iroha_logger::info!(
-                    height = vote.height,
-                    view = vote.view,
-                    block = %vote.block_hash,
-                    signer = vote.signer,
-                    targets = topology_peers.len(),
-                    "sending BlockCreated payload to commit topology (no verifiable roster snapshot)"
-                );
             } else {
-                iroha_logger::warn!(
-                    height = vote.height,
-                    view = vote.view,
-                    block = %vote.block_hash,
-                    "skipping BlockCreated fallback broadcast after no-roster fail-closed escalation"
-                );
+                match self.decide_no_roster_fallback_or_fail_closed(
+                    vote.height,
+                    vote.view,
+                    vote.block_hash,
+                    ViewChangeCause::MissingPayload,
+                    "local_precommit_no_roster",
+                ) {
+                    super::NoRosterFallbackDecision::AllowFallback => {
+                        self.broadcast_block_created_for_block_sync(
+                            super::message::BlockCreated::from(&pending.block),
+                            &topology_peers,
+                        );
+                        iroha_logger::info!(
+                            height = vote.height,
+                            view = vote.view,
+                            block = %vote.block_hash,
+                            signer = vote.signer,
+                            targets = topology_peers.len(),
+                            "sending BlockCreated payload to commit topology (no verifiable roster snapshot)"
+                        );
+                    }
+                    super::NoRosterFallbackDecision::BootstrapPending => {
+                        iroha_logger::debug!(
+                            height = vote.height,
+                            view = vote.view,
+                            block = %vote.block_hash,
+                            "deferring BlockCreated fallback broadcast while no-roster bootstrap is pending"
+                        );
+                    }
+                    super::NoRosterFallbackDecision::FailClosed => {
+                        iroha_logger::warn!(
+                            height = vote.height,
+                            view = vote.view,
+                            block = %vote.block_hash,
+                            "skipping BlockCreated fallback broadcast after no-roster fail-closed escalation"
+                        );
+                    }
+                }
             }
         } else {
             iroha_logger::trace!(

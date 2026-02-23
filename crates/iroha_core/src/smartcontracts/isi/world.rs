@@ -14692,7 +14692,11 @@ pub mod isi {
         impl ValidSingularQuery for FindExecutorDataModel {
             #[metrics(+"find_executor_data_model")]
             fn execute(&self, state_ro: &impl StateReadOnly) -> Result<ExecutorDataModel, Error> {
-                Ok(state_ro.world().executor_data_model().clone())
+                let model = state_ro.world().executor_data_model().clone();
+                if model.permissions().is_empty() {
+                    return Ok(crate::executor::initial_executor_data_model_fallback());
+                }
+                Ok(model)
             }
         }
 

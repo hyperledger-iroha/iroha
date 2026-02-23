@@ -99,15 +99,18 @@ function blake2bCompress(state, block, t0, t1, f0) {
 }
 
 /**
- * Compute a BLAKE2b-256 digest.
+ * Compute a BLAKE2b digest.
  * @param {ArrayBufferView | ArrayBuffer} data
+ * @param {number} outputLength
  * @param {{ personalization?: ArrayBufferView | ArrayBuffer; includeZeroKeyBlock?: boolean }} [options]
  * @returns {Uint8Array}
  */
-export function blake2b256(data, options = {}) {
+function blake2bDigest(data, outputLength, options = {}) {
+  if (!Number.isInteger(outputLength) || outputLength < 1 || outputLength > 64) {
+    throw new TypeError("outputLength must be an integer between 1 and 64");
+  }
   const input = asUint8Array(data, "data");
   const state = BLAKE2B_IV.map((value) => value);
-  const outputLength = 32;
   state[0] ^= 0x01010000n ^ BigInt(outputLength);
 
   const personalization = options.personalization
@@ -172,4 +175,24 @@ export function blake2b256(data, options = {}) {
     }
   }
   return output;
+}
+
+/**
+ * Compute a BLAKE2b-256 digest.
+ * @param {ArrayBufferView | ArrayBuffer} data
+ * @param {{ personalization?: ArrayBufferView | ArrayBuffer; includeZeroKeyBlock?: boolean }} [options]
+ * @returns {Uint8Array}
+ */
+export function blake2b256(data, options = {}) {
+  return blake2bDigest(data, 32, options);
+}
+
+/**
+ * Compute a BLAKE2b-512 digest.
+ * @param {ArrayBufferView | ArrayBuffer} data
+ * @param {{ personalization?: ArrayBufferView | ArrayBuffer; includeZeroKeyBlock?: boolean }} [options]
+ * @returns {Uint8Array}
+ */
+export function blake2b512(data, options = {}) {
+  return blake2bDigest(data, 64, options);
 }

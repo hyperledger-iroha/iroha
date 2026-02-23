@@ -3044,6 +3044,50 @@ async fn handler_nexus_public_lane_rewards(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_nexus_dataspaces_account_summary(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(literal): AxPath<String>,
+    crate::NoritoQuery(params): crate::NoritoQuery<
+        routing::NexusDataspacesAccountSummaryQueryParams,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let nexus_enabled = app.state.nexus_snapshot().enabled;
+    ensure_nexus_lanes_enabled(
+        nexus_enabled,
+        routing::ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY,
+    )?;
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_v1_nexus_dataspaces_account_summary(
+            app.state.clone(),
+            AxPath(literal),
+            crate::NoritoQuery(params.clone()),
+            app.telemetry.clone(),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        None,
+        routing::ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY.trim_start_matches('/'),
+        enforce,
+    )
+    .await?;
+    routing::handle_v1_nexus_dataspaces_account_summary(
+        app.state.clone(),
+        AxPath(literal),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_space_directory_bindings(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -14369,6 +14413,10 @@ impl Torii {
                     get(handler_nexus_public_lane_rewards),
                 )
                 .route(
+                    "/v1/nexus/dataspaces/accounts/{literal}/summary",
+                    get(handler_nexus_dataspaces_account_summary),
+                )
+                .route(
                     "/v1/space-directory/uaids/{uaid}",
                     get(handler_space_directory_bindings),
                 )
@@ -14531,6 +14579,66 @@ impl Torii {
                     post(soracloud::handle_state_mutation),
                 )
                 .route(
+                    "/v1/soracloud/fhe/job/run",
+                    post(soracloud::handle_fhe_job_run),
+                )
+                .route(
+                    "/v1/soracloud/decrypt/request",
+                    post(soracloud::handle_decryption_request),
+                )
+                .route(
+                    "/v1/soracloud/health/access/request",
+                    post(soracloud::handle_health_access_request),
+                )
+                .route(
+                    "/v1/soracloud/health/compliance/report",
+                    get(soracloud::handle_health_compliance_report),
+                )
+                .route(
+                    "/v1/soracloud/ciphertext/query",
+                    post(soracloud::handle_ciphertext_query),
+                )
+                .route(
+                    "/v1/soracloud/training/job/start",
+                    post(soracloud::handle_training_job_start),
+                )
+                .route(
+                    "/v1/soracloud/training/job/checkpoint",
+                    post(soracloud::handle_training_job_checkpoint),
+                )
+                .route(
+                    "/v1/soracloud/training/job/retry",
+                    post(soracloud::handle_training_job_retry),
+                )
+                .route(
+                    "/v1/soracloud/training/job/status",
+                    get(soracloud::handle_training_job_status),
+                )
+                .route(
+                    "/v1/soracloud/model/weight/register",
+                    post(soracloud::handle_model_weight_register),
+                )
+                .route(
+                    "/v1/soracloud/model/weight/promote",
+                    post(soracloud::handle_model_weight_promote),
+                )
+                .route(
+                    "/v1/soracloud/model/weight/rollback",
+                    post(soracloud::handle_model_weight_rollback),
+                )
+                .route(
+                    "/v1/soracloud/model/weight/status",
+                    get(soracloud::handle_model_weight_status),
+                )
+                .route(
+                    "/v1/soracloud/model/artifact/register",
+                    post(soracloud::handle_model_artifact_register),
+                )
+                .route(
+                    "/v1/soracloud/model/artifact/status",
+                    get(soracloud::handle_model_artifact_status),
+                )
+                .route(
                     "/v1/soracloud/registry",
                     get(soracloud::handle_registry_status),
                 )
@@ -14539,8 +14647,40 @@ impl Torii {
                     post(soracloud::handle_agent_deploy),
                 )
                 .route(
+                    "/v1/soracloud/agent/lease/renew",
+                    post(soracloud::handle_agent_lease_renew),
+                )
+                .route(
+                    "/v1/soracloud/agent/restart",
+                    post(soracloud::handle_agent_restart),
+                )
+                .route(
+                    "/v1/soracloud/agent/status",
+                    get(soracloud::handle_agent_status),
+                )
+                .route(
+                    "/v1/soracloud/agent/wallet/spend",
+                    post(soracloud::handle_agent_wallet_spend),
+                )
+                .route(
+                    "/v1/soracloud/agent/wallet/approve",
+                    post(soracloud::handle_agent_wallet_approve),
+                )
+                .route(
                     "/v1/soracloud/agent/policy/revoke",
                     post(soracloud::handle_agent_policy_revoke),
+                )
+                .route(
+                    "/v1/soracloud/agent/message/send",
+                    post(soracloud::handle_agent_message_send),
+                )
+                .route(
+                    "/v1/soracloud/agent/message/ack",
+                    post(soracloud::handle_agent_message_ack),
+                )
+                .route(
+                    "/v1/soracloud/agent/mailbox/status",
+                    get(soracloud::handle_agent_mailbox_status),
                 )
                 .route(
                     "/v1/soracloud/agent/autonomy/allow",
@@ -15861,7 +16001,16 @@ impl Torii {
             #[cfg(feature = "app_api")]
             sns_registry: Arc::new(sns::Registry::bootstrap_default()),
             #[cfg(feature = "app_api")]
-            soracloud_registry: Arc::new(soracloud::Registry::default()),
+            soracloud_registry: Arc::new({
+                #[cfg(test)]
+                {
+                    soracloud::Registry::default()
+                }
+                #[cfg(not(test))]
+                {
+                    soracloud::Registry::with_default_persistence()
+                }
+            }),
         });
 
         #[cfg(feature = "app_api")]

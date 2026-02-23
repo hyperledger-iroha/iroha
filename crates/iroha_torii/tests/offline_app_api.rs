@@ -29,12 +29,12 @@ use iroha_data_model::{
     asset::{AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
     domain::Domain,
-    isi::offline::RegisterOfflineAllowance,
+    isi::{Mint, offline::RegisterOfflineAllowance},
     metadata::Metadata,
     offline::{
-        AppleAppAttestProof, OfflineAllowanceCommitment, OfflinePlatformProof, OfflineSpendReceipt,
-        OfflineToOnlineTransfer, OfflineWalletCertificate, OfflineWalletPolicy,
-        compute_receipts_root,
+        AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineAllowanceCommitment,
+        OfflinePlatformProof, OfflineSpendReceipt, OfflineToOnlineTransfer,
+        OfflineWalletCertificate, OfflineWalletPolicy, compute_receipts_root,
     },
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec};
@@ -130,12 +130,19 @@ fn world_from_fixtures(fixtures: &Fixtures) -> World {
 
     // `RegisterOfflineAllowance` seeding resolves the definition in order to evaluate
     // offline escrow requirements, so the test harness must include it.
+    let mut asset_definition_metadata = Metadata::default();
+    asset_definition_metadata.insert(
+        OFFLINE_ASSET_ENABLED_METADATA_KEY
+            .parse::<iroha_data_model::name::Name>()
+            .expect("offline enabled metadata key"),
+        true,
+    );
     let asset_definition = AssetDefinition {
         id: fixtures.certificate.allowance.asset.definition().clone(),
         spec: NumericSpec::integer(),
         mintable: Default::default(),
         logo: None,
-        metadata: Metadata::default(),
+        metadata: asset_definition_metadata,
         owned_by: fixtures.controller.clone(),
         total_quantity: Numeric::zero(),
         confidential_policy: Default::default(),
@@ -384,6 +391,12 @@ fn seed_allowance(state: &Arc<State>, certificate: OfflineWalletCertificate) {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_001, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
+    Mint::asset_numeric(
+        certificate.allowance.amount.clone(),
+        certificate.allowance.asset.clone(),
+    )
+    .execute(&controller, &mut tx)
+    .expect("allowance prefund");
     RegisterOfflineAllowance { certificate }
         .execute(&controller, &mut tx)
         .expect("allowance registration");

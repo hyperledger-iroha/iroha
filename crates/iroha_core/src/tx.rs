@@ -3146,6 +3146,11 @@ pub(crate) fn enforce_fraud_policy(
         return Ok(());
     }
 
+    eprintln!(
+        "[debug] fraud config applied: enabled={}, required_minimum_band={:?}, missing_grace_secs={:?}",
+        config.enabled, config.required_minimum_band, config.missing_assessment_grace
+    );
+
     let lane_id = routing.lane_id;
     let dataspace_id = routing.dataspace_id;
     let dataspace_label = routing.dataspace_label();

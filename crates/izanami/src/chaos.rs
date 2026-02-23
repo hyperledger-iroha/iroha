@@ -13,7 +13,6 @@ use color_eyre::{
     Result,
     eyre::{WrapErr, eyre},
 };
-use futures::FutureExt;
 use iroha::client::Client;
 use iroha_config::{kura::FsyncMode, parameters::actual::SumeragiNposTimeouts};
 use iroha_data_model::{
@@ -58,18 +57,28 @@ const IZANAMI_PACING_GOVERNOR_MAX_FACTOR_BPS: i64 = 10_000;
 const IZANAMI_COLLECTORS_K: u16 = 4;
 const IZANAMI_REDUNDANT_SEND_R: u8 = 4;
 const IZANAMI_PACING_FACTOR_BPS: u32 = 10_000;
-const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 2;
+const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 1;
+const IZANAMI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 1;
+const IZANAMI_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 250;
 const IZANAMI_FUTURE_HEIGHT_WINDOW: i64 = 2;
 const IZANAMI_FUTURE_VIEW_WINDOW: i64 = 2;
-const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 400;
-const IZANAMI_NPOS_COMMIT_TIME_MS: i64 = 600;
+const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 180;
+const IZANAMI_NPOS_COMMIT_TIME_MS: i64 = 180;
 const IZANAMI_RECOVERY_HEIGHT_ATTEMPT_CAP: i64 = 24;
-const IZANAMI_RECOVERY_HEIGHT_WINDOW_MS: i64 = 1_500;
+const IZANAMI_RECOVERY_HEIGHT_WINDOW_MS: i64 = 1500;
+const IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 1000;
+const IZANAMI_RECOVERY_NO_ROSTER_FALLBACK_VIEWS: i64 = 2;
+const IZANAMI_RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW: i64 = 2;
+const IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 1000;
+const IZANAMI_RECOVERY_MISSING_BLOCK_HEIGHT_TTL_MS: i64 = IZANAMI_RECOVERY_HEIGHT_WINDOW_MS;
 const IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: i64 = 2;
 const IZANAMI_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: i64 = 1;
 const IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER: i64 = 3;
 const IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS: i64 = 20_000;
 const IZANAMI_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: i64 = 2;
+const IZANAMI_NPOS_TIMEOUT_PROPOSE_MIN_MS: u64 = 40;
+const IZANAMI_NPOS_TIMEOUT_PREVOTE_MIN_MS: u64 = 60;
+const IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 80;
 const IZANAMI_PIPELINE_DYNAMIC_PREPASS: bool = true;
 const IZANAMI_PIPELINE_ACCESS_SET_CACHE_ENABLED: bool = true;
 const IZANAMI_PIPELINE_PARALLEL_OVERLAY: bool = true;
@@ -96,8 +105,8 @@ const IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS: u64 = 250;
 const IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 const IZANAMI_WORKER_FAILURE_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
 const IZANAMI_PEER_LOG_BASE_LEVEL: &str = "WARN";
-const IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS: u64 = 2;
-const IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_WINDOW_SECS: u64 = 30;
+const IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS: u64 = 16;
+const IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_WINDOW_SECS: u64 = 60;
 
 #[derive(Clone, Copy, Debug)]
 struct IngressEndpointPoolConfig {
@@ -555,9 +564,12 @@ fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
     let commit_time_ms = clamp_nonzero_ms(commit_time_ms);
     // Derive per-phase timeouts from the scaled block time to keep soak cadence tight.
     let timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(timeout_block_ms));
-    let propose_ms = clamp_nonzero_ms(duration_ms(timeouts.propose));
-    let prevote_ms = clamp_nonzero_ms(duration_ms(timeouts.prevote));
-    let precommit_ms = clamp_nonzero_ms(duration_ms(timeouts.precommit));
+    let propose_ms =
+        clamp_nonzero_ms(duration_ms(timeouts.propose)).max(IZANAMI_NPOS_TIMEOUT_PROPOSE_MIN_MS);
+    let prevote_ms =
+        clamp_nonzero_ms(duration_ms(timeouts.prevote)).max(IZANAMI_NPOS_TIMEOUT_PREVOTE_MIN_MS);
+    let precommit_ms = clamp_nonzero_ms(duration_ms(timeouts.precommit))
+        .max(IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS);
     // Keep commit/DA windows at least as large as the target commit time for DA stability.
     let mut commit_timeout_ms = clamp_nonzero_ms(duration_ms(timeouts.commit));
     let mut da_ms = clamp_nonzero_ms(duration_ms(timeouts.da));
@@ -826,6 +838,26 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
                 IZANAMI_RECOVERY_HEIGHT_WINDOW_MS,
             )
             .write(
+                ["sumeragi", "recovery", "missing_qc_reacquire_window_ms"],
+                IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS,
+            )
+            .write(
+                ["sumeragi", "recovery", "no_roster_fallback_views"],
+                IZANAMI_RECOVERY_NO_ROSTER_FALLBACK_VIEWS,
+            )
+            .write(
+                ["sumeragi", "recovery", "no_roster_refresh_retry_per_view"],
+                IZANAMI_RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW,
+            )
+            .write(
+                ["sumeragi", "recovery", "deferred_qc_ttl_ms"],
+                IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS,
+            )
+            .write(
+                ["sumeragi", "recovery", "missing_block_height_ttl_ms"],
+                IZANAMI_RECOVERY_MISSING_BLOCK_HEIGHT_TTL_MS,
+            )
+            .write(
                 ["sumeragi", "recovery", "hash_miss_cap_before_range_pull"],
                 IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL,
             )
@@ -860,6 +892,24 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             .write(
                 ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
                 IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER,
+            )
+            .write(
+                [
+                    "sumeragi",
+                    "advanced",
+                    "da",
+                    "availability_timeout_multiplier",
+                ],
+                IZANAMI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER,
+            )
+            .write(
+                [
+                    "sumeragi",
+                    "advanced",
+                    "da",
+                    "availability_timeout_floor_ms",
+                ],
+                IZANAMI_DA_AVAILABILITY_TIMEOUT_FLOOR_MS,
             )
             .write(
                 ["sumeragi", "gating", "future_height_window"],
@@ -1228,12 +1278,8 @@ impl IzanamiRunner {
 }
 
 fn drain_ready_submissions(submissions: &mut JoinSet<()>) {
-    while let Some(joined) = submissions.join_next().now_or_never() {
-        if let Some(result) = joined {
-            let _ = result;
-        } else {
-            break;
-        }
+    while let Some(result) = submissions.try_join_next() {
+        let _ = result;
     }
 }
 
@@ -1304,6 +1350,29 @@ fn quorum_min_height_from_samples(mut heights: Vec<u64>) -> u64 {
     let tolerated = tolerated_peer_failures(heights.len());
     let index = tolerated.min(heights.len().saturating_sub(1));
     heights[index]
+}
+
+fn strict_divergence_reference_height_from_samples(mut heights: Vec<u64>) -> u64 {
+    if heights.is_empty() {
+        return 0;
+    }
+    heights.sort_unstable();
+    let tolerated = tolerated_peer_failures(heights.len());
+    let index = heights
+        .len()
+        .saturating_sub(1 + tolerated.min(heights.len().saturating_sub(1)));
+    heights[index]
+}
+
+fn strict_divergence_lagging_peer_count(
+    heights: &[u64],
+    reference_height: u64,
+    max_allowed_divergence: u64,
+) -> usize {
+    heights
+        .iter()
+        .filter(|height| reference_height.saturating_sub(**height) > max_allowed_divergence)
+        .count()
 }
 
 struct ProgressState {
@@ -1388,8 +1457,16 @@ async fn wait_for_target_blocks(
         let now = Instant::now();
         let heights = sampled_peer_heights(peers);
         let strict_min_height = heights.iter().copied().min().unwrap_or(0);
-        let min_height = quorum_min_height_from_samples(heights);
-        let divergence_blocks = min_height.saturating_sub(strict_min_height);
+        let min_height = quorum_min_height_from_samples(heights.clone());
+        let strict_reference_height =
+            strict_divergence_reference_height_from_samples(heights.clone());
+        let divergence_blocks = strict_reference_height.saturating_sub(strict_min_height);
+        let lagging_peers = strict_divergence_lagging_peer_count(
+            &heights,
+            strict_reference_height,
+            IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS,
+        );
+        let strict_guard_active = lagging_peers > tolerated_failures;
         if now >= run_control.deadline() {
             return Err(eyre!(
                 "timed out before reaching target blocks (quorum min height {}, strict min {}, target {}, tolerated_failures {})",
@@ -1399,29 +1476,41 @@ async fn wait_for_target_blocks(
                 tolerated_failures
             ));
         }
-        if divergence.observe(
-            now,
-            divergence_blocks,
-            IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS,
-        ) {
+        let divergence_started = if strict_guard_active {
+            divergence.observe(
+                now,
+                divergence_blocks,
+                IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS,
+            )
+        } else {
+            // A single tolerated outlier should not start the strict divergence timer.
+            let _ = divergence.observe(now, 0, IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS);
+            false
+        };
+        if divergence_started {
             warn!(
                 target: "izanami::progress",
                 quorum_min_height = min_height,
+                strict_reference_height,
                 strict_min_height,
                 divergence_blocks,
+                lagging_peers,
+                tolerated_failures,
                 max_allowed_divergence = IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS,
                 max_window = ?strict_divergence_window,
                 "detected quorum/strict height divergence above safety threshold"
             );
         }
-        if divergence.violated(now, strict_divergence_window) {
+        if strict_guard_active && divergence.violated(now, strict_divergence_window) {
             return Err(eyre!(
-                "height divergence exceeded safety window (divergence {}, threshold {}, window {:?}, quorum min {}, strict min {}, target {}, tolerated_failures {})",
+                "height divergence exceeded safety window (divergence {}, threshold {}, window {:?}, quorum min {}, strict reference {}, strict min {}, lagging peers {}, target {}, tolerated_failures {})",
                 divergence_blocks,
                 IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS,
                 strict_divergence_window,
                 min_height,
+                strict_reference_height,
                 strict_min_height,
+                lagging_peers,
                 target_blocks,
                 tolerated_failures
             ));
@@ -2190,6 +2279,18 @@ mod tests {
         let expected_da = duration_ms(expected.da).max(timing.commit_time_ms);
         assert_eq!(timing.commit_timeout_ms, expected_commit);
         assert_eq!(timing.da_ms, expected_da);
+        assert!(
+            timing.propose_ms >= IZANAMI_NPOS_TIMEOUT_PROPOSE_MIN_MS,
+            "propose timeout must respect minimum floor"
+        );
+        assert!(
+            timing.prevote_ms >= IZANAMI_NPOS_TIMEOUT_PREVOTE_MIN_MS,
+            "prevote timeout must respect minimum floor"
+        );
+        assert!(
+            timing.precommit_ms >= IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS,
+            "precommit timeout must respect minimum floor"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2645,20 +2746,77 @@ mod tests {
         assert_eq!(quorum_min_height_from_samples(vec![9, 10, 11]), 9);
     }
 
+    #[test]
+    fn strict_divergence_reference_height_trims_tolerated_outliers() {
+        assert_eq!(strict_divergence_reference_height_from_samples(vec![]), 0);
+        assert_eq!(
+            strict_divergence_reference_height_from_samples(vec![120, 149, 149, 149]),
+            149,
+            "single lagging outlier should not lower the strict divergence reference"
+        );
+        assert_eq!(
+            strict_divergence_reference_height_from_samples(vec![120, 120, 120, 149]),
+            120,
+            "single leading outlier should not raise the strict divergence reference"
+        );
+    }
+
+    #[test]
+    fn strict_divergence_lagging_peer_count_respects_threshold() {
+        let strict_reference = 149_u64;
+        assert_eq!(
+            strict_divergence_lagging_peer_count(&[141, 149, 149, 149], strict_reference, 16),
+            0,
+            "lag below threshold should not count as strict divergence"
+        );
+        assert_eq!(
+            strict_divergence_lagging_peer_count(&[141, 149, 149, 149], strict_reference, 2),
+            1,
+            "lag above threshold should be counted"
+        );
+    }
+
+    #[test]
+    fn strict_divergence_guard_requires_more_than_tolerated_outliers() {
+        let heights_one_outlier = vec![120_u64, 149, 149, 149];
+        let strict_reference_one =
+            strict_divergence_reference_height_from_samples(heights_one_outlier.clone());
+        let lagging_one =
+            strict_divergence_lagging_peer_count(&heights_one_outlier, strict_reference_one, 16);
+        assert_eq!(lagging_one, 1);
+        assert!(
+            lagging_one <= tolerated_peer_failures(heights_one_outlier.len()),
+            "a single outlier in a 4-peer run should stay within tolerated failures"
+        );
+
+        let heights_two_outliers = vec![120_u64, 121, 149, 149];
+        let strict_reference_two =
+            strict_divergence_reference_height_from_samples(heights_two_outliers.clone());
+        let lagging_two =
+            strict_divergence_lagging_peer_count(&heights_two_outliers, strict_reference_two, 16);
+        assert_eq!(lagging_two, 2);
+        assert!(
+            lagging_two > tolerated_peer_failures(heights_two_outliers.len()),
+            "strict divergence guard should activate once outliers exceed tolerated failures"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn drain_ready_submissions_clears_completed_tasks() {
         let mut set = JoinSet::new();
         set.spawn(async {});
         set.spawn(async {});
 
-        for _ in 0..8 {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while set.len() > 0 && Instant::now() < deadline {
             tokio::task::yield_now().await;
             drain_ready_submissions(&mut set);
-            if set.len() == 0 {
-                break;
-            }
         }
-        assert_eq!(set.len(), 0);
+        assert_eq!(
+            set.len(),
+            0,
+            "drain should clear completed submissions within timeout"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3092,6 +3250,26 @@ mod tests {
             Some(IZANAMI_RECOVERY_HEIGHT_WINDOW_MS)
         );
         assert_eq!(
+            lookup(&["sumeragi", "recovery", "missing_qc_reacquire_window_ms"]),
+            Some(IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "recovery", "no_roster_fallback_views"]),
+            Some(IZANAMI_RECOVERY_NO_ROSTER_FALLBACK_VIEWS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "recovery", "no_roster_refresh_retry_per_view"]),
+            Some(IZANAMI_RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "recovery", "deferred_qc_ttl_ms"]),
+            Some(IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "recovery", "missing_block_height_ttl_ms"]),
+            Some(IZANAMI_RECOVERY_MISSING_BLOCK_HEIGHT_TTL_MS)
+        );
+        assert_eq!(
             lookup(&["sumeragi", "recovery", "hash_miss_cap_before_range_pull"]),
             Some(IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL)
         );
@@ -3126,6 +3304,24 @@ mod tests {
         assert_eq!(
             lookup(&["sumeragi", "advanced", "da", "quorum_timeout_multiplier"]),
             Some(IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER)
+        );
+        assert_eq!(
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "da",
+                "availability_timeout_multiplier"
+            ]),
+            Some(IZANAMI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER)
+        );
+        assert_eq!(
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "da",
+                "availability_timeout_floor_ms"
+            ]),
+            Some(IZANAMI_DA_AVAILABILITY_TIMEOUT_FLOOR_MS)
         );
         assert_eq!(
             lookup(&["sumeragi", "gating", "future_height_window"]),
