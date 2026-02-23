@@ -14,8 +14,8 @@
   - supports developer templates:
     - `--template baseline` (manifests only, default)
     - `--template site` (Vue3/Vite static SPA + SoraFS/SoraDNS workflow files)
-    - `--template webapp` (Vue3 SPA + API starter with session/auth + chain-ID hooks)
-    - `--template health-app` (private health workload starter: Vue3 + API + consent/retention/deletion policy templates)
+    - `--template webapp` (Vue3 SPA + API starter with deterministic challenge-signature auth)
+    - `--template pii-app` (private PII workload starter: Vue3 + API + consent/retention/deletion policy templates)
 - `iroha app soracloud deploy`
   - validates a deployment bundle and registers a new service revision.
   - when `--torii-url` is supplied, signs the bundle payload with the
@@ -245,24 +245,69 @@ iroha app soracloud init \
   --output-dir .soracloud-agent
 ```
 
-Generate a regulated health workload starter:
+Generate a regulated PII workload starter:
 
 ```bash
 iroha app soracloud init \
-  --template health-app \
+  --template pii-app \
   --service-name clinic_console \
-  --output-dir .soracloud-health
+  --output-dir .soracloud-pii
 ```
 
-Both templates keep IVM/SCR assumptions (no WASM runtime dependency) and emit
+These templates keep IVM/SCR assumptions (no WASM runtime dependency) and emit
 deterministic starter artifacts that can be versioned in CI:
 
-- `site/`, `webapp/`, or `health-app/` source tree (Vue3 + API files);
+- `site/`, `webapp/`, or `pii-app/` source tree (Vue3 + API files);
 - canonical Soracloud manifests (`container_manifest.json`, `service_manifest.json`);
 - `registry.json` for local control-plane simulation.
-- health-app policy templates (`policy/consent_policy_template.json`,
+- pii-app policy templates (`policy/consent_policy_template.json`,
   `policy/retention_policy_template.json`,
   `policy/deletion_workflow_template.json`) for consent and retention/deletion governance workflows.
+
+## Scaffold auth/session model (webapp + pii-app)
+
+Generated webapp and pii-app APIs now use the same strict auth core:
+
+- `POST /api/auth/challenge`, `POST /api/auth/login`, `POST /api/auth/logout`,
+  `GET /api/auth/me` (webapp);
+- `POST /pii/api/auth/challenge`, `POST /pii/api/auth/login`,
+  `POST /pii/api/auth/logout`, `GET /pii/api/auth/me` (pii-app);
+- canonical challenge message format (`soracloud.auth.challenge.v1`) with fixed
+  field order and Ed25519-only signature verification;
+- deterministic replay protection using single-use challenge IDs persisted under
+  `/state/auth/challenges`;
+- shared session state persisted under `/state/auth/sessions`; cookie stores
+  only a signed session handle;
+- host-provided shared-state adapter hook via
+  `globalThis.__soracloudSharedStateAdapter` (`get`, `put`, `putIfAbsent`,
+  `delete`, `entries`) for multi-replica runtimes; local file-backed state is
+  retained as deterministic development fallback when
+  `AUTH_REQUIRE_EXTERNAL_SHARED_STATE=0`;
+- strict cookie defaults: `HttpOnly`, `SameSite=Strict`, and `Secure` when
+  `PUBLIC_BASE_URL` resolves to HTTPS (or proxied HTTPS headers are present).
+
+`pii-app` private routes under `/pii/api/*` require both authentication and
+capabilities:
+
+- route namespace is `/pii/api/*` and health probe is `/pii/api/healthz`
+- `pii.consent.grant`
+- `pii.consent.revoke`
+- `pii.records.retention.sweep`
+- `pii.records.delete`
+- `pii.records.read` (state/list endpoints)
+
+Strict runtime env contract for both templates:
+
+- `SESSION_HMAC_KEY` (required in strict/production mode, minimum 32 chars)
+- `AUTH_SESSION_TTL_SECS` (short session TTL)
+- `AUTH_CHALLENGE_TTL_SECS` (short challenge TTL)
+- `AUTH_CAPABILITY_MAP_JSON` (principal public-key hex -> capability list)
+- `AUTH_MODE` (default `strict`; `dev` keeps signature verification enabled)
+- `AUTH_REQUIRE_EXTERNAL_SHARED_STATE` (defaults to enabled in
+  `AUTH_MODE=strict` or production; startup fails unless
+  `globalThis.__soracloudSharedStateAdapter` is configured. Set to `0` only
+  for local single-replica development)
+- `PUBLIC_BASE_URL` (origin binding + cookie security decisions)
 
 ## Deterministic state-binding guardrail API
 
@@ -285,31 +330,27 @@ Each accepted mutation appends an audit event carrying signer identity and
 State-mutation provenance signatures are verified against a canonical tuple
 payload in this exact field order:
 `(service_name, binding_name, key, operation, value_size_bytes, encryption, governance_tx_hash)`.
-Torii also accepts the legacy struct-layout signature payload for backward
-compatibility during signer migration.
+Only this canonical tuple layout is accepted.
 
 FHE job-run provenance signatures are verified against canonical tuple payloads:
 `(service_name, binding_name, job, policy, param_set, governance_tx_hash)`.
 Decryption-request provenance signatures are verified against canonical tuple
 payloads:
 `(service_name, policy, request)`.
-Torii also accepts legacy struct-layout signature payloads for both FHE
-job-run and decryption-request mutations during signer migration.
+Only these canonical tuple layouts are accepted.
 
 Training/model provenance signatures are also verified against canonical tuple
 payloads for:
 `training/job/start`, `training/job/checkpoint`, `training/job/retry`,
 `model/artifact/register`, `model/weight/register`,
 `model/weight/promote`, and `model/weight/rollback`.
-Torii accepts legacy struct-layout signature payloads for these endpoints
-during signer migration.
+Only canonical tuple layouts are accepted for these endpoints.
 
 Rollback/rollout and agent-control provenance signatures are also verified
 against canonical tuple payloads (`rollback`, `rollout`, `agent/deploy`,
 `agent/lease/renew`, `agent/restart`, `agent/policy/revoke`,
 `agent/wallet/spend`, `agent/wallet/approve`, `agent/message/send`,
-`agent/message/ack`, `agent/artifact/allow`, `agent/autonomy/run`), with
-legacy struct-layout signatures accepted during signer migration.
+`agent/message/ack`, `agent/artifact/allow`, `agent/autonomy/run`).
 
 ## SCR host admission + lifecycle
 

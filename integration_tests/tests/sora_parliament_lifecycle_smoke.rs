@@ -38,6 +38,8 @@ const CITIZEN_COUNT: usize = 20;
 const CITIZEN_FUND: u128 = 15_000;
 const CITIZEN_BOND: u128 = 10_000;
 const BALLOT_LOCK: u128 = CITIZEN_FUND - CITIZEN_BOND;
+const BALLOT_DURATION_BLOCKS: u64 = 20;
+const GOV_MAX_CONVICTION: u64 = 6;
 const GOV_DOMAIN_ID: &str = "govsmoke";
 const GOV_ASSET_ID: &str = "xor#govsmoke";
 const TX_STATUS_TIMEOUT: Duration = Duration::from_secs(900);
@@ -161,6 +163,19 @@ fn json_u128(value: &norito::json::Value) -> Option<u128> {
         .as_u64()
         .map(u128::from)
         .or_else(|| value.as_str().and_then(|raw| raw.parse::<u128>().ok()))
+}
+
+fn integer_sqrt_u128(value: u128) -> u128 {
+    if value < 2 {
+        return value;
+    }
+    let mut x0 = value;
+    let mut x1 = (x0 + (value / x0)) / 2;
+    while x1 < x0 {
+        x0 = x1;
+        x1 = (x0 + (value / x0)) / 2;
+    }
+    x0
 }
 
 async fn wait_for_proposal_found(
@@ -579,32 +594,88 @@ async fn wait_for_asset_balance(
     }
 }
 
-async fn wait_for_status_txs_approved_at_least(
-    client: &Client,
-    minimum_approved: u64,
+fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
+    let status = payload
+        .get("content")
+        .and_then(|content| content.get("status"))
+        .or_else(|| payload.get("status"))?;
+    match status {
+        norito::json::Value::String(kind) => Some(kind.as_str()),
+        norito::json::Value::Object(map) => map.get("kind").and_then(norito::json::Value::as_str),
+        _ => None,
+    }
+}
+
+async fn wait_for_tx_applied(
+    http: &reqwest::Client,
+    torii_url: &reqwest::Url,
+    tx_hash_hex: &str,
     timeout: Duration,
     stage: &str,
 ) -> Result<()> {
+    let mut status_url = torii_url.join("v1/pipeline/transactions/status")?;
+    status_url
+        .query_pairs_mut()
+        .append_pair("hash", tx_hash_hex);
     let deadline = Instant::now() + timeout;
-    let mut last_approved = 0_u64;
-    let mut last_queue = 0_u64;
+    let mut last_kind = String::from("unavailable");
+    let mut last_payload = String::new();
     let mut last_error = String::new();
+
     loop {
-        match client.get_status() {
-            Ok(status) => {
-                last_approved = status.txs_approved;
-                last_queue = status.queue_size;
-                if status.txs_approved >= minimum_approved && status.queue_size == 0 {
-                    return Ok(());
+        match http.get(status_url.clone()).send().await {
+            Ok(response)
+                if response.status() == reqwest::StatusCode::OK
+                    || response.status() == reqwest::StatusCode::ACCEPTED =>
+            {
+                let status = response.status();
+                let bytes = response.bytes().await?;
+                if bytes.is_empty() {
+                    last_kind = format!("http {status} with empty body");
+                } else {
+                    let payload: norito::json::Value = norito::json::from_slice(&bytes)?;
+                    if let Some(kind) = pipeline_status_kind(&payload) {
+                        last_kind = kind.to_string();
+                        last_payload = format!("{payload:?}");
+                        match kind {
+                            "Applied" => return Ok(()),
+                            "Rejected" => {
+                                return Err(eyre!(
+                                    "{stage}: tx `{tx_hash_hex}` rejected; payload={payload:?}"
+                                ));
+                            }
+                            "Expired" => {
+                                return Err(eyre!("{stage}: tx `{tx_hash_hex}` expired"));
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        last_kind = "missing status kind".to_string();
+                        last_payload = format!("{payload:?}");
+                    }
                 }
             }
+            Ok(response)
+                if response.status() == reqwest::StatusCode::NO_CONTENT
+                    || response.status() == reqwest::StatusCode::NOT_FOUND =>
+            {
+                last_kind = format!("http {}", response.status());
+            }
+            Ok(response) => {
+                last_error = format!(
+                    "http {} {}",
+                    response.status(),
+                    std::str::from_utf8(response.bytes().await?.as_ref()).unwrap_or("")
+                );
+            }
             Err(err) => {
-                last_error = format!("{err:?}");
+                last_error = format!("{err}");
             }
         }
+
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "{stage}: timed out waiting for txs_approved >= {minimum_approved} and queue_size=0; last_approved={last_approved}, last_queue={last_queue}, last_error={last_error}"
+                "{stage}: timed out waiting for tx `{tx_hash_hex}` to reach Applied; last_kind={last_kind}, last_payload={last_payload}, last_error={last_error}"
             ));
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -630,6 +701,10 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
                 .write(["gov", "min_enactment_delay"], 0)
                 .write(["gov", "window_span"], 500)
                 .write(["gov", "conviction_step_blocks"], 1)
+                .write(
+                    ["gov", "max_conviction"],
+                    i64::try_from(GOV_MAX_CONVICTION).expect("max conviction should fit i64"),
+                )
                 .write(
                     ["gov", "citizenship_escrow_account"],
                     alice_escrow_account.clone(),
@@ -822,25 +897,27 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     .await?;
     eprintln!("sora smoke: proposer post-funding balance settled");
 
-    let status_before_bonds = alice.get_status()?.txs_approved;
     for (idx, (account_id, key_pair)) in citizens.iter().enumerate() {
         let mut citizen_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
         tune_client_timeouts(&mut citizen_client);
-        citizen_client
+        let tx_hash = citizen_client
             .submit(RegisterCitizen {
                 owner: account_id.clone(),
                 amount: CITIZEN_BOND,
             })
             .wrap_err_with(|| format!("register citizen bond #{idx} ({account_id})"))?;
+        wait_for_tx_applied(
+            &http,
+            &citizen_client.torii_url,
+            &hex::encode(tx_hash.as_ref()),
+            Duration::from_secs(180),
+            "wait for citizen bond tx to be applied",
+        )
+        .await
+        .wrap_err_with(|| {
+            format!("wait for register citizen bond tx #{idx} ({account_id}) applied")
+        })?;
     }
-    wait_for_status_txs_approved_at_least(
-        &alice,
-        status_before_bonds
-            .saturating_add(u64::try_from(CITIZEN_COUNT).expect("count should fit u64")),
-        Duration::from_secs(180),
-        "wait for citizen bond transactions to be approved",
-    )
-    .await?;
     eprintln!("sora smoke: citizen bond txs submitted");
 
     wait_for_all_citizen_balances(
@@ -866,7 +943,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     .await?;
     eprintln!("sora smoke: escrow bond total settled");
 
-    let (council_member_id, council_member_keypair) = &citizens[0];
+    let (council_member_id, _) = &citizens[0];
     let council_split = CITIZEN_COUNT / 2;
     let council_members: Vec<_> = citizens
         .iter()
@@ -914,23 +991,31 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .wrap_err("wait for governance proposal to be queryable")?;
     eprintln!("sora smoke: proposal submitted");
 
-    let mut council_member_client = ready_peer.client_for(
-        council_member_id,
-        council_member_keypair.private_key().clone(),
-    );
-    tune_client_timeouts(&mut council_member_client);
-    council_member_client
-        .submit_all([
-            ApproveGovernanceProposal {
-                body: ParliamentBody::RulesCommittee,
-                proposal_id,
-            },
-            ApproveGovernanceProposal {
-                body: ParliamentBody::AgendaCouncil,
-                proposal_id,
-            },
-        ])
-        .wrap_err("approve governance proposal in required parliament bodies")?;
+    for (approval_idx, council_account_id) in council_members.iter().enumerate() {
+        let (_, council_key_pair) = citizens
+            .iter()
+            .find(|(account_id, _)| account_id == council_account_id)
+            .expect("council account should have a generated key pair");
+        let mut council_member_client =
+            ready_peer.client_for(council_account_id, council_key_pair.private_key().clone());
+        tune_client_timeouts(&mut council_member_client);
+        council_member_client
+            .submit_all([
+                ApproveGovernanceProposal {
+                    body: ParliamentBody::RulesCommittee,
+                    proposal_id,
+                },
+                ApproveGovernanceProposal {
+                    body: ParliamentBody::AgendaCouncil,
+                    proposal_id,
+                },
+            ])
+            .wrap_err_with(|| {
+                format!(
+                    "approve governance proposal in required parliament bodies with council member #{approval_idx} ({council_account_id})"
+                )
+            })?;
+    }
     wait_for_referendum_found(&alice, &referendum_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for referendum record to appear")?;
@@ -947,15 +1032,19 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
                 referendum_id: referendum_id.clone(),
                 owner: account_id.clone(),
                 amount: BALLOT_LOCK,
-                duration_blocks: 20,
+                duration_blocks: BALLOT_DURATION_BLOCKS,
                 direction: if idx < 12 { 0 } else { 1 },
             })
             .wrap_err_with(|| format!("cast citizen ballot #{idx} ({account_id})"))?;
     }
+    let conviction_factor = (1_u64 + BALLOT_DURATION_BLOCKS).min(GOV_MAX_CONVICTION);
+    let expected_total_weight = integer_sqrt_u128(BALLOT_LOCK)
+        .saturating_mul(u128::from(conviction_factor))
+        .saturating_mul(u128::try_from(CITIZEN_COUNT).expect("count"));
     wait_for_tally_total(
         &alice,
         &referendum_id,
-        BALLOT_LOCK.saturating_mul(u128::try_from(CITIZEN_COUNT).expect("count")),
+        expected_total_weight,
         Duration::from_secs(180),
     )
     .await

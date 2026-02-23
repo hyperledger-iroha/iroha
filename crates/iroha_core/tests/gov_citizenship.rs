@@ -208,3 +208,55 @@ fn citizenship_gate_blocks_and_allows_governance() {
     );
     assert!(stx.world.governance_locks().get("citizen-ref").is_some());
 }
+
+#[test]
+fn citizenship_records_persist_across_transactions() {
+    let def_id: AssetDefinitionId = "xor#wonderland".parse().expect("asset id");
+    let world = build_world(&def_id);
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(world, kura, query_handle);
+
+    let mut gov_cfg = state.gov.clone();
+    gov_cfg.citizenship_asset_id = def_id.clone();
+    gov_cfg.citizenship_bond_amount = 50;
+    gov_cfg.citizenship_escrow_account = BOB_ID.clone();
+    state.set_gov(gov_cfg);
+
+    let header_1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block_1 = state.block(header_1);
+    let mut stx_1 = block_1.transaction();
+    RegisterCitizen {
+        owner: ALICE_ID.clone(),
+        amount: 50,
+    }
+    .execute(&ALICE_ID, &mut stx_1)
+    .expect("citizen bond succeeds");
+    stx_1.apply();
+    block_1
+        .commit()
+        .expect("first block with citizen registration commits");
+
+    let citizen_record = state
+        .view()
+        .world()
+        .citizens()
+        .get(&*ALICE_ID)
+        .cloned()
+        .expect("citizen record should persist after tx apply");
+    assert_eq!(citizen_record.amount, 50);
+
+    let header_2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block_2 = state.block(header_2);
+    let mut stx_2 = block_2.transaction();
+    iroha_data_model::isi::governance::PersistCouncilForEpoch {
+        epoch: 1,
+        members: vec![ALICE_ID.clone()],
+        alternates: Vec::new(),
+        verified: 0,
+        candidates_count: 1,
+        derived_by: CouncilDerivationKind::Fallback,
+    }
+    .execute(&ALICE_ID, &mut stx_2)
+    .expect("persist council should succeed when citizen record persisted");
+}
