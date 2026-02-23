@@ -3,7 +3,11 @@ import {
   extractConfidentialGasConfig,
 } from "./config.js";
 import { getNativeBinding } from "./native.js";
-import { ensureCanonicalAccountId, normalizeAccountId } from "./normalizers.js";
+import {
+  ensureCanonicalAccountId,
+  normalizeAccountId,
+  normalizeAssetId,
+} from "./normalizers.js";
 import { AccountAddressError } from "./address.js";
 import {
   buildDaIngestRequest,
@@ -249,11 +253,16 @@ const ITERABLE_LIST_OPTION_KEYS = new Set([
   "signal",
   "canonicalAuth",
 ]);
+const ASSET_ID_LIST_OPTION_KEYS = new Set([
+  ...ITERABLE_LIST_OPTION_KEYS,
+  "assetId",
+]);
 const OFFLINE_ITERABLE_OPTION_KEYS = new Set([
   ...ITERABLE_LIST_OPTION_KEYS,
   "controllerId",
   "receiverId",
   "depositAccountId",
+  "assetId",
   "certificateExpiresBeforeMs",
   "certificateExpiresAfterMs",
   "policyExpiresBeforeMs",
@@ -290,6 +299,7 @@ const ITERABLE_OPTION_KEYS = new Set([
   "controllerId",
   "receiverId",
   "depositAccountId",
+  "assetId",
   "certificateExpiresBeforeMs",
   "certificateExpiresAfterMs",
   "policyExpiresBeforeMs",
@@ -647,6 +657,7 @@ function stripBase64Padding(value) {
  * @property {string | ReadonlyArray<{key: string, order?: "asc" | "desc"}>} [sort]
  * @property {AbortSignal} [signal]
  * @property {string} [addressFormat]
+ * @property {string} [assetId]
  * @property {number} [certificateExpiresBeforeMs]
  * @property {number} [certificateExpiresAfterMs]
  * @property {number} [policyExpiresBeforeMs]
@@ -665,6 +676,14 @@ function stripBase64Padding(value) {
  *   pageSize?: number;
  *   maxItems?: number;
  * }} PaginationIteratorOptions
+ *
+ * @typedef {IterableListOptions & { assetId?: string; }} AccountAssetListOptions
+ * @typedef {IterableListOptions & { assetId?: string; }} AccountTransactionListOptions
+ * @typedef {IterableListOptions & { assetId?: string; }} AssetHolderListOptions
+ *
+ * @typedef {PaginationIteratorOptions & { assetId?: string; }} AccountAssetIteratorOptions
+ * @typedef {PaginationIteratorOptions & { assetId?: string; }} AccountTransactionIteratorOptions
+ * @typedef {PaginationIteratorOptions & { assetId?: string; }} AssetHolderIteratorOptions
  *
  * @template [T=unknown]
  * @typedef {Object} SseEvent
@@ -1139,7 +1158,7 @@ export class ToriiClient {
   /**
    * List asset holdings belonging to an account (`GET /v1/accounts/{id}/assets`).
    * @param {string} accountId
-   * @param {IterableListOptions} [options]
+   * @param {AccountAssetListOptions} [options]
    * @returns {Promise<{items: Array<{asset_id: string, quantity: string}>, total: number}>}
    */
   async listAccountAssets(accountId, options = {}) {
@@ -1154,6 +1173,7 @@ export class ToriiClient {
       `/v1/accounts/${encodedId}/assets`,
       rest,
       normalizeAccountAssetListResponse,
+      ASSET_ID_LIST_OPTION_KEYS,
     );
   }
 
@@ -1181,7 +1201,7 @@ export class ToriiClient {
   /**
    * Iterate over an account's asset holdings.
    * @param {string} accountId
-   * @param {PaginationIteratorOptions} [options]
+   * @param {AccountAssetIteratorOptions} [options]
    * @returns {AsyncGenerator<{asset_id: string, quantity: string}, void, unknown>}
    */
   iterateAccountAssets(accountId, options = {}) {
@@ -1213,7 +1233,7 @@ export class ToriiClient {
   /**
    * List transactions involving an account (`GET /v1/accounts/{id}/transactions`).
    * @param {string} accountId
-   * @param {IterableListOptions} [options]
+   * @param {AccountTransactionListOptions} [options]
    * @returns {Promise<{items: Array<object>, total: number}>}
    */
   async listAccountTransactions(accountId, options = {}) {
@@ -1223,6 +1243,7 @@ export class ToriiClient {
       `/v1/accounts/${encodedId}/transactions`,
       options,
       normalizeAccountTransactionListResponse,
+      ASSET_ID_LIST_OPTION_KEYS,
     );
   }
 
@@ -1245,7 +1266,7 @@ export class ToriiClient {
   /**
    * Iterate over transactions involving an account.
    * @param {string} accountId
-   * @param {PaginationIteratorOptions} [options]
+   * @param {AccountTransactionIteratorOptions} [options]
    * @returns {AsyncGenerator<object, void, unknown>}
    */
   iterateAccountTransactions(accountId, options = {}) {
@@ -1273,7 +1294,7 @@ export class ToriiClient {
   /**
    * List holders for an asset definition (`GET /v1/assets/{definitionId}/holders`).
    * @param {string} assetDefinitionId
-   * @param {IterableListOptions} [options]
+   * @param {AssetHolderListOptions} [options]
    * @returns {Promise<{items: Array<{account_id: string, quantity: string}>, total: number}>}
    */
   async listAssetHolders(assetDefinitionId, options = {}) {
@@ -1283,6 +1304,7 @@ export class ToriiClient {
       `/v1/assets/${encodedId}/holders`,
       options,
       normalizeAssetHolderListResponse,
+      ASSET_ID_LIST_OPTION_KEYS,
     );
   }
 
@@ -1305,7 +1327,7 @@ export class ToriiClient {
   /**
    * Iterate over holders for an asset definition.
    * @param {string} assetDefinitionId
-   * @param {PaginationIteratorOptions} [options]
+   * @param {AssetHolderIteratorOptions} [options]
    * @returns {AsyncGenerator<{account_id: string, quantity: string}, void, unknown>}
    */
   iterateAssetHolders(assetDefinitionId, options = {}) {
@@ -2874,11 +2896,15 @@ export class ToriiClient {
       this._dataModelCompatibility = { status: "compatible", actual };
     })();
     this._dataModelCompatibilityPromise = promise;
-    promise.finally(() => {
-      if (this._dataModelCompatibilityPromise === promise) {
-        this._dataModelCompatibilityPromise = null;
-      }
-    });
+    promise
+      .finally(() => {
+        if (this._dataModelCompatibilityPromise === promise) {
+          this._dataModelCompatibilityPromise = null;
+        }
+      })
+      .catch(() => {
+        // Avoid unhandled rejections from the cleanup chain.
+      });
     return promise;
   }
 
@@ -6152,7 +6178,7 @@ export class ToriiClient {
   /**
    * List offline allowances (`GET /v1/offline/allowances`).
    * Accepts the standard iterable options plus convenience fields such as
-   * `certificateExpiresBeforeMs`, `certificateExpiresAfterMs`, `policyExpiresBeforeMs`,
+   * `assetId`, `certificateExpiresBeforeMs`, `certificateExpiresAfterMs`, `policyExpiresBeforeMs`,
    * `policyExpiresAfterMs`, `verdictIdHex`, `requireVerdict`, and `onlyMissingVerdict`.
    * @param {IterableListOptions} [options]
    * @returns {Promise<ToriiOfflineAllowanceListResponse>}
@@ -6449,6 +6475,146 @@ export class ToriiClient {
       payload,
       "offline certificate renew issue response",
     );
+  }
+
+  /**
+   * Register a signed offline allowance (`POST /v1/offline/allowances`).
+   * @param {ToriiOfflineAllowanceRegisterRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineAllowanceRegisterResponse>}
+   */
+  async registerOfflineAllowance(request, options = {}) {
+    const payload = normalizeOfflineAllowanceRegisterRequest(
+      request,
+      "registerOfflineAllowance",
+    );
+    const { signal } = normalizeSignalOnlyOption(options, "registerOfflineAllowance");
+    const response = await this._request("POST", "/v1/offline/allowances", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("offline allowance register response missing JSON body");
+    }
+    return normalizeOfflineAllowanceRegisterResponse(
+      body,
+      "offline allowance register response",
+    );
+  }
+
+  /**
+   * Renew a signed offline allowance (`POST /v1/offline/allowances/{certificate_id_hex}/renew`).
+   * @param {string} certificateIdHex
+   * @param {ToriiOfflineAllowanceRegisterRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineAllowanceRegisterResponse>}
+   */
+  async renewOfflineAllowance(certificateIdHex, request, options = {}) {
+    const normalizedId = normalizeHex32String(
+      certificateIdHex,
+      "renewOfflineAllowance.certificateIdHex",
+    );
+    const payload = normalizeOfflineAllowanceRegisterRequest(
+      request,
+      "renewOfflineAllowance",
+    );
+    const { signal } = normalizeSignalOnlyOption(options, "renewOfflineAllowance");
+    const response = await this._request(
+      "POST",
+      `/v1/offline/allowances/${encodeURIComponent(normalizedId)}/renew`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("offline allowance renew response missing JSON body");
+    }
+    return normalizeOfflineAllowanceRegisterResponse(
+      body,
+      "offline allowance renew response",
+    );
+  }
+
+  /**
+   * Issue and register an offline allowance in one call.
+   * @param {ToriiOfflineTopUpRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineTopUpResponse>}
+   */
+  async topUpOfflineAllowance(request, options = {}) {
+    const normalized = normalizeOfflineTopUpRequest(
+      request,
+      "topUpOfflineAllowance",
+    );
+    const issued = await this.issueOfflineCertificate(
+      normalized.certificate,
+      options,
+    );
+    const registration = await this.registerOfflineAllowance(
+      {
+        authority: normalized.authority,
+        private_key: normalized.private_key,
+        certificate: issued.certificate,
+      },
+      options,
+    );
+    ensureTopUpCertificateIdsMatch(
+      issued.certificate_id_hex,
+      registration.certificate_id_hex,
+      "topUpOfflineAllowance",
+    );
+    return { certificate: issued, registration };
+  }
+
+  /**
+   * Issue and register an offline allowance renewal in one call.
+   * @param {string} certificateIdHex
+   * @param {ToriiOfflineTopUpRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineTopUpResponse>}
+   */
+  async topUpOfflineAllowanceRenewal(certificateIdHex, request, options = {}) {
+    const normalizedId = normalizeHex32String(
+      certificateIdHex,
+      "topUpOfflineAllowanceRenewal.certificateIdHex",
+    );
+    const normalized = normalizeOfflineTopUpRequest(
+      request,
+      "topUpOfflineAllowanceRenewal",
+    );
+    const issued = await this.issueOfflineCertificateRenewal(
+      normalizedId,
+      normalized.certificate,
+      options,
+    );
+    const registration = await this.renewOfflineAllowance(
+      normalizedId,
+      {
+        authority: normalized.authority,
+        private_key: normalized.private_key,
+        certificate: issued.certificate,
+      },
+      options,
+    );
+    ensureTopUpCertificateIdsMatch(
+      issued.certificate_id_hex,
+      registration.certificate_id_hex,
+      "topUpOfflineAllowanceRenewal",
+    );
+    return { certificate: issued, registration };
   }
 
   /**
@@ -8262,6 +8428,14 @@ export class ToriiClient {
     }
   }
 
+  static _requireAssetId(assetId, name = "assetId") {
+    return normalizeAssetId(assetId, name);
+  }
+
+  static _normalizeAssetId(assetId, name = "assetId") {
+    return ToriiClient._requireAssetId(assetId, name);
+  }
+
   static _requireAssetDefinitionId(assetDefinitionId) {
     return ToriiClient._requireNonEmptyString(assetDefinitionId, "assetDefinitionId");
   }
@@ -8590,6 +8764,9 @@ export class ToriiClient {
         normalizedOptions.depositAccountId,
         "depositAccountId",
       );
+    }
+    if (normalizedOptions.assetId !== undefined && normalizedOptions.assetId !== null) {
+      params.asset_id = ToriiClient._normalizeAssetId(normalizedOptions.assetId, "assetId");
     }
     if (
       normalizedOptions.certificateExpiresBeforeMs !== undefined &&
@@ -20435,6 +20612,56 @@ function normalizeOfflineCertificateIssueResponse(payload, context) {
   return { certificate_id_hex: certificateIdHex, certificate };
 }
 
+function normalizeOfflineAllowanceRegisterResponse(payload, context) {
+  const record = ensureRecord(payload, context);
+  const certificateIdHex = normalizeHex32String(
+    record.certificate_id_hex,
+    `${context}.certificate_id_hex`,
+  );
+  return { certificate_id_hex: certificateIdHex };
+}
+
+function normalizeOfflineTopUpRequest(input, context) {
+  const record = ensureRecord(input, context);
+  const certificate = normalizeOfflineCertificateDraft(
+    record.certificate,
+    `${context}.certificate`,
+  );
+  const credentials = normalizeAuthorityCredentials(record, context);
+  return {
+    authority: credentials.authority,
+    private_key: credentials.private_key,
+    certificate,
+  };
+}
+
+function normalizeOfflineAllowanceRegisterRequest(input, context) {
+  const record = ensureRecord(input, context);
+  const certificate = normalizeOfflineCertificate(
+    record.certificate,
+    `${context}.certificate`,
+  );
+  const credentials = normalizeAuthorityCredentials(record, context);
+  return {
+    authority: credentials.authority,
+    private_key: credentials.private_key,
+    certificate,
+  };
+}
+
+function normalizeOfflineCertificate(certificate, context) {
+  const record = ensureRecord(certificate, context);
+  const normalized = normalizeOfflineCertificateDraft(record, context);
+  const operatorSignature = normalizeUpperHex(
+    pickOverride(record, "operator_signature", "operatorSignature"),
+    `${context}.operator_signature`,
+  );
+  return {
+    ...normalized,
+    operator_signature: operatorSignature,
+  };
+}
+
 function normalizeOfflineCertificateDraft(draft, context) {
   const record = ensureRecord(draft, context);
   const controller = ToriiClient._normalizeAccountId(
@@ -20531,6 +20758,17 @@ function normalizeOfflineCertificateDraft(draft, context) {
     attestation_nonce: attestationNonce,
     refresh_at_ms: normalizedRefreshAtMs,
   };
+}
+
+function ensureTopUpCertificateIdsMatch(issuedId, registeredId, context) {
+  if (!issuedId || !registeredId) {
+    throw new Error(`${context} missing certificate id in top-up response`);
+  }
+  if (issuedId.toLowerCase() !== registeredId.toLowerCase()) {
+    throw new Error(
+      `${context} certificate mismatch (issued ${issuedId}, registered ${registeredId})`,
+    );
+  }
 }
 
 function normalizeOfflineBytesArray(value, context) {
@@ -21420,9 +21658,25 @@ function normalizeConnectStatusSnapshot(payload, context) {
       record.monotonic_drops_total,
       `${context}.monotonic_drops_total`,
     ),
+    sequenceViolationClosesTotal: coerceStatusInt(
+      record.sequence_violation_closes_total,
+      `${context}.sequence_violation_closes_total`,
+    ),
+    roleDirectionMismatchTotal: coerceStatusInt(
+      record.role_direction_mismatch_total,
+      `${context}.role_direction_mismatch_total`,
+    ),
     pingMissTotal: coerceStatusInt(
       record.ping_miss_total,
       `${context}.ping_miss_total`,
+    ),
+    p2pRebroadcastsTotal: coerceStatusInt(
+      record.p2p_rebroadcasts_total,
+      `${context}.p2p_rebroadcasts_total`,
+    ),
+    p2pRebroadcastSkippedTotal: coerceStatusInt(
+      record.p2p_rebroadcast_skipped_total,
+      `${context}.p2p_rebroadcast_skipped_total`,
     ),
   };
 }
@@ -21477,6 +21731,18 @@ function normalizeConnectStatusPolicySnapshot(payload, context) {
     relayEnabled: requireBooleanLike(
       record.relay_enabled,
       `${context}.relay_enabled`,
+    ),
+    relayStrategy: requireNonEmptyString(
+      record.relay_strategy,
+      `${context}.relay_strategy`,
+    ),
+    relayEffectiveStrategy: requireNonEmptyString(
+      record.relay_effective_strategy,
+      `${context}.relay_effective_strategy`,
+    ),
+    relayP2pAttached: requireBooleanLike(
+      record.relay_p2p_attached,
+      `${context}.relay_p2p_attached`,
     ),
     heartbeatIntervalMs: ToriiClient._normalizeUnsignedInteger(
       record.heartbeat_interval_ms,

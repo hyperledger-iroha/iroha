@@ -1145,27 +1145,40 @@ impl Actor {
                     self.broadcast_block_sync_update(update, &retransmit_targets);
                     block_sync = true;
                 } else {
-                    allow_blockcreated_fallback = self.allow_no_roster_fallback_or_fail_closed(
+                    let decision = self.decide_no_roster_fallback_or_fail_closed(
                         height,
                         view,
                         block_hash,
                         ViewChangeCause::MissingQc,
                         "reschedule_rebroadcast_no_roster",
                     );
-                    if allow_blockcreated_fallback {
-                        debug!(
-                            height,
-                            view,
-                            block = %block_hash,
-                            "skipping block sync update rebroadcast: no verifiable roster"
-                        );
-                    } else {
-                        warn!(
-                            height,
-                            view,
-                            block = %block_hash,
-                            "no-roster fallback budget exhausted; parking block rebroadcast"
-                        );
+                    allow_blockcreated_fallback =
+                        matches!(decision, super::NoRosterFallbackDecision::AllowFallback);
+                    match decision {
+                        super::NoRosterFallbackDecision::AllowFallback => {
+                            debug!(
+                                height,
+                                view,
+                                block = %block_hash,
+                                "skipping block sync update rebroadcast: no verifiable roster"
+                            );
+                        }
+                        super::NoRosterFallbackDecision::BootstrapPending => {
+                            debug!(
+                                height,
+                                view,
+                                block = %block_hash,
+                                "deferring block rebroadcast fallback while no-roster bootstrap is pending"
+                            );
+                        }
+                        super::NoRosterFallbackDecision::FailClosed => {
+                            warn!(
+                                height,
+                                view,
+                                block = %block_hash,
+                                "no-roster fallback budget exhausted; parking block rebroadcast"
+                            );
+                        }
                     }
                 }
             } else {

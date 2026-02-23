@@ -6744,6 +6744,19 @@ pub fn decode_signed_transaction_json(bytes: Uint8Array) -> napi::Result<String>
     json::to_json(&tx).map_err(norito_to_napi)
 }
 
+/// Convert a versioned signed transaction payload into Norito bytes.
+///
+/// This is used by Torii deployments that expose legacy `/transaction` submit
+/// endpoints expecting `application/x-norito`.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn encode_signed_transaction_norito(bytes: Uint8Array) -> napi::Result<Buffer> {
+    ensure_packed_struct_disabled();
+    let tx = decode_signed_transaction(bytes.as_ref())?;
+    let encoded = norito::to_bytes(&tx).map_err(norito_to_napi)?;
+    Ok(Buffer::from(encoded))
+}
+
 /// Decode a Norito-framed transaction submission receipt into its JSON representation.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership

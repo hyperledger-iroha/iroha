@@ -109,7 +109,7 @@ mod model {
         IntoSchema,
     )]
     #[ignore_extra_doc_attributes]
-    #[cfg_attr(not(feature = "fast_dsl"), derive(thiserror::Error))]
+    #[derive(thiserror::Error)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub enum TransactionRejectionReason {
         /// Account does not exist

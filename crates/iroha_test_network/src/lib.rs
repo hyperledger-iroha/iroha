@@ -2528,7 +2528,9 @@ impl Network {
         let consensus_handshake_meta = consensus_handshake_parameter(&self.consensus_profile);
 
         if let Some(cached_genesis) = self.cached_genesis.get() {
-            if genesis_has_consensus_handshake(cached_genesis, &consensus_handshake_meta) {
+            if genesis_contains_any_consensus_handshake(cached_genesis)
+                || genesis_has_consensus_handshake(cached_genesis, &consensus_handshake_meta)
+            {
                 return cached_genesis.clone();
             }
 
@@ -4049,6 +4051,28 @@ fn genesis_has_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -
                     .is_some_and(|set_param| match set_param.inner() {
                         Parameter::Custom(custom) => custom == expected_meta,
                         _ => false,
+                    })
+            }),
+            _ => false,
+        })
+}
+
+fn genesis_contains_any_consensus_handshake(block: &GenesisBlock) -> bool {
+    block
+        .0
+        .transactions_vec()
+        .iter()
+        .any(|tx| match tx.instructions() {
+            Executable::Instructions(instructions) => instructions.iter().any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<SetParameter>()
+                    .is_some_and(|set_param| {
+                        matches!(
+                            set_param.inner(),
+                            Parameter::Custom(custom)
+                                if custom.id() == &consensus_metadata::handshake_meta_id()
+                        )
                     })
             }),
             _ => false,

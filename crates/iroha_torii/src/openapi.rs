@@ -5114,6 +5114,10 @@ fn nexus_paths() -> Map {
         "/v1/nexus/public_lanes/{lane_id}/rewards/pending".to_owned(),
         Value::Object(nexus_public_lane_rewards_operation()),
     );
+    paths.insert(
+        "/v1/nexus/dataspaces/accounts/{literal}/summary".to_owned(),
+        Value::Object(nexus_dataspaces_account_summary_operation()),
+    );
     paths
 }
 
@@ -6214,6 +6218,65 @@ fn nexus_public_lane_rewards_responses() -> Map {
             "Invalid lane id or account literal.",
             error_schema_reference(),
         ),
+    );
+    responses
+}
+
+fn nexus_dataspaces_account_summary_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Nexus".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Summarize dataspaces for an account literal.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Resolves the supplied account literal (IH58 (preferred)/sora (second-best)/alias/public-key) \
+             and returns a joined view of UAID bindings, space-directory manifests, \
+             portfolio counters, and per-dataspace consensus commitments."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("nexusDataspacesAccountSummary".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![
+            string_path_param(
+                "literal",
+                "Account literal to resolve (IH58 (preferred)/sora (second-best)/alias/public-key).",
+            ),
+            address_format_query_param(),
+        ]),
+    );
+    operation.insert(
+        "responses".into(),
+        Value::Object(nexus_dataspaces_account_summary_responses()),
+    );
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn nexus_dataspaces_account_summary_responses() -> Map {
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response("Dataspace summary retrieved.", schema_ref("JsonValue")),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response("Invalid account literal.", error_schema_reference()),
+    );
+    responses.insert(
+        "404".to_owned(),
+        json_response("Account not found.", error_schema_reference()),
     );
     responses
 }

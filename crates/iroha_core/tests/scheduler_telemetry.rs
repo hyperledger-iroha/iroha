@@ -614,8 +614,8 @@ fn assert_governance_manifest_snapshot(
 #[cfg(feature = "telemetry")]
 fn nexus_config_diff_counter_and_event_emitted() {
     use iroha_config::parameters::actual::{
-        Commit, Da, Fusion, GovernanceCatalog, LaneRegistry, LaneRoutingMatcher, LaneRoutingPolicy,
-        LaneRoutingRule, Nexus, NexusAxt,
+        Autoscale, Commit, Da, Fusion, GovernanceCatalog, LaneRegistry, LaneRoutingMatcher,
+        LaneRoutingPolicy, LaneRoutingRule, Nexus, NexusAxt,
     };
     use nonzero_ext::nonzero;
     use norito::json::to_string as to_json_string;
@@ -696,6 +696,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
         governance,
         compliance: LaneCompliance::default(),
         fusion,
+        autoscale: Autoscale::default(),
         commit: Commit::default(),
         da,
     };

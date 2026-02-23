@@ -1,0 +1,221 @@
+@!@!@STARTMSG 2262:0 @!@!@
+Created by Apalache on Mon Feb 23 17:21:40 GST 2026
+@!@!@ENDMSG 2262 @!@!@
+@!@!@STARTMSG 2110:1 @!@!@
+Invariant is violated.
+@!@!@ENDMSG 2110 @!@!@
+@!@!@STARTMSG 2121:1 @!@!@
+The behavior up to this point is:
+@!@!@ENDMSG 2121 @!@!@
+@!@!@STARTMSG 2217:4 @!@!@
+1: <Initial predicate>
+/\ CommitQuorum = 3
+/\ F = 1
+/\ MaxChunks = 2
+/\ MaxView = 4
+/\ N = 4
+/\ StakePerByzVote = 1
+/\ StakePerHonestVote = 3
+/\ StakeQuorum = 8
+/\ ViewQuorum = 3
+/\ __EventuallyCommit_init = FALSE
+/\ __InLoop = FALSE
+/\ __saved___temporal_t_1 = FALSE
+/\ __saved___temporal_t_2 = TRUE
+/\ __saved___temporal_t_3 = FALSE
+/\ __saved_chunkCount = 0
+/\ __saved_commitVotesByz = 0
+/\ __saved_commitVotesHonest = 0
+/\ __saved_committed = FALSE
+/\ __saved_digestValid = FALSE
+/\ __saved_gst = FALSE
+/\ __saved_headerSeen = FALSE
+/\ __saved_newViewVotes = 0
+/\ __saved_phase = "Propose"
+/\ __saved_prepareVotes = 0
+/\ __saved_rbcState = "Idle"
+/\ __saved_readyVotes = 0
+/\ __saved_stakeSigned = 0
+/\ __saved_view = 0
+/\ __temporal_t_1 = FALSE
+/\ __temporal_t_1_unroll = TRUE
+/\ __temporal_t_1_unroll_prev = TRUE
+/\ __temporal_t_2 = TRUE
+/\ __temporal_t_3 = FALSE
+/\ __temporal_t_3_unroll = FALSE
+/\ __temporal_t_3_unroll_prev = FALSE
+/\ chunkCount = 0
+/\ commitVotesByz = 0
+/\ commitVotesHonest = 0
+/\ committed = FALSE
+/\ digestValid = FALSE
+/\ gst = FALSE
+/\ headerSeen = FALSE
+/\ newViewVotes = 0
+/\ phase = "Propose"
+/\ prepareVotes = 0
+/\ rbcState = "Idle"
+/\ readyVotes = 0
+/\ stakeSigned = 0
+/\ view = 0
+
+@!@!@ENDMSG 2217 @!@!@
+@!@!@STARTMSG 2217:4 @!@!@
+2: <Next>
+/\ CommitQuorum = 3
+/\ F = 1
+/\ MaxChunks = 2
+/\ MaxView = 4
+/\ N = 4
+/\ StakePerByzVote = 1
+/\ StakePerHonestVote = 3
+/\ StakeQuorum = 8
+/\ ViewQuorum = 3
+/\ __EventuallyCommit_init = FALSE
+/\ __InLoop = FALSE
+/\ __saved___temporal_t_1 = FALSE
+/\ __saved___temporal_t_2 = TRUE
+/\ __saved___temporal_t_3 = FALSE
+/\ __saved_chunkCount = 0
+/\ __saved_commitVotesByz = 0
+/\ __saved_commitVotesHonest = 0
+/\ __saved_committed = FALSE
+/\ __saved_digestValid = FALSE
+/\ __saved_gst = FALSE
+/\ __saved_headerSeen = FALSE
+/\ __saved_newViewVotes = 0
+/\ __saved_phase = "Propose"
+/\ __saved_prepareVotes = 0
+/\ __saved_rbcState = "Idle"
+/\ __saved_readyVotes = 0
+/\ __saved_stakeSigned = 0
+/\ __saved_view = 0
+/\ __temporal_t_1 = FALSE
+/\ __temporal_t_1_unroll = TRUE
+/\ __temporal_t_1_unroll_prev = TRUE
+/\ __temporal_t_2 = TRUE
+/\ __temporal_t_3 = FALSE
+/\ __temporal_t_3_unroll = FALSE
+/\ __temporal_t_3_unroll_prev = FALSE
+/\ chunkCount = 0
+/\ commitVotesByz = 0
+/\ commitVotesHonest = 0
+/\ committed = FALSE
+/\ digestValid = FALSE
+/\ gst = TRUE
+/\ headerSeen = FALSE
+/\ newViewVotes = 0
+/\ phase = "Propose"
+/\ prepareVotes = 0
+/\ rbcState = "Idle"
+/\ readyVotes = 0
+/\ stakeSigned = 0
+/\ view = 0
+
+@!@!@ENDMSG 2217 @!@!@
+@!@!@STARTMSG 2217:4 @!@!@
+3: <Next>
+/\ CommitQuorum = 3
+/\ F = 1
+/\ MaxChunks = 2
+/\ MaxView = 4
+/\ N = 4
+/\ StakePerByzVote = 1
+/\ StakePerHonestVote = 3
+/\ StakeQuorum = 8
+/\ ViewQuorum = 3
+/\ __EventuallyCommit_init = FALSE
+/\ __InLoop = FALSE
+/\ __saved___temporal_t_1 = FALSE
+/\ __saved___temporal_t_2 = TRUE
+/\ __saved___temporal_t_3 = FALSE
+/\ __saved_chunkCount = 0
+/\ __saved_commitVotesByz = 0
+/\ __saved_commitVotesHonest = 0
+/\ __saved_committed = FALSE
+/\ __saved_digestValid = FALSE
+/\ __saved_gst = FALSE
+/\ __saved_headerSeen = FALSE
+/\ __saved_newViewVotes = 0
+/\ __saved_phase = "Propose"
+/\ __saved_prepareVotes = 0
+/\ __saved_rbcState = "Idle"
+/\ __saved_readyVotes = 0
+/\ __saved_stakeSigned = 0
+/\ __saved_view = 0
+/\ __temporal_t_1 = FALSE
+/\ __temporal_t_1_unroll = FALSE
+/\ __temporal_t_1_unroll_prev = TRUE
+/\ __temporal_t_2 = FALSE
+/\ __temporal_t_3 = FALSE
+/\ __temporal_t_3_unroll = FALSE
+/\ __temporal_t_3_unroll_prev = FALSE
+/\ chunkCount = 0
+/\ commitVotesByz = 0
+/\ commitVotesHonest = 0
+/\ committed = FALSE
+/\ digestValid = FALSE
+/\ gst = TRUE
+/\ headerSeen = FALSE
+/\ newViewVotes = 0
+/\ phase = "Propose"
+/\ prepareVotes = 0
+/\ rbcState = "Idle"
+/\ readyVotes = 0
+/\ stakeSigned = 0
+/\ view = 0
+
+@!@!@ENDMSG 2217 @!@!@
+@!@!@STARTMSG 2217:4 @!@!@
+4: <Next>
+/\ CommitQuorum = 3
+/\ F = 1
+/\ MaxChunks = 2
+/\ MaxView = 4
+/\ N = 4
+/\ StakePerByzVote = 1
+/\ StakePerHonestVote = 3
+/\ StakeQuorum = 8
+/\ ViewQuorum = 3
+/\ __EventuallyCommit_init = FALSE
+/\ __InLoop = TRUE
+/\ __saved___temporal_t_1 = FALSE
+/\ __saved___temporal_t_2 = FALSE
+/\ __saved___temporal_t_3 = FALSE
+/\ __saved_chunkCount = 0
+/\ __saved_commitVotesByz = 0
+/\ __saved_commitVotesHonest = 0
+/\ __saved_committed = FALSE
+/\ __saved_digestValid = FALSE
+/\ __saved_gst = TRUE
+/\ __saved_headerSeen = FALSE
+/\ __saved_newViewVotes = 0
+/\ __saved_phase = "Propose"
+/\ __saved_prepareVotes = 0
+/\ __saved_rbcState = "Idle"
+/\ __saved_readyVotes = 0
+/\ __saved_stakeSigned = 0
+/\ __saved_view = 0
+/\ __temporal_t_1 = FALSE
+/\ __temporal_t_1_unroll = FALSE
+/\ __temporal_t_1_unroll_prev = FALSE
+/\ __temporal_t_2 = FALSE
+/\ __temporal_t_3 = FALSE
+/\ __temporal_t_3_unroll = FALSE
+/\ __temporal_t_3_unroll_prev = FALSE
+/\ chunkCount = 0
+/\ commitVotesByz = 0
+/\ commitVotesHonest = 0
+/\ committed = FALSE
+/\ digestValid = FALSE
+/\ gst = TRUE
+/\ headerSeen = FALSE
+/\ newViewVotes = 0
+/\ phase = "Propose"
+/\ prepareVotes = 0
+/\ rbcState = "Idle"
+/\ readyVotes = 0
+/\ stakeSigned = 0
+/\ view = 0
+
+@!@!@ENDMSG 2217 @!@!@

@@ -377,6 +377,18 @@ jobs:
         working-directory: crates/iroha_smart_contract
         run: mold --run cargo test -p iroha_smart_contract -p iroha_smart_contract_utils --release --tests --target wasm32-unknown-unknown --no-fail-fast --quiet
 
+  sumeragi_formal:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/apalache-mc/apalache:latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apalache version
+        run: apalache-mc --version
+      - name: Sumeragi formal model checks (fast + deep)
+        run: bash ci/check_sumeragi_formal.sh
+
   nexus_cross_dataspace_localnet:
     runs-on: [self-hosted, Linux, iroha2]
     container:

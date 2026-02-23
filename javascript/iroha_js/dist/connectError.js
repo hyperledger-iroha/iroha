@@ -47,6 +47,8 @@ const TLS_CODES = new Set([
 ]);
 
 const HTTP_AUTH_STATUS = new Set([401, 403, 407]);
+const HTTP_TIMEOUT_STATUS = 408;
+const HTTP_RATE_LIMIT_STATUS = 429;
 
 function normalizeFatal(value) {
   return value === true;
@@ -205,6 +207,22 @@ function httpErrorDetails(error) {
   const status = info.status;
   const statusText =
     typeof info.statusText === "string" ? info.statusText : undefined;
+  if (status === HTTP_TIMEOUT_STATUS) {
+    return {
+      category: CATEGORY.TIMEOUT,
+      code: "http.timeout",
+      message: statusText ?? `HTTP ${status}`,
+      httpStatus: status,
+    };
+  }
+  if (status === HTTP_RATE_LIMIT_STATUS) {
+    return {
+      category: CATEGORY.TRANSPORT,
+      code: "http.rate_limited",
+      message: statusText ?? `HTTP ${status}`,
+      httpStatus: status,
+    };
+  }
   if (status >= 500) {
     return {
       category: CATEGORY.TRANSPORT,
@@ -223,7 +241,7 @@ function httpErrorDetails(error) {
   }
   if (status >= 400 && status < 500) {
     return {
-      category: CATEGORY.AUTHORIZATION,
+      category: CATEGORY.TRANSPORT,
       code: "http.client_error",
       message: statusText ?? `HTTP ${status}`,
       httpStatus: status,

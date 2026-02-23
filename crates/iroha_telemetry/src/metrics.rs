@@ -3965,7 +3965,7 @@ pub struct NexusDataspaceTeuStatus {
     pub age_slots: u64,
     /// Latest SFQ virtual-finish tag for audit/debugging.
     pub virtual_finish: u64,
-    /// Transactions executed in the latest block for this dataspace.
+    /// Cumulative transactions executed for this dataspace since node start.
     pub tx_served: u64,
     /// Human-readable alias for the dataspace.
     pub alias: String,

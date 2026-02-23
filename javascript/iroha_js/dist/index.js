@@ -152,7 +152,9 @@ export {
   decodeQrFrameText,
   scanQrStreamFrames,
   sakuraQrStreamTheme,
+  sakuraStormQrStreamTheme,
   sakuraQrStreamSkin,
+  sakuraStormQrStreamSkin,
   sakuraQrStreamReducedMotionSkin,
   sakuraQrStreamLowPowerSkin,
 } from "./offlineQrStream.js";
