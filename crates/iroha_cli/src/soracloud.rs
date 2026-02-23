@@ -13019,6 +13019,8 @@ main().catch((error) => {
             assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
             assert!(api.contains("AUTH_CHALLENGE_EXPIRED"));
             assert!(api.contains("AUTH_CHALLENGE_NOT_FOUND"));
+            assert!(api.contains("AUTH_CHALLENGE_PRINCIPAL_MISMATCH"));
+            assert!(api.contains("AUTH_SIGNATURE_INVALID"));
             assert!(api.contains("AUTH_SESSION_PREFIX"));
             assert!(api.contains("SameSite=Strict"));
             assert!(api.contains("/pii/api/consent/state"));
@@ -13172,6 +13174,60 @@ async function main() {
     public_key: publicKeyHex
   });
   assert(challenge.status === 200, `challenge failed: ${JSON.stringify(challenge)}`);
+  const expectedChallengeMessage = [
+    challenge.body.auth_message_version,
+    `challenge_id=${challenge.body.challenge_id}`,
+    `public_key=${challenge.body.public_key}`,
+    `nonce=${challenge.body.nonce}`,
+    `issued_at_unix_ms=${challenge.body.issued_at_unix_ms}`,
+    `expires_at_unix_ms=${challenge.body.expires_at_unix_ms}`,
+    "origin=http://127.0.0.1"
+  ].join("\n");
+  assert(
+    challenge.body.message === expectedChallengeMessage,
+    `challenge message must be canonical and deterministic: ${JSON.stringify(challenge.body)}`
+  );
+
+  const { publicKey: otherPublicKey } = crypto.generateKeyPairSync("ed25519");
+  const otherPublicKeyHex = publicKeyHexFromSpki(
+    otherPublicKey.export({ format: "der", type: "spki" })
+  );
+  const principalMismatch = await jsonRequest(portA, "POST", "/pii/api/auth/login", {
+    public_key: otherPublicKeyHex,
+    challenge_id: challenge.body.challenge_id,
+    signature: "00".repeat(64)
+  });
+  assert(
+    principalMismatch.status === 401,
+    `challenge principal mismatch should fail: ${JSON.stringify(principalMismatch)}`
+  );
+  assert(
+    principalMismatch.body?.code === "AUTH_CHALLENGE_PRINCIPAL_MISMATCH",
+    `challenge principal mismatch code mismatch: ${JSON.stringify(principalMismatch.body)}`
+  );
+
+  const malformed = await jsonRequest(portA, "POST", "/pii/api/auth/login", {
+    public_key: publicKeyHex,
+    challenge_id: challenge.body.challenge_id,
+    signature: "00".repeat(64)
+  });
+  assert(malformed.status === 401, `malformed signature should fail: ${JSON.stringify(malformed)}`);
+  assert(
+    malformed.body?.code === "AUTH_SIGNATURE_INVALID",
+    `malformed signature code mismatch: ${JSON.stringify(malformed.body)}`
+  );
+
+  const unknown = await jsonRequest(portA, "POST", "/pii/api/auth/login", {
+    public_key: publicKeyHex,
+    challenge_id: crypto.randomUUID(),
+    signature: "00".repeat(64)
+  });
+  assert(unknown.status === 401, `unknown challenge should fail: ${JSON.stringify(unknown)}`);
+  assert(
+    unknown.body?.code === "AUTH_CHALLENGE_NOT_FOUND",
+    `unknown challenge code mismatch: ${JSON.stringify(unknown.body)}`
+  );
+
   const signature = crypto
     .sign(null, Buffer.from(challenge.body.message, "utf8"), privateKey)
     .toString("hex");
@@ -13191,6 +13247,39 @@ async function main() {
   });
   assert(me.status === 200, `auth me should succeed on replica A: ${JSON.stringify(me)}`);
   assert(me.body?.principal === publicKeyHex, "auth me principal mismatch");
+
+  const replay = await jsonRequest(portA, "POST", "/pii/api/auth/login", {
+    public_key: publicKeyHex,
+    challenge_id: challenge.body.challenge_id,
+    signature
+  });
+  assert(replay.status === 401, `challenge replay should fail: ${JSON.stringify(replay)}`);
+  assert(
+    replay.body?.code === "AUTH_CHALLENGE_REPLAYED",
+    `challenge replay code mismatch: ${JSON.stringify(replay.body)}`
+  );
+
+  const expiringChallenge = await jsonRequest(portA, "POST", "/pii/api/auth/challenge", {
+    public_key: publicKeyHex
+  });
+  assert(expiringChallenge.status === 200, "expiring challenge should be issued");
+  const expiringSnapshot = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+  const challengeKey = `/state/auth/challenges/${expiringChallenge.body.challenge_id}`;
+  expiringSnapshot.records[challengeKey].expires_at_unix_ms = Date.now() - 1;
+  fs.writeFileSync(STATE_FILE, JSON.stringify(expiringSnapshot));
+  const expiringSignature = crypto
+    .sign(null, Buffer.from(expiringChallenge.body.message, "utf8"), privateKey)
+    .toString("hex");
+  const expired = await jsonRequest(portA, "POST", "/pii/api/auth/login", {
+    public_key: publicKeyHex,
+    challenge_id: expiringChallenge.body.challenge_id,
+    signature: expiringSignature
+  });
+  assert(expired.status === 401, `expired challenge should be rejected: ${JSON.stringify(expired)}`);
+  assert(
+    expired.body?.code === "AUTH_CHALLENGE_EXPIRED",
+    `unexpected expired challenge code: ${JSON.stringify(expired.body)}`
+  );
 
   const stateOnReplicaA = await jsonRequest(
     portA,

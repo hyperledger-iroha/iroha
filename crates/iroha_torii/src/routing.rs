@@ -20566,6 +20566,7 @@ fn committed_block_height(event: &EventBox) -> Option<u64> {
 struct TelemetryLiveSnapshot {
     peers_info: Vec<crate::telemetry::peers::PeerInfoDto>,
     peers_status: Vec<crate::telemetry::peers::PeerStatusDto>,
+    propagation: Vec<crate::telemetry::peers::PeerPropagationDto>,
     network_status: crate::explorer::ExplorerNetworkMetricsDto,
 }
 
@@ -20581,6 +20582,7 @@ struct TelemetryLiveState {
     bootstrap_pending: bool,
     prev_peers_info: BTreeMap<String, String>,
     prev_peers_status: BTreeMap<String, String>,
+    prev_propagation: BTreeMap<u32, String>,
     prev_network: Option<String>,
 }
 
@@ -20615,6 +20617,7 @@ pub fn handle_v1_telemetry_live(
             bootstrap_pending: true,
             prev_peers_info: BTreeMap::new(),
             prev_peers_status: BTreeMap::new(),
+            prev_propagation: BTreeMap::new(),
             prev_network: None,
         },
         |mut state| async move {
@@ -20693,6 +20696,7 @@ pub fn handle_v1_telemetry_live(
                             Err(RecvError::Lagged(_)) => {
                                 state.prev_peers_info.clear();
                                 state.prev_peers_status.clear();
+                                state.prev_propagation.clear();
                                 state.prev_network = None;
                                 state.bootstrap_pending = true;
                                 state.pending.push_back(SseEvent::default().comment("lagged"));
@@ -20720,6 +20724,7 @@ async fn collect_telemetry_live_snapshot(
     Ok(TelemetryLiveSnapshot {
         peers_info: peer_snapshot.peers_info,
         peers_status: peer_snapshot.peers_status,
+        propagation: peer_snapshot.propagation,
         network_status,
     })
 }
@@ -20738,15 +20743,23 @@ fn enqueue_telemetry_bootstrap(state: &mut TelemetryLiveState, snapshot: Telemet
         peers_status.insert(status.url.clone(), telemetry_live_json(&payload));
     }
 
+    let mut propagation = BTreeMap::new();
+    for entry in &snapshot.propagation {
+        let payload = json_value(entry);
+        propagation.insert(entry.block, telemetry_live_json(&payload));
+    }
+
     let network_payload = json_value(&snapshot.network_status);
     state.prev_peers_info = peers_info;
     state.prev_peers_status = peers_status;
+    state.prev_propagation = propagation;
     state.prev_network = Some(telemetry_live_json(&network_payload));
 
     let payload = json_object(vec![
         json_entry("kind", "first"),
         json_entry("peers_info", snapshot.peers_info),
         json_entry("peers_status", snapshot.peers_status),
+        json_entry("propagation", snapshot.propagation),
         json_entry("network_status", snapshot.network_status),
     ]);
     state
@@ -20784,7 +20797,28 @@ fn enqueue_telemetry_deltas(state: &mut TelemetryLiveState, snapshot: TelemetryL
     }
     state.prev_peers_status = next_status;
 
+    enqueue_telemetry_propagation_deltas(state, snapshot.propagation);
     enqueue_telemetry_network_delta(state, snapshot.network_status);
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+fn enqueue_telemetry_propagation_deltas(
+    state: &mut TelemetryLiveState,
+    propagation: Vec<crate::telemetry::peers::PeerPropagationDto>,
+) {
+    let mut next_propagation = BTreeMap::new();
+    for entry in propagation {
+        let raw_payload = json_value(&entry);
+        let raw_json = telemetry_live_json(&raw_payload);
+        if state.prev_propagation.get(&entry.block) != Some(&raw_json) {
+            let tagged = telemetry_live_tagged_payload("propagation", raw_payload);
+            state
+                .pending
+                .push_back(SseEvent::default().data(telemetry_live_json(&tagged)));
+        }
+        next_propagation.insert(entry.block, raw_json);
+    }
+    state.prev_propagation = next_propagation;
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
