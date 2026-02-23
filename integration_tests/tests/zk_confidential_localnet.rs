@@ -3,7 +3,7 @@
 //! public-origin shield -> 3 shielded hops -> unshield -> public transfer,
 //! plus a second shielded asset with 3 shielded hops.
 
-use std::{sync::OnceLock, time::Duration};
+use std::time::Duration;
 
 use eyre::{Report, Result, WrapErr as _, eyre};
 use integration_tests::sandbox;
@@ -18,29 +18,39 @@ use iroha::{
         transaction::SignedTransaction,
     },
 };
-use iroha_core::zk::test_utils::halo2_fixture_envelope;
+use iroha_core::zk::test_utils::halo2_ivm_execution_envelope;
 use iroha_data_model::proof::ProofAttachment;
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use iroha_test_samples::BOB_ID;
 
 const PROOF_VERIFY_TIMEOUT_MS: i64 = 600_000;
+const ALL_PEER_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+const STATUS_ERROR_STREAK_FOR_MUTE: usize = 3;
+const MUTED_PEER_COOLDOWN_ATTEMPTS: usize = 5;
 
 fn marker(byte: u8) -> [u8; 32] {
     [byte; 32]
 }
 
-fn halo2_attachment() -> ProofAttachment {
-    static ATTACHMENT: OnceLock<ProofAttachment> = OnceLock::new();
-    ATTACHMENT
-        .get_or_init(|| {
-            let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
-            let vk_box = fixture
-                .vk_box("halo2/ipa")
-                .expect("fixture must include a verifying key");
-            let proof_box = fixture.proof_box("halo2/ipa");
-            ProofAttachment::new_inline("halo2/ipa".into(), proof_box, vk_box)
-        })
-        .clone()
+fn hash_for_live_proof(domain: &[u8], seed: [u8; 32]) -> iroha_crypto::Hash {
+    let mut preimage = Vec::with_capacity(domain.len() + seed.len());
+    preimage.extend_from_slice(domain);
+    preimage.extend_from_slice(&seed);
+    iroha_crypto::Hash::new(preimage)
+}
+
+fn live_halo2_attachment(seed: [u8; 32]) -> ProofAttachment {
+    let fixture = halo2_ivm_execution_envelope(
+        hash_for_live_proof(b"zk-confidential-localnet/code", seed),
+        hash_for_live_proof(b"zk-confidential-localnet/overlay", seed),
+        hash_for_live_proof(b"zk-confidential-localnet/events", seed),
+        hash_for_live_proof(b"zk-confidential-localnet/gas-policy", seed),
+    );
+    let vk_box = fixture
+        .vk_box("halo2/ipa")
+        .expect("fixture must include a verifying key");
+    let proof_box = fixture.proof_box("halo2/ipa");
+    ProofAttachment::new_inline("halo2/ipa".into(), proof_box, vk_box)
 }
 
 fn numeric_balance(client: &Client, id: AssetId) -> Result<Numeric> {
@@ -181,10 +191,21 @@ async fn submit_and_wait_non_empty_block(
 
     *non_empty_target = non_empty_target.saturating_add(1);
     let target = *non_empty_target;
-    if let Err(err) = network
-        .ensure_blocks_with(|height| height.non_empty >= target)
-        .await
+    let all_peer_wait_error = match tokio::time::timeout(
+        ALL_PEER_WAIT_TIMEOUT,
+        network.ensure_blocks_with(|height| height.non_empty >= target),
+    )
+    .await
     {
+        Ok(Ok(_)) => None,
+        Ok(Err(err)) => Some(format!("{err:?}")),
+        Err(err) => Some(format!(
+            "timed out after {:?}: {err:?}",
+            ALL_PEER_WAIT_TIMEOUT
+        )),
+    };
+
+    if let Some(err) = all_peer_wait_error {
         let quorum = submitters.len().saturating_sub(1).max(1);
         wait_for_non_empty_quorum(submitters, target, quorum, context)
             .await
@@ -204,30 +225,52 @@ async fn wait_for_non_empty_quorum(
     quorum: usize,
     context: &str,
 ) -> Result<()> {
-    const ATTEMPTS: usize = 100;
+    const ATTEMPTS: usize = 200;
     const DELAY: Duration = Duration::from_millis(300);
     let mut last_observed = Vec::new();
+    let mut heights = Vec::new();
+    let mut error_streaks = vec![0_usize; clients.len()];
+    let mut muted_until_attempt = vec![0_usize; clients.len()];
 
-    for _ in 0..ATTEMPTS {
-        let mut reached = 0usize;
+    for attempt in 0..ATTEMPTS {
+        heights.clear();
         last_observed.clear();
+        let mut currently_muted = muted_peer_count(&muted_until_attempt, attempt);
 
-        for client in clients {
+        for (idx, client) in clients.iter().enumerate() {
+            if is_peer_muted(&muted_until_attempt, idx, attempt) {
+                heights.push(None);
+                last_observed.push(format!("muted:{idx}@{}", muted_until_attempt[idx]));
+                continue;
+            }
+
             match client.get_status() {
                 Ok(status) => {
                     let height = status.blocks_non_empty;
-                    if height >= target {
-                        reached += 1;
-                    }
+                    error_streaks[idx] = 0;
+                    heights.push(Some(height));
                     last_observed.push(format!("ok:{height}"));
                 }
                 Err(err) => {
+                    error_streaks[idx] = error_streaks[idx].saturating_add(1);
+                    if should_temporarily_mute_peer(
+                        error_streaks[idx],
+                        currently_muted,
+                        clients.len(),
+                        quorum,
+                    ) {
+                        muted_until_attempt[idx] =
+                            attempt.saturating_add(MUTED_PEER_COOLDOWN_ATTEMPTS);
+                        currently_muted = currently_muted.saturating_add(1);
+                        error_streaks[idx] = 0;
+                    }
+                    heights.push(None);
                     last_observed.push(format!("err:{err}"));
                 }
             }
         }
 
-        if reached >= quorum {
+        if count_non_empty_reached(&heights, target) >= quorum {
             return Ok(());
         }
 
@@ -238,6 +281,36 @@ async fn wait_for_non_empty_quorum(
         "{context}: expected non-empty block {target} on quorum {quorum}, last observed {:?}",
         last_observed
     ))
+}
+
+fn should_temporarily_mute_peer(
+    error_streak: usize,
+    currently_muted: usize,
+    total_clients: usize,
+    quorum: usize,
+) -> bool {
+    if error_streak < STATUS_ERROR_STREAK_FOR_MUTE {
+        return false;
+    }
+    total_clients.saturating_sub(currently_muted.saturating_add(1)) >= quorum
+}
+
+fn is_peer_muted(muted_until_attempt: &[usize], index: usize, attempt: usize) -> bool {
+    attempt < muted_until_attempt[index]
+}
+
+fn muted_peer_count(muted_until_attempt: &[usize], attempt: usize) -> usize {
+    muted_until_attempt
+        .iter()
+        .filter(|&&muted_until| attempt < muted_until)
+        .count()
+}
+
+fn count_non_empty_reached(heights: &[Option<u64>], target: u64) -> usize {
+    heights
+        .iter()
+        .filter(|height| height.is_some_and(|value| value >= target))
+        .count()
 }
 
 struct ConfidentialLocalnetCtx {
@@ -397,7 +470,7 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
                     public_asset_def.clone(),
                     Vec::new(),
                     vec![marker(output_commitment)],
-                    halo2_attachment(),
+                    live_halo2_attachment(marker(output_commitment)),
                     None,
                 )
                 .into(),
@@ -418,7 +491,7 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
                 source.clone(),
                 250_u128,
                 vec![marker(31)],
-                halo2_attachment(),
+                live_halo2_attachment(marker(31)),
                 None,
             )
             .into(),
@@ -475,7 +548,7 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
                     shielded_asset_def.clone(),
                     Vec::new(),
                     vec![marker(output_commitment)],
-                    halo2_attachment(),
+                    live_halo2_attachment(marker(output_commitment)),
                     None,
                 )
                 .into(),
@@ -584,7 +657,7 @@ async fn confidential_shielded_asset_three_hop_localnet() -> Result<()> {
                     shielded_asset_def.clone(),
                     Vec::new(),
                     vec![marker(output_commitment)],
-                    halo2_attachment(),
+                    live_halo2_attachment(marker(output_commitment)),
                     None,
                 )
                 .into(),
@@ -650,7 +723,7 @@ async fn confidential_zknative_asset_three_hop_localnet() -> Result<()> {
                     zknative_asset_def.clone(),
                     Vec::new(),
                     vec![marker(output_commitment)],
-                    halo2_attachment(),
+                    live_halo2_attachment(marker(output_commitment)),
                     None,
                 )
                 .into(),
@@ -795,14 +868,11 @@ async fn confidential_zknative_transparent_transfer_after_mint_localnet() -> Res
         &network,
         &tx_builder_client,
         &peer_clients,
-        vec![
-            Transfer::asset_numeric(
-                AssetId::new(asset_def.clone(), source.clone()),
-                10_u64,
-                recipient.clone(),
-            )
-            .into(),
-        ],
+        vec![InstructionBox::from(Transfer::asset_numeric(
+            AssetId::new(asset_def.clone(), source.clone()),
+            10_u64,
+            recipient.clone(),
+        ))],
         &mut non_empty_target,
         "zknative transparent transfer after mint failed",
     )
@@ -898,7 +968,7 @@ async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
                 source.clone(),
                 100_u128,
                 vec![marker(9)],
-                halo2_attachment(),
+                live_halo2_attachment(marker(109)),
                 None,
             ),
         )],
@@ -1190,7 +1260,7 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
                 source.clone(),
                 100_u128,
                 vec![marker(42)],
-                halo2_attachment(),
+                live_halo2_attachment(marker(142)),
                 Some(marker(77)),
             ),
         )],
@@ -1278,7 +1348,7 @@ async fn confidential_unshield_rejected_without_zk_registration() -> Result<()> 
                 source.clone(),
                 100_u128,
                 vec![marker(12)],
-                halo2_attachment(),
+                live_halo2_attachment(marker(112)),
                 None,
             ),
         )],
@@ -1393,7 +1463,7 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
                 source.clone(),
                 120_u128,
                 vec![marker(61)],
-                halo2_attachment(),
+                live_halo2_attachment(marker(161)),
                 None,
             )
             .into(),
@@ -1403,11 +1473,13 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
     )
     .await?;
 
-    let after_first_unshield = numeric_balance_any(
-        &peer_clients,
+    wait_for_numeric_balance(
+        &tx_builder_client,
         AssetId::new(asset_def.clone(), source.clone()),
-    )?;
-    assert_eq!(after_first_unshield, Numeric::from(320_u32));
+        Numeric::from(320_u32),
+        "wait balance after first unshield in duplicate-nullifier scenario",
+    )
+    .await?;
 
     let duplicate_unshield_tx = tx_builder_client.build_transaction_from_items(
         vec![InstructionBox::from(
@@ -1416,7 +1488,7 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
                 source.clone(),
                 80_u128,
                 vec![marker(61)],
-                halo2_attachment(),
+                live_halo2_attachment(marker(162)),
                 None,
             ),
         )],
@@ -1454,9 +1526,13 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
     )
     .await?;
 
-    let after_duplicate_attempt =
-        numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
-    assert_eq!(after_duplicate_attempt, Numeric::from(320_u32));
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def, source),
+        Numeric::from(320_u32),
+        "wait balance after duplicate-nullifier attempt",
+    )
+    .await?;
 
     Ok(())
 }
@@ -1564,7 +1640,7 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
                 source.clone(),
                 100_u128,
                 vec![marker(16)],
-                halo2_attachment(),
+                live_halo2_attachment(marker(116)),
                 None,
             ),
         )],
@@ -1661,7 +1737,7 @@ async fn confidential_transfer_rejected_in_transparent_only_mode() -> Result<()>
                 asset_def.clone(),
                 Vec::new(),
                 vec![marker(33)],
-                halo2_attachment(),
+                live_halo2_attachment(marker(133)),
                 None,
             ),
         )],
@@ -1754,4 +1830,55 @@ fn duplicate_tx_error_detector_ignores_non_duplicate_messages() {
     ] {
         assert!(!is_duplicate_tx_error(&eyre!(message)));
     }
+}
+
+#[test]
+fn transient_localnet_startup_error_detector_matches_expected_messages() {
+    for message in [
+        "terminated within 5s post-genesis window",
+        "error sending request for url",
+        "Connection refused",
+        "operation timed out",
+    ] {
+        assert!(is_transient_localnet_startup_error(&eyre!(message)));
+    }
+}
+
+#[test]
+fn transient_localnet_startup_error_detector_ignores_non_startup_messages() {
+    for message in [
+        "permission denied",
+        "validation failed",
+        "duplicate nullifier",
+    ] {
+        assert!(!is_transient_localnet_startup_error(&eyre!(message)));
+    }
+}
+
+#[test]
+fn count_non_empty_reached_counts_only_target_or_above() {
+    let heights = vec![Some(4_u64), Some(6_u64), None, Some(7_u64), Some(5_u64)];
+    assert_eq!(count_non_empty_reached(&heights, 6), 2);
+    assert_eq!(count_non_empty_reached(&heights, 5), 3);
+}
+
+#[test]
+fn should_temporarily_mute_peer_requires_error_streak_threshold() {
+    assert!(!should_temporarily_mute_peer(2, 0, 4, 3));
+    assert!(should_temporarily_mute_peer(3, 0, 4, 3));
+}
+
+#[test]
+fn should_temporarily_mute_peer_preserves_quorum_capacity() {
+    assert!(!should_temporarily_mute_peer(3, 1, 4, 3));
+    assert!(should_temporarily_mute_peer(3, 0, 4, 3));
+}
+
+#[test]
+fn muted_peer_count_counts_only_currently_muted_peers() {
+    let muted_until_attempt = vec![0_usize, 3, 5, 1];
+    assert_eq!(muted_peer_count(&muted_until_attempt, 0), 3);
+    assert_eq!(muted_peer_count(&muted_until_attempt, 1), 2);
+    assert_eq!(muted_peer_count(&muted_until_attempt, 3), 1);
+    assert_eq!(muted_peer_count(&muted_until_attempt, 5), 0);
 }

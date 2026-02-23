@@ -1,6 +1,5 @@
 //! Protected namespace admission gate test for IVM deploys.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 #![allow(clippy::too_many_lines, clippy::items_after_statements)]
 
 use iroha_core::{
@@ -63,10 +62,6 @@ fn compute_proposal_id(
 
 #[test]
 fn protected_namespace_requires_enacted_proposal() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!("Skipping: protected namespace gate test gated. Set IROHA_RUN_IGNORED=1 to run.");
-        return;
-    }
     use std::str::FromStr;
 
     use iroha_data_model::{
