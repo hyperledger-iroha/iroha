@@ -3,7 +3,7 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { domainToASCII } from "node:url";
-import { blake2b256 } from "./blake2b.js";
+import { blake2b256, blake2b512 } from "./blake2b.js";
 import { blake2sMac } from "./blake2s.js";
 import { getNativeBinding } from "./native.js";
 export const DEFAULT_DOMAIN_NAME = "default";
@@ -2041,6 +2041,22 @@ function decodeIh58Prefix(bytes) {
   );
 }
 
+function blake2b512Digest(payload) {
+  try {
+    return createHash("blake2b512").update(payload).digest();
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      /digest method not supported/i.test(
+        `${error.message}\n${error.stack ?? ""}`,
+      )
+    ) {
+      return Buffer.from(blake2b512(payload));
+    }
+    throw error;
+  }
+}
+
 function encodeIh58String(prefix, canonical) {
   const canonicalBytes = normalizeBytes(canonical);
   const prefixBytes = encodeIh58Prefix(prefix);
@@ -2048,7 +2064,7 @@ function encodeIh58String(prefix, canonical) {
   body.set(prefixBytes, 0);
   body.set(canonicalBytes, prefixBytes.length);
   const checksumInput = Buffer.concat([IH58_CHECKSUM_PREFIX, Buffer.from(body)]);
-  const checksum = createHash("blake2b512").update(checksumInput).digest();
+  const checksum = blake2b512Digest(checksumInput);
   const full = new Uint8Array(body.length + IH58_CHECKSUM_BYTES);
   full.set(body, 0);
   full.set(checksum.subarray(0, IH58_CHECKSUM_BYTES), body.length);
@@ -2073,10 +2089,10 @@ function decodeIh58String(encoded) {
   const payload = body.slice(0, body.length - IH58_CHECKSUM_BYTES);
   const [prefix, prefixLen] = decodeIh58Prefix(payload);
   const checksumInput = Buffer.concat([IH58_CHECKSUM_PREFIX, Buffer.from(payload)]);
-  const expected = createHash("blake2b512")
-    .update(checksumInput)
-    .digest()
-    .subarray(0, IH58_CHECKSUM_BYTES);
+  const expected = blake2b512Digest(checksumInput).subarray(
+    0,
+    IH58_CHECKSUM_BYTES,
+  );
   if (!Buffer.from(checksumBytes).equals(Buffer.from(expected))) {
     throw new AccountAddressError(AccountAddressErrorCode.CHECKSUM_MISMATCH, "IH58 checksum mismatch");
   }

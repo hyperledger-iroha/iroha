@@ -3044,6 +3044,50 @@ async fn handler_nexus_public_lane_rewards(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_nexus_dataspaces_account_summary(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(literal): AxPath<String>,
+    crate::NoritoQuery(params): crate::NoritoQuery<
+        routing::NexusDataspacesAccountSummaryQueryParams,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let nexus_enabled = app.state.nexus_snapshot().enabled;
+    ensure_nexus_lanes_enabled(
+        nexus_enabled,
+        routing::ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY,
+    )?;
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_v1_nexus_dataspaces_account_summary(
+            app.state.clone(),
+            AxPath(literal),
+            crate::NoritoQuery(params.clone()),
+            app.telemetry.clone(),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        None,
+        routing::ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY.trim_start_matches('/'),
+        enforce,
+    )
+    .await?;
+    routing::handle_v1_nexus_dataspaces_account_summary(
+        app.state.clone(),
+        AxPath(literal),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_space_directory_bindings(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -14367,6 +14411,10 @@ impl Torii {
                 .route(
                     "/v1/nexus/public_lanes/{lane_id}/rewards/pending",
                     get(handler_nexus_public_lane_rewards),
+                )
+                .route(
+                    "/v1/nexus/dataspaces/accounts/{literal}/summary",
+                    get(handler_nexus_dataspaces_account_summary),
                 )
                 .route(
                     "/v1/space-directory/uaids/{uaid}",
