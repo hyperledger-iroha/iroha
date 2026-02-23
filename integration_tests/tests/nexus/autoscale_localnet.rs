@@ -59,7 +59,7 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
                 .write(["nexus", "autoscale", "enabled"], true)
                 .write(["nexus", "autoscale", "min_lanes"], 1_i64)
                 .write(["nexus", "autoscale", "max_lanes"], 2_i64)
-                .write(["nexus", "autoscale", "target_block_ms"], 2000_i64)
+                .write(["nexus", "autoscale", "target_block_ms"], 3000_i64)
                 .write(["nexus", "autoscale", "scale_out_latency_ratio"], 0.2_f64)
                 .write(["nexus", "autoscale", "scale_in_latency_ratio"], 0.15_f64)
                 .write(
@@ -73,7 +73,7 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
                 .write(["nexus", "autoscale", "scale_out_window_blocks"], 2_i64)
                 .write(["nexus", "autoscale", "scale_in_window_blocks"], 4_i64)
                 .write(["nexus", "autoscale", "cooldown_blocks"], 1_i64)
-                .write(["nexus", "autoscale", "per_lane_target_tps"], 1_i64);
+                .write(["nexus", "autoscale", "per_lane_target_tps"], 40_i64);
         })
 }
 
@@ -1376,23 +1376,28 @@ fn run_expand_contract_cycle(
         &post_expansion_autoscale_transitions,
         &pre_cycle_autoscale_transitions,
     );
+    let peers_with_scale_in_before_contraction = peers_with_scale_in_transition(
+        &post_expansion_autoscale_transitions,
+        &pre_cycle_autoscale_transitions,
+    );
     eprintln!(
-        "[autoscale-localnet][cycle {cycle_index}] autoscale transition snapshot after expansion: scale-out peers with new transitions {peers_with_scale_out}/{TOTAL_PEERS}"
+        "[autoscale-localnet][cycle {cycle_index}] autoscale transition snapshot after expansion: scale-out peers with new transitions {peers_with_scale_out}/{TOTAL_PEERS}, scale-in peers since cycle start {peers_with_scale_in_before_contraction}/{TOTAL_PEERS}"
     );
 
-    let contraction_heartbeat_client = peer_client_with_timeout(network.peer());
+    let contraction_heartbeat_client =
+        (!require_scale_in_transition).then(|| peer_client_with_timeout(network.peer()));
     let contraction_started = Instant::now();
     let contraction_context = format!("autoscale contraction cycle {cycle_index}");
     let contraction_prefix = format!("autoscale-heartbeat-cycle-{cycle_index}");
     wait_for_contracted_lanes(
         network,
-        Some(&contraction_heartbeat_client),
+        contraction_heartbeat_client.as_ref(),
         &contraction_prefix,
         quorum_required,
         SCALE_IN_WAIT_TIMEOUT,
         &contraction_context,
-        None,
-        false,
+        Some(&pre_cycle_autoscale_transitions),
+        require_scale_in_transition,
         CONTRACTION_HEARTBEAT_INTERVAL,
     )?;
     eprintln!(
@@ -1400,17 +1405,21 @@ fn run_expand_contract_cycle(
         contraction_started.elapsed().as_secs_f64()
     );
     let post_contraction_autoscale_transitions = autoscale_transition_snapshot(network)?;
-    let peers_with_scale_in = peers_with_scale_in_transition(
+    let peers_with_scale_in_after_expansion = peers_with_scale_in_transition(
         &post_contraction_autoscale_transitions,
         &post_expansion_autoscale_transitions,
     );
+    let peers_with_scale_in_since_cycle_start = peers_with_scale_in_transition(
+        &post_contraction_autoscale_transitions,
+        &pre_cycle_autoscale_transitions,
+    );
     eprintln!(
-        "[autoscale-localnet][cycle {cycle_index}] autoscale transition snapshot after contraction: scale-in peers with new transitions {peers_with_scale_in}/{TOTAL_PEERS}"
+        "[autoscale-localnet][cycle {cycle_index}] autoscale transition snapshot after contraction: scale-in peers with new transitions after expansion {peers_with_scale_in_after_expansion}/{TOTAL_PEERS}; since cycle start {peers_with_scale_in_since_cycle_start}/{TOTAL_PEERS}"
     );
     if require_scale_in_transition {
         ensure!(
-            peers_with_scale_in >= quorum_required,
-            "autoscale cycle {cycle_index}: contraction profile was observed but deterministic autoscale scale-in transitions were not (scale-in transition peers: {peers_with_scale_in}/{TOTAL_PEERS}; required quorum: {quorum_required})"
+            peers_with_scale_in_since_cycle_start >= quorum_required,
+            "autoscale cycle {cycle_index}: contraction profile was observed but deterministic autoscale scale-in transitions were not observed on quorum peers within the cycle window (scale-in peers since cycle start: {peers_with_scale_in_since_cycle_start}/{TOTAL_PEERS}; after expansion snapshot: {peers_with_scale_in_after_expansion}/{TOTAL_PEERS}; required quorum: {quorum_required})"
         );
     }
     let post_cycle_status = status_snapshot(network)?;

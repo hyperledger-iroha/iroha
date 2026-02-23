@@ -20,13 +20,6 @@ use nonzero_ext::nonzero;
 
 #[test]
 fn plain_ballot_rejected_when_referendum_absent_or_closed() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: plain governance missing-ref test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
