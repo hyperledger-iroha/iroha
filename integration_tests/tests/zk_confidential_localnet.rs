@@ -745,14 +745,14 @@ async fn confidential_zknative_asset_three_hop_localnet() -> Result<()> {
 }
 
 #[tokio::test]
-async fn confidential_zknative_transparent_mint_rejected_localnet() -> Result<()> {
+async fn confidential_zknative_transparent_mint_creates_public_balance_localnet() -> Result<()> {
     let Some(ConfidentialLocalnetCtx {
         network,
         tx_builder_client,
         peer_clients,
         mut non_empty_target,
     }) = start_confidential_localnet(stringify!(
-        confidential_zknative_transparent_mint_rejected_localnet
+        confidential_zknative_transparent_mint_creates_public_balance_localnet
     ))
     .await?
     else {
@@ -780,67 +780,40 @@ async fn confidential_zknative_transparent_mint_rejected_localnet() -> Result<()
             .into(),
         ],
         &mut non_empty_target,
-        "prepare zknative shielded-only mint-rejection asset",
+        "prepare zknative transparent-mint asset",
     )
     .await?;
-
-    let denied_mint_tx = tx_builder_client.build_transaction_from_items(
-        vec![Mint::asset_numeric(10_u64, AssetId::new(asset_def.clone(), source.clone())).into()],
-        iroha_data_model::metadata::Metadata::default(),
-    );
-    let submit_result = submit_transaction_on_any_peer(
-        &peer_clients,
-        &denied_mint_tx,
-        "zknative transparent mint unexpectedly accepted",
-    );
-    let err = submit_result.expect_err("transparent mint should be rejected for zknative policy");
-    assert!(
-        err.chain().any(|cause| {
-            let text = cause.to_string().to_lowercase();
-            text.contains("transparent mint not permitted by policy")
-                || text.contains("not permitted by policy")
-                || text.contains("shielded")
-        }),
-        "expected transparent mint rejection signal, got: {err:?}"
-    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
-        vec![
-            Log::new(
-                Level::INFO,
-                "post denied zknative transparent mint barrier".to_owned(),
-            )
-            .into(),
-        ],
+        vec![Mint::asset_numeric(10_u64, AssetId::new(asset_def.clone(), source.clone())).into()],
         &mut non_empty_target,
-        "post denied zknative transparent mint barrier failed",
+        "zknative transparent mint failed",
     )
     .await?;
 
-    match numeric_balance_any(&peer_clients, AssetId::new(asset_def, source)) {
-        Ok(value) => assert_eq!(
-            value,
-            Numeric::from(0_u32),
-            "zknative denied mint unexpectedly changed transparent balance"
-        ),
-        Err(_) => {}
-    }
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def.clone(), source.clone()),
+        Numeric::from(10_u32),
+        "wait zknative transparent balance after mint",
+    )
+    .await?;
 
     Ok(())
 }
 
 #[tokio::test]
-async fn confidential_zknative_transparent_transfer_rejected_localnet() -> Result<()> {
+async fn confidential_zknative_transparent_transfer_after_mint_localnet() -> Result<()> {
     let Some(ConfidentialLocalnetCtx {
         network,
         tx_builder_client,
         peer_clients,
         mut non_empty_target,
     }) = start_confidential_localnet(stringify!(
-        confidential_zknative_transparent_transfer_rejected_localnet
+        confidential_zknative_transparent_transfer_after_mint_localnet
     ))
     .await?
     else {
@@ -857,26 +830,6 @@ async fn confidential_zknative_transparent_transfer_rejected_localnet() -> Resul
         &peer_clients,
         vec![
             Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
-            Mint::asset_numeric(25_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
-        ],
-        &mut non_empty_target,
-        "prepare public balance before zknative policy switch",
-    )
-    .await?;
-
-    wait_for_numeric_balance(
-        &tx_builder_client,
-        AssetId::new(asset_def.clone(), source.clone()),
-        Numeric::from(25_u32),
-        "wait pre-zknative source balance before transfer rejection",
-    )
-    .await?;
-
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &peer_clients,
-        vec![
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::ZkNative,
@@ -889,70 +842,56 @@ async fn confidential_zknative_transparent_transfer_rejected_localnet() -> Resul
             .into(),
         ],
         &mut non_empty_target,
-        "apply zknative shielded-only policy before transfer",
+        "prepare zknative transparent-transfer asset",
     )
     .await?;
-
-    let denied_transfer_tx = tx_builder_client.build_transaction_from_items(
-        vec![
-            Transfer::asset_numeric(
-                AssetId::new(asset_def.clone(), source.clone()),
-                10_u64,
-                recipient.clone(),
-            )
-            .into(),
-        ],
-        iroha_data_model::metadata::Metadata::default(),
-    );
-    let submit_result = submit_transaction_on_any_peer(
-        &peer_clients,
-        &denied_transfer_tx,
-        "zknative transparent transfer unexpectedly accepted",
-    );
-    let err =
-        submit_result.expect_err("transparent transfer should be rejected for zknative policy");
-    assert!(
-        err.chain().any(|cause| {
-            let text = cause.to_string().to_lowercase();
-            text.contains("transparent transfer not permitted by policy")
-                || text.contains("policy")
-                || text.contains("permitted")
-        }),
-        "expected transparent transfer rejection signal, got: {err:?}"
-    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
-        vec![
-            Log::new(
-                Level::INFO,
-                "post denied zknative transparent transfer barrier".to_owned(),
-            )
-            .into(),
-        ],
+        vec![Mint::asset_numeric(25_u64, AssetId::new(asset_def.clone(), source.clone())).into()],
         &mut non_empty_target,
-        "post denied zknative transparent transfer barrier failed",
+        "zknative transparent mint before transfer failed",
     )
     .await?;
 
-    if let Ok(value) = numeric_balance_any(&peer_clients, AssetId::new(asset_def.clone(), source)) {
-        assert_eq!(
-            value,
-            Numeric::from(25_u32),
-            "zknative denied transfer unexpectedly changed source balance"
-        );
-    }
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def.clone(), source.clone()),
+        Numeric::from(25_u32),
+        "wait zknative source balance before transfer",
+    )
+    .await?;
 
-    match numeric_balance_any(&peer_clients, AssetId::new(asset_def, recipient)) {
-        Ok(value) => assert_eq!(
-            value,
-            Numeric::from(0_u32),
-            "zknative denied transfer unexpectedly credited recipient balance"
-        ),
-        Err(_) => {}
-    }
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![InstructionBox::from(Transfer::asset_numeric(
+            AssetId::new(asset_def.clone(), source.clone()),
+            10_u64,
+            recipient.clone(),
+        ))],
+        &mut non_empty_target,
+        "zknative transparent transfer after mint failed",
+    )
+    .await?;
+
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def.clone(), source.clone()),
+        Numeric::from(15_u32),
+        "wait zknative source balance after transfer",
+    )
+    .await?;
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def, recipient.clone()),
+        Numeric::from(10_u32),
+        "wait zknative recipient balance after transfer",
+    )
+    .await?;
 
     Ok(())
 }
@@ -1534,11 +1473,13 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
     )
     .await?;
 
-    let after_first_unshield = numeric_balance_any(
-        &peer_clients,
+    wait_for_numeric_balance(
+        &tx_builder_client,
         AssetId::new(asset_def.clone(), source.clone()),
-    )?;
-    assert_eq!(after_first_unshield, Numeric::from(320_u32));
+        Numeric::from(320_u32),
+        "wait balance after first unshield in duplicate-nullifier scenario",
+    )
+    .await?;
 
     let duplicate_unshield_tx = tx_builder_client.build_transaction_from_items(
         vec![InstructionBox::from(
@@ -1585,9 +1526,13 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
     )
     .await?;
 
-    let after_duplicate_attempt =
-        numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
-    assert_eq!(after_duplicate_attempt, Numeric::from(320_u32));
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def, source),
+        Numeric::from(320_u32),
+        "wait balance after duplicate-nullifier attempt",
+    )
+    .await?;
 
     Ok(())
 }

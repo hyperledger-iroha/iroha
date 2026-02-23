@@ -20,6 +20,7 @@ Options:
   --cargo-jobs <N>                 Set CARGO_BUILD_JOBS for cargo test (default: 1)
   --test-threads <N>               --test-threads for cargo test (default: 1)
   --prefer-test-binary             Prefer running prebuilt test binary from <target-dir>/debug/deps/mod-*
+  --summary-json-rows              Include per-run row arrays in matrix_summary.json
   --skip-cross                     Skip all cross-dataspace runs
   --skip-runtime                   Skip all runtime-registration runs
   --no-skip-bindings-sync          Do not set NORITO_SKIP_BINDINGS_SYNC=1
@@ -31,6 +32,7 @@ Outputs:
   <output-dir>/cross_dataspace_matrix.csv
   <output-dir>/runtime_registration_matrix.csv
   <output-dir>/matrix_summary.txt
+  <output-dir>/matrix_summary.json
   <output-dir>/cross_run_<N>.log
   <output-dir>/runtime_run_<N>.log
 EOF
@@ -54,6 +56,14 @@ require_nonnegative_int() {
   fi
 }
 
+require_command() {
+  local cmd="$1"
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    echo "Required command not found: ${cmd}" >&2
+    exit 2
+  fi
+}
+
 CROSS_RUNS=5
 RUNTIME_RUNS=5
 CROSS_SOAK_ITERATIONS=10
@@ -70,6 +80,9 @@ RUN_RUNTIME=true
 CARGO_JOBS=1
 SKIP_BINDINGS_SYNC=true
 PREFER_TEST_BINARY=false
+SUMMARY_JSON_ROWS=false
+CACHED_CROSS_TEST_BIN=""
+CACHED_RUNTIME_TEST_BIN=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -115,6 +128,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --prefer-test-binary)
       PREFER_TEST_BINARY=true
+      shift
+      ;;
+    --summary-json-rows)
+      SUMMARY_JSON_ROWS=true
       shift
       ;;
     --skip-cross)
@@ -169,14 +186,19 @@ if [[ "$RUN_CROSS" != true ]] && [[ "$RUN_RUNTIME" != true ]]; then
   exit 2
 fi
 
+require_command "python3"
+require_command "rg"
+
 mkdir -p "$OUTPUT_DIR"
 
 CROSS_CSV="${OUTPUT_DIR}/cross_dataspace_matrix.csv"
 RUNTIME_CSV="${OUTPUT_DIR}/runtime_registration_matrix.csv"
 SUMMARY_TXT="${OUTPUT_DIR}/matrix_summary.txt"
+SUMMARY_JSON="${OUTPUT_DIR}/matrix_summary.json"
 printf "run,exit,timed_out,duration_s,soak_passed,soak_total,soak_fallbacks,soak_retries,swap_nonconverged_fallbacks\n" > "$CROSS_CSV"
 printf "run,exit,timed_out,duration_s,pass_rate,submitter_delta_max,cluster_delta_max,note_zero_delta\n" > "$RUNTIME_CSV"
 : > "$SUMMARY_TXT"
+: > "$SUMMARY_JSON"
 
 ENV_VARS=()
 
@@ -216,25 +238,57 @@ PY
   fi
 }
 
-resolve_mod_test_binary() {
+file_mtime_epoch() {
+  local file_path="$1"
+  local mtime
+  if mtime=$(stat -f '%m' "${file_path}" 2>/dev/null); then
+    printf '%s\n' "${mtime}"
+    return 0
+  fi
+  if mtime=$(stat -c '%Y' "${file_path}" 2>/dev/null); then
+    printf '%s\n' "${mtime}"
+    return 0
+  fi
+  printf '0\n'
+}
+
+list_mod_test_binaries_by_mtime_desc() {
   local deps_dir="${TARGET_DIR}/debug/deps"
-  local best_path=""
-  local best_mtime=0
   local candidate mtime
   if [[ ! -d "${deps_dir}" ]]; then
     return 1
   fi
   while IFS= read -r candidate; do
-    mtime=$(stat -f '%m' "${candidate}" 2>/dev/null || printf '0')
-    if [[ -z "${best_path}" ]] || [[ "${mtime}" -gt "${best_mtime}" ]]; then
-      best_path="${candidate}"
-      best_mtime="${mtime}"
-    fi
+    mtime=$(file_mtime_epoch "${candidate}")
+    printf '%s\t%s\n' "${mtime}" "${candidate}"
   done < <(find "${deps_dir}" -maxdepth 1 -type f -name 'mod-*' -perm -111)
-  if [[ -z "${best_path}" ]]; then
-    return 1
+}
+
+resolve_mod_test_binary_for_filter() {
+  local test_filter="$1"
+  local candidate list_output
+
+  while IFS=$'\t' read -r _mtime candidate; do
+    list_output=$("${candidate}" "${test_filter}" --list 2>/dev/null || true)
+    if printf '%s\n' "${list_output}" | rg -q -F "${test_filter}"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done < <(list_mod_test_binaries_by_mtime_desc | sort -rn -k1,1)
+
+  return 1
+}
+
+require_resolved_test_binary() {
+  local test_filter="$1"
+  local test_bin
+
+  test_bin=$(resolve_mod_test_binary_for_filter "${test_filter}" || true)
+  if [[ -z "${test_bin}" ]]; then
+    echo "Unable to locate executable mod-* test binary under ${TARGET_DIR}/debug/deps containing test filter '${test_filter}'" >&2
+    exit 2
   fi
-  printf '%s\n' "${best_path}"
+  printf '%s\n' "${test_bin}"
 }
 
 run_cross() {
@@ -242,19 +296,20 @@ run_cross() {
   local log_path="${OUTPUT_DIR}/cross_run_${run_index}.log"
   local start_ts end_ts duration_s code
   local timed_out=0
-  local test_bin
+  local test_bin test_filter
   local -a command
   local soak_line soak_passed soak_total soak_fallbacks soak_retries swap_nonconverged
+  test_filter="cross_dataspace_atomic_swap_is_all_or_nothing"
   build_env_vars
   if [[ "${PREFER_TEST_BINARY}" == true ]]; then
-    test_bin=$(resolve_mod_test_binary || true)
-    if [[ -z "${test_bin}" ]]; then
-      echo "Unable to locate executable mod-* test binary under ${TARGET_DIR}/debug/deps" >&2
-      exit 2
+    if [[ -z "${CACHED_CROSS_TEST_BIN}" ]]; then
+      CACHED_CROSS_TEST_BIN=$(require_resolved_test_binary "${test_filter}")
     fi
-    command=("${test_bin}" "cross_dataspace_atomic_swap_is_all_or_nothing" "--nocapture" "--test-threads=${TEST_THREADS}")
+    test_bin="${CACHED_CROSS_TEST_BIN}"
+    echo "[matrix] resolved test binary for ${test_filter}: ${test_bin}"
+    command=("${test_bin}" "${test_filter}" "--nocapture" "--test-threads=${TEST_THREADS}")
   else
-    command=(cargo test -p integration_tests --test mod cross_dataspace_atomic_swap_is_all_or_nothing -- --nocapture --test-threads="${TEST_THREADS}")
+    command=(cargo test -p integration_tests --test mod "${test_filter}" -- --nocapture --test-threads="${TEST_THREADS}")
   fi
   start_ts=$(date +%s)
   if run_with_timeout "${CROSS_TIMEOUT_S}" env "${ENV_VARS[@]}" "${command[@]}" >"${log_path}" 2>&1; then
@@ -296,19 +351,20 @@ run_runtime() {
   local log_path="${OUTPUT_DIR}/runtime_run_${run_index}.log"
   local start_ts end_ts duration_s code
   local timed_out=0
-  local test_bin
+  local test_bin test_filter
   local -a command
   local pass_rate submitter_max cluster_max note_zero_delta
+  test_filter="runtime_nexus_registration_reports_lane_lifecycle_costs"
   build_env_vars
   if [[ "${PREFER_TEST_BINARY}" == true ]]; then
-    test_bin=$(resolve_mod_test_binary || true)
-    if [[ -z "${test_bin}" ]]; then
-      echo "Unable to locate executable mod-* test binary under ${TARGET_DIR}/debug/deps" >&2
-      exit 2
+    if [[ -z "${CACHED_RUNTIME_TEST_BIN}" ]]; then
+      CACHED_RUNTIME_TEST_BIN=$(require_resolved_test_binary "${test_filter}")
     fi
-    command=("${test_bin}" "runtime_nexus_registration_reports_lane_lifecycle_costs" "--nocapture" "--test-threads=${TEST_THREADS}")
+    test_bin="${CACHED_RUNTIME_TEST_BIN}"
+    echo "[matrix] resolved test binary for ${test_filter}: ${test_bin}"
+    command=("${test_bin}" "${test_filter}" "--nocapture" "--test-threads=${TEST_THREADS}")
   else
-    command=(cargo test -p integration_tests --test mod runtime_nexus_registration_reports_lane_lifecycle_costs -- --nocapture --test-threads="${TEST_THREADS}")
+    command=(cargo test -p integration_tests --test mod "${test_filter}" -- --nocapture --test-threads="${TEST_THREADS}")
   fi
   start_ts=$(date +%s)
   if run_with_timeout "${RUNTIME_TIMEOUT_S}" env "${ENV_VARS[@]}" "${command[@]}" >"${log_path}" 2>&1; then
@@ -408,6 +464,209 @@ runtime_summary_line() {
   ' "${RUNTIME_CSV}"
 }
 
+write_json_summary() {
+  local include_rows_flag=0
+  if [[ "${SUMMARY_JSON_ROWS}" == true ]]; then
+    include_rows_flag=1
+  fi
+  MATRIX_TARGET_DIR="${TARGET_DIR}" \
+  MATRIX_OUTPUT_DIR="${OUTPUT_DIR}" \
+  MATRIX_CROSS_RUNS="${CROSS_RUNS}" \
+  MATRIX_RUNTIME_RUNS="${RUNTIME_RUNS}" \
+  MATRIX_CROSS_SOAK_ITERATIONS="${CROSS_SOAK_ITERATIONS}" \
+  MATRIX_RUNTIME_BENCH_ITERATIONS="${RUNTIME_BENCH_ITERATIONS}" \
+  MATRIX_CROSS_TIMEOUT_S="${CROSS_TIMEOUT_S}" \
+  MATRIX_RUNTIME_TIMEOUT_S="${RUNTIME_TIMEOUT_S}" \
+  MATRIX_CARGO_JOBS="${CARGO_JOBS}" \
+  MATRIX_TEST_THREADS="${TEST_THREADS}" \
+  MATRIX_PREFER_TEST_BINARY="${PREFER_TEST_BINARY}" \
+  MATRIX_SUMMARY_JSON_ROWS="${SUMMARY_JSON_ROWS}" \
+  MATRIX_SKIP_BUILD="${SKIP_BUILD}" \
+  MATRIX_SKIP_BINDINGS_SYNC="${SKIP_BINDINGS_SYNC}" \
+  MATRIX_CONTINUE_ON_FAILURE="${CONTINUE_ON_FAILURE}" \
+  MATRIX_RUN_CROSS="${RUN_CROSS}" \
+  MATRIX_RUN_RUNTIME="${RUN_RUNTIME}" \
+  python3 - "${CROSS_CSV}" "${RUNTIME_CSV}" "${SUMMARY_JSON}" "${include_rows_flag}" <<'PY'
+import csv
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+cross_csv, runtime_csv, out_json = sys.argv[1], sys.argv[2], sys.argv[3]
+include_rows = sys.argv[4] == "1"
+
+def to_int(value):
+    if value is None:
+        return 0
+    value = str(value).strip()
+    if value == "":
+        return 0
+    return int(float(value))
+
+def to_float(value):
+    if value is None:
+        return 0.0
+    value = str(value).strip()
+    if value == "":
+        return 0.0
+    return float(value)
+
+def load_rows(path):
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+cross_rows = load_rows(cross_csv)
+runtime_rows = load_rows(runtime_csv)
+
+def summarize_cross(rows):
+    runs = len(rows)
+    if runs == 0:
+        return {
+            "runs": 0,
+            "success": 0,
+            "fail": 0,
+            "exit_code_counts": {},
+            "timed_out": 0,
+            "duration_s": {"min": 0, "avg": 0.0, "max": 0},
+            "soak_pass_rate_percent": 0.0,
+            "soak_fallbacks_total": 0,
+            "soak_retries_total": 0,
+            "swap_nonconverged_fallbacks_total": 0,
+        }
+
+    durations = [to_int(r.get("duration_s")) for r in rows]
+    exit_codes = [to_int(r.get("exit")) for r in rows]
+    fail = sum(1 for code in exit_codes if code != 0)
+    success = runs - fail
+    timed_out = sum(to_int(r.get("timed_out")) for r in rows)
+    soak_passed = sum(to_int(r.get("soak_passed")) for r in rows)
+    soak_total = sum(to_int(r.get("soak_total")) for r in rows)
+    soak_pass_rate = (soak_passed * 100.0 / soak_total) if soak_total else 0.0
+    exit_code_counts = {}
+    for code in exit_codes:
+        key = str(code)
+        exit_code_counts[key] = exit_code_counts.get(key, 0) + 1
+    return {
+        "runs": runs,
+        "success": success,
+        "fail": fail,
+        "exit_code_counts": exit_code_counts,
+        "timed_out": timed_out,
+        "duration_s": {
+            "min": min(durations),
+            "avg": sum(durations) / runs,
+            "max": max(durations),
+        },
+        "soak_pass_rate_percent": soak_pass_rate,
+        "soak_fallbacks_total": sum(to_int(r.get("soak_fallbacks")) for r in rows),
+        "soak_retries_total": sum(to_int(r.get("soak_retries")) for r in rows),
+        "swap_nonconverged_fallbacks_total": sum(to_int(r.get("swap_nonconverged_fallbacks")) for r in rows),
+    }
+
+def summarize_runtime(rows):
+    runs = len(rows)
+    if runs == 0:
+        return {
+            "runs": 0,
+            "success": 0,
+            "fail": 0,
+            "exit_code_counts": {},
+            "timed_out": 0,
+            "duration_s": {"min": 0, "avg": 0.0, "max": 0},
+            "pass_rate_avg_percent": 0.0,
+            "submitter_delta_max": 0,
+            "cluster_delta_max": 0,
+            "note_zero_delta_rows": 0,
+        }
+
+    durations = [to_int(r.get("duration_s")) for r in rows]
+    exit_codes = [to_int(r.get("exit")) for r in rows]
+    fail = sum(1 for code in exit_codes if code != 0)
+    success = runs - fail
+    exit_code_counts = {}
+    for code in exit_codes:
+        key = str(code)
+        exit_code_counts[key] = exit_code_counts.get(key, 0) + 1
+    return {
+        "runs": runs,
+        "success": success,
+        "fail": fail,
+        "exit_code_counts": exit_code_counts,
+        "timed_out": sum(to_int(r.get("timed_out")) for r in rows),
+        "duration_s": {
+            "min": min(durations),
+            "avg": sum(durations) / runs,
+            "max": max(durations),
+        },
+        "pass_rate_avg_percent": sum(to_float(r.get("pass_rate")) for r in rows) / runs,
+        "submitter_delta_max": max(to_int(r.get("submitter_delta_max")) for r in rows),
+        "cluster_delta_max": max(to_int(r.get("cluster_delta_max")) for r in rows),
+        "note_zero_delta_rows": sum(to_int(r.get("note_zero_delta")) for r in rows),
+    }
+
+payload = {
+    "generated_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    "config": {
+        "target_dir": os.environ.get("MATRIX_TARGET_DIR", ""),
+        "output_dir": os.environ.get("MATRIX_OUTPUT_DIR", ""),
+        "cross_runs": to_int(os.environ.get("MATRIX_CROSS_RUNS", "0")),
+        "runtime_runs": to_int(os.environ.get("MATRIX_RUNTIME_RUNS", "0")),
+        "cross_soak_iterations": to_int(os.environ.get("MATRIX_CROSS_SOAK_ITERATIONS", "0")),
+        "runtime_bench_iterations": to_int(os.environ.get("MATRIX_RUNTIME_BENCH_ITERATIONS", "0")),
+        "cross_timeout_s": to_int(os.environ.get("MATRIX_CROSS_TIMEOUT_S", "0")),
+        "runtime_timeout_s": to_int(os.environ.get("MATRIX_RUNTIME_TIMEOUT_S", "0")),
+        "cargo_jobs": to_int(os.environ.get("MATRIX_CARGO_JOBS", "0")),
+        "test_threads": to_int(os.environ.get("MATRIX_TEST_THREADS", "0")),
+        "prefer_test_binary": os.environ.get("MATRIX_PREFER_TEST_BINARY", "") == "true",
+        "summary_json_rows": os.environ.get("MATRIX_SUMMARY_JSON_ROWS", "") == "true",
+        "skip_build": os.environ.get("MATRIX_SKIP_BUILD", "") == "true",
+        "skip_bindings_sync": os.environ.get("MATRIX_SKIP_BINDINGS_SYNC", "") == "true",
+        "continue_on_failure": os.environ.get("MATRIX_CONTINUE_ON_FAILURE", "") == "true",
+        "run_cross": os.environ.get("MATRIX_RUN_CROSS", "") == "true",
+        "run_runtime": os.environ.get("MATRIX_RUN_RUNTIME", "") == "true",
+    },
+    "cross": summarize_cross(cross_rows),
+    "runtime": summarize_runtime(runtime_rows),
+}
+
+if include_rows:
+    def typed_cross_row(row):
+        return {
+            "run": to_int(row.get("run")),
+            "exit": to_int(row.get("exit")),
+            "timed_out": to_int(row.get("timed_out")),
+            "duration_s": to_int(row.get("duration_s")),
+            "soak_passed": to_int(row.get("soak_passed")),
+            "soak_total": to_int(row.get("soak_total")),
+            "soak_fallbacks": to_int(row.get("soak_fallbacks")),
+            "soak_retries": to_int(row.get("soak_retries")),
+            "swap_nonconverged_fallbacks": to_int(row.get("swap_nonconverged_fallbacks")),
+        }
+
+    def typed_runtime_row(row):
+        return {
+            "run": to_int(row.get("run")),
+            "exit": to_int(row.get("exit")),
+            "timed_out": to_int(row.get("timed_out")),
+            "duration_s": to_int(row.get("duration_s")),
+            "pass_rate": to_float(row.get("pass_rate")),
+            "submitter_delta_max": to_int(row.get("submitter_delta_max")),
+            "cluster_delta_max": to_int(row.get("cluster_delta_max")),
+            "note_zero_delta": to_int(row.get("note_zero_delta")),
+        }
+
+    payload["rows"] = {
+        "cross": [typed_cross_row(row) for row in cross_rows],
+        "runtime": [typed_runtime_row(row) for row in runtime_rows],
+    }
+
+with open(out_json, "w", encoding="utf-8") as f:
+    json.dump(payload, f, indent=2, sort_keys=True)
+    f.write("\n")
+PY
+}
+
 echo "Output directory: ${OUTPUT_DIR}"
 echo "Cross runs enabled: ${RUN_CROSS}, runs: ${CROSS_RUNS}, soak iterations: ${CROSS_SOAK_ITERATIONS}, timeout: ${CROSS_TIMEOUT_S}s"
 echo "Runtime runs enabled: ${RUN_RUNTIME}, runs: ${RUNTIME_RUNS}, bench iterations: ${RUNTIME_BENCH_ITERATIONS}, timeout: ${RUNTIME_TIMEOUT_S}s"
@@ -415,6 +674,7 @@ echo "Target dir: ${TARGET_DIR}"
 echo "Cargo jobs: ${CARGO_JOBS}"
 echo "Test threads: ${TEST_THREADS}"
 echo "Prefer test binary: ${PREFER_TEST_BINARY}"
+echo "Summary JSON include rows: ${SUMMARY_JSON_ROWS}"
 echo "Skip build: ${SKIP_BUILD}"
 echo "Skip bindings sync: ${SKIP_BINDINGS_SYNC}"
 echo "Continue on failure: ${CONTINUE_ON_FAILURE}"
@@ -443,4 +703,6 @@ cat "${CROSS_CSV}"
 cat "${RUNTIME_CSV}"
 cross_summary_line | tee -a "${SUMMARY_TXT}"
 runtime_summary_line | tee -a "${SUMMARY_TXT}"
+write_json_summary
 echo "SUMMARY_TXT=${SUMMARY_TXT}"
+echo "SUMMARY_JSON=${SUMMARY_JSON}"
