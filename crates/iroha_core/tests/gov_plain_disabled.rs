@@ -1,6 +1,5 @@
 //! Plain voting disabled policy gate test.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 
 use core::num::NonZeroU64;
 
@@ -17,10 +16,6 @@ use iroha_test_samples::ALICE_ID;
 
 #[test]
 fn plain_ballot_rejected_when_disabled() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!("Skipping: plain disabled test gated. Set IROHA_RUN_IGNORED=1 to run.");
-        return;
-    }
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);

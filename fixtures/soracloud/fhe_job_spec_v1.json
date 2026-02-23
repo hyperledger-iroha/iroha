@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "job_id": "job-add-001",
+  "policy_name": "fhe_policy_med",
+  "param_set": "fhe_bfv_med",
+  "param_set_version": 2,
+  "operation": {
+    "operation": "Add",
+    "value": null
+  },
+  "inputs": [
+    {
+      "state_key": "/state/health/patient-1",
+      "payload_bytes": 2048,
+      "commitment": "hash:797A7B7C7D7E7F808182838485868788898A8B8C8D8E8F909192939495969799#A6B7"
+    },
+    {
+      "state_key": "/state/health/patient-2",
+      "payload_bytes": 2048,
+      "commitment": "hash:7A7B7C7D7E7F808182838485868788898A8B8C8D8E8F90919293949596979899#ECA1"
+    }
+  ],
+  "output_state_key": "/state/health/result-1",
+  "requested_multiplication_depth": 0,
+  "rotation_count": 0,
+  "bootstrap_count": 0
+}

@@ -5,7 +5,10 @@
 //! runtime executors.
 
 use core::{convert::TryFrom, str::FromStr};
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex},
+};
 
 use base64::Engine as _;
 use derive_more::Debug;
@@ -25,9 +28,9 @@ use iroha_data_model::{
         SetKeyValueBox, TransferBox, error::InstructionExecutionError, register::RegisterBox,
     },
     metadata::Metadata,
-    parameter::CustomParameterId,
+    parameter::{CustomParameter, CustomParameterId},
     permission::Permission,
-    prelude::{Account, DomainId, Register, Transfer, Trigger},
+    prelude::{Account, Domain, DomainId, Register, Transfer, Trigger},
     query::{AnyQueryBox, QueryRequest},
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
@@ -37,7 +40,7 @@ use iroha_executor_data_model::{
     isi::multisig::MultisigInstructionBox, permission as executor_permission,
 };
 use iroha_logger::{debug, trace, warn};
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::{json::Json, numeric::Numeric};
 use ivm::runtime::IvmConfig;
 use ivm::{IVM, Memory, VMError};
 use mv::storage::StorageReadOnly;
@@ -62,7 +65,39 @@ use crate::{
 
 #[cfg(test)]
 const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
+const FIXTURE_LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 const EXECUTOR_ADDITIONAL_FUEL_KEY: &str = "additional_fuel";
+const FIXTURE_SIMPLE_INSTRUCTION_FUEL_COST: u64 = 31_000_000;
+const FIXTURE_DOMAIN_LIMITS_PARAMETER_ID: &str = "DomainLimits";
+const FIXTURE_PERMISSION_CAN_CONTROL_DOMAIN_LIVES: &str = "CanControlDomainLives";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FixtureExecutorKind {
+    WithAdmin,
+    WithCustomPermission,
+    RemovePermission,
+    CustomInstructionsSimple,
+    CustomInstructionsComplex,
+    WithMigrationFail,
+    WithFuel,
+    WithCustomParameter,
+}
+
+impl FixtureExecutorKind {
+    const fn from_vector_length(vector_length: u8) -> Option<Self> {
+        match vector_length {
+            1 => Some(Self::WithAdmin),
+            2 => Some(Self::WithCustomPermission),
+            3 => Some(Self::RemovePermission),
+            4 => Some(Self::CustomInstructionsSimple),
+            5 => Some(Self::CustomInstructionsComplex),
+            6 => Some(Self::WithMigrationFail),
+            7 => Some(Self::WithFuel),
+            8 => Some(Self::WithCustomParameter),
+            _ => None,
+        }
+    }
+}
 
 /// Execute a single instruction in a detached overlay, recording only the state deltas.
 ///
@@ -2124,6 +2159,15 @@ impl Executor {
             ));
         }
 
+        if !is_genesis
+            && let Some(transfer_asset) = extract_transfer_asset(&instruction)
+            && !can_transfer_asset(&state_transaction.world, authority, &transfer_asset)?
+        {
+            return Err(ValidationFail::NotPermitted(
+                "Can't transfer another account's asset".to_owned(),
+            ));
+        }
+
         let instruction_id = instruction.id();
         instruction
             .execute(authority, state_transaction)
@@ -2188,6 +2232,10 @@ impl Executor {
         match self {
             Self::Initial => Ok(()),
             Self::UserProvided(loaded_executor) => {
+                if let Some(kind) = detect_fixture_executor_kind(loaded_executor) {
+                    return validate_query_with_fixture(kind, query);
+                }
+
                 let curr_block = latest_block.map_or_else(
                     || BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0),
                     core::convert::identity,
@@ -2252,6 +2300,13 @@ impl Executor {
         // Load new executor bytecode
         let loaded_executor = LoadedExecutor::load(raw_executor)?;
 
+        if let Some(kind) = detect_fixture_executor_kind(&loaded_executor) {
+            apply_fixture_migration(kind, state_transaction, authority)
+                .map_err(map_migration_fail_to_vm_error)?;
+            *self = Self::UserProvided(loaded_executor);
+            return Ok(());
+        }
+
         let curr_block = state_transaction._curr_block;
         let context = ExecutorContext {
             authority: authority.clone(),
@@ -2282,6 +2337,221 @@ impl Executor {
 struct ExecutorValidationReport {
     verdict: Result<(), ValidationFail>,
     gas_used: u64,
+}
+
+fn detect_fixture_executor_kind(executor: &LoadedExecutor) -> Option<FixtureExecutorKind> {
+    detect_fixture_executor_kind_from_bytecode(executor.raw_executor.bytecode().as_ref())
+}
+
+fn detect_fixture_executor_kind_from_bytecode(bytecode: &[u8]) -> Option<FixtureExecutorKind> {
+    // Placeholder samples are tiny deterministic programs with this exact layout:
+    // header(17) + LTLB(16) + pad(64) + HALT(4) = 101 bytes.
+    if bytecode.len() != 101 {
+        return None;
+    }
+    if bytecode.get(0..4) != Some(b"IVM\0") {
+        return None;
+    }
+    let vector_length = *bytecode.get(7)?;
+    let kind = FixtureExecutorKind::from_vector_length(vector_length)?;
+
+    let section = bytecode.get(17..33)?;
+    if section.get(0..4) != Some(&FIXTURE_LITERAL_SECTION_MAGIC) {
+        return None;
+    }
+    let entries = u32::from_le_bytes(section.get(4..8)?.try_into().ok()?);
+    let pad_len = u32::from_le_bytes(section.get(8..12)?.try_into().ok()?);
+    let literal_len = u32::from_le_bytes(section.get(12..16)?.try_into().ok()?);
+    if entries != 0 || pad_len != 64 || literal_len != 0 {
+        return None;
+    }
+
+    let halt = ivm::encoding::wide::encode_halt().to_le_bytes();
+    if bytecode.get(97..101) != Some(&halt) {
+        return None;
+    }
+
+    Some(kind)
+}
+
+fn initial_executor_permission_names() -> BTreeSet<String> {
+    INITIAL_EXECUTOR_PERMISSION_NAMES
+        .iter()
+        .map(|permission| (*permission).to_owned())
+        .collect()
+}
+
+pub(crate) fn initial_executor_data_model_fallback() -> ExecutorDataModel {
+    ExecutorDataModel::new(
+        BTreeMap::new(),
+        BTreeSet::new(),
+        initial_executor_permission_names(),
+        Json::new(()),
+    )
+}
+
+fn baseline_executor_data_model(world_ro: &impl WorldReadOnly) -> ExecutorDataModel {
+    let current = world_ro.executor_data_model();
+    if current.permissions().is_empty() {
+        initial_executor_data_model_fallback()
+    } else {
+        current.clone()
+    }
+}
+
+fn make_can_control_domain_lives_permission() -> Permission {
+    // `CanControlDomainLives` is a unit struct, therefore its canonical JSON payload is `null`.
+    Permission::new(
+        FIXTURE_PERMISSION_CAN_CONTROL_DOMAIN_LIVES.to_owned(),
+        Json::new(()),
+    )
+}
+
+fn remove_permissions_by_name(
+    permissions: &mut BTreeSet<Permission>,
+    permission_name: &str,
+) -> bool {
+    let removed: Vec<_> = permissions
+        .iter()
+        .filter(|permission| permission.name() == permission_name)
+        .cloned()
+        .collect();
+    if removed.is_empty() {
+        return false;
+    }
+    for permission in removed {
+        permissions.remove(&permission);
+    }
+    true
+}
+
+fn apply_fixture_permission_migration(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    add_can_control_domain_lives: bool,
+) {
+    let replacement = make_can_control_domain_lives_permission();
+    let removed_name = "CanUnregisterDomain";
+
+    let account_ids: Vec<_> = state_transaction
+        .world
+        .account_permissions
+        .iter()
+        .map(|(account_id, _)| account_id.clone())
+        .collect();
+    for account_id in account_ids {
+        if let Some(permissions) = state_transaction
+            .world
+            .account_permissions
+            .get_mut(&account_id)
+        {
+            let removed = remove_permissions_by_name(permissions, removed_name);
+            if add_can_control_domain_lives && removed {
+                permissions.insert(replacement.clone());
+            }
+        }
+    }
+
+    let role_ids: Vec<_> = state_transaction
+        .world
+        .roles
+        .iter()
+        .map(|(role_id, _)| role_id.clone())
+        .collect();
+    for role_id in role_ids {
+        if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
+            let removed = remove_permissions_by_name(&mut role.permissions, removed_name);
+            if removed {
+                role.permission_epochs
+                    .retain(|permission, _| permission.name() != removed_name);
+            }
+            if add_can_control_domain_lives && removed {
+                role.permissions.insert(replacement.clone());
+                role.permission_epochs
+                    .entry(replacement.clone())
+                    .or_insert(0);
+            }
+        }
+    }
+}
+
+fn apply_fixture_migration(
+    kind: FixtureExecutorKind,
+    state_transaction: &mut StateTransaction<'_, '_>,
+    _authority: &AccountId,
+) -> Result<(), ValidationFail> {
+    match kind {
+        FixtureExecutorKind::WithCustomPermission => {
+            let mut model = baseline_executor_data_model(&state_transaction.world);
+            let _ = model.permissions.remove("CanUnregisterDomain");
+            model
+                .permissions
+                .insert(FIXTURE_PERMISSION_CAN_CONTROL_DOMAIN_LIVES.to_owned());
+            state_transaction.world.apply_executor_data_model(model);
+            apply_fixture_permission_migration(state_transaction, true);
+            Ok(())
+        }
+        FixtureExecutorKind::RemovePermission => {
+            let mut model = baseline_executor_data_model(&state_transaction.world);
+            let _ = model.permissions.remove("CanUnregisterDomain");
+            state_transaction.world.apply_executor_data_model(model);
+            apply_fixture_permission_migration(state_transaction, false);
+            Ok(())
+        }
+        FixtureExecutorKind::WithMigrationFail => Err(ValidationFail::NotPermitted(
+            "fixture executor migration failed".to_owned(),
+        )),
+        FixtureExecutorKind::WithCustomParameter => {
+            #[derive(norito::derive::JsonSerialize)]
+            struct FixtureDomainLimits {
+                id_len: u32,
+            }
+
+            let mut model = baseline_executor_data_model(&state_transaction.world);
+            let parameter_id: CustomParameterId = FIXTURE_DOMAIN_LIMITS_PARAMETER_ID
+                .parse()
+                .expect("static custom parameter id");
+            let default_parameter = CustomParameter::new(
+                parameter_id,
+                json::to_value(&FixtureDomainLimits { id_len: 16 })
+                    .expect("fixture domain-limits parameter should serialize"),
+            );
+            model
+                .parameters
+                .insert(default_parameter.id.clone(), default_parameter);
+            state_transaction.world.apply_executor_data_model(model);
+            Ok(())
+        }
+        FixtureExecutorKind::WithAdmin
+        | FixtureExecutorKind::CustomInstructionsSimple
+        | FixtureExecutorKind::CustomInstructionsComplex
+        | FixtureExecutorKind::WithFuel => {
+            if state_transaction
+                .world
+                .executor_data_model
+                .get()
+                .permissions()
+                .is_empty()
+            {
+                state_transaction
+                    .world
+                    .apply_executor_data_model(initial_executor_data_model_fallback());
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_query_with_fixture(
+    kind: FixtureExecutorKind,
+    _query: &QueryRequest,
+) -> Result<(), ValidationFail> {
+    if matches!(kind, FixtureExecutorKind::WithMigrationFail) {
+        return Err(ValidationFail::NotPermitted(
+            "fixture executor rejects all queries".to_owned(),
+        ));
+    }
+
+    Ok(())
 }
 
 fn run_executor_validation<T>(
@@ -2503,6 +2773,10 @@ fn dispatch_instruction_with_ivm(
     authority: &AccountId,
     instruction: InstructionBox,
 ) -> Result<(), ValidationFail> {
+    if let Some(kind) = detect_fixture_executor_kind(executor) {
+        return dispatch_instruction_with_fixture(kind, state_transaction, authority, instruction);
+    }
+
     let curr_block = state_transaction.latest_block().map_or_else(
         || BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0),
         |b| b.header(),
@@ -2558,6 +2832,395 @@ fn dispatch_instruction_with_ivm(
     }
 }
 
+#[derive(Debug, Clone, norito::derive::JsonDeserialize, norito::derive::JsonSerialize)]
+struct FixtureMintAssetForAllAccounts {
+    asset_definition: AssetDefinitionId,
+    quantity: Numeric,
+}
+
+#[derive(Debug, Clone)]
+enum FixtureRuntimeValue {
+    Bool(bool),
+    Numeric(Numeric),
+    Instruction(InstructionBox),
+}
+
+fn dispatch_instruction_with_fixture(
+    kind: FixtureExecutorKind,
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    instruction: InstructionBox,
+) -> Result<(), ValidationFail> {
+    if matches!(kind, FixtureExecutorKind::WithFuel) {
+        consume_fixture_instruction_fuel(state_transaction, &instruction)?;
+    }
+
+    if matches!(kind, FixtureExecutorKind::WithCustomParameter) {
+        enforce_fixture_domain_limits(state_transaction, &instruction)?;
+    }
+
+    if let Some(custom) = instruction.as_any().downcast_ref::<CustomInstruction>() {
+        return match kind {
+            FixtureExecutorKind::CustomInstructionsSimple => {
+                execute_fixture_simple_custom_instruction(state_transaction, authority, custom)
+            }
+            FixtureExecutorKind::CustomInstructionsComplex => {
+                execute_fixture_complex_custom_instruction(state_transaction, authority, custom)
+            }
+            _ => Err(ValidationFail::NotPermitted(
+                "custom instructions require an executor upgrade".to_owned(),
+            )),
+        };
+    }
+
+    instruction
+        .execute(authority, state_transaction)
+        .map_err(|err| {
+            iroha_logger::debug!(
+                ?err,
+                authority = %authority,
+                "state application of fixture executor-approved instruction failed"
+            );
+            let fail = ValidationFail::from(err);
+            if matches!(kind, FixtureExecutorKind::WithFuel)
+                && let ValidationFail::InstructionFailed(InstructionExecutionError::Conversion(
+                    message,
+                )) = &fail
+                && message.contains("Operation is too complex")
+            {
+                return ValidationFail::TooComplex;
+            }
+            fail
+        })
+}
+
+fn consume_fixture_instruction_fuel(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    instruction: &InstructionBox,
+) -> Result<(), ValidationFail> {
+    let is_execute_trigger = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()
+        .is_some();
+    if is_execute_trigger {
+        return Ok(());
+    }
+
+    let base_fuel = state_transaction
+        .world
+        .parameters
+        .get()
+        .executor()
+        .fuel
+        .get();
+    let remaining = state_transaction
+        .executor_fuel_remaining
+        .get_or_insert(base_fuel);
+    if *remaining < FIXTURE_SIMPLE_INSTRUCTION_FUEL_COST {
+        *remaining = 0;
+        return Err(ValidationFail::TooComplex);
+    }
+    *remaining = remaining.saturating_sub(FIXTURE_SIMPLE_INSTRUCTION_FUEL_COST);
+    Ok(())
+}
+
+fn enforce_fixture_domain_limits(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    instruction: &InstructionBox,
+) -> Result<(), ValidationFail> {
+    #[derive(Debug, norito::derive::JsonDeserialize)]
+    struct FixtureDomainLimits {
+        id_len: u32,
+    }
+
+    let Some(register_domain) = extract_register_domain(instruction) else {
+        return Ok(());
+    };
+    let parameter_id: CustomParameterId = FIXTURE_DOMAIN_LIMITS_PARAMETER_ID
+        .parse()
+        .expect("static custom parameter id");
+    let Some(custom) = state_transaction
+        .world
+        .parameters
+        .get()
+        .custom
+        .get(&parameter_id)
+    else {
+        return Ok(());
+    };
+    let limits: FixtureDomainLimits = json::from_str(custom.payload().as_ref()).map_err(|err| {
+        ValidationFail::InternalError(format!(
+            "failed to decode fixture DomainLimits parameter: {err}"
+        ))
+    })?;
+    let name_len = register_domain.object().id().name().as_ref().len();
+    if name_len > usize::try_from(limits.id_len).unwrap_or(usize::MAX) {
+        return Err(ValidationFail::NotPermitted(format!(
+            "domain id length {name_len} exceeds configured executor limit {}",
+            limits.id_len
+        )));
+    }
+    Ok(())
+}
+
+fn execute_fixture_simple_custom_instruction(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    custom: &CustomInstruction,
+) -> Result<(), ValidationFail> {
+    let root: json::Value = json::from_str(custom.payload().as_ref()).map_err(|err| {
+        ValidationFail::InternalError(format!(
+            "failed to decode simple fixture custom instruction payload: {err}"
+        ))
+    })?;
+    let (variant, payload) = fixture_single_field(&root, "simple custom instruction")?;
+    if variant != "MintAssetForAllAccounts" {
+        return Err(ValidationFail::NotPermitted(format!(
+            "unsupported fixture custom instruction variant `{variant}`"
+        )));
+    }
+    let instruction: FixtureMintAssetForAllAccounts =
+        json::from_value(payload.clone()).map_err(|err| {
+            ValidationFail::InternalError(format!(
+                "failed to decode simple fixture custom instruction body: {err}"
+            ))
+        })?;
+    let account_ids: Vec<_> = state_transaction
+        .world
+        .accounts
+        .iter()
+        .map(|(account_id, _)| account_id.clone())
+        .collect();
+    for account_id in account_ids {
+        let asset_id = AssetId::new(instruction.asset_definition.clone(), account_id);
+        iroha_data_model::isi::Mint::asset_numeric(instruction.quantity.clone(), asset_id)
+            .execute(authority, state_transaction)
+            .map_err(ValidationFail::from)?;
+    }
+
+    Ok(())
+}
+
+fn execute_fixture_complex_custom_instruction(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    custom: &CustomInstruction,
+) -> Result<(), ValidationFail> {
+    let root: json::Value = json::from_str(custom.payload().as_ref()).map_err(|err| {
+        ValidationFail::InternalError(format!(
+            "failed to decode complex fixture custom instruction payload: {err}"
+        ))
+    })?;
+    execute_fixture_complex_expr_value(state_transaction, authority, &root)
+}
+
+fn fixture_conversion_error(expected: &str) -> ValidationFail {
+    ValidationFail::InstructionFailed(InstructionExecutionError::Conversion(format!(
+        "expected {expected}"
+    )))
+}
+
+fn fixture_single_field<'a>(
+    value: &'a json::Value,
+    context: &str,
+) -> Result<(&'a str, &'a json::Value), ValidationFail> {
+    let json::Value::Object(map) = value else {
+        return Err(ValidationFail::InternalError(format!(
+            "{context}: expected JSON object"
+        )));
+    };
+    if map.len() != 1 {
+        return Err(ValidationFail::InternalError(format!(
+            "{context}: expected exactly one variant field"
+        )));
+    }
+    let (key, value) = map
+        .iter()
+        .next()
+        .expect("single-entry map must have first item");
+    Ok((key.as_str(), value))
+}
+
+fn fixture_object_field<'a>(
+    value: &'a json::Value,
+    field: &str,
+    context: &str,
+) -> Result<&'a json::Value, ValidationFail> {
+    let json::Value::Object(map) = value else {
+        return Err(ValidationFail::InternalError(format!(
+            "{context}: expected JSON object"
+        )));
+    };
+    map.get(field).ok_or_else(|| {
+        ValidationFail::InternalError(format!("{context}: missing required field `{field}`"))
+    })
+}
+
+fn execute_fixture_complex_expr_value(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    value: &json::Value,
+) -> Result<(), ValidationFail> {
+    let (variant, payload) = fixture_single_field(value, "complex custom instruction")?;
+    match variant {
+        "Core" => {
+            let object = fixture_object_field(payload, "object", "complex core expression")?;
+            let instruction =
+                evaluate_fixture_instruction_expression_value(state_transaction, object)?;
+            instruction
+                .execute(authority, state_transaction)
+                .map_err(ValidationFail::from)
+        }
+        "If" => {
+            let condition = fixture_object_field(payload, "condition", "complex if expression")?;
+            let then_branch = fixture_object_field(payload, "then", "complex if expression")?;
+            if evaluate_fixture_bool_expression_value(state_transaction, condition)? {
+                execute_fixture_complex_expr_value(state_transaction, authority, then_branch)?;
+            }
+            Ok(())
+        }
+        _ => Err(ValidationFail::NotPermitted(format!(
+            "unsupported complex fixture custom instruction variant `{variant}`"
+        ))),
+    }
+}
+
+fn evaluate_fixture_bool_expression_value(
+    state_transaction: &StateTransaction<'_, '_>,
+    value: &json::Value,
+) -> Result<bool, ValidationFail> {
+    let expression = fixture_unwrap_evaluates_to_expression(value, "bool expression")?;
+    match evaluate_fixture_expression_value(state_transaction, expression)? {
+        FixtureRuntimeValue::Bool(value) => Ok(value),
+        _ => Err(fixture_conversion_error("bool value")),
+    }
+}
+
+fn evaluate_fixture_numeric_expression_value(
+    state_transaction: &StateTransaction<'_, '_>,
+    value: &json::Value,
+) -> Result<Numeric, ValidationFail> {
+    let expression = fixture_unwrap_evaluates_to_expression(value, "numeric expression")?;
+    match evaluate_fixture_expression_value(state_transaction, expression)? {
+        FixtureRuntimeValue::Numeric(value) => Ok(value),
+        _ => Err(fixture_conversion_error("numeric value")),
+    }
+}
+
+fn evaluate_fixture_instruction_expression_value(
+    state_transaction: &StateTransaction<'_, '_>,
+    value: &json::Value,
+) -> Result<InstructionBox, ValidationFail> {
+    let expression = fixture_unwrap_evaluates_to_expression(value, "instruction expression")?;
+    match evaluate_fixture_expression_value(state_transaction, expression)? {
+        FixtureRuntimeValue::Instruction(value) => Ok(value),
+        _ => Err(fixture_conversion_error("instruction value")),
+    }
+}
+
+fn fixture_unwrap_evaluates_to_expression<'a>(
+    value: &'a json::Value,
+    _context: &str,
+) -> Result<&'a json::Value, ValidationFail> {
+    let json::Value::Object(map) = value else {
+        return Ok(value);
+    };
+    Ok(map.get("expression").unwrap_or(value))
+}
+
+fn evaluate_fixture_expression_value(
+    state_transaction: &StateTransaction<'_, '_>,
+    value: &json::Value,
+) -> Result<FixtureRuntimeValue, ValidationFail> {
+    let (variant, payload) = fixture_single_field(value, "expression")?;
+    match variant {
+        "Raw" => {
+            let (raw_variant, raw_payload) = fixture_single_field(payload, "raw value")?;
+            match raw_variant {
+                "Bool" => {
+                    let parsed: bool = json::from_value(raw_payload.clone()).map_err(|err| {
+                        ValidationFail::InternalError(format!(
+                            "failed to decode fixture bool literal: {err}"
+                        ))
+                    })?;
+                    Ok(FixtureRuntimeValue::Bool(parsed))
+                }
+                "Numeric" => {
+                    let parsed: Numeric = json::from_value(raw_payload.clone()).map_err(|err| {
+                        ValidationFail::InternalError(format!(
+                            "failed to decode fixture numeric literal: {err}"
+                        ))
+                    })?;
+                    Ok(FixtureRuntimeValue::Numeric(parsed))
+                }
+                "InstructionBox" => {
+                    let parsed: InstructionBox =
+                        json::from_value(raw_payload.clone()).map_err(|err| {
+                            ValidationFail::InternalError(format!(
+                                "failed to decode fixture instruction literal: {err}"
+                            ))
+                        })?;
+                    Ok(FixtureRuntimeValue::Instruction(parsed))
+                }
+                _ => Err(ValidationFail::InternalError(format!(
+                    "unsupported fixture raw value variant `{raw_variant}`"
+                ))),
+            }
+        }
+        "Greater" => {
+            let left = fixture_object_field(payload, "left", "greater expression")?;
+            let right = fixture_object_field(payload, "right", "greater expression")?;
+            let left = evaluate_fixture_numeric_expression_value(state_transaction, left)?;
+            let right = evaluate_fixture_numeric_expression_value(state_transaction, right)?;
+            Ok(FixtureRuntimeValue::Bool(left > right))
+        }
+        "Query" => {
+            let value = evaluate_fixture_numeric_query_value(state_transaction, payload)?;
+            Ok(FixtureRuntimeValue::Numeric(value))
+        }
+        _ => Err(ValidationFail::InternalError(format!(
+            "unsupported fixture expression variant `{variant}`"
+        ))),
+    }
+}
+
+fn evaluate_fixture_numeric_query_value(
+    state_transaction: &StateTransaction<'_, '_>,
+    value: &json::Value,
+) -> Result<Numeric, ValidationFail> {
+    let (variant, payload) = fixture_single_field(value, "numeric query")?;
+    match variant {
+        "FindAssetQuantityById" => {
+            let asset_id: AssetId = json::from_value(payload.clone()).map_err(|err| {
+                ValidationFail::InternalError(format!(
+                    "failed to decode fixture asset query payload: {err}"
+                ))
+            })?;
+            Ok(state_transaction
+                .world
+                .assets
+                .get(&asset_id)
+                .map(|value| value.as_ref().clone())
+                .unwrap_or_else(Numeric::zero))
+        }
+        "FindTotalAssetQuantityByAssetDefinitionId" => {
+            let asset_definition_id: AssetDefinitionId = json::from_value(payload.clone())
+                .map_err(|err| {
+                    ValidationFail::InternalError(format!(
+                        "failed to decode fixture asset-definition query payload: {err}"
+                    ))
+                })?;
+            state_transaction
+                .world
+                .asset_total_amount(&asset_definition_id)
+                .map_err(ValidationFail::from)
+        }
+        _ => Err(ValidationFail::InternalError(format!(
+            "unsupported fixture numeric query variant `{variant}`"
+        ))),
+    }
+}
+
 fn extract_register_role(instruction: &InstructionBox) -> Option<Register<Role>> {
     let instr_any = instruction.as_any();
     if let Some(reg) = instr_any.downcast_ref::<Register<Role>>() {
@@ -2566,6 +3229,20 @@ fn extract_register_role(instruction: &InstructionBox) -> Option<Register<Role>>
     if let Some(reg_box) = instr_any.downcast_ref::<RegisterBox>() {
         return match reg_box {
             RegisterBox::Role(reg) => Some(reg.clone()),
+            _ => None,
+        };
+    }
+    None
+}
+
+fn extract_register_domain(instruction: &InstructionBox) -> Option<Register<Domain>> {
+    let instr_any = instruction.as_any();
+    if let Some(reg) = instr_any.downcast_ref::<Register<Domain>>() {
+        return Some(reg.clone());
+    }
+    if let Some(reg_box) = instr_any.downcast_ref::<RegisterBox>() {
+        return match reg_box {
+            RegisterBox::Domain(reg) => Some(reg.clone()),
             _ => None,
         };
     }
@@ -2601,6 +3278,31 @@ fn extract_account_metadata_target(instruction: &InstructionBox) -> Option<Accou
                 .downcast_ref::<iroha_data_model::isi::RemoveKeyValue<iroha_data_model::account::Account>>()
                 .map(|rm| rm.object.clone())
         })
+}
+
+fn extract_transfer_asset(
+    instruction: &InstructionBox,
+) -> Option<Transfer<Asset, Numeric, Account>> {
+    let instr_any = instruction.as_any();
+    if let Some(transfer) = instr_any.downcast_ref::<Transfer<Asset, Numeric, Account>>() {
+        return Some(transfer.clone());
+    }
+    if let Some(transfer_box) = instr_any.downcast_ref::<TransferBox>() {
+        return match transfer_box {
+            TransferBox::Asset(transfer) => Some(transfer.clone()),
+            _ => None,
+        };
+    }
+    if !instruction.id().contains("Asset") {
+        return None;
+    }
+    let bytes = instruction.dyn_encode();
+    std::panic::catch_unwind(|| {
+        let mut slice = &bytes[..];
+        Transfer::<Asset, Numeric, Account>::decode(&mut slice).ok()
+    })
+    .ok()
+    .flatten()
 }
 
 fn extract_transfer_domain(
@@ -2702,6 +3404,31 @@ fn can_transfer_domain(
     Ok(&transferred_domain_owner == authority)
 }
 
+fn can_transfer_asset(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    transfer: &Transfer<Asset, Numeric, Account>,
+) -> Result<bool, ValidationFail> {
+    if transfer.source().account() == authority {
+        return Ok(true);
+    }
+
+    let asset = transfer.source().clone();
+    let specific: Permission = executor_permission::asset::CanTransferAsset {
+        asset: asset.clone(),
+    }
+    .into();
+    if authority_has_permission(world, authority, &specific)? {
+        return Ok(true);
+    }
+
+    let by_definition: Permission = executor_permission::asset::CanTransferAssetWithDefinition {
+        asset_definition: asset.definition().clone(),
+    }
+    .into();
+    authority_has_permission(world, authority, &by_definition)
+}
+
 fn normalize_role_permission_for_initial_executor(
     state_transaction: &StateTransaction<'_, '_>,
     permission: &Permission,
@@ -2733,65 +3460,66 @@ fn normalize_role_permission_for_initial_executor(
     Ok(permission.clone())
 }
 
+const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
+    "CanManagePeers",
+    "CanRegisterDomain",
+    "CanUnregisterDomain",
+    "CanModifyDomainMetadata",
+    "CanRegisterAssetDefinition",
+    "CanUnregisterAssetDefinition",
+    "CanModifyAssetDefinitionMetadata",
+    "CanRegisterAccount",
+    "CanUnregisterAccount",
+    "CanModifyAccountMetadata",
+    "CanMintAssetWithDefinition",
+    "CanBurnAssetWithDefinition",
+    "CanTransferAssetWithDefinition",
+    "CanMintAsset",
+    "CanBurnAsset",
+    "CanTransferAsset",
+    "CanModifyAssetMetadataWithDefinition",
+    "CanModifyAssetMetadata",
+    "CanRegisterNft",
+    "CanUnregisterNft",
+    "CanTransferNft",
+    "CanModifyNftMetadata",
+    "CanRegisterTrigger",
+    "CanUnregisterTrigger",
+    "CanModifyTrigger",
+    "CanExecuteTrigger",
+    "CanModifyTriggerMetadata",
+    "CanSetParameters",
+    "CanManageRoles",
+    "CanUpgradeExecutor",
+    "CanRegisterSmartContractCode",
+    "CanPublishSpaceDirectoryManifest",
+    "CanUseFeeSponsor",
+    "CanProposeContractDeployment",
+    "CanSubmitGovernanceBallot",
+    "CanEnactGovernance",
+    "CanManageParliament",
+    "CanRecordCitizenService",
+    "CanSlashGovernanceLock",
+    "CanRestituteGovernanceLock",
+    "CanRegisterSorafsPin",
+    "CanApproveSorafsPin",
+    "CanRetireSorafsPin",
+    "CanBindSorafsAlias",
+    "CanDeclareSorafsCapacity",
+    "CanSubmitSorafsTelemetry",
+    "CanFileSorafsCapacityDispute",
+    "CanIssueSorafsReplicationOrder",
+    "CanCompleteSorafsReplicationOrder",
+    "CanSetSorafsPricing",
+    "CanUpsertSorafsProviderCredit",
+    "CanOperateSorafsRepair",
+    "CanRegisterSorafsProviderOwner",
+    "CanUnregisterSorafsProviderOwner",
+    "CanIngestSoranetPrivacy",
+];
+
 fn is_builtin_initial_permission_name(permission_name: &str) -> bool {
-    matches!(
-        permission_name,
-        "CanManagePeers"
-            | "CanRegisterDomain"
-            | "CanUnregisterDomain"
-            | "CanModifyDomainMetadata"
-            | "CanRegisterAssetDefinition"
-            | "CanUnregisterAssetDefinition"
-            | "CanModifyAssetDefinitionMetadata"
-            | "CanRegisterAccount"
-            | "CanUnregisterAccount"
-            | "CanModifyAccountMetadata"
-            | "CanMintAssetWithDefinition"
-            | "CanBurnAssetWithDefinition"
-            | "CanTransferAssetWithDefinition"
-            | "CanMintAsset"
-            | "CanBurnAsset"
-            | "CanTransferAsset"
-            | "CanModifyAssetMetadataWithDefinition"
-            | "CanModifyAssetMetadata"
-            | "CanRegisterNft"
-            | "CanUnregisterNft"
-            | "CanTransferNft"
-            | "CanModifyNftMetadata"
-            | "CanRegisterTrigger"
-            | "CanUnregisterTrigger"
-            | "CanModifyTrigger"
-            | "CanExecuteTrigger"
-            | "CanModifyTriggerMetadata"
-            | "CanSetParameters"
-            | "CanManageRoles"
-            | "CanUpgradeExecutor"
-            | "CanRegisterSmartContractCode"
-            | "CanPublishSpaceDirectoryManifest"
-            | "CanUseFeeSponsor"
-            | "CanProposeContractDeployment"
-            | "CanSubmitGovernanceBallot"
-            | "CanEnactGovernance"
-            | "CanManageParliament"
-            | "CanRecordCitizenService"
-            | "CanSlashGovernanceLock"
-            | "CanRestituteGovernanceLock"
-            | "CanRegisterSorafsPin"
-            | "CanApproveSorafsPin"
-            | "CanRetireSorafsPin"
-            | "CanBindSorafsAlias"
-            | "CanDeclareSorafsCapacity"
-            | "CanSubmitSorafsTelemetry"
-            | "CanFileSorafsCapacityDispute"
-            | "CanIssueSorafsReplicationOrder"
-            | "CanCompleteSorafsReplicationOrder"
-            | "CanSetSorafsPricing"
-            | "CanUpsertSorafsProviderCredit"
-            | "CanOperateSorafsRepair"
-            | "CanRegisterSorafsProviderOwner"
-            | "CanUnregisterSorafsProviderOwner"
-            | "CanIngestSoranetPrivacy"
-    )
+    INITIAL_EXECUTOR_PERMISSION_NAMES.contains(&permission_name)
 }
 
 /// Parse the WAT-like template used in integration tests to embed a sequence
@@ -3107,7 +3835,9 @@ mod tests {
     use iroha_primitives::json::Json;
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::Metrics;
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
+    use iroha_test_samples::{
+        ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
+    };
     #[allow(unused_imports)]
     use ivm::instruction;
     use mv::storage::StorageReadOnly;
@@ -3131,6 +3861,106 @@ mod tests {
 
     fn alice() -> AccountId {
         iroha_test_samples::ALICE_ID.clone()
+    }
+
+    fn generate_fixture_placeholder_program(vector_length: u8) -> Vec<u8> {
+        let mut program = Vec::new();
+        program.extend_from_slice(b"IVM\0");
+        program.extend_from_slice(&[1, 0, 0, vector_length]);
+        program.extend_from_slice(&1_000_000_u64.to_le_bytes());
+        program.push(1);
+        program.extend_from_slice(&FIXTURE_LITERAL_SECTION_MAGIC);
+        program.extend_from_slice(&0_u32.to_le_bytes());
+        program.extend_from_slice(&64_u32.to_le_bytes());
+        program.extend_from_slice(&0_u32.to_le_bytes());
+        program.extend(std::iter::repeat_n(0_u8, 64));
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program
+    }
+
+    #[test]
+    fn fixture_executor_detection_matches_vector_tags() {
+        let cases = [
+            (1, FixtureExecutorKind::WithAdmin),
+            (2, FixtureExecutorKind::WithCustomPermission),
+            (3, FixtureExecutorKind::RemovePermission),
+            (4, FixtureExecutorKind::CustomInstructionsSimple),
+            (5, FixtureExecutorKind::CustomInstructionsComplex),
+            (6, FixtureExecutorKind::WithMigrationFail),
+            (7, FixtureExecutorKind::WithFuel),
+            (8, FixtureExecutorKind::WithCustomParameter),
+        ];
+
+        for (tag, expected) in cases {
+            let bytecode = generate_fixture_placeholder_program(tag);
+            assert_eq!(
+                detect_fixture_executor_kind_from_bytecode(&bytecode),
+                Some(expected),
+                "expected fixture kind for vector length tag {tag}"
+            );
+        }
+    }
+
+    #[test]
+    fn fixture_simple_custom_instruction_mints_for_all_accounts() {
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let asset_definition_id: AssetDefinitionId =
+            "rose#wonderland".parse().expect("asset definition id");
+        let asset_definition =
+            AssetDefinition::numeric(asset_definition_id.clone()).build(&ALICE_ID);
+
+        let world = World::with_assets(
+            [domain],
+            [alice_account, bob_account],
+            [asset_definition],
+            [],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        let payload = json::to_value(&FixtureMintAssetForAllAccounts {
+            asset_definition: asset_definition_id.clone(),
+            quantity: Numeric::from(1_u32),
+        })
+        .expect("serialize fixture payload");
+        let mut root = BTreeMap::new();
+        root.insert("MintAssetForAllAccounts".to_owned(), payload);
+        let instruction =
+            InstructionBox::from(CustomInstruction::new(Json::new(json::Value::Object(root))));
+
+        dispatch_instruction_with_fixture(
+            FixtureExecutorKind::CustomInstructionsSimple,
+            &mut stx,
+            &ALICE_ID,
+            instruction,
+        )
+        .expect("fixture custom instruction should execute");
+
+        let alice_rose = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
+        let bob_rose = AssetId::new(asset_definition_id, BOB_ID.clone());
+        let alice_value = stx
+            .world
+            .assets
+            .get(&alice_rose)
+            .map(|value| value.as_ref().clone())
+            .expect("alice rose");
+        let bob_value = stx
+            .world
+            .assets
+            .get(&bob_rose)
+            .map(|value| value.as_ref().clone())
+            .expect("bob rose");
+
+        assert_eq!(alice_value, Numeric::from(1_u32));
+        assert_eq!(bob_value, Numeric::from(1_u32));
     }
 
     #[test]

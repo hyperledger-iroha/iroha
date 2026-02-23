@@ -1,6 +1,5 @@
 //! Governance plain ballot test: emits `BallotAccepted` with weight.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 
 use iroha_core::{
     kura::Kura,
@@ -22,11 +21,6 @@ use nonzero_ext::nonzero;
 
 #[test]
 fn plain_ballot_emits_ballot_accepted_with_weight() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!("Skipping: plain governance ballot test gated. Set IROHA_RUN_IGNORED=1 to run.");
-        return;
-    }
-
     // Build minimal state/transaction
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();

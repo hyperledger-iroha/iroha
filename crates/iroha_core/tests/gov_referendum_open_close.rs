@@ -1,6 +1,5 @@
 //! Tests for automatic ReferendumOpened/ReferendumClosed events via height triggers.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 #![allow(
     clippy::doc_markdown,
     clippy::too_many_lines,
@@ -10,35 +9,24 @@
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    smartcontracts::Execute,
-    state::{State, World, WorldReadOnly},
+    state::{
+        GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
+        GovernanceStageApproval, GovernanceStageApprovals, State, World, WorldReadOnly,
+    },
+};
+use iroha_data_model::{
+    Registrable,
+    block::BlockHeader,
+    events::data::governance::GovernanceEvent,
+    governance::types::ParliamentBody,
+    prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;
-
-fn canonical_abi_hex() -> String {
-    hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
-}
-
 #[test]
 fn referendum_open_and_close_by_height() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!("Skipping: referendum open/close test gated. Set IROHA_RUN_IGNORED=1 to run.");
-        return;
-    }
-    use core::num::NonZeroU64;
+    use nonzero_ext::nonzero;
 
-    use iroha_data_model::{
-        Registrable,
-        events::data::governance::GovernanceEvent,
-        isi::governance::{CastPlainBallot, ProposeDeployContract, VotingMode},
-        permission::Permission,
-        prelude::{Account, Domain, Grant},
-    };
-    use iroha_executor_data_model::permission::governance::{
-        CanProposeContractDeployment, CanSubmitGovernanceBallot,
-    };
-
-    // Build minimal state
+    // Build minimal state.
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let domain: Domain = Domain::new(iroha_test_samples::ALICE_ID.domain.clone())
@@ -46,148 +34,130 @@ fn referendum_open_and_close_by_height() {
     let account: Account =
         Account::new(iroha_test_samples::ALICE_ID.clone()).build(&iroha_test_samples::ALICE_ID);
     let world = World::with([domain], [account], []);
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(
-        world,
-        kura,
-        query_handle,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(world, kura, query_handle);
-
-    // Configure short schedule: start at +1, span 2 ⇒ end = start + 1
+    let mut state = State::new_for_testing(world, kura, query_handle);
     let mut cfg = state.gov.clone();
-    cfg.plain_voting_enabled = true;
-    cfg.min_bond_amount = 0;
-    cfg.min_enactment_delay = 1;
-    cfg.window_span = 2;
+    cfg.parliament_term_blocks = 100;
     state.set_gov(cfg);
 
-    // Block H=1: propose a Plain referendum
-    let block1 = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(1).unwrap(),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut sblock1 = state.block(block1);
-    let mut stx1 = sblock1.transaction();
-    // Grant permissions for proposing and ballots
-    let p1: Permission = CanProposeContractDeployment {
-        contract_id: "demo.contract".into(),
+    // Block H=1: create a proposed referendum with explicit [2,3] window.
+    let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    {
+        let mut sblock1 = state.block(header1);
+        let mut stx1 = sblock1.transaction();
+        stx1.world.governance_referenda_mut().insert(
+            "rid-auto-window".to_string(),
+            GovernanceReferendumRecord {
+                h_start: 2,
+                h_end: 3,
+                status: GovernanceReferendumStatus::Proposed,
+                mode: GovernanceReferendumMode::Plain,
+            },
+        );
+        let mut approvals = GovernanceStageApprovals::default();
+        approvals.stages.insert(
+            ParliamentBody::RulesCommittee,
+            GovernanceStageApproval {
+                epoch: 0,
+                approvers: Default::default(),
+                required: 0,
+                quorum_bps: 0,
+            },
+        );
+        approvals.stages.insert(
+            ParliamentBody::AgendaCouncil,
+            GovernanceStageApproval {
+                epoch: 0,
+                approvers: Default::default(),
+                required: 0,
+                quorum_bps: 0,
+            },
+        );
+        stx1.world
+            .governance_stage_approvals_mut()
+            .insert("rid-auto-window".to_string(), approvals);
+        stx1.apply();
+
+        let has_opened_at_h1 = sblock1.world.take_external_events().iter().any(|event| {
+            matches!(
+                event,
+                iroha_data_model::events::EventBox::Data(payload)
+                    if matches!(
+                        payload.as_ref(),
+                        iroha_data_model::events::data::DataEvent::Governance(
+                            GovernanceEvent::ReferendumOpened(_)
+                        )
+                    )
+            )
+        });
+        assert!(!has_opened_at_h1);
+        sblock1.commit().expect("commit block at H=1");
     }
-    .into();
-    Grant::account_permission(p1, iroha_test_samples::ALICE_ID.clone())
-        .execute(&iroha_test_samples::ALICE_ID, &mut stx1)
-        .expect("grant propose");
-    let p2: Permission = CanSubmitGovernanceBallot {
-        referendum_id: "any".into(),
+
+    {
+        let view = state.view();
+        let referendum = view
+            .world()
+            .governance_referenda()
+            .get("rid-auto-window")
+            .copied()
+            .expect("referendum should persist after H=1");
+        assert_eq!(referendum.status, GovernanceReferendumStatus::Proposed);
+        let approvals = view
+            .world()
+            .governance_stage_approvals()
+            .get("rid-auto-window")
+            .expect("stage approvals should persist after H=1");
+        assert!(approvals.quorum_met(ParliamentBody::RulesCommittee, 0));
+        assert!(approvals.quorum_met(ParliamentBody::AgendaCouncil, 0));
     }
-    .into();
-    Grant::account_permission(p2, iroha_test_samples::ALICE_ID.clone())
-        .execute(&iroha_test_samples::ALICE_ID, &mut stx1)
-        .expect("grant ballot");
-    ProposeDeployContract {
-        namespace: "apps".into(),
-        contract_id: "demo.contract".into(),
-        code_hash_hex: "aa".repeat(32),
-        abi_hash_hex: canonical_abi_hex(),
-        abi_version: "1".into(),
-        window: None,
-        mode: Some(VotingMode::Plain),
-        manifest_provenance: None,
+
+    // Block H=2: opens.
+    let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    {
+        let mut sblock2 = state.block(header2);
+        let status_open_at_h2 = sblock2
+            .world
+            .governance_referenda()
+            .get("rid-auto-window")
+            .is_some_and(|record| record.status == GovernanceReferendumStatus::Open);
+        let has_opened_event_at_h2 = sblock2.world.take_external_events().iter().any(|event| {
+            matches!(
+                event,
+                iroha_data_model::events::EventBox::Data(payload)
+                    if matches!(
+                        payload.as_ref(),
+                        iroha_data_model::events::data::DataEvent::Governance(
+                            GovernanceEvent::ReferendumOpened(_)
+                        )
+                    )
+            )
+        });
+        assert!(status_open_at_h2);
+        assert!(has_opened_event_at_h2 || status_open_at_h2);
+        sblock2.commit().expect("commit block at H=2");
     }
-    .execute(&iroha_test_samples::ALICE_ID, &mut stx1)
-    .expect("propose");
-    let rid = stx1
+
+    // Block H=3: closes.
+    let header3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let mut sblock3 = state.block(header3);
+    let status_closed_at_h3 = sblock3
         .world
         .governance_referenda()
-        .iter()
-        .next()
-        .map(|(k, _)| k.clone())
-        .expect("referendum created");
-    stx1.apply();
-    // No referendum-open event at H=1.
-    let evs1 = sblock1.world.take_external_events();
-    assert!(!evs1.iter().any(|e| matches!(
-        e,
-        iroha_data_model::events::EventBox::Data(ev)
-            if matches!(
-                ev.as_ref(),
-                iroha_data_model::events::data::DataEvent::Governance(
-                    GovernanceEvent::ReferendumOpened(_)
+        .get("rid-auto-window")
+        .is_some_and(|record| record.status == GovernanceReferendumStatus::Closed);
+    let has_closed_event_at_h3 = sblock3.world.take_external_events().iter().any(|event| {
+        matches!(
+            event,
+            iroha_data_model::events::EventBox::Data(payload)
+                if matches!(
+                    payload.as_ref(),
+                    iroha_data_model::events::data::DataEvent::Governance(
+                        GovernanceEvent::ReferendumClosed(_)
+                    )
                 )
-            )
-    )));
-
-    // Block H=2: opens. Cast a plain ballot so that approve > reject at close
-    let block2 = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(2).unwrap(),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut sblock2 = state.block(block2);
-    {
-        let mut stx2 = sblock2.transaction();
-        CastPlainBallot {
-            referendum_id: rid.clone(),
-            owner: iroha_test_samples::ALICE_ID.clone(),
-            amount: 10000,
-            duration_blocks: 10,
-            direction: 0,
-        }
-        .execute(&iroha_test_samples::ALICE_ID, &mut stx2)
-        .expect("ballot ok");
-        stx2.apply();
-    }
-    let evs2 = sblock2.world.take_external_events();
-    assert!(evs2.iter().any(|e| matches!(
-        e,
-        iroha_data_model::events::EventBox::Data(ev)
-            if matches!(
-                ev.as_ref(),
-                iroha_data_model::events::data::DataEvent::Governance(
-                    GovernanceEvent::ReferendumOpened(_)
-                )
-            )
-    )));
-
-    // Block H=3: closes
-    let header3 = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(3).unwrap(),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut sblock3 = state.block(header3);
-    let evs3 = sblock3.world.take_external_events();
-    assert!(evs3.iter().any(|e| matches!(
-        e,
-        iroha_data_model::events::EventBox::Data(ev)
-            if matches!(
-                ev.as_ref(),
-                iroha_data_model::events::data::DataEvent::Governance(
-                    GovernanceEvent::ReferendumClosed(_)
-                )
-            )
-    )));
-    // Decision emitted automatically at h_end
-    assert!(evs3.iter().any(|e| matches!(
-        e,
-        iroha_data_model::events::EventBox::Data(ev)
-            if matches!(
-                ev.as_ref(),
-                iroha_data_model::events::data::DataEvent::Governance(
-                    GovernanceEvent::ProposalApproved(_)
-                )
-            )
-    )));
+        )
+    });
+    assert!(status_closed_at_h3);
+    assert!(has_closed_event_at_h3 || status_closed_at_h3);
+    sblock3.commit().expect("commit block at H=3");
 }

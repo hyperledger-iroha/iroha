@@ -304,6 +304,7 @@ fn main() {
         "executor_custom_instructions_complex",
         "executor_with_migration_fail",
         "executor_with_fuel",
+        "executor_with_custom_parameter",
         // Triggers and query samples referenced by integration tests
         "mint_rose_trigger",
         "create_nft_for_every_user_trigger",
@@ -380,7 +381,8 @@ fn main() {
             | "executor_custom_instructions_simple"
             | "executor_custom_instructions_complex"
             | "executor_with_migration_fail"
-            | "executor_with_fuel") => load_fixture_sample(&fixtures_dir, name)
+            | "executor_with_fuel"
+            | "executor_with_custom_parameter") => load_fixture_sample(&fixtures_dir, name)
                 .unwrap_or_else(|| build_minimal_program(tag)),
             // Fallback placeholders for other samples
             _ => build_minimal_program(tag),
