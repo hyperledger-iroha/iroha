@@ -73,6 +73,8 @@ const PEER_QUERY_REQUEST_RETRIES: usize = 2;
 const PEER_QUERY_REQUEST_RETRY_BACKOFF: Duration = Duration::from_millis(200);
 const STATUS_QUORUM_RETRY_TIMEOUT: Duration = Duration::from_secs(15);
 const FINAL_SETTLE_WINDOW: Duration = Duration::from_secs(120);
+const LOAD_SUBMIT_RETRY_TIMEOUT_SECS: u64 = 3;
+const LOAD_SUBMIT_RETRY_BACKOFF: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Copy)]
 struct SimulationModes {
@@ -570,7 +572,13 @@ async fn run_testus_simulation(
                 refresh_primary_client_from_validators(harness),
                 "no validator endpoint is reachable before process churn"
             );
-            let lagged = process_churn_cycle(harness, restart_idx, cfg.process_downtime).await?;
+            let selected_restart_idx = select_process_churn_index(
+                &harness.validator_clients,
+                restart_idx,
+                INTERIM_CONVERGENCE_MAX_SKEW,
+            );
+            let lagged =
+                process_churn_cycle(harness, selected_restart_idx, cfg.process_downtime).await?;
             paused_for_churn = paused_for_churn.saturating_add(churn_start.elapsed());
             let statuses_after_churn = top_quorum_statuses(
                 &collect_statuses_quorum_with_retry(
@@ -591,7 +599,8 @@ async fn run_testus_simulation(
                 last_min_progress_height = min_after_churn;
             }
             last_min_progress_at = Instant::now();
-            restart_idx = next_process_churn_index(restart_idx, harness.validator_clients.len());
+            restart_idx =
+                next_process_churn_index(selected_restart_idx, harness.validator_clients.len());
             process_churn_cycles = process_churn_cycles.saturating_add(1);
             if lagged {
                 process_churn_lagged_cycles = process_churn_lagged_cycles.saturating_add(1);
@@ -600,16 +609,17 @@ async fn run_testus_simulation(
                     INTERIM_LAG_CHURN_BACKOFF_SECS
                 );
             }
-            next_process_churn = next_churn_deadline(Instant::now(), cfg.churn_interval, lagged);
+            next_process_churn =
+                next_process_churn_deadline(Instant::now(), cfg.churn_interval, lagged);
             continue;
         }
 
         if modes.membership_churn && allow_churn && now >= next_membership_churn {
-            let churn_start = Instant::now();
             ensure!(
                 refresh_primary_client_from_validators(harness),
                 "no validator endpoint is reachable before membership churn"
             );
+            let churn_start = Instant::now();
             let lagged = if joiner_active {
                 membership_leave_cycle(harness).await?
             } else {
@@ -648,7 +658,8 @@ async fn run_testus_simulation(
                     INTERIM_LAG_CHURN_BACKOFF_SECS
                 );
             }
-            next_membership_churn = next_churn_deadline(Instant::now(), cfg.churn_interval, lagged);
+            next_membership_churn =
+                next_membership_churn_deadline(Instant::now(), cfg.churn_interval, lagged);
             continue;
         }
 
@@ -658,25 +669,18 @@ async fn run_testus_simulation(
             while catchup_now >= next_tx && burst_submitted < MAX_TX_BURST_PER_TICK {
                 tx_attempted = tx_attempted.saturating_add(1);
                 let msg = format!("testus-load-{tx_attempted}");
-                if let Err(err) = harness
-                    .primary_client
-                    .submit::<InstructionBox>(Log::new(Level::INFO, msg).into())
+                let load_instruction: InstructionBox = Log::new(Level::INFO, msg).into();
+                if let Err(err) = submit_load_instruction_with_retry(
+                    harness,
+                    &load_instruction,
+                    Duration::from_secs(LOAD_SUBMIT_RETRY_TIMEOUT_SECS),
+                )
+                .await
                 {
                     tx_submit_errors = tx_submit_errors.saturating_add(1);
-                    eprintln!("testus load submit failed: {err:?}");
-                    if is_submit_timeout_error(&err) || is_connect_error(&err) {
-                        let previous_url = harness.primary_client.torii_url.to_string();
-                        if refresh_primary_client_from_validators(harness) {
-                            let next_url = harness.primary_client.torii_url.to_string();
-                            if next_url != previous_url {
-                                eprintln!(
-                                    "switching load submit endpoint: {previous_url} -> {next_url}"
-                                );
-                            }
-                        }
-                        next_tx = Instant::now() + tx_period;
-                        break;
-                    }
+                    eprintln!("testus load submit failed after retries: {err:?}");
+                    next_tx = Instant::now() + tx_period;
+                    break;
                 } else {
                     tx_sent = tx_sent.saturating_add(1);
                 }
@@ -1554,6 +1558,17 @@ fn top_quorum_statuses(
     selected
 }
 
+fn observed_validator_heights(clients: &[Client]) -> Vec<Option<u64>> {
+    clients
+        .iter()
+        .map(|client| {
+            get_status_with_retry(client)
+                .ok()
+                .map(|status| status.blocks)
+        })
+        .collect()
+}
+
 fn collect_statuses_quorum(
     clients: &[Client],
     min_required: usize,
@@ -2131,6 +2146,58 @@ fn first_process_churn_index(validator_count: usize) -> usize {
     if validator_count > 1 { 1 } else { 0 }
 }
 
+fn select_process_churn_index(
+    clients: &[Client],
+    fallback_idx: usize,
+    lag_threshold: u64,
+) -> usize {
+    let observed_heights = observed_validator_heights(clients);
+    let selected =
+        select_process_churn_index_from_heights(&observed_heights, fallback_idx, lag_threshold);
+    if selected != fallback_idx {
+        eprintln!(
+            "process churn selected lagging/unresponsive validator index {selected} (fallback={fallback_idx}, observed_heights={observed_heights:?})"
+        );
+    }
+    selected
+}
+
+fn select_process_churn_index_from_heights(
+    observed_heights: &[Option<u64>],
+    fallback_idx: usize,
+    lag_threshold: u64,
+) -> usize {
+    if observed_heights.is_empty() {
+        return 0;
+    }
+    let bounded_fallback = fallback_idx.min(observed_heights.len().saturating_sub(1));
+    if let Some((idx, _)) = observed_heights
+        .iter()
+        .enumerate()
+        .find(|(_, height)| height.is_none())
+    {
+        return idx;
+    }
+    let mut max_height = 0_u64;
+    let mut min_height = u64::MAX;
+    let mut min_idx = bounded_fallback;
+    for (idx, height) in observed_heights.iter().enumerate() {
+        let height = height.expect("status heights should be present after None fast-path");
+        if height > max_height {
+            max_height = height;
+        }
+        if height < min_height {
+            min_height = height;
+            min_idx = idx;
+        }
+    }
+    if max_height.saturating_sub(min_height) >= lag_threshold {
+        min_idx
+    } else {
+        bounded_fallback
+    }
+}
+
 fn next_process_churn_index(current: usize, validator_count: usize) -> usize {
     if validator_count <= 1 {
         return 0;
@@ -2138,7 +2205,14 @@ fn next_process_churn_index(current: usize, validator_count: usize) -> usize {
     (current + 1) % validator_count
 }
 
-fn next_churn_deadline(now: Instant, interval: Duration, lagged: bool) -> Instant {
+fn next_process_churn_deadline(now: Instant, interval: Duration, lagged: bool) -> Instant {
+    if lagged {
+        return now + Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS);
+    }
+    now + interval
+}
+
+fn next_membership_churn_deadline(now: Instant, interval: Duration, lagged: bool) -> Instant {
     let mut delay = interval;
     if lagged {
         delay = delay.saturating_add(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS));
@@ -2181,6 +2255,36 @@ async fn validator_max_height_with_retry(clients: &[Client], timeout: Duration) 
                 );
                 sleep(STATUS_POLL).await;
             }
+        }
+    }
+}
+
+async fn submit_load_instruction_with_retry(
+    harness: &mut TestusHarness,
+    instruction: &InstructionBox,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match harness
+            .primary_client
+            .submit::<InstructionBox>(instruction.clone())
+        {
+            Ok(_) => return Ok(()),
+            Err(err)
+                if (is_submit_timeout_error(&err) || is_connect_error(&err))
+                    && Instant::now() < deadline =>
+            {
+                let previous_url = harness.primary_client.torii_url.to_string();
+                if refresh_primary_client_from_validators(harness) {
+                    let next_url = harness.primary_client.torii_url.to_string();
+                    if next_url != previous_url {
+                        eprintln!("switching load submit endpoint: {previous_url} -> {next_url}");
+                    }
+                }
+                sleep(LOAD_SUBMIT_RETRY_BACKOFF).await;
+            }
+            Err(err) => return Err(err).wrap_err("submit load instruction"),
         }
     }
 }
@@ -2489,18 +2593,61 @@ fn process_churn_index_handles_single_validator() {
 }
 
 #[test]
-fn next_churn_deadline_uses_interval_without_lag() {
+fn select_process_churn_index_prioritizes_unresponsive_validator() {
+    let observed = [Some(100), Some(101), None, Some(100)];
+    assert_eq!(select_process_churn_index_from_heights(&observed, 0, 6), 2);
+}
+
+#[test]
+fn select_process_churn_index_prioritizes_lagger_when_skew_is_large() {
+    let observed = [Some(100), Some(84), Some(99), Some(100)];
+    assert_eq!(select_process_churn_index_from_heights(&observed, 0, 6), 1);
+}
+
+#[test]
+fn select_process_churn_index_uses_round_robin_fallback_when_balanced() {
+    let observed = [Some(100), Some(98), Some(99), Some(100)];
+    assert_eq!(select_process_churn_index_from_heights(&observed, 2, 6), 2);
+}
+
+#[test]
+fn select_process_churn_index_clamps_out_of_bounds_fallback() {
+    let observed = [Some(10), Some(10), Some(10)];
+    assert_eq!(select_process_churn_index_from_heights(&observed, 7, 6), 2);
+}
+
+#[test]
+fn next_process_churn_deadline_uses_interval_without_lag() {
     let now = Instant::now();
     let interval = Duration::from_secs(30);
-    let deadline = next_churn_deadline(now, interval, false);
+    let deadline = next_process_churn_deadline(now, interval, false);
     assert_eq!(deadline.duration_since(now), interval);
 }
 
 #[test]
-fn next_churn_deadline_adds_backoff_when_lagged() {
+fn next_process_churn_deadline_retries_soon_when_lagged() {
     let now = Instant::now();
     let interval = Duration::from_secs(30);
-    let deadline = next_churn_deadline(now, interval, true);
+    let deadline = next_process_churn_deadline(now, interval, true);
+    assert_eq!(
+        deadline.duration_since(now),
+        Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS)
+    );
+}
+
+#[test]
+fn next_membership_churn_deadline_uses_interval_without_lag() {
+    let now = Instant::now();
+    let interval = Duration::from_secs(30);
+    let deadline = next_membership_churn_deadline(now, interval, false);
+    assert_eq!(deadline.duration_since(now), interval);
+}
+
+#[test]
+fn next_membership_churn_deadline_adds_backoff_when_lagged() {
+    let now = Instant::now();
+    let interval = Duration::from_secs(30);
+    let deadline = next_membership_churn_deadline(now, interval, true);
     assert_eq!(
         deadline.duration_since(now),
         interval.saturating_add(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS))
