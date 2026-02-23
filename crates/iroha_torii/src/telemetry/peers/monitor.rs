@@ -4,7 +4,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     str::FromStr,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use eyre::{Report, eyre};
@@ -40,6 +40,7 @@ const GET_GEO_RETRY_INTERVAL: Duration = Duration::from_mins(1);
 const GET_CONFIG_INIT_INTERVAL: Duration = Duration::from_secs(15);
 const GET_CONFIG_MAX_INTERVAL: Duration = Duration::from_mins(2);
 const GET_CONFIG_INTERVAL_MULTIPLIER: f64 = 1.67;
+const STATUS_RTT_WINDOW: usize = 32;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Metrics {
@@ -48,6 +49,10 @@ pub struct Metrics {
     pub avg_commit_time: Duration,
     pub queue_size: u32,
     pub uptime: Duration,
+    pub status_rtt: Option<Duration>,
+    pub status_rtt_avg: Option<Duration>,
+    pub status_rtt_p95: Option<Duration>,
+    pub observed_at_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -547,10 +552,12 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
     }
 
     let mut avg_commit_time = AverageCommitTime::<AVG_COMMIT_BLOCK_TIME_WINDOW>::new();
+    let mut status_rtt_window = LatencyWindow::<STATUS_RTT_WINDOW>::new();
     let client = Client::new();
     let url = torii_url.0.join("/status").expect("valid url");
 
     let get_status = || async {
+        let started_at = Instant::now();
         let resp = client.get(url.clone()).send().await?;
         let status = resp.status();
         if matches!(
@@ -564,7 +571,9 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
         }
         let bytes = resp.bytes().await?;
         let status: Status = json::from_slice(&bytes)?;
-        Ok::<_, GetError>(status)
+        let request_rtt = started_at.elapsed();
+        let observed_at_ms = unix_epoch_ms();
+        Ok::<_, GetError>((status, request_rtt, observed_at_ms))
     };
 
     let mut telemetry_unsupported_checked = Instant::now();
@@ -572,11 +581,12 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         match tokio::time::timeout(GET_STATUS_INTERVAL, get_status()).await {
-            Ok(Ok(status)) => {
+            Ok(Ok((status, request_rtt, observed_at_ms))) => {
                 let block_height = u32::try_from(status.blocks).unwrap_or(u32::MAX);
                 let queue_depth = u32::try_from(status.queue_size).unwrap_or(u32::MAX);
                 avg_commit_time
                     .observe(status.blocks, Duration::from_millis(status.commit_time_ms));
+                status_rtt_window.observe(request_rtt);
                 let metrics = Metrics {
                     block: block_height,
                     block_commit_time: Duration::from_millis(status.commit_time_ms),
@@ -585,6 +595,10 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
                         .unwrap_or_else(|| Duration::from_millis(status.commit_time_ms)),
                     queue_size: queue_depth,
                     uptime: Duration::from_millis(status.uptime.0.as_millis() as u64),
+                    status_rtt: Some(request_rtt),
+                    status_rtt_avg: status_rtt_window.average(),
+                    status_rtt_p95: status_rtt_window.percentile(95),
+                    observed_at_ms,
                 };
                 let _ = tx.send(Update::Metrics(metrics)).await;
             }
@@ -614,6 +628,11 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
         }
         interval.tick().await;
     }
+}
+
+fn unix_epoch_ms() -> Option<u64> {
+    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
+    u64::try_from(elapsed.as_millis()).ok()
 }
 
 #[derive(Default)]
@@ -646,6 +665,63 @@ impl<const N: usize> AverageCommitTime<N> {
             sum.checked_div(self.buff.len() as u32)
                 .expect("non-zero if sum exists")
         })
+    }
+}
+
+#[derive(Default)]
+struct LatencyWindow<const N: usize> {
+    buff: CircularBuffer<N>,
+}
+
+impl<const N: usize> LatencyWindow<N> {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn observe(&mut self, sample: Duration) {
+        self.buff.push_back(sample);
+    }
+
+    fn average(&self) -> Option<Duration> {
+        let sum = self
+            .buff
+            .iter()
+            .fold(None, |acc, x| Some(acc.unwrap_or(Duration::ZERO) + *x))?;
+        sum.checked_div(self.buff.len() as u32)
+    }
+
+    fn percentile(&self, percentile: u8) -> Option<Duration> {
+        let mut values_ms = self
+            .buff
+            .iter()
+            .map(|sample| sample.as_millis())
+            .collect::<Vec<_>>();
+        if values_ms.is_empty() {
+            return None;
+        }
+        if values_ms.len() == 1 {
+            let single = u64::try_from(values_ms[0]).ok()?;
+            return Some(Duration::from_millis(single));
+        }
+
+        values_ms.sort_unstable();
+
+        let clamped = percentile.min(100) as f64;
+        let rank = (clamped / 100.0) * ((values_ms.len() - 1) as f64);
+        let lower = rank.floor() as usize;
+        let upper = rank.ceil() as usize;
+        let selected = if lower == upper {
+            values_ms[lower] as f64
+        } else {
+            let weight = rank - (lower as f64);
+            let low = values_ms[lower] as f64;
+            let high = values_ms[upper] as f64;
+            low + ((high - low) * weight)
+        };
+        if !selected.is_finite() || selected < 0.0 {
+            return None;
+        }
+        Some(Duration::from_millis(selected.round() as u64))
     }
 }
 
@@ -870,6 +946,43 @@ mod tests {
         assert!(
             message.contains("missing queue object"),
             "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn latency_window_calculates_average_and_percentile() {
+        let mut window = LatencyWindow::<4>::new();
+        window.observe(Duration::from_millis(10));
+        window.observe(Duration::from_millis(30));
+        window.observe(Duration::from_millis(20));
+        window.observe(Duration::from_millis(40));
+
+        assert_eq!(
+            window.average().map(|duration| duration.as_millis()),
+            Some(25)
+        );
+        assert_eq!(
+            window.percentile(95).map(|duration| duration.as_millis()),
+            Some(39)
+        );
+    }
+
+    #[test]
+    fn latency_window_keeps_latest_samples_only() {
+        let mut window = LatencyWindow::<3>::new();
+        window.observe(Duration::from_millis(10));
+        window.observe(Duration::from_millis(20));
+        window.observe(Duration::from_millis(30));
+        window.observe(Duration::from_millis(40));
+
+        // oldest sample (10ms) is evicted
+        assert_eq!(
+            window.average().map(|duration| duration.as_millis()),
+            Some(30)
+        );
+        assert_eq!(
+            window.percentile(95).map(|duration| duration.as_millis()),
+            Some(39)
         );
     }
 }
