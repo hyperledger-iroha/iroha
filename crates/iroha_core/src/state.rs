@@ -17045,6 +17045,25 @@ fn autoscale_ratio_permille(value: f64) -> u64 {
     }
 }
 
+fn autoscale_scale_in_triggered(
+    can_scale_in: bool,
+    sample_count: usize,
+    required_window: usize,
+    utilization_p95_permille: Option<u64>,
+    utilization_threshold_permille: u64,
+) -> bool {
+    can_scale_in
+        && sample_count >= required_window
+        && utilization_p95_permille.unwrap_or(u64::MAX) <= utilization_threshold_permille
+}
+
+fn autoscale_sample_latency_ms(prev_ts_ms: u64, curr_ts_ms: u64) -> Option<u64> {
+    if prev_ts_ms == 0 || curr_ts_ms == 0 {
+        return None;
+    }
+    Some(curr_ts_ms.saturating_sub(prev_ts_ms).max(1))
+}
+
 fn p95_u64(values: &[u64]) -> Option<u64> {
     if values.is_empty() {
         return None;
@@ -17969,7 +17988,6 @@ impl<'state> StateBlock<'state> {
 
         let target_block_ms = autoscale.target_block_ms.get();
         let latency_out_permille = autoscale_ratio_permille(autoscale.scale_out_latency_ratio);
-        let latency_in_permille = autoscale_ratio_permille(autoscale.scale_in_latency_ratio);
         let utilization_out_permille =
             autoscale_ratio_permille(autoscale.scale_out_utilization_ratio);
         let utilization_in_permille =
@@ -18012,10 +18030,13 @@ impl<'state> StateBlock<'state> {
             && out_latency_ratio_permille >= latency_out_permille
             && out_utilization_p95_permille.unwrap_or_default() >= utilization_out_permille;
 
-        let scale_in_triggered = can_scale_in
-            && scale_in_samples.len() >= usize::from(autoscale.scale_in_window_blocks.get())
-            && in_latency_ratio_permille <= latency_in_permille
-            && in_utilization_p95_permille.unwrap_or(u64::MAX) <= utilization_in_permille;
+        let scale_in_triggered = autoscale_scale_in_triggered(
+            can_scale_in,
+            scale_in_samples.len(),
+            usize::from(autoscale.scale_in_window_blocks.get()),
+            in_utilization_p95_permille,
+            utilization_in_permille,
+        );
 
         if scale_out_triggered {
             let Some(next_lane_id) = self.next_autoscale_lane_id(autoscale.max_lanes.get()) else {
@@ -18191,7 +18212,9 @@ impl<'state> StateBlock<'state> {
                 )
             };
 
-            let latency_ms = curr_ts_ms.saturating_sub(prev_ts_ms).max(1);
+            let Some(latency_ms) = autoscale_sample_latency_ms(prev_ts_ms, curr_ts_ms) else {
+                continue;
+            };
             let tps_milli = tx_count
                 .saturating_mul(1_000_000)
                 .saturating_div(latency_ms);
@@ -24052,6 +24075,38 @@ mod tests {
     ) -> u64 {
         let payload = norito::to_bytes(value).expect("serialize Norito payload");
         store_tlv_bytes(vm, ty, &payload)
+    }
+
+    #[test]
+    fn autoscale_scale_in_triggered_requires_window_and_low_utilization() {
+        assert!(autoscale_scale_in_triggered(true, 4, 4, Some(500), 500));
+        assert!(autoscale_scale_in_triggered(true, 8, 4, Some(0), 500));
+    }
+
+    #[test]
+    fn autoscale_scale_in_triggered_rejects_disabled_missing_or_high_utilization() {
+        assert!(!autoscale_scale_in_triggered(false, 4, 4, Some(100), 500));
+        assert!(!autoscale_scale_in_triggered(true, 3, 4, Some(100), 500));
+        assert!(!autoscale_scale_in_triggered(true, 4, 4, Some(501), 500));
+        assert!(!autoscale_scale_in_triggered(true, 4, 4, None, 500));
+    }
+
+    #[test]
+    fn autoscale_sample_latency_ms_rejects_missing_timestamps() {
+        assert_eq!(autoscale_sample_latency_ms(0, 10), None);
+        assert_eq!(autoscale_sample_latency_ms(10, 0), None);
+        assert_eq!(autoscale_sample_latency_ms(0, 0), None);
+    }
+
+    #[test]
+    fn autoscale_sample_latency_ms_uses_positive_delta_for_monotonic_timestamps() {
+        assert_eq!(autoscale_sample_latency_ms(100, 115), Some(15));
+    }
+
+    #[test]
+    fn autoscale_sample_latency_ms_clamps_non_monotonic_or_equal_timestamps() {
+        assert_eq!(autoscale_sample_latency_ms(200, 150), Some(1));
+        assert_eq!(autoscale_sample_latency_ms(200, 200), Some(1));
     }
 
     fn build_state_with_vk_order(order: &[(&str, &str)]) -> State {

@@ -1,6 +1,5 @@
 //! Governance referendum mode mismatch tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 #![allow(clippy::items_after_statements)]
 
 use iroha_core::{
@@ -21,10 +20,6 @@ fn canonical_abi_hex() -> String {
 
 #[test]
 fn plain_ballot_rejected_on_zk_referendum() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!("Skipping: mode mismatch test gated. Set IROHA_RUN_IGNORED=1 to run.");
-        return;
-    }
     use core::num::NonZeroU64;
 
     use iroha_data_model::{

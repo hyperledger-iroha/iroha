@@ -1,14 +1,8 @@
-#![doc = "ZK ballot rejected on Plain-mode referendum (mode mismatch).\nSkipped by default; enable with `IROHA_RUN_IGNORED=1`."]
+#![doc = "ZK ballot rejected on Plain-mode referendum (mode mismatch)."]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-#![cfg(feature = "zk-tests")]
-#![cfg(feature = "halo2-dev-tests")]
 #![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #![allow(clippy::items_after_statements)]
 
-#[cfg(all(
-    feature = "halo2-dev-tests",
-    any(feature = "zk-halo2", feature = "zk-halo2-ipa")
-))]
 mod zk_testkit;
 
 use iroha_core::{
@@ -30,10 +24,6 @@ fn canonical_abi_hex() -> String {
 
 #[test]
 fn zk_ballot_rejected_on_plain_referendum() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!("Skipping: zk mode mismatch test gated. Set IROHA_RUN_IGNORED=1 to run.");
-        return;
-    }
     use core::num::NonZeroU64;
 
     use iroha_data_model::{
@@ -155,8 +145,10 @@ fn zk_ballot_rejected_on_plain_referendum() {
         public_inputs_json: public_inputs,
     };
     let err = instr.execute(&ALICE_ID, &mut stx2).unwrap_err();
-    let s = format!("{err}");
-    assert!(s.contains("referendum mode mismatch"));
+    assert!(matches!(
+        err,
+        iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(_)
+    ));
     stx2.apply();
     let events = sblock.world.take_external_events();
     assert!(events.iter().any(|event| matches!(

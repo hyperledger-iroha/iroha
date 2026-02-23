@@ -1,6 +1,5 @@
 //! Enforce minimum lock duration for plain ballots.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 
 use iroha_core::{
     kura::Kura,
@@ -16,11 +15,6 @@ use nonzero_ext::nonzero;
 
 #[test]
 fn plain_ballot_rejected_when_duration_below_min() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!("Skipping: min duration test gated. Set IROHA_RUN_IGNORED=1 to run.");
-        return;
-    }
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);
