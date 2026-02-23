@@ -1,6 +1,5 @@
 //! Governance threshold tests: ratio and turnout logic.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 
 use core::num::NonZeroU64;
 
@@ -19,10 +18,6 @@ use iroha_test_samples::ALICE_ID;
 
 #[test]
 fn ratio_threshold_rejects_even_if_approve_gt_reject() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!("Skipping: threshold test gated. Set IROHA_RUN_IGNORED=1 to run.");
-        return;
-    }
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);
@@ -81,10 +76,6 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
 
 #[test]
 fn min_turnout_rejects_when_below_threshold() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!("Skipping: threshold test gated. Set IROHA_RUN_IGNORED=1 to run.");
-        return;
-    }
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);

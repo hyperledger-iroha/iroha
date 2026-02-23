@@ -1,6 +1,5 @@
 //! End-to-end SORA parliament lifecycle test for ZK voting.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-#![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 #![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 
 mod zk_testkit;

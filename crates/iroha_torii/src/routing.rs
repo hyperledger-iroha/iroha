@@ -43,7 +43,8 @@ use iroha_core::{
     nexus::{
         portfolio,
         space_directory::{
-            SpaceDirectoryManifestLifecycle, SpaceDirectoryManifestRecord, UaidDataspaceBindings,
+            SpaceDirectoryManifestLifecycle, SpaceDirectoryManifestRecord,
+            SpaceDirectoryManifestSet, UaidDataspaceBindings,
         },
     },
     query::store::LiveQueryStoreHandle,
@@ -13771,6 +13772,9 @@ pub const ENDPOINT_NEXUS_PUBLIC_LANE_STAKE: &str = "/v1/nexus/public_lanes/{lane
 pub const ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS: &str =
     "/v1/nexus/public_lanes/{lane_id}/rewards/pending";
 #[cfg(feature = "app_api")]
+pub const ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY: &str =
+    "/v1/nexus/dataspaces/accounts/{literal}/summary";
+#[cfg(feature = "app_api")]
 const CONTEXT_NEXUS_PUBLIC_LANE_STAKE: &str = ENDPOINT_NEXUS_PUBLIC_LANE_STAKE;
 #[cfg(feature = "app_api")]
 const CONTEXT_NEXUS_PUBLIC_LANE_REWARDS: &str = ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS;
@@ -13809,6 +13813,15 @@ pub struct PublicLaneRewardsQueryParams {
     pub asset_id: Option<String>,
     #[norito(default)]
     pub upto_epoch: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+)]
+pub struct NexusDataspacesAccountSummaryQueryParams {
+    #[norito(default)]
+    pub address_format: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -30580,6 +30593,440 @@ pub async fn handle_v1_accounts_portfolio(
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug, Default, Clone)]
+struct DataspaceSummaryAccumulator {
+    dataspace_id: DataSpaceId,
+    dataspace_alias: Option<String>,
+    accounts: BTreeSet<iroha_data_model::account::AccountId>,
+    manifest: Option<SpaceDirectoryManifestRecord>,
+    portfolio_accounts: u64,
+    portfolio_positions: u64,
+    asset_definitions: BTreeSet<String>,
+    commitments: Vec<sumeragi::status::DataspaceCommitmentSnapshot>,
+}
+
+#[cfg(feature = "app_api")]
+fn upsert_dataspace_summary<'a>(
+    summaries: &'a mut BTreeMap<DataSpaceId, DataspaceSummaryAccumulator>,
+    dataspace_id: DataSpaceId,
+    alias_lookup: &DataspaceAliasLookup,
+) -> &'a mut DataspaceSummaryAccumulator {
+    summaries
+        .entry(dataspace_id)
+        .or_insert_with(|| DataspaceSummaryAccumulator {
+            dataspace_id,
+            dataspace_alias: alias_lookup.alias_for(dataspace_id).map(str::to_string),
+            ..DataspaceSummaryAccumulator::default()
+        })
+}
+
+#[cfg(feature = "app_api")]
+fn manifest_summary_json(manifest: Option<&SpaceDirectoryManifestRecord>) -> Value {
+    let mut map = Map::new();
+    if let Some(record) = manifest {
+        map.insert("present".into(), Value::Bool(true));
+        map.insert("status".into(), Value::from(manifest_status(record)));
+        map.insert("active".into(), Value::Bool(record.is_active()));
+        map.insert("issued_ms".into(), Value::from(record.manifest.issued_ms));
+        map.insert(
+            "activation_epoch".into(),
+            Value::from(record.manifest.activation_epoch),
+        );
+        map.insert(
+            "expiry_epoch".into(),
+            record
+                .manifest
+                .expiry_epoch
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        );
+        map.insert(
+            "activated_epoch".into(),
+            record
+                .lifecycle
+                .activated_epoch
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        );
+        map.insert(
+            "expired_epoch".into(),
+            record
+                .lifecycle
+                .expired_epoch
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        );
+        map.insert(
+            "revoked_epoch".into(),
+            record
+                .lifecycle
+                .revocation
+                .as_ref()
+                .map(|revocation| Value::from(revocation.epoch))
+                .unwrap_or(Value::Null),
+        );
+        map.insert(
+            "revoked_reason".into(),
+            record
+                .lifecycle
+                .revocation
+                .as_ref()
+                .and_then(|revocation| revocation.reason.as_ref())
+                .map(|reason| Value::from(reason.as_str()))
+                .unwrap_or(Value::Null),
+        );
+        map.insert(
+            "entries".into(),
+            Value::from(record.manifest.entries.len() as u64),
+        );
+    } else {
+        map.insert("present".into(), Value::Bool(false));
+        map.insert("status".into(), Value::from("Missing"));
+        map.insert("active".into(), Value::Bool(false));
+        map.insert("issued_ms".into(), Value::Null);
+        map.insert("activation_epoch".into(), Value::Null);
+        map.insert("expiry_epoch".into(), Value::Null);
+        map.insert("activated_epoch".into(), Value::Null);
+        map.insert("expired_epoch".into(), Value::Null);
+        map.insert("revoked_epoch".into(), Value::Null);
+        map.insert("revoked_reason".into(), Value::Null);
+        map.insert("entries".into(), Value::from(0_u64));
+    }
+    Value::Object(map)
+}
+
+#[cfg(feature = "app_api")]
+fn commitments_summary_json(
+    commitments: &[sumeragi::status::DataspaceCommitmentSnapshot],
+) -> Value {
+    let mut map = Map::new();
+    let mut lane_ids = BTreeSet::new();
+    let mut tx_count = 0_u64;
+    let mut total_chunks = 0_u64;
+    let mut rbc_bytes_total = 0_u64;
+    let mut teu_total = 0_u64;
+    let mut last_block_height = None;
+    let mut last_block_hash: Option<String> = None;
+
+    let mut sorted = commitments.to_vec();
+    sorted.sort_by(|lhs, rhs| {
+        rhs.block_height
+            .cmp(&lhs.block_height)
+            .then_with(|| lhs.lane_id.cmp(&rhs.lane_id))
+    });
+
+    for commitment in &sorted {
+        lane_ids.insert(u64::from(commitment.lane_id));
+        tx_count = tx_count.saturating_add(commitment.tx_count);
+        total_chunks = total_chunks.saturating_add(commitment.total_chunks);
+        rbc_bytes_total = rbc_bytes_total.saturating_add(commitment.rbc_bytes_total);
+        teu_total = teu_total.saturating_add(commitment.teu_total);
+    }
+    if let Some(latest) = sorted.first() {
+        last_block_height = Some(latest.block_height);
+        last_block_hash = Some(format!("{}", latest.block_hash));
+    }
+
+    let details = sorted
+        .iter()
+        .map(|commitment| {
+            let mut detail = Map::new();
+            detail.insert("block_height".into(), Value::from(commitment.block_height));
+            detail.insert("lane_id".into(), Value::from(u64::from(commitment.lane_id)));
+            detail.insert("dataspace_id".into(), Value::from(commitment.dataspace_id));
+            detail.insert("tx_count".into(), Value::from(commitment.tx_count));
+            detail.insert("total_chunks".into(), Value::from(commitment.total_chunks));
+            detail.insert(
+                "rbc_bytes_total".into(),
+                Value::from(commitment.rbc_bytes_total),
+            );
+            detail.insert("teu_total".into(), Value::from(commitment.teu_total));
+            detail.insert(
+                "block_hash".into(),
+                Value::from(format!("{}", commitment.block_hash)),
+            );
+            Value::Object(detail)
+        })
+        .collect();
+
+    map.insert("entries".into(), Value::from(sorted.len() as u64));
+    map.insert(
+        "lane_ids".into(),
+        Value::Array(lane_ids.into_iter().map(Value::from).collect()),
+    );
+    map.insert("tx_count".into(), Value::from(tx_count));
+    map.insert("total_chunks".into(), Value::from(total_chunks));
+    map.insert("rbc_bytes_total".into(), Value::from(rbc_bytes_total));
+    map.insert("teu_total".into(), Value::from(teu_total));
+    map.insert(
+        "last_block_height".into(),
+        last_block_height.map(Value::from).unwrap_or(Value::Null),
+    );
+    map.insert(
+        "last_block_hash".into(),
+        last_block_hash.map(Value::from).unwrap_or(Value::Null),
+    );
+    map.insert("details".into(), Value::Array(details));
+    Value::Object(map)
+}
+
+/// GET /v1/nexus/dataspaces/accounts/{literal}/summary — joined dataspace view by account literal.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_nexus_dataspaces_account_summary(
+    state: Arc<CoreState>,
+    axum::extract::Path(raw_literal): axum::extract::Path<String>,
+    crate::NoritoQuery(query): crate::NoritoQuery<NexusDataspacesAccountSummaryQueryParams>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    #[cfg(test)]
+    crate::ensure_test_domain_selector_resolver();
+
+    let literal = raw_literal.trim();
+    if literal.is_empty() {
+        return Err(conversion_error(
+            "account literal must not be empty".to_string(),
+        ));
+    }
+
+    let parsed = parse_account_literal(
+        literal,
+        &telemetry,
+        ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY,
+    )
+    .map_err(|err| {
+        conversion_error(format!(
+            "invalid account literal `{literal}`: {}",
+            err.reason()
+        ))
+    })?;
+    let (account_id, canonical_account_id, _) = parsed.into_parts();
+    let address_format = AddressFormatPreference::from_param(query.address_format.as_deref())?;
+    record_address_format_selection(
+        &telemetry,
+        ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY,
+        address_format,
+    );
+
+    let world = state.world_view();
+    let account = world
+        .account(&account_id)
+        .map_err(|_| explorer_not_found())?;
+    let mut totals = Map::new();
+    totals.insert("dataspaces".into(), Value::from(0_u64));
+    totals.insert("accounts_bound".into(), Value::from(0_u64));
+    totals.insert("portfolio_accounts".into(), Value::from(0_u64));
+    totals.insert("portfolio_positions".into(), Value::from(0_u64));
+    totals.insert("manifests_total".into(), Value::from(0_u64));
+    totals.insert("manifests_active".into(), Value::from(0_u64));
+    totals.insert("consensus_entries".into(), Value::from(0_u64));
+    totals.insert("consensus_tx_count".into(), Value::from(0_u64));
+    totals.insert("consensus_chunks_total".into(), Value::from(0_u64));
+    totals.insert("consensus_rbc_bytes_total".into(), Value::from(0_u64));
+    totals.insert("consensus_teu_total".into(), Value::from(0_u64));
+    let mut dataspaces_json = Vec::new();
+    let mut uaid_value = Value::Null;
+
+    if let Some(uaid) = account.uaid().copied() {
+        uaid_value = Value::from(uaid.to_string());
+        let nexus = state.nexus_snapshot();
+        let alias_lookup = DataspaceAliasLookup::new(nexus.dataspace_catalog.clone());
+        let bindings = world.uaid_dataspaces().get(&uaid);
+        let manifests = world.space_directory_manifests().get(&uaid);
+        let portfolio = portfolio::collect_portfolio_from_world_and_nexus(&world, &nexus, uaid);
+        let status_snapshot = sumeragi::status_snapshot();
+
+        let mut summaries: BTreeMap<DataSpaceId, DataspaceSummaryAccumulator> = BTreeMap::new();
+
+        if let Some(binding_set) = bindings.as_ref() {
+            for (dataspace_id, accounts) in binding_set.iter() {
+                let summary =
+                    upsert_dataspace_summary(&mut summaries, *dataspace_id, &alias_lookup);
+                summary.accounts.extend(accounts.iter().cloned());
+            }
+        }
+
+        if let Some(manifest_set) = manifests.as_ref() {
+            for (dataspace_id, record) in manifest_set.iter() {
+                let summary =
+                    upsert_dataspace_summary(&mut summaries, *dataspace_id, &alias_lookup);
+                summary.manifest = Some(record.clone());
+            }
+        }
+
+        for dataspace in &portfolio.dataspaces {
+            let summary =
+                upsert_dataspace_summary(&mut summaries, dataspace.dataspace_id, &alias_lookup);
+            summary
+                .dataspace_alias
+                .get_or_insert_with(|| dataspace.dataspace_alias.clone().unwrap_or_default());
+            for account_portfolio in &dataspace.accounts {
+                summary
+                    .accounts
+                    .insert(account_portfolio.account_id.clone());
+                summary.portfolio_accounts = summary.portfolio_accounts.saturating_add(1);
+                summary.portfolio_positions = summary
+                    .portfolio_positions
+                    .saturating_add(account_portfolio.assets.len() as u64);
+                for asset in &account_portfolio.assets {
+                    summary
+                        .asset_definitions
+                        .insert(asset.asset_definition_id.to_string());
+                }
+            }
+        }
+
+        for commitment in &status_snapshot.dataspace_commitments {
+            let dataspace_id = DataSpaceId::new(commitment.dataspace_id);
+            if let Some(summary) = summaries.get_mut(&dataspace_id) {
+                summary.commitments.push(*commitment);
+            }
+        }
+
+        let mut unique_accounts = BTreeSet::new();
+        let mut portfolio_accounts_total = 0_u64;
+        let mut portfolio_positions_total = 0_u64;
+        let mut manifests_total = 0_u64;
+        let mut manifests_active = 0_u64;
+        let mut consensus_entries_total = 0_u64;
+        let mut consensus_tx_total = 0_u64;
+        let mut consensus_chunks_total = 0_u64;
+        let mut consensus_rbc_bytes_total = 0_u64;
+        let mut consensus_teu_total = 0_u64;
+
+        dataspaces_json.reserve(summaries.len());
+        for (_, summary) in summaries {
+            unique_accounts.extend(summary.accounts.iter().cloned());
+            portfolio_accounts_total =
+                portfolio_accounts_total.saturating_add(summary.portfolio_accounts);
+            portfolio_positions_total =
+                portfolio_positions_total.saturating_add(summary.portfolio_positions);
+            if let Some(record) = summary.manifest.as_ref() {
+                manifests_total = manifests_total.saturating_add(1);
+                if record.is_active() {
+                    manifests_active = manifests_active.saturating_add(1);
+                }
+            }
+
+            let mut consensus_tx = 0_u64;
+            let mut consensus_chunks = 0_u64;
+            let mut consensus_rbc = 0_u64;
+            let mut consensus_teu = 0_u64;
+            for commitment in &summary.commitments {
+                consensus_tx = consensus_tx.saturating_add(commitment.tx_count);
+                consensus_chunks = consensus_chunks.saturating_add(commitment.total_chunks);
+                consensus_rbc = consensus_rbc.saturating_add(commitment.rbc_bytes_total);
+                consensus_teu = consensus_teu.saturating_add(commitment.teu_total);
+            }
+            consensus_entries_total =
+                consensus_entries_total.saturating_add(summary.commitments.len() as u64);
+            consensus_tx_total = consensus_tx_total.saturating_add(consensus_tx);
+            consensus_chunks_total = consensus_chunks_total.saturating_add(consensus_chunks);
+            consensus_rbc_bytes_total = consensus_rbc_bytes_total.saturating_add(consensus_rbc);
+            consensus_teu_total = consensus_teu_total.saturating_add(consensus_teu);
+
+            let account_values = summary
+                .accounts
+                .iter()
+                .map(|account_id| Value::from(address_format.display_literal(account_id)))
+                .collect();
+            let mut row = Map::new();
+            row.insert(
+                "dataspace_id".into(),
+                Value::from(summary.dataspace_id.as_u64()),
+            );
+            row.insert(
+                "dataspace_alias".into(),
+                summary
+                    .dataspace_alias
+                    .as_ref()
+                    .filter(|alias| !alias.is_empty())
+                    .map(|alias| Value::from(alias.as_str()))
+                    .unwrap_or(Value::Null),
+            );
+            row.insert("accounts".into(), Value::Array(account_values));
+
+            let mut portfolio_map = Map::new();
+            portfolio_map.insert("accounts".into(), Value::from(summary.portfolio_accounts));
+            portfolio_map.insert("positions".into(), Value::from(summary.portfolio_positions));
+            portfolio_map.insert(
+                "asset_definitions".into(),
+                Value::from(summary.asset_definitions.len() as u64),
+            );
+            row.insert("portfolio".into(), Value::Object(portfolio_map));
+            row.insert(
+                "manifest".into(),
+                manifest_summary_json(summary.manifest.as_ref()),
+            );
+            row.insert(
+                "consensus".into(),
+                commitments_summary_json(&summary.commitments),
+            );
+            dataspaces_json.push(Value::Object(row));
+        }
+
+        totals.insert(
+            "dataspaces".into(),
+            Value::from(dataspaces_json.len() as u64),
+        );
+        totals.insert(
+            "accounts_bound".into(),
+            Value::from(unique_accounts.len() as u64),
+        );
+        totals.insert(
+            "portfolio_accounts".into(),
+            Value::from(portfolio_accounts_total),
+        );
+        totals.insert(
+            "portfolio_positions".into(),
+            Value::from(portfolio_positions_total),
+        );
+        totals.insert("manifests_total".into(), Value::from(manifests_total));
+        totals.insert("manifests_active".into(), Value::from(manifests_active));
+        totals.insert(
+            "consensus_entries".into(),
+            Value::from(consensus_entries_total),
+        );
+        totals.insert("consensus_tx_count".into(), Value::from(consensus_tx_total));
+        totals.insert(
+            "consensus_chunks_total".into(),
+            Value::from(consensus_chunks_total),
+        );
+        totals.insert(
+            "consensus_rbc_bytes_total".into(),
+            Value::from(consensus_rbc_bytes_total),
+        );
+        totals.insert(
+            "consensus_teu_total".into(),
+            Value::from(consensus_teu_total),
+        );
+    }
+
+    let mut root = Map::new();
+    root.insert(
+        "account".into(),
+        Value::from(address_format.display_literal(&account_id)),
+    );
+    root.insert("account_id".into(), Value::from(canonical_account_id));
+    root.insert("uaid".into(), uaid_value);
+    root.insert("totals".into(), Value::Object(totals));
+    root.insert("dataspaces".into(), Value::Array(dataspaces_json));
+
+    let body = norito::json::to_json_pretty(&Value::Object(root)).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            err.to_string(),
+        ))
+    })?;
+
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
 fn filter_portfolio_by_asset_id(
     snapshot: &mut iroha_data_model::nexus::portfolio::UniversalPortfolio,
     asset_id: &iroha_data_model::asset::AssetId,
@@ -36342,6 +36789,118 @@ mod public_lane_tests {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].asset, asset_a);
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod nexus_dataspaces_summary_tests {
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{
+        block::BlockHeader,
+        nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
+    };
+
+    use super::*;
+
+    fn sample_manifest_record() -> SpaceDirectoryManifestRecord {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x11; Hash::LENGTH]));
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::V1,
+            uaid,
+            dataspace: DataSpaceId::new(42),
+            issued_ms: 1_710_000_000_000,
+            activation_epoch: 120,
+            expiry_epoch: Some(240),
+            entries: Vec::new(),
+        };
+        let mut record = SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(121);
+        record
+    }
+
+    #[test]
+    fn manifest_summary_json_reports_missing_manifest() {
+        let payload = manifest_summary_json(None);
+        let obj = payload.as_object().expect("manifest summary object");
+        assert_eq!(obj.get("present").and_then(Value::as_bool), Some(false));
+        assert_eq!(obj.get("status").and_then(Value::as_str), Some("Missing"));
+        assert!(obj.get("issued_ms").is_some_and(Value::is_null));
+        assert_eq!(obj.get("entries").and_then(Value::as_u64), Some(0));
+    }
+
+    #[test]
+    fn manifest_summary_json_reports_manifest_lifecycle() {
+        let record = sample_manifest_record();
+        let payload = manifest_summary_json(Some(&record));
+        let obj = payload.as_object().expect("manifest summary object");
+        assert_eq!(obj.get("present").and_then(Value::as_bool), Some(true));
+        assert_eq!(obj.get("status").and_then(Value::as_str), Some("Active"));
+        assert_eq!(
+            obj.get("issued_ms").and_then(Value::as_u64),
+            Some(1_710_000_000_000)
+        );
+        assert_eq!(
+            obj.get("activation_epoch").and_then(Value::as_u64),
+            Some(120)
+        );
+        assert_eq!(
+            obj.get("activated_epoch").and_then(Value::as_u64),
+            Some(121)
+        );
+        assert_eq!(obj.get("entries").and_then(Value::as_u64), Some(0));
+    }
+
+    #[test]
+    fn commitments_summary_json_aggregates_totals_and_latest() {
+        let commitments = vec![
+            status::DataspaceCommitmentSnapshot {
+                block_height: 7,
+                lane_id: 3,
+                dataspace_id: 42,
+                tx_count: 5,
+                total_chunks: 10,
+                rbc_bytes_total: 1000,
+                teu_total: 500,
+                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                    [0xAA; Hash::LENGTH],
+                )),
+            },
+            status::DataspaceCommitmentSnapshot {
+                block_height: 9,
+                lane_id: 1,
+                dataspace_id: 42,
+                tx_count: 2,
+                total_chunks: 4,
+                rbc_bytes_total: 400,
+                teu_total: 200,
+                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                    [0xBB; Hash::LENGTH],
+                )),
+            },
+        ];
+
+        let payload = commitments_summary_json(&commitments);
+        let obj = payload.as_object().expect("commitment summary object");
+        assert_eq!(obj.get("entries").and_then(Value::as_u64), Some(2));
+        assert_eq!(obj.get("tx_count").and_then(Value::as_u64), Some(7));
+        assert_eq!(obj.get("total_chunks").and_then(Value::as_u64), Some(14));
+        assert_eq!(
+            obj.get("rbc_bytes_total").and_then(Value::as_u64),
+            Some(1400)
+        );
+        assert_eq!(obj.get("teu_total").and_then(Value::as_u64), Some(700));
+        assert_eq!(
+            obj.get("last_block_height").and_then(Value::as_u64),
+            Some(9)
+        );
+
+        let lane_ids = obj
+            .get("lane_ids")
+            .and_then(Value::as_array)
+            .expect("lane ids array");
+        assert_eq!(lane_ids.len(), 2);
+        assert_eq!(lane_ids[0].as_u64(), Some(1));
+        assert_eq!(lane_ids[1].as_u64(), Some(3));
     }
 }
 

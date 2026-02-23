@@ -155,7 +155,7 @@ fn rule_matches(rule: &LaneRoutingRule, tx: &AcceptedTransaction<'_>) -> bool {
     let matcher = &rule.matcher;
 
     if let Some(account) = matcher.account.as_deref()
-        && tx.as_ref().authority().to_string() != account
+        && !account_matches(account, tx.as_ref().authority())
     {
         return false;
     }
@@ -169,9 +169,35 @@ fn rule_matches(rule: &LaneRoutingRule, tx: &AcceptedTransaction<'_>) -> bool {
     true
 }
 
+fn account_matches(pattern: &str, authority: &iroha_data_model::account::AccountId) -> bool {
+    let pattern = pattern.trim();
+    if pattern.is_empty() {
+        return false;
+    }
+
+    if authority.to_string() == pattern {
+        return true;
+    }
+
+    let authority_domain = authority.domain().to_string();
+    let wildcard_domain = pattern
+        .strip_prefix("*@")
+        .or_else(|| pattern.strip_prefix("domain:"))
+        .or_else(|| pattern.strip_prefix("authority_domain:"));
+
+    wildcard_domain.is_some_and(|domain| {
+        let domain = domain.trim();
+        !domain.is_empty() && authority_domain.eq_ignore_ascii_case(domain)
+    })
+}
+
 fn instructions_match(matcher: &str, tx: &AcceptedTransaction<'_>) -> bool {
     let matcher_norm = matcher.trim().to_ascii_lowercase();
     if matcher_norm.is_empty() {
+        return false;
+    }
+    let (matcher_label, destination_domain) = split_instruction_matcher(&matcher_norm);
+    if matcher_label.is_empty() {
         return false;
     }
 
@@ -182,10 +208,34 @@ fn instructions_match(matcher: &str, tx: &AcceptedTransaction<'_>) -> bool {
 
     batch
         .iter()
-        .any(|instruction| instruction_matches(&matcher_norm, &**instruction))
+        .any(|instruction| instruction_matches(matcher_label, destination_domain, &**instruction))
 }
 
-fn instruction_matches(matcher: &str, instruction: &dyn Instruction) -> bool {
+fn split_instruction_matcher(matcher: &str) -> (&str, Option<&str>) {
+    if let Some((label, domain)) = matcher.rsplit_once('@')
+        && label.starts_with("transfer")
+    {
+        let label = label.trim();
+        let domain = domain.trim();
+        if !label.is_empty() && !domain.is_empty() {
+            return (label, Some(domain));
+        }
+    }
+
+    (matcher, None)
+}
+
+fn instruction_matches(
+    matcher: &str,
+    destination_domain: Option<&str>,
+    instruction: &dyn Instruction,
+) -> bool {
+    if destination_domain
+        .is_some_and(|domain| !transfer_destination_matches_domain(instruction, domain))
+    {
+        return false;
+    }
+
     if instruction_label_matches(matcher, instruction) {
         return true;
     }
@@ -201,6 +251,30 @@ fn instruction_matches(matcher: &str, instruction: &dyn Instruction) -> bool {
                 .strip_suffix("box")
                 .is_some_and(|trimmed| !trimmed.is_empty() && matches_label(matcher, trimmed))
     })
+}
+
+fn transfer_destination_matches_domain(instruction: &dyn Instruction, domain: &str) -> bool {
+    let domain = domain.trim();
+    if domain.is_empty() {
+        return false;
+    }
+
+    let any = instruction.as_any();
+    let Some(transfer) = any.downcast_ref::<TransferBox>() else {
+        return false;
+    };
+
+    let destination = match transfer {
+        TransferBox::Domain(transfer) => &transfer.destination,
+        TransferBox::AssetDefinition(transfer) => &transfer.destination,
+        TransferBox::Asset(transfer) => &transfer.destination,
+        TransferBox::Nft(transfer) => &transfer.destination,
+    };
+
+    destination
+        .domain()
+        .to_string()
+        .eq_ignore_ascii_case(domain)
 }
 
 fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bool {
@@ -424,7 +498,7 @@ mod tests {
     use iroha_crypto::Hash;
     use iroha_data_model::{
         isi::{
-            prelude::{Mint, Register},
+            prelude::{Mint, Register, Transfer},
             smart_contract_code::RegisterSmartContractBytes,
         },
         metadata::Metadata,
@@ -998,5 +1072,149 @@ mod tests {
 
         let decision = router.route_with_view(&tx, &blank_state().view());
         assert_eq!(decision.lane_id, LaneId::new(1));
+    }
+
+    #[test]
+    fn matches_account_domain_wildcard_rule() {
+        let (uae_id, uae_keypair) = gen_account_in("uae");
+        let (bank_id, bank_keypair) = gen_account_in("bank1");
+
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: None,
+                matcher: LaneRoutingMatcher {
+                    account: Some("*@uae".to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+
+        let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1)]);
+        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+
+        let uae_tx = sample_transaction(
+            &uae_id,
+            uae_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                "uae-match".parse().expect("domain id"),
+            )))],
+        );
+        let bank_tx = sample_transaction(
+            &bank_id,
+            bank_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                "bank-no-match".parse().expect("domain id"),
+            )))],
+        );
+
+        let state = blank_state();
+        let uae_decision = router.route_with_view(&uae_tx, &state.view());
+        let bank_decision = router.route_with_view(&bank_tx, &state.view());
+
+        assert_eq!(uae_decision.lane_id, LaneId::new(1));
+        assert_eq!(bank_decision.lane_id, LaneId::SINGLE);
+    }
+
+    #[test]
+    fn matches_transfer_destination_domain_rule() {
+        let (sender_id, sender_keypair) = gen_account_in("bank1");
+        let (receiver_id, _) = gen_account_in("sbp");
+
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: None,
+                matcher: LaneRoutingMatcher {
+                    account: None,
+                    instruction: Some("transfer@sbp".to_string()),
+                    description: None,
+                },
+            }],
+        };
+
+        let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1)]);
+        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+
+        let asset_definition: AssetDefinitionId = "aed#uae".parse().expect("asset definition");
+        let asset_id = AssetId::of(asset_definition, sender_id.clone());
+        let transfer = Transfer::asset_numeric(asset_id, 1_u32, receiver_id);
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(transfer)],
+        );
+
+        let decision = router.route_with_view(&tx, &blank_state().view());
+        assert_eq!(decision.lane_id, LaneId::new(1));
+    }
+
+    #[test]
+    fn account_rule_takes_precedence_over_transfer_destination_rule() {
+        let (uae_sender_id, uae_sender_keypair) = gen_account_in("uae");
+        let (bank_sender_id, bank_sender_keypair) = gen_account_in("bank1");
+        let (sbp_receiver_id, _) = gen_account_in("sbp");
+
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![
+                LaneRoutingRule {
+                    lane: LaneId::new(2),
+                    dataspace: None,
+                    matcher: LaneRoutingMatcher {
+                        account: Some("*@uae".to_string()),
+                        instruction: Some("transfer".to_string()),
+                        description: None,
+                    },
+                },
+                LaneRoutingRule {
+                    lane: LaneId::new(1),
+                    dataspace: None,
+                    matcher: LaneRoutingMatcher {
+                        account: None,
+                        instruction: Some("transfer@sbp".to_string()),
+                        description: None,
+                    },
+                },
+            ],
+        };
+
+        let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1), LaneId::new(2)]);
+        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+
+        let asset_definition: AssetDefinitionId = "aed#uae".parse().expect("asset definition");
+        let uae_transfer = Transfer::asset_numeric(
+            AssetId::of(asset_definition.clone(), uae_sender_id.clone()),
+            1_u32,
+            sbp_receiver_id.clone(),
+        );
+        let bank_transfer = Transfer::asset_numeric(
+            AssetId::of(asset_definition, bank_sender_id.clone()),
+            1_u32,
+            sbp_receiver_id,
+        );
+
+        let uae_tx = sample_transaction(
+            &uae_sender_id,
+            uae_sender_keypair.private_key(),
+            vec![InstructionBox::from(uae_transfer)],
+        );
+        let bank_tx = sample_transaction(
+            &bank_sender_id,
+            bank_sender_keypair.private_key(),
+            vec![InstructionBox::from(bank_transfer)],
+        );
+
+        let state = blank_state();
+        let uae_decision = router.route_with_view(&uae_tx, &state.view());
+        let bank_decision = router.route_with_view(&bank_tx, &state.view());
+        assert_eq!(uae_decision.lane_id, LaneId::new(2));
+        assert_eq!(bank_decision.lane_id, LaneId::new(1));
     }
 }

@@ -471,6 +471,16 @@ export const sakuraQrStreamTheme = new OfflineQrStreamTheme({
   pulsePeriod: 48,
 });
 
+export const sakuraStormQrStreamTheme = new OfflineQrStreamTheme({
+  name: "sakura-storm",
+  backgroundStart: { red: 0.05, green: 0.02, blue: 0.08 },
+  backgroundEnd: { red: 0.02, green: 0.01, blue: 0.04 },
+  accent: { red: 0.95, green: 0.71, blue: 0.87 },
+  petal: { red: 0.98, green: 0.92, blue: 0.97 },
+  petalCount: 8,
+  pulsePeriod: 36,
+});
+
 export class OfflineQrStreamPlaybackSkin {
   constructor({
     name,
@@ -542,6 +552,14 @@ export const sakuraQrStreamLowPowerSkin = new OfflineQrStreamPlaybackSkin({
   petalDriftSpeed: 0.4,
   progressOverlayAlpha: 0.3,
   lowPower: true,
+});
+
+export const sakuraStormQrStreamSkin = new OfflineQrStreamPlaybackSkin({
+  name: "sakura-storm",
+  theme: sakuraStormQrStreamTheme,
+  frameRate: 12,
+  petalDriftSpeed: 0.6,
+  progressOverlayAlpha: 0.34,
 });
 
 export function encodeQrFrameText(bytes, encoding = OfflineQrStreamFrameEncoding.base64) {

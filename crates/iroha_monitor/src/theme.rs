@@ -56,6 +56,7 @@ impl ThemeIntro {
         Self
     }
 
+    #[allow(clippy::future_not_send)]
     pub async fn play(&self, options: ThemeOptions) -> Result<ThemePlayback> {
         let mut playback = ThemePlayback::default();
         if options.audio {

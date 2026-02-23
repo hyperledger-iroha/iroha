@@ -437,10 +437,10 @@ pub struct LanePipelineSummary {
     pub quarantine_executed: u64,
 }
 
-/// Summary of per-dataspace activity for the latest block.
+/// Per-dataspace pipeline delta for the latest block.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DataspacePipelineSummary {
-    /// Transactions scheduled for this dataspace.
+    /// Transactions scheduled for this dataspace in the latest block.
     pub tx_served: u64,
 }
 
@@ -2715,7 +2715,9 @@ impl StateTelemetry {
     }
 
     #[cfg(feature = "telemetry")]
-    /// Record per-dataspace pipeline summary data for the latest block.
+    /// Record per-dataspace pipeline summary delta for the latest block.
+    ///
+    /// The in-memory `tx_served` status is cumulative and is incremented by this delta.
     pub fn record_dataspace_pipeline_summary(
         &self,
         lane_id: LaneId,
@@ -2726,7 +2728,7 @@ impl StateTelemetry {
             return;
         }
         self.with_dataspace_snapshot(lane_id, dataspace_id, |entry| {
-            entry.tx_served = summary.tx_served;
+            entry.tx_served = entry.tx_served.saturating_add(summary.tx_served);
         });
     }
 
@@ -11642,6 +11644,34 @@ mod tests {
         assert_eq!(ds_snapshot.backlog, 5);
         assert_eq!(ds_snapshot.age_slots, 3);
         assert_eq!(ds_snapshot.virtual_finish, 7);
+    }
+
+    #[test]
+    fn dataspace_pipeline_summary_accumulates_tx_served_lifetime() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+        let lane_id = LaneId::SINGLE;
+        let dataspace_id = DataSpaceId::GLOBAL;
+
+        telemetry.record_dataspace_pipeline_summary(
+            lane_id,
+            dataspace_id,
+            DataspacePipelineSummary { tx_served: 2 },
+        );
+        telemetry.record_dataspace_pipeline_summary(
+            lane_id,
+            dataspace_id,
+            DataspacePipelineSummary { tx_served: 3 },
+        );
+
+        let ds_snapshots = metrics
+            .nexus_scheduler_dataspace_teu_status
+            .read()
+            .expect("dataspace TEU cache poisoned");
+        let ds_snapshot = ds_snapshots
+            .get(&(lane_id.as_u32(), dataspace_id.as_u64()))
+            .expect("dataspace snapshot missing");
+        assert_eq!(ds_snapshot.tx_served, 5);
     }
 
     #[test]
