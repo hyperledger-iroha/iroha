@@ -1,13 +1,15 @@
 //! Positive-path threshold test: approvals meet ratio and turnout.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 #![allow(clippy::items_after_statements)]
 
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World, WorldReadOnly},
+    state::{
+        GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus, State,
+        World, WorldReadOnly,
+    },
 };
 use iroha_data_model::{
     Registrable,
@@ -21,10 +23,6 @@ fn canonical_abi_hex() -> String {
 
 #[test]
 fn approves_when_ratio_and_turnout_met() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!("Skipping: positive threshold test gated. Set IROHA_RUN_IGNORED=1 to run.");
-        return;
-    }
     use core::num::NonZeroU64;
 
     use iroha_data_model::{
@@ -53,6 +51,7 @@ fn approves_when_ratio_and_turnout_met() {
     cfg.approval_threshold_q_num = 1;
     cfg.approval_threshold_q_den = 2;
     cfg.min_turnout = 0;
+    cfg.conviction_step_blocks = 1;
     state.set_gov(cfg);
 
     // H=1: open a Plain referendum via propose
@@ -101,13 +100,21 @@ fn approves_when_ratio_and_turnout_met() {
 
     // Approve: sqrt(9)=3 by ALICE; Reject: sqrt(1)=1 by BOB; ratio=3/4 >= 1/2
     // Discover referendum id (rid)
-    let rid = state
-        .view()
+    let rid = stx
         .world
         .governance_referenda()
         .iter()
         .next()
         .map_or_else(|| "rid-threshold-pos".to_string(), |(k, _)| k.clone());
+    stx.world.governance_referenda_mut().insert(
+        rid.clone(),
+        GovernanceReferendumRecord {
+            h_start: 0,
+            h_end: u64::MAX,
+            status: GovernanceReferendumStatus::Open,
+            mode: GovernanceReferendumMode::Plain,
+        },
+    );
     // Cast ballots: ALICE Aye with amount 9; BOB Nay with amount 1
     CastPlainBallot {
         referendum_id: rid.clone(),

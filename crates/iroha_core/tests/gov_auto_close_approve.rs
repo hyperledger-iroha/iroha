@@ -1,7 +1,6 @@
 //! Auto-close approval test: decision at `h_end` without explicit finalize.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::too_many_lines, clippy::items_after_statements)]
-//! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 
 use iroha_core::{
     kura::Kura,
@@ -21,10 +20,6 @@ fn canonical_abi_hex() -> String {
 
 #[test]
 fn auto_close_emits_approved() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!("Skipping: auto-close test gated. Set IROHA_RUN_IGNORED=1 to run.");
-        return;
-    }
     use core::num::NonZeroU64;
 
     use iroha_data_model::{

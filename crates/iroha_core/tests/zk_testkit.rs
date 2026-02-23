@@ -1,7 +1,6 @@
 #![doc = "Helpers for generating minimal Halo2 proofs for governance tests."]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(dead_code, unused_imports)]
-#![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_bundle {
@@ -24,7 +23,7 @@ mod halo2_bundle {
         },
         transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
     };
-    use iroha_core::zk::{self, zk1_test_helpers as zk1};
+    use iroha_core::zk;
     use iroha_crypto::Hash as CryptoHash;
     use iroha_data_model::{
         confidential::ConfidentialStatus,
@@ -32,6 +31,69 @@ mod halo2_bundle {
         zk::{BackendTag, OpenVerifyEnvelope},
     };
     use rand_core_06::OsRng;
+
+    mod zk1 {
+        use halo2_proofs::{
+            SerdeFormat,
+            halo2curves::pasta::{EqAffine as Curve, Fp},
+            plonk::VerifyingKey,
+        };
+
+        const MAGIC: &[u8; 4] = b"ZK1\0";
+
+        fn write_tlv(buf: &mut Vec<u8>, tag: [u8; 4], payload: &[u8]) {
+            buf.extend_from_slice(&tag);
+            let len = u32::try_from(payload.len()).expect("ZK1 TLV payload length should fit u32");
+            buf.extend_from_slice(&len.to_le_bytes());
+            buf.extend_from_slice(payload);
+        }
+
+        pub fn wrap_start() -> Vec<u8> {
+            MAGIC.to_vec()
+        }
+
+        pub fn wrap_append_proof(buf: &mut Vec<u8>, transcript_bytes: &[u8]) {
+            write_tlv(buf, *b"PROF", transcript_bytes);
+        }
+
+        pub fn wrap_append_ipa_k(buf: &mut Vec<u8>, k: u32) {
+            let mut payload = Vec::with_capacity(4);
+            payload.extend_from_slice(&k.to_le_bytes());
+            write_tlv(buf, *b"IPAK", &payload);
+        }
+
+        pub fn wrap_append_vk_pasta(buf: &mut Vec<u8>, vk: &VerifyingKey<Curve>) {
+            let bytes = vk.to_bytes(SerdeFormat::Processed);
+            write_tlv(buf, *b"H2VK", &bytes);
+        }
+
+        pub fn wrap_append_instances_pasta_fp_cols(columns: &[&[Fp]], buf: &mut Vec<u8>) {
+            use halo2_proofs::halo2curves::ff::PrimeField as _;
+
+            if columns.is_empty() {
+                return;
+            }
+            let cols = u32::try_from(columns.len()).expect("instance column count should fit u32");
+            let rows = u32::try_from(columns[0].len()).expect("instance row count should fit u32");
+            if columns
+                .iter()
+                .any(|column| u32::try_from(column.len()).ok() != Some(rows))
+            {
+                return;
+            }
+            let row_count = usize::try_from(rows).expect("row count should fit usize");
+            let col_count = usize::try_from(cols).expect("column count should fit usize");
+            let mut payload = Vec::with_capacity(8 + row_count * col_count * 32);
+            payload.extend_from_slice(&cols.to_le_bytes());
+            payload.extend_from_slice(&rows.to_le_bytes());
+            for row in 0..row_count {
+                for column in columns.iter().take(col_count) {
+                    payload.extend_from_slice(column[row].to_repr().as_ref());
+                }
+            }
+            write_tlv(buf, *b"I10P", &payload);
+        }
+    }
 
     /// Deterministic tiny add circuit used across governance ZK tests.
     #[derive(Clone, Default)]
