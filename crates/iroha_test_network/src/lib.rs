@@ -2375,6 +2375,12 @@ impl Network {
         self.block_time + self.commit_time
     }
 
+    /// DA commit-quorum timeout (block_time + 4 * commit_time) used by RBC-aware waits.
+    pub fn da_commit_quorum_timeout(&self) -> Duration {
+        self.block_time
+            .saturating_add(self.commit_time.saturating_mul(4))
+    }
+
     /// Block gossip period configured for the network overlay.
     pub fn block_sync_gossip_period(&self) -> Duration {
         self.block_sync_gossip_period
