@@ -822,6 +822,20 @@ fn contraction_observed_on_quorum_peers(
     peers_with_contracted_profile(status_snapshot) >= quorum_required
 }
 
+fn should_require_scale_in_transition(
+    requested: bool,
+    post_expansion_snapshot: &[PeerStatusSnapshot],
+    pre_cycle_snapshot: &[PeerStatusSnapshot],
+    quorum_required: usize,
+) -> bool {
+    requested
+        && expansion_observed_on_quorum_peers(
+            post_expansion_snapshot,
+            Some(pre_cycle_snapshot),
+            quorum_required,
+        )
+}
+
 fn max_non_empty_height(snapshot: &[PeerStatusSnapshot]) -> u64 {
     snapshot
         .iter()
@@ -1493,9 +1507,21 @@ fn run_expand_contract_cycle(
     eprintln!(
         "[autoscale-localnet][cycle {cycle_index}] autoscale transition snapshot after expansion: scale-out peers with new transitions {peers_with_scale_out}/{TOTAL_PEERS}, scale-in peers since cycle start {peers_with_scale_in_before_contraction}/{TOTAL_PEERS}"
     );
+    let post_expansion_status = status_snapshot(network)?;
+    let require_scale_in_transition_this_cycle = should_require_scale_in_transition(
+        require_scale_in_transition,
+        &post_expansion_status,
+        &pre_cycle_status,
+        quorum_required,
+    );
+    if require_scale_in_transition && !require_scale_in_transition_this_cycle {
+        eprintln!(
+            "[autoscale-localnet][cycle {cycle_index}] scale-in transition check relaxed: expansion status signal was not observed on quorum peers; validating contraction profile only"
+        );
+    }
 
     let contraction_heartbeat_client =
-        (!require_scale_in_transition).then(|| peer_client_with_timeout(network.peer()));
+        (!require_scale_in_transition_this_cycle).then(|| peer_client_with_timeout(network.peer()));
     let contraction_started = Instant::now();
     let contraction_context = format!("autoscale contraction cycle {cycle_index}");
     let contraction_prefix = format!("autoscale-heartbeat-cycle-{cycle_index}");
@@ -1507,7 +1533,7 @@ fn run_expand_contract_cycle(
         SCALE_IN_WAIT_TIMEOUT,
         &contraction_context,
         Some(&pre_cycle_autoscale_transitions),
-        require_scale_in_transition,
+        require_scale_in_transition_this_cycle,
         CONTRACTION_HEARTBEAT_INTERVAL,
     )?;
     eprintln!(
@@ -1526,10 +1552,14 @@ fn run_expand_contract_cycle(
     eprintln!(
         "[autoscale-localnet][cycle {cycle_index}] autoscale transition snapshot after contraction: scale-in peers with new transitions after expansion {peers_with_scale_in_after_expansion}/{TOTAL_PEERS}; since cycle start {peers_with_scale_in_since_cycle_start}/{TOTAL_PEERS}"
     );
-    if require_scale_in_transition {
+    if require_scale_in_transition_this_cycle {
         ensure!(
             peers_with_scale_in_since_cycle_start >= quorum_required,
             "autoscale cycle {cycle_index}: contraction profile was observed but deterministic autoscale scale-in transitions were not observed on quorum peers within the cycle window (scale-in peers since cycle start: {peers_with_scale_in_since_cycle_start}/{TOTAL_PEERS}; after expansion snapshot: {peers_with_scale_in_after_expansion}/{TOTAL_PEERS}; required quorum: {quorum_required})"
+        );
+    } else if require_scale_in_transition {
+        eprintln!(
+            "[autoscale-localnet][cycle {cycle_index}] scale-in transition check skipped: expansion status signal did not reach quorum during this cycle"
         );
     }
     let post_cycle_status = status_snapshot(network)?;
@@ -1671,6 +1701,7 @@ mod tests {
         expansion_observed_on_storage, expansion_probe_top_up_tx_count, expansion_top_up_tx_count,
         parse_autoscale_transition_stats, peers_with_scale_in_transition,
         peers_with_scale_out_transition, scale_out_transition_observed_on_quorum_peers,
+        should_require_scale_in_transition,
     };
 
     #[test]
@@ -1799,6 +1830,82 @@ mod tests {
 
         assert_eq!(peers_with_scale_out_transition(&current, &baseline), 2);
         assert_eq!(peers_with_scale_in_transition(&current, &baseline), 2);
+    }
+
+    #[test]
+    fn scale_in_transition_requirement_respects_request_flag() {
+        let pre_cycle_snapshot = vec![
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                    committed: 12,
+                }],
+                lane_commitments: vec![],
+                lane_governance_ids: vec![0],
+                lane_relay: vec![],
+                lane_validators: vec![],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 10,
+                txs_rejected: 0,
+                blocks_non_empty: 10,
+            };
+            4
+        ];
+        let mut post_expansion_snapshot = pre_cycle_snapshot.clone();
+        for peer in post_expansion_snapshot.iter_mut().take(3) {
+            peer.lanes.push(LaneStatusSnapshot {
+                lane_id: 1,
+                capacity: 3000,
+                committed: 3,
+            });
+            peer.lane_governance_ids.push(1);
+        }
+
+        assert!(!should_require_scale_in_transition(
+            false,
+            &post_expansion_snapshot,
+            &pre_cycle_snapshot,
+            3
+        ));
+        assert!(should_require_scale_in_transition(
+            true,
+            &post_expansion_snapshot,
+            &pre_cycle_snapshot,
+            3
+        ));
+    }
+
+    #[test]
+    fn scale_in_transition_requirement_is_disabled_without_expansion_status_quorum() {
+        let pre_cycle_snapshot = vec![
+            PeerStatusSnapshot {
+                lanes: vec![LaneStatusSnapshot {
+                    lane_id: 0,
+                    capacity: 6000,
+                    committed: 12,
+                }],
+                lane_commitments: vec![],
+                lane_governance_ids: vec![0],
+                lane_relay: vec![],
+                lane_validators: vec![],
+                commit_signatures_required: 3,
+                commit_qc_validator_set_len: 4,
+                txs_approved: 10,
+                txs_rejected: 0,
+                blocks_non_empty: 10,
+            };
+            4
+        ];
+        let post_expansion_snapshot = pre_cycle_snapshot.clone();
+
+        assert!(!should_require_scale_in_transition(
+            true,
+            &post_expansion_snapshot,
+            &pre_cycle_snapshot,
+            3
+        ));
     }
 
     #[test]
