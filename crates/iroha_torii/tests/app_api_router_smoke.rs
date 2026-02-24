@@ -224,6 +224,29 @@ async fn app_api_router_smoke() {
         assert_eq!(resp_telemetry_live.status(), StatusCode::NOT_FOUND);
     }
 
+    // 2e) App API: GET /v1/telemetry/propagation — endpoint exists; allow OK/429/403.
+    let resp_telemetry_propagation = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/v1/telemetry/propagation"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    #[cfg(feature = "telemetry")]
+    {
+        assert!(matches!(
+            resp_telemetry_propagation.status(),
+            StatusCode::OK | StatusCode::TOO_MANY_REQUESTS | StatusCode::FORBIDDEN
+        ));
+    }
+    #[cfg(not(feature = "telemetry"))]
+    {
+        assert_eq!(resp_telemetry_propagation.status(), StatusCode::NOT_FOUND);
+    }
+
     // 3) App API: GET /v1/webhooks — ensure route exists; allow OK or 429
     let resp_webhooks = app
         .clone()
