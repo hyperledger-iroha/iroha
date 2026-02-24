@@ -6,6 +6,7 @@ use std::{
     net::SocketAddr,
     str::FromStr,
     sync::Arc,
+    time::Duration,
 };
 
 use iroha_config::client_api::ConfigGetDTO;
@@ -20,6 +21,9 @@ use crate::{
     explorer::ExplorerDurationDto,
     json_macros::{JsonDeserialize, JsonSerialize},
 };
+
+const PROPAGATION_HISTORY_LIMIT: usize = 64;
+const PROPAGATION_SNAPSHOT_LIMIT: usize = 32;
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub struct GeoLocation {
@@ -74,14 +78,34 @@ pub struct PeerStatusDto {
     pub block: u32,
     pub commit_time: ExplorerDurationDto,
     pub avg_commit_time: ExplorerDurationDto,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub status_rtt: Option<ExplorerDurationDto>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub status_rtt_avg: Option<ExplorerDurationDto>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub status_rtt_p95: Option<ExplorerDurationDto>,
     pub queue_size: u32,
     pub uptime: ExplorerDurationDto,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub propagation_time: Option<ExplorerDurationDto>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub observed_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub struct PeerPropagationDto {
+    pub block: u32,
+    pub first_seen_at_ms: u64,
+    pub last_seen_at_ms: u64,
+    pub spread_ms: u64,
+    pub peers_reported: u32,
 }
 
 #[derive(Clone, Debug)]
 pub struct PeerTelemetrySnapshot {
     pub peers_info: Vec<PeerInfoDto>,
     pub peers_status: Vec<PeerStatusDto>,
+    pub propagation: Vec<PeerPropagationDto>,
 }
 
 #[derive(Clone, Debug)]
@@ -110,6 +134,7 @@ impl From<&iroha_config::parameters::actual::ToriiPeerGeo> for GeoLookupConfig {
 
 pub struct PeerTelemetryService {
     peers: RwLock<BTreeMap<ToriiUrl, PeerState>>,
+    propagation: RwLock<PropagationTracker>,
     geo_config: GeoLookupConfig,
 }
 
@@ -117,6 +142,7 @@ impl PeerTelemetryService {
     pub fn new(peer_urls: Vec<ToriiUrl>, geo_config: GeoLookupConfig) -> Arc<Self> {
         let service = Arc::new(Self {
             peers: RwLock::new(BTreeMap::new()),
+            propagation: RwLock::new(PropagationTracker::default()),
             geo_config,
         });
         for url in BTreeSet::from_iter(peer_urls) {
@@ -138,6 +164,8 @@ impl PeerTelemetryService {
     }
 
     async fn apply_update(&self, url: ToriiUrl, update: Update) {
+        let peer_url = url.as_str().to_owned();
+        let mut metrics_update = None;
         let mut guard = self.peers.write().await;
         let state = guard
             .entry(url.clone())
@@ -166,8 +194,22 @@ impl PeerTelemetryService {
             }
             Update::Metrics(metrics) => {
                 state.metrics = Some(metrics);
+                metrics_update = Some(metrics);
             }
         }
+        drop(guard);
+
+        if let Some(metrics) = metrics_update {
+            self.observe_propagation(&peer_url, metrics).await;
+        }
+    }
+
+    async fn observe_propagation(&self, peer_url: &str, metrics: PeerMetricsSnapshot) {
+        let Some(observed_at_ms) = metrics.observed_at_ms else {
+            return;
+        };
+        let mut propagation = self.propagation.write().await;
+        propagation.observe(peer_url, metrics.block, observed_at_ms);
     }
 
     pub async fn peers_info(&self) -> Vec<PeerInfoDto> {
@@ -176,17 +218,40 @@ impl PeerTelemetryService {
     }
 
     pub async fn peers_status(&self) -> Vec<PeerStatusDto> {
+        let first_seen_by_block = {
+            let propagation = self.propagation.read().await;
+            propagation.first_seen_by_block()
+        };
         let guard = self.peers.read().await;
-        guard.values().filter_map(PeerState::status).collect()
+        guard
+            .values()
+            .filter_map(|peer| peer.status(&first_seen_by_block))
+            .collect()
+    }
+
+    pub async fn propagation(&self, limit: usize) -> Vec<PeerPropagationDto> {
+        let propagation = self.propagation.read().await;
+        propagation.snapshot(limit)
     }
 
     pub async fn snapshot(&self) -> PeerTelemetrySnapshot {
+        let (first_seen_by_block, propagation) = {
+            let propagation = self.propagation.read().await;
+            (
+                propagation.first_seen_by_block(),
+                propagation.snapshot(PROPAGATION_SNAPSHOT_LIMIT),
+            )
+        };
         let guard = self.peers.read().await;
         let peers_info = guard.values().map(PeerState::info).collect();
-        let peers_status = guard.values().filter_map(PeerState::status).collect();
+        let peers_status = guard
+            .values()
+            .filter_map(|peer| peer.status(&first_seen_by_block))
+            .collect();
         PeerTelemetrySnapshot {
             peers_info,
             peers_status,
+            propagation,
         }
     }
 }
@@ -266,8 +331,14 @@ impl PeerState {
         }
     }
 
-    fn status(&self) -> Option<PeerStatusDto> {
+    fn status(&self, first_seen_by_block: &BTreeMap<u32, u64>) -> Option<PeerStatusDto> {
         let metrics = self.metrics?;
+        let propagation_time = metrics.observed_at_ms.and_then(|observed_at_ms| {
+            first_seen_by_block
+                .get(&metrics.block)
+                .copied()
+                .map(|first_seen_ms| observed_at_ms.saturating_sub(first_seen_ms))
+        });
         Some(PeerStatusDto {
             url: self.url.as_str().to_string(),
             block: metrics.block,
@@ -277,16 +348,116 @@ impl PeerState {
             avg_commit_time: ExplorerDurationDto {
                 ms: duration_ms_u64(metrics.avg_commit_time),
             },
+            status_rtt: metrics.status_rtt.map(|duration| ExplorerDurationDto {
+                ms: duration_ms_u64(duration),
+            }),
+            status_rtt_avg: metrics.status_rtt_avg.map(|duration| ExplorerDurationDto {
+                ms: duration_ms_u64(duration),
+            }),
+            status_rtt_p95: metrics.status_rtt_p95.map(|duration| ExplorerDurationDto {
+                ms: duration_ms_u64(duration),
+            }),
             queue_size: metrics.queue_size,
             uptime: ExplorerDurationDto {
                 ms: duration_ms_u64(metrics.uptime),
             },
+            propagation_time: propagation_time.map(|ms| ExplorerDurationDto { ms }),
+            observed_at_ms: metrics.observed_at_ms,
         })
     }
 }
 
 fn duration_ms_u64(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[derive(Default)]
+struct PropagationTracker {
+    by_block: BTreeMap<u32, BlockPropagationEntry>,
+}
+
+impl PropagationTracker {
+    fn observe(&mut self, peer_url: &str, block: u32, observed_at_ms: u64) {
+        match self.by_block.entry(block) {
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(BlockPropagationEntry::new(peer_url, observed_at_ms));
+            }
+            std::collections::btree_map::Entry::Occupied(mut slot) => {
+                slot.get_mut().observe(peer_url, observed_at_ms);
+            }
+        }
+
+        while self.by_block.len() > PROPAGATION_HISTORY_LIMIT {
+            let Some(oldest) = self.by_block.keys().next().copied() else {
+                break;
+            };
+            self.by_block.remove(&oldest);
+        }
+    }
+
+    fn first_seen_by_block(&self) -> BTreeMap<u32, u64> {
+        self.by_block
+            .iter()
+            .map(|(block, entry)| (*block, entry.first_seen_at_ms))
+            .collect()
+    }
+
+    fn snapshot(&self, limit: usize) -> Vec<PeerPropagationDto> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let mut entries = self
+            .by_block
+            .iter()
+            .rev()
+            .take(limit)
+            .map(|(block, entry)| PeerPropagationDto {
+                block: *block,
+                first_seen_at_ms: entry.first_seen_at_ms,
+                last_seen_at_ms: entry.last_seen_at_ms,
+                spread_ms: entry.spread_ms(),
+                peers_reported: entry.peers_reported(),
+            })
+            .collect::<Vec<_>>();
+        entries.reverse();
+        entries
+    }
+}
+
+#[derive(Clone, Debug)]
+struct BlockPropagationEntry {
+    first_seen_at_ms: u64,
+    last_seen_at_ms: u64,
+    peers: BTreeSet<String>,
+}
+
+impl BlockPropagationEntry {
+    fn new(peer_url: &str, observed_at_ms: u64) -> Self {
+        let mut peers = BTreeSet::new();
+        peers.insert(peer_url.to_owned());
+        Self {
+            first_seen_at_ms: observed_at_ms,
+            last_seen_at_ms: observed_at_ms,
+            peers,
+        }
+    }
+
+    fn observe(&mut self, peer_url: &str, observed_at_ms: u64) {
+        if !self.peers.insert(peer_url.to_owned()) {
+            return;
+        }
+        self.first_seen_at_ms = self.first_seen_at_ms.min(observed_at_ms);
+        self.last_seen_at_ms = self.last_seen_at_ms.max(observed_at_ms);
+    }
+
+    fn spread_ms(&self) -> u64 {
+        self.last_seen_at_ms.saturating_sub(self.first_seen_at_ms)
+    }
+
+    fn peers_reported(&self) -> u32 {
+        u32::try_from(self.peers.len()).unwrap_or(u32::MAX)
+    }
 }
 
 impl PeerConfigDto {
@@ -322,7 +493,6 @@ impl From<&ConfigGetDTO> for PeerConfigSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[test]
     fn geo_lookup_config_respects_disable_helper() {
@@ -359,6 +529,10 @@ mod tests {
                     avg_commit_time: Duration::from_millis(700),
                     queue_size: 3,
                     uptime: Duration::from_secs(3600),
+                    status_rtt: Some(Duration::from_millis(18)),
+                    status_rtt_avg: Some(Duration::from_millis(21)),
+                    status_rtt_p95: Some(Duration::from_millis(34)),
+                    observed_at_ms: Some(100),
                 }),
             )
             .await;
@@ -370,8 +544,25 @@ mod tests {
         assert_eq!(status.block, 42);
         assert_eq!(status.commit_time.ms, 850);
         assert_eq!(status.avg_commit_time.ms, 700);
+        assert_eq!(
+            status.status_rtt.as_ref().map(|duration| duration.ms),
+            Some(18)
+        );
+        assert_eq!(
+            status.status_rtt_avg.as_ref().map(|duration| duration.ms),
+            Some(21)
+        );
+        assert_eq!(
+            status.status_rtt_p95.as_ref().map(|duration| duration.ms),
+            Some(34)
+        );
         assert_eq!(status.queue_size, 3);
         assert_eq!(status.uptime.ms, 3_600_000);
+        assert_eq!(
+            status.propagation_time.as_ref().map(|duration| duration.ms),
+            Some(0)
+        );
+        assert_eq!(status.observed_at_ms, Some(100));
     }
 
     #[tokio::test]
@@ -400,6 +591,10 @@ mod tests {
                     avg_commit_time: Duration::from_millis(1100),
                     queue_size: 1,
                     uptime: Duration::from_secs(120),
+                    status_rtt: None,
+                    status_rtt_avg: None,
+                    status_rtt_p95: None,
+                    observed_at_ms: Some(200),
                 }),
             )
             .await;
@@ -407,7 +602,81 @@ mod tests {
         let snapshot = service.snapshot().await;
         assert_eq!(snapshot.peers_info.len(), 1);
         assert_eq!(snapshot.peers_status.len(), 1);
+        assert_eq!(snapshot.propagation.len(), 1);
         assert_eq!(snapshot.peers_info[0].url, url.as_str());
         assert_eq!(snapshot.peers_status[0].url, url.as_str());
+        assert_eq!(snapshot.propagation[0].block, 9);
+        assert_eq!(snapshot.propagation[0].spread_ms, 0);
+        assert_eq!(snapshot.propagation[0].peers_reported, 1);
+    }
+
+    #[tokio::test]
+    async fn peers_status_computes_propagation_from_first_seen_timestamp() {
+        let service = PeerTelemetryService::new(Vec::new(), GeoLookupConfig::disabled());
+        let url_a: ToriiUrl = "http://peer-a.example:8080".parse().expect("torii url");
+        let url_b: ToriiUrl = "http://peer-b.example:8080".parse().expect("torii url");
+
+        service
+            .apply_update(
+                url_a.clone(),
+                Update::Metrics(monitor::Metrics {
+                    block: 20,
+                    block_commit_time: Duration::from_millis(400),
+                    avg_commit_time: Duration::from_millis(390),
+                    queue_size: 1,
+                    uptime: Duration::from_secs(10),
+                    status_rtt: Some(Duration::from_millis(14)),
+                    status_rtt_avg: Some(Duration::from_millis(16)),
+                    status_rtt_p95: Some(Duration::from_millis(20)),
+                    observed_at_ms: Some(1_000),
+                }),
+            )
+            .await;
+        service
+            .apply_update(
+                url_b.clone(),
+                Update::Metrics(monitor::Metrics {
+                    block: 20,
+                    block_commit_time: Duration::from_millis(410),
+                    avg_commit_time: Duration::from_millis(395),
+                    queue_size: 2,
+                    uptime: Duration::from_secs(11),
+                    status_rtt: Some(Duration::from_millis(18)),
+                    status_rtt_avg: Some(Duration::from_millis(19)),
+                    status_rtt_p95: Some(Duration::from_millis(27)),
+                    observed_at_ms: Some(1_045),
+                }),
+            )
+            .await;
+
+        let statuses = service.peers_status().await;
+        let status_a = statuses
+            .iter()
+            .find(|status| status.url == url_a.as_str())
+            .expect("status for peer a");
+        let status_b = statuses
+            .iter()
+            .find(|status| status.url == url_b.as_str())
+            .expect("status for peer b");
+        assert_eq!(
+            status_a
+                .propagation_time
+                .as_ref()
+                .map(|duration| duration.ms),
+            Some(0)
+        );
+        assert_eq!(
+            status_b
+                .propagation_time
+                .as_ref()
+                .map(|duration| duration.ms),
+            Some(45)
+        );
+
+        let propagation = service.propagation(10).await;
+        assert_eq!(propagation.len(), 1);
+        assert_eq!(propagation[0].block, 20);
+        assert_eq!(propagation[0].spread_ms, 45);
+        assert_eq!(propagation[0].peers_reported, 2);
     }
 }
