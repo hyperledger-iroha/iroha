@@ -5,22 +5,22 @@ use std::{
     time::Duration,
 };
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use hex;
 use iroha_core::state::WorldReadOnly;
 use iroha_data_model::{
+    HasMetadata, Identifiable, ValidationFail,
     account::{AccountAddress, AccountEntry, AccountId},
     asset::{AssetDefinition, AssetDefinitionId, AssetEntry, AssetId, Mintable},
     block::SignedBlock,
     domain::{Domain, DomainId},
     isi::{
-        self,
+        self, CustomInstruction, ExecuteTrigger, GrantBox, Instruction as IsiInstruction,
+        InstructionBox, Log, MintBox, RegisterBox, RemoveAssetKeyValue, RemoveKeyValueBox,
+        RevokeBox, SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
+        UnregisterBox, Upgrade,
         mint_burn::BurnBox,
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
-        CustomInstruction, ExecuteTrigger, GrantBox, Instruction as IsiInstruction, InstructionBox,
-        Log, MintBox, RegisterBox, RemoveAssetKeyValue, RemoveKeyValueBox, RevokeBox,
-        SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
-        UnregisterBox, Upgrade,
     },
     metadata::Metadata,
     nft::{NftEntry, NftId},
@@ -30,7 +30,6 @@ use iroha_data_model::{
         executable::Executable,
         signed::{SignedTransaction, TransactionResult},
     },
-    HasMetadata, Identifiable, ValidationFail,
 };
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -38,11 +37,11 @@ use norito::{
     json::{self, Map, Value},
 };
 use qrcode::{
+    EcLevel, QrCode,
     render::svg,
     types::{QrError, Version},
-    EcLevel, QrCode,
 };
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
     address_format::AddressFormatPreference,
@@ -1377,9 +1376,10 @@ mod tests {
     };
 
     use iroha_data_model::{
+        ChainId, Registrable, ValidationFail,
         account::AccountDetails,
-        asset::{definition::MintabilityTokens, AssetDefinitionId, AssetId},
-        block::{builder::BlockBuilder, BlockHeader},
+        asset::{AssetDefinitionId, AssetId, definition::MintabilityTokens},
+        block::{BlockHeader, builder::BlockBuilder},
         common::{Owned, Ref},
         domain::DomainId,
         isi::{Register, Transfer},
@@ -1390,7 +1390,6 @@ mod tests {
             signed::{TransactionBuilder, TransactionResultInner},
         },
         trigger::DataTriggerSequence,
-        ChainId, Registrable, ValidationFail,
     };
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};

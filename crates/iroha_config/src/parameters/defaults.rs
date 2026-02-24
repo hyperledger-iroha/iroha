@@ -2585,6 +2585,14 @@ pub mod sumeragi {
     pub const SIDECAR_MISMATCH_TTL_MS: u64 = 2_000;
     /// Number of hash misses before escalating missing dependencies to range pull.
     pub const RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: u32 = 3;
+    /// Height margin used to prune stale missing-block requests once head advances.
+    pub const RECOVERY_MISSING_REQUEST_STALE_HEIGHT_MARGIN: u64 = 16;
+    /// Maximum deferred block-sync updates retained in memory.
+    pub const RECOVERY_PENDING_BLOCK_SYNC_CAP: usize = 256;
+    /// Maximum cached proposal entries retained in memory.
+    pub const RECOVERY_PENDING_PROPOSAL_CAP: usize = 128;
+    /// Missing-block fetch attempts before switching from signer-preferred to aggressive topology.
+    pub const RECOVERY_MISSING_FETCH_AGGRESSIVE_AFTER_ATTEMPTS: u32 = 2;
     /// Consecutive membership mismatches required before alerting.
     pub const MEMBERSHIP_MISMATCH_ALERT_THRESHOLD: u32 = 1;
     /// Whether to drop consensus messages from peers with repeated membership mismatches.
