@@ -54,13 +54,19 @@ async fn register_new_peer() -> Result<()> {
     };
 
     let peer = NetworkPeerBuilder::new().build(network.env());
+    let submit_timeout = network
+        .sync_timeout()
+        .saturating_add(network.da_commit_quorum_timeout());
     let register = RegisterPeerWithPop::new(
         peer.id(),
         peer.bls_pop()
             .expect("network peer should have BLS PoP")
             .to_vec(),
     );
-    submit_instruction_or_warn(network.client(), register, "register_new_peer").await?;
+    let mut client = network.client();
+    client.transaction_status_timeout = submit_timeout;
+    client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
+    submit_instruction_or_warn(client, register, "register_new_peer").await?;
     if sandbox::handle_result(
         network.ensure_blocks(2).await,
         stringify!(register_new_peer),
@@ -88,8 +94,11 @@ async fn register_new_peer() -> Result<()> {
         return Ok(());
     }
 
+    let mut client = network.client();
+    client.transaction_status_timeout = submit_timeout;
+    client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
     submit_instruction_or_warn(
-        network.client(),
+        client,
         Log::new(Level::INFO, "register_new_peer_sync".to_string()),
         "register_new_peer",
     )
@@ -152,6 +161,7 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     // This scenario performs two roster reconfigurations and can exceed the generic sync budget on
     // loaded CI hosts.
     let sync_timeout = network.sync_timeout().saturating_mul(2);
+    let da_commit_timeout = network.da_commit_quorum_timeout();
     let expected_connected = expected_connected_peers(n_peers);
 
     if sandbox::handle_result(
@@ -169,9 +179,12 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     };
     let removed_peer = randomized_peers.remove(0);
     let roster_client = leader_peer(randomized_peers.iter().copied()).client();
+    let submit_timeout = sync_timeout.saturating_add(da_commit_timeout);
 
     // Unregister a peer and wait for the roster to reflect the change.
-    let client = leader_peer(randomized_peers.iter().copied()).client();
+    let mut client = leader_peer(randomized_peers.iter().copied()).client();
+    client.transaction_status_timeout = submit_timeout;
+    client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
     let unregister_peer = Unregister::peer(removed_peer.id());
     submit_instruction_or_warn(client.clone(), unregister_peer, context).await?;
     wait_for_block_height(randomized_peers.iter().copied(), 2, sync_timeout).await?;
@@ -221,9 +234,12 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
             .expect("network peer should have BLS PoP")
             .to_vec(),
     );
-    let client = leader_peer(randomized_peers.iter().copied()).client();
+    let mut client = leader_peer(randomized_peers.iter().copied()).client();
+    client.transaction_status_timeout = submit_timeout;
+    client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
     submit_instruction_or_warn(client.clone(), register_peer, context).await?;
-    wait_for_block_height(randomized_peers.iter().copied(), 3, sync_timeout).await?;
+    let re_register_timeout = sync_timeout.saturating_add(da_commit_timeout);
+    wait_for_block_height(randomized_peers.iter().copied(), 3, re_register_timeout).await?;
     if sandbox::handle_result(
         wait_for_peer_roster(&roster_client, n_peers, sync_timeout).await,
         context,

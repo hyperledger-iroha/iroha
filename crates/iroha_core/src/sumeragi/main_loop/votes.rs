@@ -2478,6 +2478,14 @@ impl Actor {
             }
         }
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        // Keep vote/RBC validation aligned with pacemaker proposal assembly for the active round.
+        // Roster changes committed at height N must be visible for votes at N+1 immediately.
+        if height == committed_height.saturating_add(1) {
+            let live = self.roster_for_live_vote_with_mode(height, consensus_mode);
+            if !live.is_empty() {
+                return canonicalize(live);
+            }
+        }
         if height <= committed_height {
             let mut roster_height = height;
             let mut roster_view = None;
