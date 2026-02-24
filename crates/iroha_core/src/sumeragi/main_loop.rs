@@ -2767,19 +2767,24 @@ struct MissingBlockRequest {
     last_requested: Instant,
     last_dependency_progress: Instant,
     last_rbc_observed: Option<Instant>,
+    last_view_change_triggered: Option<Instant>,
     view_change_triggered_view: Option<u64>,
     attempts: u32,
 }
 
 impl MissingBlockRequest {
+    fn can_trigger_view_change(&self) -> bool {
+        matches!(self.priority, MissingBlockPriority::Consensus)
+    }
+
     fn view_change_triggered_in_view(&self) -> bool {
         self.view_change_triggered_view == Some(self.view)
     }
 
-    /// Return true once the missing-block dwell time exceeds the view-change window for the
-    /// current view. Subsequent calls within the same view return false to avoid repeated
-    /// view changes.
-    fn mark_view_change_if_due(&mut self, now: Instant) -> bool {
+    fn view_change_due(&self, now: Instant) -> bool {
+        if !self.can_trigger_view_change() {
+            return false;
+        }
         let Some(window) = self.view_change_window else {
             return false;
         };
@@ -2787,11 +2792,23 @@ impl MissingBlockRequest {
             return false;
         }
         let dwell = now.saturating_duration_since(self.first_seen);
-        if dwell >= window {
-            self.view_change_triggered_view = Some(self.view);
-            return true;
+        if dwell < window {
+            return false;
         }
-        false
+        self.last_view_change_triggered
+            .is_none_or(|last| now.saturating_duration_since(last) >= window)
+    }
+
+    /// Return true once the missing-block dwell time exceeds the view-change window for the
+    /// current view. Repeated calls are throttled by the same window so attacker-controlled
+    /// view churn cannot force a tight view-change loop.
+    fn mark_view_change_if_due(&mut self, now: Instant) -> bool {
+        if !self.view_change_due(now) {
+            return false;
+        }
+        self.view_change_triggered_view = Some(self.view);
+        self.last_view_change_triggered = Some(now);
+        true
     }
 }
 
@@ -2834,6 +2851,7 @@ fn touch_missing_block_request(
                 last_requested: now,
                 last_dependency_progress: now,
                 last_rbc_observed: None,
+                last_view_change_triggered: None,
                 view_change_triggered_view: None,
                 attempts: 0,
             });
@@ -2842,11 +2860,24 @@ fn touch_missing_block_request(
         Entry::Occupied(mut occupied) => {
             let stats = occupied.get_mut();
             let priority_upgrade = priority > stats.priority;
-            let view_advanced = view > stats.view;
-            let height_advanced = height > stats.height;
-            if stats.view != view {
+            let height_conflict = stats.height != height;
+            if height_conflict {
+                // A block hash canonically commits to a single header/height.
+                // Conflicting heights for the same hash are inconsistent evidence, so keep
+                // the original request identity stable and ignore the conflicting update.
+                debug!(
+                    height,
+                    stored_height = stats.height,
+                    view,
+                    stored_view = stats.view,
+                    block = ?block_hash,
+                    "ignoring missing-block request update with conflicting hash height"
+                );
+            }
+            let view_advanced = !height_conflict && view > stats.view;
+            if !height_conflict && stats.view != view {
                 if view_advanced {
-                    warn!(
+                    debug!(
                         height,
                         view,
                         stored_view = stats.view,
@@ -2863,21 +2894,24 @@ fn touch_missing_block_request(
                         "ignoring stale missing-block request view"
                     );
                 }
+            } else if height_conflict && stats.view != view {
+                debug!(
+                    height,
+                    stored_height = stats.height,
+                    view,
+                    stored_view = stats.view,
+                    block = ?block_hash,
+                    "ignoring missing-block request view update because hash height conflicted"
+                );
             }
-            if height_advanced {
-                stats.height = height;
-            }
+            let height_advanced = false;
             if height_advanced {
                 stats.first_seen = now;
                 stats.last_requested = now;
                 stats.last_dependency_progress = now;
                 stats.last_rbc_observed = None;
+                stats.last_view_change_triggered = None;
                 stats.attempts = 0;
-            } else if view_advanced {
-                // Preserve dwell/attempt history across view churn so recovery cannot
-                // perpetually re-arm by advancing views on the same missing payload.
-                stats.last_requested = now;
-                stats.view_change_triggered_view = None;
             }
             if phase_rank(phase) > phase_rank(stats.phase) {
                 stats.phase = phase;
@@ -2909,9 +2943,7 @@ fn touch_missing_block_request(
                 }
                 std::cmp::Ordering::Less => {}
             }
-            let retry_due = view_advanced
-                || height_advanced
-                || priority_upgrade
+            let retry_due = priority_upgrade
                 || now.saturating_duration_since(stats.last_requested) >= stats.retry_window;
             if retry_due {
                 stats.last_requested = now;
@@ -3072,20 +3104,24 @@ fn block_sync_quorum_available(
     block_height: u64,
     local_height: u64,
 ) -> bool {
-    // Require commit evidence unless we explicitly requested the next missing payload.
+    // Require commit evidence unless we explicitly requested this missing payload.
     if commit_cert_present || qc_evidence_present || signature_quorum_met || checkpoint_present {
         return true;
     }
 
     if block_signers == 0 {
-        return false;
+        return missing_block_requested;
     }
 
     if !missing_block_requested {
         return false;
     }
 
-    block_height <= local_height.saturating_add(1)
+    // For recovery we can request payloads far ahead of the local tip (for example after
+    // prolonged lag). Keep accepting sparse signatures for explicitly requested hashes so the
+    // FSM can hydrate pending payloads and converge back to the canonical chain.
+    let _ = (block_height, local_height);
+    true
 }
 
 fn block_sync_commit_cert_present(
@@ -7631,7 +7667,14 @@ where
             }
             Ok(())
         }
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            // A block can be rejected locally (e.g., stale lock) while still carrying a
+            // valid QC that should drive missing-payload recovery.
+            if let Some(qc) = qc_to_apply {
+                apply_qc(qc)?;
+            }
+            Ok(())
+        }
         Err(err) => Err(err),
     }
 }
@@ -10607,11 +10650,7 @@ impl Actor {
             return None;
         }
 
-        let committed_qc = self.latest_committed_qc_snapshot();
-        let committed_height = committed_qc
-            .as_ref()
-            .map_or_else(|| self.committed_height_snapshot(), |qc| qc.height);
-        let height = active_round_height(self.highest_qc, committed_qc, committed_height);
+        let height = self.active_consensus_round_height();
         let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
         let Some(age) = self.phase_tracker.view_age(height, now) else {
             // Avoid scheduling idle view changes before the round tracker is seeded.
@@ -15726,6 +15765,32 @@ impl Actor {
         self.request_range_pull_from_anchor_with_tier(height, reason, now, None)
     }
 
+    fn active_consensus_round_height(&self) -> u64 {
+        let committed_height = self.committed_height_snapshot();
+        let mut active_height = active_round_height(
+            self.highest_qc,
+            self.latest_committed_qc(),
+            committed_height,
+        );
+        if let Some(missing_height) = self.lowest_unresolved_missing_block_height(committed_height)
+            && missing_height < active_height
+        {
+            active_height = missing_height;
+        }
+        active_height
+    }
+
+    fn lowest_unresolved_missing_block_height(&self, committed_height: u64) -> Option<u64> {
+        self.pending
+            .missing_block_requests
+            .iter()
+            .filter(|(hash, request)| {
+                request.height > committed_height && !self.block_payload_available_locally(**hash)
+            })
+            .map(|(_, request)| request.height)
+            .min()
+    }
+
     fn maybe_escalate_missing_block_height_recovery(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -15755,16 +15820,20 @@ impl Actor {
                     stats.last_dependency_progress,
                     stats.last_rbc_observed,
                     stats.view_change_triggered_in_view(),
+                    stats.can_trigger_view_change(),
                 )
             });
-        let recent_dependency_progress = request_progress.and_then(|(progress, _, _)| {
+        let recent_dependency_progress = request_progress.and_then(|(progress, _, _, _)| {
             (now.saturating_duration_since(progress) < ttl).then_some(progress)
         });
         let recent_rbc_progress = request_progress
-            .and_then(|(_, observed, _)| observed)
+            .and_then(|(_, observed, _, _)| observed)
             .filter(|observed| now.saturating_duration_since(*observed) < ttl);
         let view_change_already_triggered =
-            request_progress.is_some_and(|(_, _, triggered)| triggered);
+            request_progress.is_some_and(|(_, _, triggered, _)| triggered);
+        let can_trigger_view_change = request_progress.is_some_and(|(_, _, _, allowed)| allowed);
+        let active_height = self.active_consensus_round_height();
+        let height_is_active = height == active_height;
 
         if budget.range_pull.inflight
             && now.saturating_duration_since(budget.range_pull.last_progress) >= ttl
@@ -15878,9 +15947,20 @@ impl Actor {
             && (inflight_range_pull_converging_now
                 || self.should_defer_missing_block_view_change(&block_hash, height, view));
         let mut progressed = budget.range_pull.inflight;
-        if hard_cap_due
+        if hard_cap_due && !height_is_active {
+            debug!(
+                height,
+                view,
+                active_height,
+                block = %block_hash,
+                attempts = budget.attempts,
+                dwell_ms = dwell.as_millis(),
+                "suppressing missing-block hard-cap view change for non-active round height"
+            );
+        } else if hard_cap_due
             && !defer_hard_cap_escalation
             && !defer_view_change
+            && can_trigger_view_change
             && !view_change_already_triggered
             && !self
                 .phase_tracker
@@ -15888,6 +15968,27 @@ impl Actor {
                 .is_some_and(|current| current > view)
             && budget.escalated_view != Some(view)
         {
+            let (pending_removed, missing_removed, hints_removed, proposals_removed, seen_removed) =
+                self.prune_consensus_state_for_missing_block_height(height);
+            if pending_removed > 0
+                || missing_removed > 0
+                || hints_removed > 0
+                || proposals_removed > 0
+                || seen_removed > 0
+            {
+                info!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    pending_removed,
+                    missing_removed,
+                    hints_removed,
+                    proposals_removed,
+                    seen_removed,
+                    "cleared stale consensus state for missing-block hard-cap recovery"
+                );
+            }
+            self.clear_missing_block_recovery_for_height(height, now);
             budget.escalated_view = Some(view);
             super::status::inc_consensus_missing_block_height_escalation();
             #[cfg(feature = "telemetry")]
@@ -15918,6 +16019,15 @@ impl Actor {
                 dwell_ms = dwell.as_millis(),
                 "skipping missing-block hard-cap escalation: view change already triggered in this view"
             );
+        } else if hard_cap_due && !can_trigger_view_change {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                attempts = budget.attempts,
+                dwell_ms = dwell.as_millis(),
+                "suppressing missing-block hard-cap view change for background-priority request"
+            );
         } else if hard_cap_due && defer_view_change {
             if inflight_range_pull_converging_now {
                 super::status::inc_consensus_missing_block_height_progress_deferred();
@@ -15934,6 +16044,76 @@ impl Actor {
         }
         self.missing_block_height_recovery.insert(key, budget);
         progressed
+    }
+
+    fn prune_consensus_state_for_missing_block_height(
+        &mut self,
+        height: u64,
+    ) -> (usize, usize, usize, usize, usize) {
+        let stale_pending: Vec<_> = self
+            .pending
+            .pending_blocks
+            .iter()
+            .filter(|(_, pending)| pending.height == height)
+            .map(|(hash, _)| *hash)
+            .collect();
+        let mut pending_removed = 0usize;
+        for hash in stale_pending {
+            if let Some(pending) = self.pending.pending_blocks.remove(&hash) {
+                self.subsystems.validation.inflight.remove(&hash);
+                self.subsystems.validation.superseded_results.remove(&hash);
+                self.pending.pending_fetch_requests.remove(&hash);
+                self.clean_rbc_sessions_for_block(hash, pending.height);
+                pending_removed = pending_removed.saturating_add(1);
+            }
+        }
+
+        let stale_missing: Vec<_> = self
+            .pending
+            .missing_block_requests
+            .iter()
+            .filter(|(_, request)| request.height == height)
+            .map(|(hash, _)| *hash)
+            .collect();
+        let mut missing_removed = 0usize;
+        for hash in stale_missing {
+            if self.pending.missing_block_requests.remove(&hash).is_some() {
+                missing_removed = missing_removed.saturating_add(1);
+            }
+        }
+
+        let hints_before = self.subsystems.propose.proposal_cache.hints.len();
+        self.subsystems
+            .propose
+            .proposal_cache
+            .hints
+            .retain(|(entry_height, _), _| *entry_height != height);
+        let hints_removed =
+            hints_before.saturating_sub(self.subsystems.propose.proposal_cache.hints.len());
+
+        let proposals_before = self.subsystems.propose.proposal_cache.proposals.len();
+        self.subsystems
+            .propose
+            .proposal_cache
+            .proposals
+            .retain(|(entry_height, _), _| *entry_height != height);
+        let proposals_removed =
+            proposals_before.saturating_sub(self.subsystems.propose.proposal_cache.proposals.len());
+
+        let seen_before = self.subsystems.propose.proposals_seen.len();
+        self.subsystems
+            .propose
+            .proposals_seen
+            .retain(|(entry_height, _)| *entry_height != height);
+        let seen_removed = seen_before.saturating_sub(self.subsystems.propose.proposals_seen.len());
+
+        (
+            pending_removed,
+            missing_removed,
+            hints_removed,
+            proposals_removed,
+            seen_removed,
+        )
     }
 
     fn note_missing_block_height_recovery_success(
@@ -15963,6 +16143,14 @@ impl Actor {
 
     fn sidecar_entry_expired(&self, entry: SidecarMismatchRecoveryEntry, now: Instant) -> bool {
         now.saturating_duration_since(entry.first_seen) >= self.recovery_sidecar_mismatch_ttl()
+    }
+
+    fn committed_block_hash_for_height(&self, height: u64) -> Option<HashOf<BlockHeader>> {
+        usize::try_from(height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .and_then(|height_nz| self.kura.get_block(height_nz))
+            .map(|block| block.hash())
     }
 
     fn note_sidecar_mismatch(
@@ -16039,6 +16227,145 @@ impl Actor {
         self.sidecar_mismatch_recovery.remove(&height);
     }
 
+    fn retarget_missing_block_request_to_canonical_hash(
+        &mut self,
+        height: u64,
+        expected_hash: HashOf<BlockHeader>,
+        canonical_hash: HashOf<BlockHeader>,
+        reason: &'static str,
+    ) -> bool {
+        if expected_hash == canonical_hash {
+            return false;
+        }
+        let Some(stale_request) = self.pending.missing_block_requests.get(&expected_hash) else {
+            return false;
+        };
+        let stale_height = stale_request.height;
+        if stale_height != height {
+            return false;
+        }
+        let stale_view = stale_request.view;
+        let stale_phase = stale_request.phase;
+        let stale_priority = stale_request.priority;
+        let stale_retry_window = stale_request.retry_window;
+        let stale_view_change_window = stale_request.view_change_window;
+
+        let now = Instant::now();
+        let (pending_removed, missing_removed, hints_removed, proposals_removed, seen_removed) =
+            self.prune_consensus_state_for_missing_block_height(height);
+        self.clear_missing_block_recovery_for_height(height, now);
+
+        let mut targets = self.effective_commit_topology();
+        if targets.is_empty() {
+            targets = self
+                .common_config
+                .trusted_peers
+                .value()
+                .others
+                .iter()
+                .map(|peer| peer.id().clone())
+                .collect();
+        }
+        targets.sort_by(|lhs, rhs| {
+            lhs.public_key()
+                .cmp(rhs.public_key())
+                .then_with(|| lhs.cmp(rhs))
+        });
+        targets.dedup();
+        if targets.is_empty() {
+            warn!(
+                height,
+                expected = %expected_hash,
+                canonical = %canonical_hash,
+                reason,
+                "cannot retarget missing-block request to canonical hash: empty deterministic target set"
+            );
+            return false;
+        }
+
+        let topology = super::network_topology::Topology::new(targets);
+        let signers = BTreeSet::<crate::sumeragi::consensus::ValidatorIndex>::new();
+        let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
+        let decision = plan_missing_block_fetch_with_mode(
+            &mut self.pending.missing_block_requests,
+            canonical_hash,
+            height,
+            stale_view,
+            stale_phase,
+            stale_priority,
+            &signers,
+            &topology,
+            now,
+            stale_retry_window,
+            stale_view_change_window,
+            signer_fallback_attempts,
+            MissingBlockFetchMode::AggressiveTopology,
+        );
+        match &decision {
+            MissingBlockFetchDecision::Requested {
+                targets,
+                target_kind,
+            } => {
+                self.request_missing_block(
+                    canonical_hash,
+                    height,
+                    stale_view,
+                    stale_priority,
+                    targets,
+                );
+                self.note_missing_block_height_attempt(
+                    canonical_hash,
+                    height,
+                    stale_view,
+                    MissingBlockRecoveryStage::HashFetch,
+                    Some(*target_kind),
+                    now,
+                );
+            }
+            MissingBlockFetchDecision::NoTargets => {
+                self.note_missing_block_height_attempt(
+                    canonical_hash,
+                    height,
+                    stale_view,
+                    MissingBlockRecoveryStage::HashFetch,
+                    None,
+                    now,
+                );
+            }
+            MissingBlockFetchDecision::Backoff => {
+                self.note_missing_block_height_hash_miss(
+                    canonical_hash,
+                    height,
+                    stale_view,
+                    MissingBlockRecoveryStage::HashFetch,
+                    now,
+                );
+            }
+        }
+        let _ = self.maybe_escalate_missing_block_height_recovery(
+            canonical_hash,
+            height,
+            stale_view,
+            now,
+        );
+        info!(
+            height,
+            expected = %expected_hash,
+            canonical = %canonical_hash,
+            phase = ?stale_phase,
+            view = stale_view,
+            reason,
+            pending_removed,
+            missing_removed,
+            hints_removed,
+            proposals_removed,
+            seen_removed,
+            fetch = ?decision,
+            "retargeted missing-block request to canonical sidecar hash"
+        );
+        true
+    }
+
     fn observe_sidecar_mismatch_for_height(
         &mut self,
         height: u64,
@@ -16048,18 +16375,71 @@ impl Actor {
         if self.sidecar_observation_suppression_depth > 0 {
             return;
         }
-        if let Some(meta) = self.kura.read_roster_metadata(height)
-            && meta.block_hash != expected_hash
-        {
-            self.note_sidecar_mismatch(height, expected_hash, meta.block_hash, reason);
+        let Some(meta) = self.kura.read_roster_metadata(height) else {
+            return;
+        };
+        if meta.block_hash == expected_hash {
+            return;
         }
+
+        let Some(canonical_hash) = self.committed_block_hash_for_height(height) else {
+            if let Some(suppressed_since_last) =
+                allow_roster_sidecar_mismatch_warning(height, expected_hash, meta.block_hash)
+            {
+                debug!(
+                    height,
+                    expected = %expected_hash,
+                    stored = %meta.block_hash,
+                    suppressed_since_last,
+                    reason,
+                    "ignoring roster sidecar mismatch for uncommitted height"
+                );
+            }
+            return;
+        };
+
+        if canonical_hash == meta.block_hash {
+            let retargeted = self.retarget_missing_block_request_to_canonical_hash(
+                height,
+                expected_hash,
+                canonical_hash,
+                reason,
+            );
+            // A mismatch against a non-canonical branch hash is expected during view churn. If
+            // the local FSM is still waiting for that non-canonical payload, deterministically
+            // retarget the missing-block request to the canonical hash advertised by sidecar
+            // metadata at this height.
+            if let Some(suppressed_since_last) =
+                allow_roster_sidecar_mismatch_warning(height, expected_hash, meta.block_hash)
+            {
+                debug!(
+                    height,
+                    expected = %expected_hash,
+                    canonical = %canonical_hash,
+                    stored = %meta.block_hash,
+                    suppressed_since_last,
+                    retargeted,
+                    reason,
+                    "ignoring roster sidecar mismatch for non-canonical block hash"
+                );
+            }
+            return;
+        }
+
+        // Fail closed only when sidecar metadata diverges from the canonical committed block hash.
+        self.note_sidecar_mismatch(height, canonical_hash, meta.block_hash, reason);
     }
 
     fn proposal_gated_by_missing_dependencies(&self, height: u64) -> bool {
+        let now = Instant::now();
+        let ttl = self
+            .recovery_missing_block_height_ttl()
+            .max(Duration::from_millis(1));
         self.missing_block_height_recovery
             .iter()
             .any(|(key, budget)| {
                 key.height == height
+                    && now.saturating_duration_since(budget.range_pull.last_progress) < ttl
                     && (budget.range_pull.inflight
                         || budget.range_pull.stage
                             == MissingBlockRecoveryStage::RangePullFromAnchor)
@@ -16566,7 +16946,102 @@ impl Actor {
         should_defer
     }
 
+    fn maybe_force_view_change_for_stalled_pending(&mut self, now: Instant) -> bool {
+        let committed_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        let timeout = self
+            .commit_quorum_timeout()
+            .max(self.subsystems.propose.pacemaker.propose_interval)
+            .max(Duration::from_millis(1));
+        let mut stalled_pending = 0usize;
+        let mut max_pending_stall = Duration::ZERO;
+        let mut stalled_height: Option<u64> = None;
+
+        for pending in self.pending.pending_blocks.values() {
+            if pending.aborted
+                || !pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    committed_height,
+                    tip_hash,
+                )
+            {
+                continue;
+            }
+            let stall_age = pending.progress_age(now);
+            if stall_age < timeout {
+                continue;
+            }
+            stalled_pending = stalled_pending.saturating_add(1);
+            max_pending_stall = max_pending_stall.max(stall_age);
+            stalled_height =
+                Some(stalled_height.map_or(pending.height, |current| current.min(pending.height)));
+        }
+
+        let inflight_stall = self
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .filter(|inflight| !inflight.pending.aborted)
+            .map(|inflight| {
+                (
+                    inflight.pending.height,
+                    inflight.pending.progress_age(now) >= timeout,
+                    inflight.pending.progress_age(now),
+                )
+            });
+        let inflight_stalled = inflight_stall.is_some_and(|(_, stalled, _)| stalled);
+        if let Some((height, true, stall_age)) = inflight_stall {
+            stalled_height = Some(stalled_height.map_or(height, |current| current.min(height)));
+            max_pending_stall = max_pending_stall.max(stall_age);
+        }
+
+        if stalled_pending == 0 && !inflight_stalled {
+            return false;
+        }
+
+        let height = stalled_height.unwrap_or_else(|| self.active_consensus_round_height());
+        if self.phase_tracker.current_view(height).is_none() {
+            self.phase_tracker.start_new_round(height, now);
+        }
+        let Some(view_age) = self.phase_tracker.view_age(height, now) else {
+            return false;
+        };
+        if view_age < timeout {
+            return false;
+        }
+        let view = self.phase_tracker.current_view(height).unwrap_or(0);
+        let already_forced = self
+            .subsystems
+            .propose
+            .forced_view_after_timeout
+            .is_some_and(|(forced_height, forced_view)| {
+                forced_height == height && forced_view > view
+            });
+        if already_forced {
+            return false;
+        }
+
+        warn!(
+            height,
+            view,
+            stalled_pending,
+            inflight_stalled,
+            view_age_ms = view_age.as_millis(),
+            timeout_ms = timeout.as_millis(),
+            max_pending_stall_ms = max_pending_stall.as_millis(),
+            "active pending block stalled past quorum timeout; forcing deterministic view change"
+        );
+        self.trigger_view_change_with_cause(height, view, ViewChangeCause::QuorumTimeout);
+        self.subsystems.propose.forced_view_after_timeout = Some((height, view.saturating_add(1)));
+        true
+    }
+
     fn force_view_change_if_idle(&mut self, now: Instant) -> bool {
+        if self.maybe_force_view_change_for_stalled_pending(now) {
+            return true;
+        }
         if self.has_active_pending_blocks() {
             return false;
         }
@@ -16602,9 +17077,24 @@ impl Actor {
         let committed_height = committed_qc
             .as_ref()
             .map_or_else(|| self.committed_height_snapshot(), |qc| qc.height);
-        let derived_height = active_round_height(self.highest_qc, committed_qc, committed_height);
+        let derived_height = self.active_consensus_round_height();
+        let unresolved_missing_height =
+            self.lowest_unresolved_missing_block_height(committed_height);
         let tracked_height = self.phase_tracker.round_height;
-        let height = tracked_height.map_or(derived_height, |tracked| tracked.max(derived_height));
+        let mut height =
+            tracked_height.map_or(derived_height, |tracked| tracked.max(derived_height));
+        if let Some(missing_height) = unresolved_missing_height
+            && missing_height < height
+        {
+            debug!(
+                derived_height,
+                tracked_height,
+                missing_height,
+                selected_height = missing_height,
+                "using unresolved missing-block height for idle view-change evaluation"
+            );
+            height = missing_height;
+        }
         if let Some(tracked) = tracked_height
             && tracked > derived_height
         {
@@ -16614,6 +17104,15 @@ impl Actor {
                 selected_height = height,
                 "using tracked round height for idle view-change evaluation"
             );
+        }
+        let commit_horizon_height = committed_height.saturating_add(1);
+        if height > commit_horizon_height {
+            debug!(
+                selected_height = height,
+                commit_horizon_height,
+                "clamping idle view-change evaluation height to local commit horizon"
+            );
+            height = commit_horizon_height;
         }
 
         let current_view = self.phase_tracker.current_view(height).unwrap_or(0);

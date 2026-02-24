@@ -1225,6 +1225,14 @@ impl Actor {
             }
         }
         if roster.is_empty() {
+            let trusted = self.trusted_topology();
+            if !trusted.is_empty() {
+                roster = trusted;
+                signers.clear();
+                roster_source = "trusted topology fallback";
+            }
+        }
+        if roster.is_empty() {
             debug!(
                 height = highest.height,
                 view = highest.view,
@@ -1937,14 +1945,19 @@ impl Actor {
         if self.block_known_locally(vote.block_hash) {
             return;
         }
-        let roster = self.effective_commit_topology();
+        let mut roster = self.effective_commit_topology();
+        let mut roster_source = "commit topology";
+        if roster.is_empty() {
+            roster = self.trusted_topology();
+            roster_source = "trusted topology fallback";
+        }
         if roster.is_empty() {
             debug!(
                 height = vote.height,
                 view = vote.view,
                 phase = ?vote.phase,
                 block_hash = %vote.block_hash,
-                "skipping missing-block fetch: empty commit topology"
+                "skipping missing-block fetch: no roster available"
             );
             return;
         }
@@ -2003,9 +2016,10 @@ impl Actor {
                     block = ?vote.block_hash,
                     targets = ?targets,
                     target_kind = target_kind.label(),
+                    roster_source,
                     retry_window_ms = retry_window.as_millis(),
                     dwell_ms,
-                    "requested missing block payload after empty commit topology"
+                    "requested missing block payload after roster fallback"
                 );
             }
             MissingBlockFetchDecision::NoTargets => {
@@ -2017,7 +2031,8 @@ impl Actor {
                     retry_window_ms = retry_window.as_millis(),
                     dwell_ms,
                     targets = targets_len,
-                    "unable to request missing block payload after empty commit topology: no peers available"
+                    roster_source,
+                    "unable to request missing block payload after roster fallback: no peers available"
                 );
             }
             MissingBlockFetchDecision::Backoff => {
@@ -2029,7 +2044,8 @@ impl Actor {
                     retry_window_ms = retry_window.as_millis(),
                     dwell_ms,
                     targets = targets_len,
-                    "skipping missing-block fetch after empty commit topology during backoff"
+                    roster_source,
+                    "skipping missing-block fetch after roster fallback during backoff"
                 );
             }
         }

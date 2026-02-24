@@ -43,6 +43,22 @@ bash scripts/formal/sumeragi_apalache.sh fast
 bash scripts/formal/sumeragi_apalache.sh deep
 ```
 
+### Reproducible local setup (no Docker required)
+
+Install the pinned local Apalache toolchain used by this repository:
+
+```bash
+bash scripts/formal/install_apalache.sh 0.52.2
+```
+
+The runner auto-detects this install at:
+`target/apalache/toolchains/v0.52.2/bin/apalache-mc`.
+After installation, `ci/check_sumeragi_formal.sh` should work without extra env vars:
+
+```bash
+bash ci/check_sumeragi_formal.sh
+```
+
 If Apalache is not in `PATH`, you can:
 
 - set `APALACHE_BIN` to the executable path, or
