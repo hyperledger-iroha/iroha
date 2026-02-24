@@ -50031,6 +50031,105 @@ async fn live_vote_roster_uses_pending_activation_for_next_height() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn vote_roster_for_next_height_prefers_active_topology_over_commit_qc_history() {
+    use crate::sumeragi::status;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let _history_guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
+
+    let committed_height = actor.state.view().height() as u64;
+    let next_height = committed_height.saturating_add(1);
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(next_height);
+    assert_eq!(
+        consensus_mode,
+        ConsensusMode::Permissioned,
+        "test assumes permissioned consensus"
+    );
+
+    let active_roster = actor.effective_commit_topology();
+    assert!(
+        active_roster.len() > 2,
+        "test requires at least three active validators"
+    );
+    let local = actor.common_config.peer.id().clone();
+    let removed = active_roster
+        .iter()
+        .find(|peer| *peer != &local)
+        .cloned()
+        .expect("active roster should include non-local peers");
+    let stale_roster: Vec<_> = active_roster
+        .iter()
+        .filter(|peer| *peer != &removed)
+        .cloned()
+        .collect();
+    assert_ne!(
+        stale_roster, active_roster,
+        "stale roster should differ from the active topology"
+    );
+
+    let mut signers = BTreeSet::new();
+    for idx in 0..stale_roster.len() {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, stale_roster.len());
+    let topology = super::network_topology::Topology::new(stale_roster.clone());
+    let parent_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA8; Hash::LENGTH]));
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        parent_hash,
+        committed_height,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    status::record_commit_qc(Qc {
+        phase: Phase::Commit,
+        subject_block_hash: parent_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: committed_height,
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&stale_roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: stale_roster,
+        aggregate: QcAggregate {
+            signers_bitmap,
+            bls_aggregate_signature,
+        },
+    });
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA9; Hash::LENGTH]));
+    let vote_roster = actor.roster_for_vote_with_mode(block_hash, next_height, 0, consensus_mode);
+    let live_roster = actor.roster_for_live_vote_with_mode(next_height, consensus_mode);
+    assert_eq!(
+        vote_roster, live_roster,
+        "vote roster should match pacemaker/live roster at committed+1 height"
+    );
+    assert_eq!(
+        vote_roster, active_roster,
+        "vote roster should use active topology instead of stale commit-QC history"
+    );
+    assert!(
+        vote_roster.contains(&removed),
+        "stale roster member should remain active at committed+1"
+    );
+
+    status::reset_commit_certs_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_qc_roll_forward_prefers_active_roster_when_keys_disabled() {
     use crate::sumeragi::status;
     use iroha_data_model::consensus::ConsensusKeyStatus;

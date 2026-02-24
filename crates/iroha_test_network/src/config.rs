@@ -632,7 +632,15 @@ pub(crate) fn ensure_genesis_results(
 ) {
     let tx_count = block.0.transactions_vec().len();
     let result_count = block.0.results().count();
-    if tx_count == 0 || tx_count == result_count {
+    let missing_results = tx_count > 0 && tx_count != result_count;
+    let signature_is_canonical = genesis_signature_is_canonical(&block.0, genesis_key_pair);
+    if !missing_results && signature_is_canonical {
+        return;
+    }
+
+    // Preserve already computed execution results while restoring the canonical genesis signature.
+    if !missing_results {
+        block.0 = rebuild_block_with_results(&block.0, genesis_key_pair);
         return;
     }
 
@@ -652,6 +660,23 @@ pub(crate) fn ensure_genesis_results(
             block.0 = build_placeholder_block(&block.0, genesis_key_pair);
         }
     }
+}
+
+fn genesis_signature_is_canonical(
+    block: &iroha_data_model::block::SignedBlock,
+    genesis_key_pair: &KeyPair,
+) -> bool {
+    let mut signatures = block.signatures();
+    let Some(signature) = signatures.next() else {
+        return false;
+    };
+    if signatures.next().is_some() {
+        return false;
+    }
+    signature
+        .signature()
+        .verify_hash(genesis_key_pair.public_key(), block.hash())
+        .is_ok()
 }
 
 fn populate_genesis_results(
@@ -1251,6 +1276,76 @@ mod tests {
         assert!(
             block.0.results().all(|result| result.as_ref().is_ok()),
             "pre-executed genesis should yield successful outcomes"
+        );
+    }
+
+    #[test]
+    fn ensure_genesis_results_resigns_mutated_genesis_with_existing_results() {
+        init_instruction_registry();
+        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_id = PeerId::new(bls.public_key().clone());
+        let topology = [peer_id.clone()]
+            .into_iter()
+            .collect::<iroha_primitives::unique_vec::UniqueVec<_>>();
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        let (mut block, genesis_account, topology_vec, genesis_key_pair) =
+            super::build_minimal_genesis_unexecuted(
+                Vec::new(),
+                topology,
+                vec![entry],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+            );
+        super::ensure_genesis_results(
+            &mut block,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            None,
+        );
+        assert!(
+            block.0.has_results(),
+            "precondition: genesis has execution results"
+        );
+
+        block.0.set_da_proof_policies(Some(
+            iroha_data_model::da::commitment::DaProofPolicyBundle::new(Vec::new()),
+        ));
+        let stale_signature = block
+            .0
+            .signatures()
+            .next()
+            .expect("genesis signature present")
+            .signature()
+            .verify_hash(genesis_key_pair.public_key(), block.0.hash())
+            .is_err();
+        assert!(
+            stale_signature,
+            "mutating header should stale existing signature"
+        );
+
+        super::ensure_genesis_results(
+            &mut block,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            None,
+        );
+
+        let signatures: Vec<_> = block.0.signatures().collect();
+        assert_eq!(
+            signatures.len(),
+            1,
+            "genesis should keep a single canonical signature"
+        );
+        assert!(
+            signatures[0]
+                .signature()
+                .verify_hash(genesis_key_pair.public_key(), block.0.hash())
+                .is_ok(),
+            "genesis signature must be refreshed after metadata mutation"
         );
     }
 
