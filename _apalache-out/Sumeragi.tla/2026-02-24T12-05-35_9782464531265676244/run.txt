@@ -1,0 +1,1 @@
+ check --config=/Users/mtakemiya/dev/iroha/docs/formal/sumeragi/Sumeragi_deep.cfg --run-dir=/Users/mtakemiya/dev/iroha/target/apalache/sumeragi-deep /Users/mtakemiya/dev/iroha/docs/formal/sumeragi/Sumeragi.tla

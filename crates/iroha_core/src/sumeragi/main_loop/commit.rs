@@ -4530,6 +4530,7 @@ impl Actor {
     ) {
         let height = created.block.header().height().get();
         let view = created.block.header().view_change_index();
+        let block_hash = created.block.hash();
         let fanout_peers =
             self.transport_fanout_targets_for_round(peers, height, view, "block_created");
         let online_peers = self
@@ -4555,10 +4556,30 @@ impl Actor {
             trace!(
                 height = created.block.header().height().get(),
                 view = created.block.header().view_change_index(),
-                block = ?created.block.hash(),
+                block = ?block_hash,
                 "skipping block payload gossip: no targets"
             );
             return;
+        }
+        if let Some(hint) = self
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_hint(height, view)
+            .copied()
+            .filter(|hint| hint.block_hash == block_hash)
+        {
+            let hint_msg = Arc::new(BlockMessage::ProposalHint(hint));
+            let hint_encoded = Arc::new(BlockMessageWire::encode_message(hint_msg.as_ref()));
+            for peer in &targets {
+                self.schedule_background(BackgroundRequest::Post {
+                    peer: peer.clone(),
+                    msg: BlockMessageWire::with_encoded(
+                        Arc::clone(&hint_msg),
+                        Arc::clone(&hint_encoded),
+                    ),
+                });
+            }
         }
         let msg = Arc::new(BlockMessage::BlockCreated(created));
         let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));

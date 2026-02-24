@@ -1418,31 +1418,82 @@ impl Actor {
         if let Some(hint) = cached_hint {
             let mut hint_highest = hint.highest_qc;
             let hint_highest_missing = !self.block_known_for_lock(hint_highest.subject_block_hash);
-            if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, hint_highest) {
-                let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);
-                let locked_missing =
-                    locked_hash.is_some_and(|hash| !self.block_known_for_lock(hash));
-                if locked_missing {
-                    warn!(
-                        ?reason,
-                        locked_qc_height = self.locked_qc.map(|qc| qc.height),
-                        locked_qc_view = self.locked_qc.map(|qc| qc.view),
-                        locked_qc_hash = ?locked_hash,
-                        hint_highest_qc_height = hint.highest_qc.height,
-                        hint_highest_qc_view = hint.highest_qc.view,
-                        hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
-                        height,
-                        view,
-                        "locked QC missing from kura; accepting BlockCreated and replacing lock"
-                    );
-                    self.locked_qc = Some(hint.highest_qc);
-                    super::status::set_locked_qc(
-                        hint.highest_qc.height,
-                        hint.highest_qc.view,
-                        Some(hint.highest_qc.subject_block_hash),
-                    );
-                } else if hint_highest_missing {
-                    if let Some(lock) = self.locked_qc {
+            if let Err(initial_reason) = ensure_locked_qc_allows(self.locked_qc, hint_highest) {
+                if let Some(new_lock) = realign_locked_to_committed_if_extends(
+                    self.locked_qc,
+                    self.latest_committed_qc(),
+                    hint_highest,
+                    |hash, height| self.parent_hash_for(hash, height),
+                ) {
+                    if self.locked_qc != Some(new_lock) {
+                        info!(
+                            ?initial_reason,
+                            locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                            locked_qc_view = self.locked_qc.map(|qc| qc.view),
+                            locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
+                            committed_qc_height = new_lock.height,
+                            committed_qc_view = new_lock.view,
+                            committed_qc_hash = %new_lock.subject_block_hash,
+                            hint_highest_qc_height = hint.highest_qc.height,
+                            hint_highest_qc_view = hint.highest_qc.view,
+                            hint_highest_qc_hash = %hint.highest_qc.subject_block_hash,
+                            height,
+                            view,
+                            "realigning stale locked QC to committed chain before applying BlockCreated hint"
+                        );
+                        self.locked_qc = Some(new_lock);
+                        super::status::set_locked_qc(
+                            new_lock.height,
+                            new_lock.view,
+                            Some(new_lock.subject_block_hash),
+                        );
+                    }
+                }
+
+                if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, hint_highest) {
+                    let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);
+                    let locked_missing =
+                        locked_hash.is_some_and(|hash| !self.block_known_for_lock(hash));
+                    if locked_missing {
+                        warn!(
+                            ?reason,
+                            locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                            locked_qc_view = self.locked_qc.map(|qc| qc.view),
+                            locked_qc_hash = ?locked_hash,
+                            hint_highest_qc_height = hint.highest_qc.height,
+                            hint_highest_qc_view = hint.highest_qc.view,
+                            hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                            height,
+                            view,
+                            "locked QC missing from kura; accepting BlockCreated and replacing lock"
+                        );
+                        self.locked_qc = Some(hint.highest_qc);
+                        super::status::set_locked_qc(
+                            hint.highest_qc.height,
+                            hint.highest_qc.view,
+                            Some(hint.highest_qc.subject_block_hash),
+                        );
+                    } else if hint_highest_missing {
+                        if let Some(lock) = self.locked_qc {
+                            info!(
+                                ?reason,
+                                locked_qc_height = lock.height,
+                                locked_qc_view = lock.view,
+                                locked_qc_hash = %lock.subject_block_hash,
+                                hint_highest_qc_height = hint.highest_qc.height,
+                                hint_highest_qc_view = hint.highest_qc.view,
+                                hint_highest_qc_hash = %hint.highest_qc.subject_block_hash,
+                                height,
+                                view,
+                                "highest QC block missing locally; accepting BlockCreated on locked chain"
+                            );
+                            hint_highest = lock;
+                        }
+                    } else if let Some(lock) = self.locked_qc.filter(|lock| {
+                        matches!(reason, LockedQcRejection::HeightRegressed { .. })
+                            && lock.height == height
+                            && lock.subject_block_hash == block_hash
+                    }) {
                         info!(
                             ?reason,
                             locked_qc_height = lock.height,
@@ -1453,51 +1504,33 @@ impl Actor {
                             hint_highest_qc_hash = %hint.highest_qc.subject_block_hash,
                             height,
                             view,
-                            "highest QC block missing locally; accepting BlockCreated on locked chain"
+                            block = %block_hash,
+                            "accepting BlockCreated for already-locked block despite stale hint highest QC"
                         );
                         hint_highest = lock;
+                    } else {
+                        super::status::inc_block_created_dropped_by_lock();
+                        #[cfg(feature = "telemetry")]
+                        self.telemetry.inc_block_created_dropped_by_lock();
+                        warn!(
+                            ?reason,
+                            locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                            locked_qc_view = self.locked_qc.map(|qc| qc.view),
+                            locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
+                            hint_highest_qc_height = hint.highest_qc.height,
+                            hint_highest_qc_view = hint.highest_qc.view,
+                            hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                            height,
+                            view,
+                            "BlockCreated rejected by locked QC gate"
+                        );
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::BlockCreated,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::LockedQc,
+                        );
+                        return Ok(());
                     }
-                } else if let Some(lock) = self.locked_qc.filter(|lock| {
-                    matches!(reason, LockedQcRejection::HeightRegressed { .. })
-                        && lock.height == height
-                        && lock.subject_block_hash == block_hash
-                }) {
-                    info!(
-                        ?reason,
-                        locked_qc_height = lock.height,
-                        locked_qc_view = lock.view,
-                        locked_qc_hash = %lock.subject_block_hash,
-                        hint_highest_qc_height = hint.highest_qc.height,
-                        hint_highest_qc_view = hint.highest_qc.view,
-                        hint_highest_qc_hash = %hint.highest_qc.subject_block_hash,
-                        height,
-                        view,
-                        block = %block_hash,
-                        "accepting BlockCreated for already-locked block despite stale hint highest QC"
-                    );
-                    hint_highest = lock;
-                } else {
-                    super::status::inc_block_created_dropped_by_lock();
-                    #[cfg(feature = "telemetry")]
-                    self.telemetry.inc_block_created_dropped_by_lock();
-                    warn!(
-                        ?reason,
-                        locked_qc_height = self.locked_qc.map(|qc| qc.height),
-                        locked_qc_view = self.locked_qc.map(|qc| qc.view),
-                        locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
-                        hint_highest_qc_height = hint.highest_qc.height,
-                        hint_highest_qc_view = hint.highest_qc.view,
-                        hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
-                        height,
-                        view,
-                        "BlockCreated rejected by locked QC gate"
-                    );
-                    self.record_consensus_message_handling(
-                        super::status::ConsensusMessageKind::BlockCreated,
-                        super::status::ConsensusMessageOutcome::Dropped,
-                        super::status::ConsensusMessageReason::LockedQc,
-                    );
-                    return Ok(());
                 }
             }
             if !self.highest_qc_extends_locked(hint_highest) {
@@ -1551,11 +1584,37 @@ impl Actor {
                 height,
                 view, "BlockCreated arrived without cached ProposalHint"
             );
-            if let Some(lock) = self.locked_qc {
+            if let Some(mut lock) = self.locked_qc {
+                if let Some(highest_qc) = self.highest_qc {
+                    let should_adopt_highest_conflict = highest_qc.height == lock.height
+                        && highest_qc.subject_block_hash != lock.subject_block_hash
+                        && highest_qc.view > lock.view
+                        && ensure_locked_qc_allows(Some(lock), highest_qc).is_ok();
+                    if should_adopt_highest_conflict {
+                        info!(
+                            locked_qc_height = lock.height,
+                            locked_qc_view = lock.view,
+                            locked_qc_hash = %lock.subject_block_hash,
+                            highest_qc_height = highest_qc.height,
+                            highest_qc_view = highest_qc.view,
+                            highest_qc_hash = %highest_qc.subject_block_hash,
+                            height,
+                            view,
+                            "adopting local higher-view highest QC before validating BlockCreated without hint"
+                        );
+                        self.locked_qc = Some(highest_qc);
+                        super::status::set_locked_qc(
+                            highest_qc.height,
+                            highest_qc.view,
+                            Some(highest_qc.subject_block_hash),
+                        );
+                        lock = highest_qc;
+                    }
+                }
                 let locked_hash = lock.subject_block_hash;
                 if self.block_known_for_lock(locked_hash) {
                     let parent_hash = header.prev_block_hash();
-                    let extends = super::chain_extends_tip(
+                    let mut extends = super::chain_extends_tip(
                         block_hash,
                         height,
                         lock.height,
@@ -1568,6 +1627,61 @@ impl Actor {
                             }
                         },
                     );
+                    if matches!(extends, Some(false)) {
+                        let block_qc = crate::sumeragi::consensus::QcHeaderRef {
+                            height,
+                            view,
+                            epoch: self.epoch_for_height(height),
+                            subject_block_hash: block_hash,
+                            phase: crate::sumeragi::consensus::Phase::Commit,
+                        };
+                        if let Some(new_lock) = realign_locked_to_committed_if_extends(
+                            self.locked_qc,
+                            self.latest_committed_qc(),
+                            block_qc,
+                            |hash, height| {
+                                if hash == block_hash {
+                                    parent_hash
+                                } else {
+                                    self.parent_hash_for(hash, height)
+                                }
+                            },
+                        ) {
+                            if self.locked_qc != Some(new_lock) {
+                                info!(
+                                    locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                                    locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
+                                    block_height = height,
+                                    block_hash = %block_hash,
+                                    committed_qc_height = new_lock.height,
+                                    committed_qc_hash = %new_lock.subject_block_hash,
+                                    "resetting locked QC to committed chain before accepting BlockCreated without hint"
+                                );
+                                self.locked_qc = Some(new_lock);
+                                super::status::set_locked_qc(
+                                    new_lock.height,
+                                    new_lock.view,
+                                    Some(new_lock.subject_block_hash),
+                                );
+                            }
+                        }
+                        if let Some(updated_lock) = self.locked_qc {
+                            let updated_locked_hash = updated_lock.subject_block_hash;
+                            extends = super::chain_extends_tip(
+                                block_hash,
+                                height,
+                                updated_lock.height,
+                                updated_locked_hash,
+                                |hash, height| {
+                                    if hash == block_hash {
+                                        parent_hash
+                                    } else {
+                                        self.parent_hash_for(hash, height)
+                                    }
+                                },
+                            );
+                        }
+                    }
                     match extends {
                         Some(false) => {
                             super::status::inc_block_created_dropped_by_lock();
@@ -1916,6 +2030,10 @@ impl Actor {
             }
         }
         if is_active_height {
+            // `BlockCreated` can arrive ahead of `Proposal`/`ProposalHint` on recovery paths.
+            // Mark the slot as observed once the payload is accepted so the FSM does not rotate
+            // solely because proposal metadata was delayed in transit.
+            self.note_proposal_seen(height, view, payload_hash);
             self.note_view_change_from_block(height, view);
         }
         self.record_phase_sample(PipelinePhase::CollectDa, height, view);
@@ -2030,14 +2148,8 @@ impl Actor {
             }
         }
 
-        self.subsystems
-            .propose
-            .proposal_cache
-            .pop_hint(height, view);
-        self.subsystems
-            .propose
-            .proposal_cache
-            .pop_proposal(height, view);
+        // Keep proposal context cached for this slot so stalled peers can recover from
+        // `BlockCreated` retransmits that race ahead of proposal delivery.
         if let Some(block) = self
             .pending
             .pending_blocks
