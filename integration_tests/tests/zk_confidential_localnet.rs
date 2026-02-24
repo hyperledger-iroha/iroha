@@ -1,7 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Localnet confidential flow coverage:
-//! public-origin shield -> 3 shielded hops -> unshield -> public transfer,
-//! plus a second shielded asset with 3 shielded hops.
+//! public-origin shield -> two 3-hop shielded sequences -> unshield -> public transfer,
+//! plus dedicated shielded-asset 3-hop and unshield/transfer scenarios.
 
 use std::time::Duration;
 
@@ -440,7 +440,7 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
     )
     .await?;
 
-    // Flow 1: public-origin -> shield -> 3 shielded hops -> unshield -> public transfer.
+    // Flow 1: public-origin -> shield -> two 3-hop shielded sequences -> unshield -> public transfer.
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
@@ -477,6 +477,27 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
             ],
             &mut non_empty_target,
             "public-origin 3-hop shielded transfer failed",
+        )
+        .await?;
+    }
+
+    for output_commitment in [24_u8, 25_u8, 26_u8] {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                iroha_data_model::isi::zk::ZkTransfer::new(
+                    public_asset_def.clone(),
+                    Vec::new(),
+                    vec![marker(output_commitment)],
+                    live_halo2_attachment(marker(output_commitment)),
+                    None,
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "public-origin second 3-hop shielded transfer failed",
         )
         .await?;
     }
@@ -580,6 +601,167 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
 }
 
 #[tokio::test]
+async fn confidential_public_two_three_hop_sequences_allow_multiple_unshields_localnet()
+-> Result<()> {
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) = start_confidential_localnet(stringify!(
+        confidential_public_two_three_hop_sequences_allow_multiple_unshields_localnet
+    ))
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let source = tx_builder_client.account.clone();
+    let recipient = BOB_ID.clone();
+    let asset_def: AssetDefinitionId = "zkpublicdoubleunshield#wonderland".parse().unwrap();
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Mint::asset_numeric(900_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            iroha_data_model::isi::zk::RegisterZkAsset::new(
+                asset_def.clone(),
+                iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+                true,
+                true,
+                None,
+                None,
+                None,
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "prepare public double-unshield flow",
+    )
+    .await?;
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            iroha_data_model::isi::zk::Shield::new(
+                asset_def.clone(),
+                source.clone(),
+                600_u128,
+                marker(61),
+                ConfidentialEncryptedPayload::default(),
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "double-unshield flow shield failed",
+    )
+    .await?;
+
+    for output_commitment in [62_u8, 63_u8, 64_u8] {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                iroha_data_model::isi::zk::ZkTransfer::new(
+                    asset_def.clone(),
+                    Vec::new(),
+                    vec![marker(output_commitment)],
+                    live_halo2_attachment(marker(output_commitment)),
+                    None,
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "double-unshield flow first 3-hop transfer failed",
+        )
+        .await?;
+    }
+
+    for output_commitment in [65_u8, 66_u8, 67_u8] {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                iroha_data_model::isi::zk::ZkTransfer::new(
+                    asset_def.clone(),
+                    Vec::new(),
+                    vec![marker(output_commitment)],
+                    live_halo2_attachment(marker(output_commitment)),
+                    None,
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "double-unshield flow second 3-hop transfer failed",
+        )
+        .await?;
+    }
+
+    for (amount, nullifier) in [(200_u128, 68_u8), (150_u128, 69_u8)] {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                iroha_data_model::isi::zk::Unshield::new(
+                    asset_def.clone(),
+                    source.clone(),
+                    amount,
+                    vec![marker(nullifier)],
+                    live_halo2_attachment(marker(nullifier)),
+                    None,
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "double-unshield flow unshield failed",
+        )
+        .await?;
+    }
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Transfer::asset_numeric(
+                AssetId::new(asset_def.clone(), source.clone()),
+                320_u64,
+                recipient.clone(),
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "double-unshield flow transfer failed",
+    )
+    .await?;
+
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def.clone(), source.clone()),
+        Numeric::from(330_u32),
+        "wait source balance after double-unshield flow",
+    )
+    .await?;
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def, recipient.clone()),
+        Numeric::from(320_u32),
+        "wait recipient balance after double-unshield flow",
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn confidential_shielded_asset_three_hop_localnet() -> Result<()> {
     let Some(ConfidentialLocalnetCtx {
         network,
@@ -671,6 +853,143 @@ async fn confidential_shielded_asset_three_hop_localnet() -> Result<()> {
     let after_three_hops =
         numeric_balance_any(&peer_clients, AssetId::new(shielded_asset_def, source))?;
     assert_eq!(after_three_hops, Numeric::from(200_u32));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn confidential_shielded_asset_three_hop_then_unshield_and_transfer_localnet() -> Result<()> {
+    let Some(ConfidentialLocalnetCtx {
+        network,
+        tx_builder_client,
+        peer_clients,
+        mut non_empty_target,
+    }) = start_confidential_localnet(stringify!(
+        confidential_shielded_asset_three_hop_then_unshield_and_transfer_localnet
+    ))
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let source = tx_builder_client.account.clone();
+    let recipient = BOB_ID.clone();
+    let asset_def: AssetDefinitionId = "zkshieldedunshieldflow#wonderland".parse().unwrap();
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Mint::asset_numeric(800_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            iroha_data_model::isi::zk::RegisterZkAsset::new(
+                asset_def.clone(),
+                iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+                true,
+                true,
+                None,
+                None,
+                None,
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "prepare shielded-asset unshield flow",
+    )
+    .await?;
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            iroha_data_model::isi::zk::Shield::new(
+                asset_def.clone(),
+                source.clone(),
+                500_u128,
+                marker(91),
+                ConfidentialEncryptedPayload::default(),
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "shielded-asset unshield flow shield failed",
+    )
+    .await?;
+
+    for output_commitment in [92_u8, 93_u8, 94_u8] {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                iroha_data_model::isi::zk::ZkTransfer::new(
+                    asset_def.clone(),
+                    Vec::new(),
+                    vec![marker(output_commitment)],
+                    live_halo2_attachment(marker(output_commitment)),
+                    None,
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "shielded-asset unshield flow 3-hop transfer failed",
+        )
+        .await?;
+    }
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            iroha_data_model::isi::zk::Unshield::new(
+                asset_def.clone(),
+                source.clone(),
+                220_u128,
+                vec![marker(95)],
+                live_halo2_attachment(marker(95)),
+                None,
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "shielded-asset unshield flow unshield failed",
+    )
+    .await?;
+
+    submit_and_wait_non_empty_block(
+        &network,
+        &tx_builder_client,
+        &peer_clients,
+        vec![
+            Transfer::asset_numeric(
+                AssetId::new(asset_def.clone(), source.clone()),
+                120_u64,
+                recipient.clone(),
+            )
+            .into(),
+        ],
+        &mut non_empty_target,
+        "shielded-asset unshield flow transfer failed",
+    )
+    .await?;
+
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def.clone(), source.clone()),
+        Numeric::from(400_u32),
+        "wait source balance after shielded-asset unshield flow",
+    )
+    .await?;
+    wait_for_numeric_balance(
+        &tx_builder_client,
+        AssetId::new(asset_def, recipient.clone()),
+        Numeric::from(120_u32),
+        "wait recipient balance after shielded-asset unshield flow",
+    )
+    .await?;
 
     Ok(())
 }
