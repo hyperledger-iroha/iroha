@@ -4546,6 +4546,20 @@ async fn handler_telemetry_peers_info(
     Ok(JsonBody(peers).into_response())
 }
 
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+#[axum::debug_handler]
+async fn handler_telemetry_propagation(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<AxResponse, Error> {
+    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, None, "v1/telemetry/propagation").await?;
+    }
+    let propagation = app.peer_telemetry.propagation(64).await;
+    Ok(JsonBody(propagation).into_response())
+}
+
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_account_detail(
@@ -14797,6 +14811,10 @@ impl Torii {
                     .route(
                         "/v1/telemetry/peers-info",
                         get(handler_telemetry_peers_info),
+                    )
+                    .route(
+                        "/v1/telemetry/propagation",
+                        get(handler_telemetry_propagation),
                     )
                     .route("/v1/telemetry/live", get(handler_telemetry_live))
             };
