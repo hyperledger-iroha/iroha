@@ -5,22 +5,22 @@ use std::{
     time::Duration,
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use hex;
 use iroha_core::state::WorldReadOnly;
 use iroha_data_model::{
-    HasMetadata, Identifiable,
     account::{AccountAddress, AccountEntry, AccountId},
     asset::{AssetDefinition, AssetDefinitionId, AssetEntry, AssetId, Mintable},
     block::SignedBlock,
     domain::{Domain, DomainId},
     isi::{
-        self, CustomInstruction, ExecuteTrigger, GrantBox, Instruction as IsiInstruction,
-        InstructionBox, Log, MintBox, RegisterBox, RemoveAssetKeyValue, RemoveKeyValueBox,
-        RevokeBox, SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
-        UnregisterBox, Upgrade,
+        self,
         mint_burn::BurnBox,
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
+        CustomInstruction, ExecuteTrigger, GrantBox, Instruction as IsiInstruction, InstructionBox,
+        Log, MintBox, RegisterBox, RemoveAssetKeyValue, RemoveKeyValueBox, RevokeBox,
+        SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
+        UnregisterBox, Upgrade,
     },
     metadata::Metadata,
     nft::{NftEntry, NftId},
@@ -30,6 +30,7 @@ use iroha_data_model::{
         executable::Executable,
         signed::{SignedTransaction, TransactionResult},
     },
+    HasMetadata, Identifiable, ValidationFail,
 };
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -37,11 +38,11 @@ use norito::{
     json::{self, Map, Value},
 };
 use qrcode::{
-    EcLevel, QrCode,
     render::svg,
     types::{QrError, Version},
+    EcLevel, QrCode,
 };
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use crate::{
     address_format::AddressFormatPreference,
@@ -624,6 +625,7 @@ pub(crate) struct ExplorerTransactionDetailDto {
 pub(crate) struct ExplorerTransactionRejectionDto {
     pub encoded: String,
     pub json: Value,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
@@ -1133,11 +1135,66 @@ pub(crate) fn transaction_detail_dto(
             .map(|reason| ExplorerTransactionRejectionDto {
                 encoded: encode_norito_hex_prefixed(reason),
                 json: norito::json::to_value(reason).unwrap_or(Value::Null),
+                message: format_rejection_reason_message(reason),
             }),
         metadata: metadata_to_json(tx.metadata()),
         nonce: tx.nonce().map(|nonce| nonce.get().into()),
         signature: hex::encode(tx.signature().payload().payload()),
         time_to_live: ttl_to_dto(tx.time_to_live()),
+    }
+}
+
+fn format_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+
+    while let Some(next) = source {
+        let piece = next.to_string();
+        if !piece.is_empty() {
+            if !message.is_empty() {
+                message.push_str(": ");
+            }
+            message.push_str(&piece);
+        }
+        source = next.source();
+    }
+
+    message
+}
+
+fn format_validation_fail_message(fail: &ValidationFail) -> String {
+    match fail {
+        ValidationFail::InstructionFailed(error) => {
+            format!(
+                "Instruction execution failed: {}",
+                format_instruction_execution_error_message(error)
+            )
+        }
+        _ => fail.to_string(),
+    }
+}
+
+fn format_instruction_execution_error_message(
+    error: &isi::error::InstructionExecutionError,
+) -> String {
+    match error {
+        isi::error::InstructionExecutionError::Find(find_error) => find_error.to_string(),
+        isi::error::InstructionExecutionError::Repetition(repetition_error) => {
+            repetition_error.to_string()
+        }
+        _ => error.to_string(),
+    }
+}
+
+fn format_rejection_reason_message(reason: &TransactionRejectionReason) -> String {
+    match reason {
+        TransactionRejectionReason::Validation(fail) => {
+            format!(
+                "Validation failed: {}",
+                format_validation_fail_message(fail)
+            )
+        }
+        _ => format_error_chain(reason),
     }
 }
 
@@ -1320,10 +1377,9 @@ mod tests {
     };
 
     use iroha_data_model::{
-        ChainId, Registrable, ValidationFail,
         account::AccountDetails,
-        asset::{AssetDefinitionId, AssetId, definition::MintabilityTokens},
-        block::{BlockHeader, builder::BlockBuilder},
+        asset::{definition::MintabilityTokens, AssetDefinitionId, AssetId},
+        block::{builder::BlockBuilder, BlockHeader},
         common::{Owned, Ref},
         domain::DomainId,
         isi::{Register, Transfer},
@@ -1334,6 +1390,7 @@ mod tests {
             signed::{TransactionBuilder, TransactionResultInner},
         },
         trigger::DataTriggerSequence,
+        ChainId, Registrable, ValidationFail,
     };
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
@@ -1588,10 +1645,55 @@ mod tests {
         match serialized {
             Value::Object(map) => {
                 assert!(map.contains_key("encoded"));
+                assert!(map.contains_key("message"));
                 assert!(!map.contains_key("scale"));
+                let message = map
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .expect("message should be serialized as string");
+                assert!(
+                    message.contains("Validation failed"),
+                    "message should include the root rejection reason"
+                );
+                assert!(
+                    message.contains("Operation is too complex"),
+                    "message should include the nested validation detail"
+                );
             }
             _ => panic!("rejection reason should serialize into object"),
         }
+    }
+
+    #[test]
+    fn transaction_detail_includes_repetition_error_context_in_message() {
+        let chain: ChainId = "test-chain".parse().expect("valid chain id");
+        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
+            .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
+            .sign(ALICE_KEYPAIR.private_key());
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+            isi::error::InstructionExecutionError::Repetition(isi::error::RepetitionError {
+                instruction: isi::InstructionType::Register,
+                id: iroha_data_model::IdBox::DomainId(
+                    DomainId::from_str("sbp").expect("domain id"),
+                ),
+            }),
+        ));
+        let result = TransactionResult(Err(rejection));
+        let dto = transaction_detail_dto(&tx, 21, &result, AddressFormatPreference::Ih58);
+
+        let message = dto
+            .rejection_reason
+            .as_ref()
+            .map(|reason| reason.message.as_str())
+            .expect("rejection message should be present");
+        assert!(
+            message.contains("Validation failed: Instruction execution failed"),
+            "message should preserve validation and instruction context"
+        );
+        assert!(
+            message.contains("sbp"),
+            "message should include repeated identifier details"
+        );
     }
 
     #[test]
