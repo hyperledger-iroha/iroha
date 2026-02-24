@@ -1260,7 +1260,12 @@ impl Actor {
         );
         let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
         let now = Instant::now();
-        let decision = plan_missing_block_fetch(
+        let fetch_mode = if self.sidecar_quarantined_for_height(highest.height) {
+            MissingBlockFetchMode::AggressiveTopology
+        } else {
+            MissingBlockFetchMode::Default
+        };
+        let decision = plan_missing_block_fetch_with_mode(
             &mut self.pending.missing_block_requests,
             highest.subject_block_hash,
             highest.height,
@@ -1273,6 +1278,7 @@ impl Actor {
             retry_window,
             None,
             signer_fallback_attempts,
+            fetch_mode,
         );
         let dwell = self
             .pending

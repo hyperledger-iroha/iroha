@@ -133,73 +133,104 @@ impl Actor {
         commit_quorum: usize,
         block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
         topology: &super::network_topology::Topology,
-    ) {
+    ) -> bool {
         let now = Instant::now();
         let retry_window = self.rebroadcast_cooldown();
-        if !touch_missing_block_request(
+        let aggressive_after_attempts = self.recovery_missing_fetch_aggressive_after_attempts();
+        let existing_attempts = self
+            .pending
+            .missing_block_requests
+            .get(&block_hash)
+            .map_or(0, |stats| stats.attempts);
+        let fetch_mode = if existing_attempts >= aggressive_after_attempts {
+            super::MissingBlockFetchMode::AggressiveTopology
+        } else {
+            super::MissingBlockFetchMode::Default
+        };
+        let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
+        let decision = super::plan_missing_block_fetch_with_mode(
             &mut self.pending.missing_block_requests,
             block_hash,
             block_height,
             block_view,
             crate::sumeragi::consensus::Phase::Commit,
             super::MissingBlockPriority::Background,
+            block_signers,
+            topology,
             now,
             retry_window,
             None,
-        ) {
-            trace!(
-                height = block_height,
-                view = block_view,
-                block = %block_hash,
-                retry_window_ms = retry_window.as_millis(),
-                "skipping pending-block fetch during missing-block backoff"
-            );
-            return;
-        }
-        let cooldown = self.rebroadcast_cooldown();
-        if self.block_sync_fetch_log.allow(block_hash, now, cooldown) {
-            let targets = Self::build_fetch_targets(block_signers, topology);
-            if targets.is_empty() {
-                debug!(
+            signer_fallback_attempts,
+            fetch_mode,
+        );
+        let dwell = self
+            .pending
+            .missing_block_requests
+            .get(&block_hash)
+            .map(|stats| now.saturating_duration_since(stats.first_seen))
+            .unwrap_or_default();
+        let targets_len = match &decision {
+            super::MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+            _ => 0,
+        };
+        self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+
+        // Invariant A: every sparse missing-QC signal must either advance request state in-place
+        // or be explicitly backoff-suppressed with an existing request.
+        let no_targets = matches!(&decision, super::MissingBlockFetchDecision::NoTargets);
+        match &decision {
+            super::MissingBlockFetchDecision::Requested {
+                targets,
+                target_kind,
+            } => {
+                self.request_missing_block(
+                    block_hash,
+                    block_height,
+                    block_view,
+                    super::MissingBlockPriority::Background,
+                    &targets,
+                );
+                info!(
                     height = block_height,
                     view = block_view,
                     block = %block_hash,
-                    "skipping pending-block fetch: no viable targets"
+                    block_signers = block_signer_count,
+                    commit_quorum,
+                    target_kind = target_kind.label(),
+                    retry_window_ms = retry_window.as_millis(),
+                    "requesting pending block to recover missing QC"
                 );
-                return;
             }
-            let request = super::message::FetchPendingBlock {
-                requester: self.common_config.peer.id.clone(),
-                block_hash,
-                height: block_height,
-                view: block_view,
-                priority: None,
-            };
-            let msg = BlockMessage::FetchPendingBlock(request);
-            for peer in targets {
-                self.schedule_background(BackgroundRequest::Post {
-                    peer,
-                    msg: msg.clone().into(),
-                });
+            super::MissingBlockFetchDecision::Backoff => {
+                trace!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    retry_window_ms = retry_window.as_millis(),
+                    "suppressing duplicate pending-block fetch during missing-block backoff"
+                );
             }
-            info!(
-                height = block_height,
-                view = block_view,
-                block = %block_hash,
-                block_signers = block_signer_count,
-                commit_quorum,
-                retry_window_ms = retry_window.as_millis(),
-                "requesting pending block to recover missing QC"
-            );
-        } else {
-            trace!(
-                height = block_height,
-                view = block_view,
-                block = %block_hash,
-                cooldown_ms = cooldown.as_millis(),
-                "skipping pending-block fetch due to cooldown"
-            );
+            super::MissingBlockFetchDecision::NoTargets => {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    block_signers = block_signer_count,
+                    commit_quorum,
+                    retry_window_ms = retry_window.as_millis(),
+                    "missing-block recovery tracked but no fetch targets available"
+                );
+            }
         }
+        let tracked = self
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash);
+        debug_assert!(
+            tracked || no_targets,
+            "sparse missing-QC recovery must track request state unless no targets are available"
+        );
+        tracked
     }
 
     pub(super) fn try_replay_quarantined_block_sync_qcs(
@@ -932,7 +963,59 @@ impl Actor {
         }
     }
 
-    fn defer_block_sync_update(
+    fn deferred_block_sync_has_commit_evidence(entry: &super::DeferredBlockSyncUpdate) -> bool {
+        entry.update.commit_qc.is_some()
+            || entry.update.validator_checkpoint.is_some()
+            || entry.update.stake_snapshot.is_some()
+    }
+
+    fn enforce_deferred_block_sync_cap(&mut self) {
+        let cap = self.recovery_pending_block_sync_cap();
+        if cap == 0 {
+            return;
+        }
+        let mut evictions = 0u64;
+        while self.deferred_block_sync_updates.len() > cap {
+            let candidate = self
+                .deferred_block_sync_updates
+                .iter()
+                .min_by_key(|(key, entry)| {
+                    let (height, view, hash) = *key;
+                    (
+                        // Prefer retaining entries carrying commit evidence.
+                        u8::from(Self::deferred_block_sync_has_commit_evidence(entry)),
+                        // Prefer retaining newer views/heights.
+                        view,
+                        height,
+                        hash,
+                    )
+                })
+                .map(|(key, _)| *key);
+            let Some((height, view, hash)) = candidate else {
+                break;
+            };
+            if self
+                .deferred_block_sync_updates
+                .remove(&(height, view, hash))
+                .is_some()
+            {
+                evictions = evictions.saturating_add(1);
+                debug!(
+                    height,
+                    view,
+                    block = %hash,
+                    deferred = self.deferred_block_sync_updates.len(),
+                    cap,
+                    "evicting deferred block sync update due to bounded queue cap"
+                );
+            }
+        }
+        if evictions > 0 {
+            super::status::inc_pending_queue_evictions_total(evictions);
+        }
+    }
+
+    pub(super) fn defer_block_sync_update(
         &mut self,
         mut update: super::message::BlockSyncUpdate,
         sender: Option<PeerId>,
@@ -949,6 +1032,7 @@ impl Actor {
         } else {
             self.deferred_block_sync_updates.insert(key, entry);
         }
+        self.enforce_deferred_block_sync_cap();
         self.record_consensus_message_handling(
             super::status::ConsensusMessageKind::BlockSyncUpdate,
             super::status::ConsensusMessageOutcome::Deferred,
@@ -1586,7 +1670,7 @@ impl Actor {
                     let fallback_topology = super::network_topology::Topology::new(fallback_roster);
                     let empty_signers =
                         BTreeSet::<crate::sumeragi::consensus::ValidatorIndex>::new();
-                    self.maybe_request_pending_block_for_missing_qc(
+                    if self.maybe_request_pending_block_for_missing_qc(
                         block_hash,
                         block_height,
                         block_view,
@@ -1594,7 +1678,9 @@ impl Actor {
                         fallback_topology.min_votes_for_commit().max(1),
                         &empty_signers,
                         &fallback_topology,
-                    );
+                    ) {
+                        requested_missing_block = true;
+                    }
                 }
             }
             warn!(
@@ -2214,7 +2300,7 @@ impl Actor {
             );
             return Ok(());
         }
-        if !block_sync_quorum_available(
+        let mut quorum_available = block_sync_quorum_available(
             block_signer_count,
             commit_quorum,
             signature_quorum_met,
@@ -2224,21 +2310,51 @@ impl Actor {
             requested_missing_block,
             block_height,
             local_height,
-        ) {
+        );
+        if !quorum_available
+            && !qc_evidence_present
+            && !commit_cert_present
+            && !checkpoint_present
+            && block_signer_count < commit_quorum
+            && !requested_missing_block
+        {
+            if self.maybe_request_pending_block_for_missing_qc(
+                block_hash,
+                block_height,
+                block_view,
+                block_signer_count,
+                commit_quorum,
+                &block_signers,
+                &topology,
+            ) {
+                // Invariant A: sparse missing-QC updates must transition request state in this
+                // same event step (or stay explicitly suppressed via backoff).
+                requested_missing_block = true;
+                quorum_available = block_sync_quorum_available(
+                    block_signer_count,
+                    commit_quorum,
+                    signature_quorum_met,
+                    qc_evidence_present,
+                    commit_cert_present,
+                    checkpoint_present,
+                    requested_missing_block,
+                    block_height,
+                    local_height,
+                );
+            }
+        }
+        if !quorum_available {
             if !qc_evidence_present
                 && !commit_cert_present
                 && !checkpoint_present
                 && block_signer_count < commit_quorum
                 && !requested_missing_block
             {
-                self.maybe_request_pending_block_for_missing_qc(
-                    block_hash,
-                    block_height,
-                    block_view,
-                    block_signer_count,
-                    commit_quorum,
-                    &block_signers,
-                    &topology,
+                debug!(
+                    hash = ?block_hash,
+                    height = block_height,
+                    view = block_view,
+                    "sparse block sync update remained unrequested after recovery planning"
                 );
             }
             super::status::inc_block_sync_drop_invalid_signatures();

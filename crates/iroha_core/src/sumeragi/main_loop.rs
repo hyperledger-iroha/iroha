@@ -4960,6 +4960,10 @@ struct DeterministicRecoveryProfile {
     no_roster_fallback_views: u32,
     no_roster_refresh_retry_per_view: u32,
     rotate_after_reacquire_exhausted: bool,
+    missing_request_stale_height_margin: u64,
+    pending_block_sync_cap: usize,
+    pending_proposal_cap: usize,
+    missing_fetch_aggressive_after_attempts: u32,
 }
 
 struct QcBuildContext {
@@ -9833,7 +9837,7 @@ impl Actor {
             last_missing_qc_timeout_trigger: None,
             last_missing_qc_reacquire_attempt: None,
             proposal_liveness: None,
-            proposal_cache: ProposalCache::new(PROPOSAL_CACHE_LIMIT),
+            proposal_cache: ProposalCache::new(config.recovery.pending_proposal_cap.max(1)),
             collector_plan: None,
             collector_plan_subject: None,
             collector_plan_targets: Vec::new(),
@@ -14876,6 +14880,17 @@ impl Actor {
                 .no_roster_refresh_retry_per_view
                 .max(1),
             rotate_after_reacquire_exhausted: self.config.recovery.rotate_after_reacquire_exhausted,
+            missing_request_stale_height_margin: self
+                .config
+                .recovery
+                .missing_request_stale_height_margin,
+            pending_block_sync_cap: self.config.recovery.pending_block_sync_cap.max(1),
+            pending_proposal_cap: self.config.recovery.pending_proposal_cap.max(1),
+            missing_fetch_aggressive_after_attempts: self
+                .config
+                .recovery
+                .missing_fetch_aggressive_after_attempts
+                .max(1),
         }
     }
 
@@ -14990,6 +15005,24 @@ impl Actor {
     fn recovery_rotate_after_reacquire_exhausted(&self) -> bool {
         self.deterministic_recovery_profile()
             .rotate_after_reacquire_exhausted
+    }
+
+    fn recovery_missing_request_stale_height_margin(&self) -> u64 {
+        self.deterministic_recovery_profile()
+            .missing_request_stale_height_margin
+    }
+
+    fn recovery_pending_block_sync_cap(&self) -> usize {
+        self.deterministic_recovery_profile().pending_block_sync_cap
+    }
+
+    fn recovery_pending_proposal_cap(&self) -> usize {
+        self.deterministic_recovery_profile().pending_proposal_cap
+    }
+
+    fn recovery_missing_fetch_aggressive_after_attempts(&self) -> u32 {
+        self.deterministic_recovery_profile()
+            .missing_fetch_aggressive_after_attempts
     }
 
     fn relay_backpressure_active(&mut self, now: Instant, cooldown: Duration) -> bool {
@@ -15175,6 +15208,76 @@ impl Actor {
         cleared_any |= had_no_roster;
         if cleared_any {
             self.note_missing_block_dependency_event(now);
+        }
+    }
+
+    fn prune_stale_missing_requests_for_committed_height(
+        &mut self,
+        local_height: u64,
+        now: Instant,
+    ) {
+        let stale_margin = self.recovery_missing_request_stale_height_margin();
+        let stale_requests: Vec<_> = self
+            .pending
+            .missing_block_requests
+            .iter()
+            .filter(|(_, request)| request.height.saturating_add(stale_margin) < local_height)
+            .map(|(hash, request)| (*hash, request.height))
+            .collect();
+        if stale_requests.is_empty() {
+            return;
+        }
+
+        let mut pruned = 0u64;
+        let mut cleared_heights = BTreeSet::new();
+        for (hash, request_height) in stale_requests {
+            if self.pending.missing_block_requests.remove(&hash).is_none() {
+                continue;
+            }
+            pruned = pruned.saturating_add(1);
+            cleared_heights.insert(request_height);
+            self.pending.pending_fetch_requests.remove(&hash);
+
+            if self
+                .pending
+                .pending_blocks
+                .get(&hash)
+                .is_some_and(|pending| pending.height == request_height)
+            {
+                self.pending.pending_blocks.remove(&hash);
+            }
+            self.subsystems.validation.inflight.remove(&hash);
+            self.subsystems.validation.superseded_results.remove(&hash);
+            self.clean_rbc_sessions_for_block(hash, request_height);
+
+            let stale_deferred: Vec<_> = self
+                .deferred_block_sync_updates
+                .keys()
+                .filter(|(height, _, block_hash)| *height == request_height && *block_hash == hash)
+                .copied()
+                .collect();
+            for key in stale_deferred {
+                self.deferred_block_sync_updates.remove(&key);
+            }
+        }
+
+        for height in cleared_heights {
+            self.clear_missing_block_recovery_for_height(height, now);
+            self.clear_sidecar_mismatch_for_height(height);
+        }
+
+        if pruned > 0 {
+            // Invariant B: missing-request state must shrink monotonically as committed head
+            // advances, bounded by the configured stale-height margin.
+            super::status::inc_missing_request_pruned_stale_height(pruned);
+            debug_assert!(
+                self.pending
+                    .missing_block_requests
+                    .values()
+                    .all(|request| request.height.saturating_add(stale_margin) >= local_height),
+                "stale missing-block requests must be pruned once head advanced beyond margin"
+            );
+            self.update_missing_block_gauges();
         }
     }
 
@@ -17368,6 +17471,32 @@ impl Actor {
                     self.recovery_missing_qc_reacquire_window().as_millis(),
                 rotate_after_exhausted = self.recovery_rotate_after_reacquire_exhausted(),
                 "deferring idle view-change while proposal liveness state machine waits for proposal"
+            );
+            return false;
+        }
+
+        let stale_margin = self.recovery_missing_request_stale_height_margin();
+        if height.saturating_add(stale_margin) < committed_height {
+            // Invariant C: stale missing-height state must not spin endless MissingQc rotations.
+            super::status::inc_missing_qc_trigger_suppressed_stale();
+            self.prune_stale_missing_requests_for_committed_height(committed_height, now);
+            self.clear_consensus_recovery_for_round(height, current_view);
+            self.subsystems.propose.proposal_liveness = None;
+            self.subsystems.propose.last_missing_qc_timeout_trigger = None;
+            self.subsystems.propose.last_missing_qc_reacquire_attempt = None;
+            self.prune_stale_view_state(height, current_view.saturating_add(1));
+            debug_assert!(
+                self.pending.missing_block_requests.values().all(|request| {
+                    request.height.saturating_add(stale_margin) >= committed_height
+                }),
+                "stale rounds must not keep stale missing-block requests that would retrigger MissingQc"
+            );
+            debug!(
+                height,
+                view = current_view,
+                committed_height,
+                stale_margin,
+                "suppressing stale missing_qc trigger and cleaning stale round state"
             );
             return false;
         }

@@ -764,6 +764,12 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 ),
                 range_pull_escalation_after_hash_misses:
                     defaults::sumeragi::RANGE_PULL_ESCALATION_AFTER_HASH_MISSES,
+                missing_request_stale_height_margin:
+                    defaults::sumeragi::RECOVERY_MISSING_REQUEST_STALE_HEIGHT_MARGIN,
+                pending_block_sync_cap: defaults::sumeragi::RECOVERY_PENDING_BLOCK_SYNC_CAP,
+                pending_proposal_cap: defaults::sumeragi::RECOVERY_PENDING_PROPOSAL_CAP,
+                missing_fetch_aggressive_after_attempts:
+                    defaults::sumeragi::RECOVERY_MISSING_FETCH_AGGRESSIVE_AFTER_ATTEMPTS,
             },
             fanout: A::SumeragiFanout {
                 large_set_threshold: defaults::sumeragi::FANOUT_LARGE_SET_THRESHOLD,
