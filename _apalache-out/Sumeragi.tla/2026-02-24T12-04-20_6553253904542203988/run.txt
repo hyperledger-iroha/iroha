@@ -1,1 +1,0 @@
- check --config=/Users/mtakemiya/dev/iroha/docs/formal/sumeragi/Sumeragi_fast.cfg --run-dir=/Users/mtakemiya/dev/iroha/target/apalache/sumeragi-fast /Users/mtakemiya/dev/iroha/docs/formal/sumeragi/Sumeragi.tla
