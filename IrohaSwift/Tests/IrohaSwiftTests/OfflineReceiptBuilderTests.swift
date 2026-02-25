@@ -803,7 +803,15 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildAggregateProofEnvelope(receipts: [receipt], version: 2)
         ) { error in
-            XCTAssertEqual(error as? OfflineReceiptBuilderError, .aggregateProofVersionUnsupported(2))
+            XCTAssertEqual(
+                error as? OfflineReceiptBuilderError,
+                .aggregateProofMetadataInvalid("version=2 requires non-empty proof_sum")
+            )
+        }
+        XCTAssertThrowsError(
+            try OfflineReceiptBuilder.buildAggregateProofEnvelope(receipts: [receipt], version: 3)
+        ) { error in
+            XCTAssertEqual(error as? OfflineReceiptBuilderError, .aggregateProofVersionUnsupported(3))
         }
     }
 
@@ -926,6 +934,130 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         let entry = try XCTUnwrap(entries.first)
         XCTAssertEqual(entry.txId, receipt.txId.hexUppercased())
         XCTAssertEqual(entry.timestampMs, 987)
+    }
+
+    func testValidateTransferReceiverSupportsPerCertificateBalanceProofs() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x21, count: 32))
+        let certificateA = try makeCertificate(signingKey: signingKey)
+        let certificateB = OfflineWalletCertificate(
+            controller: certificateA.controller,
+            operatorId: certificateA.operatorId,
+            allowance: OfflineAllowanceCommitment(
+                assetId: certificateA.allowance.assetId,
+                amount: certificateA.allowance.amount,
+                commitment: Data(repeating: 0x7B, count: 32)
+            ),
+            spendPublicKey: certificateA.spendPublicKey,
+            attestationReport: certificateA.attestationReport,
+            issuedAtMs: certificateA.issuedAtMs,
+            expiresAtMs: certificateA.expiresAtMs,
+            policy: certificateA.policy,
+            operatorSignature: certificateA.operatorSignature,
+            metadata: certificateA.metadata,
+            verdictId: certificateA.verdictId,
+            attestationNonce: certificateA.attestationNonce,
+            refreshAtMs: certificateA.refreshAtMs
+        )
+
+        let receiptA = try makeReceipt(certificate: certificateA,
+                                       signingKey: signingKey,
+                                       amount: "10.00",
+                                       invoiceId: "inv-multi-a",
+                                       seed: "multi-a",
+                                       counter: 1)
+        let receiptB = try makeReceipt(certificate: certificateB,
+                                       signingKey: signingKey,
+                                       amount: "20.00",
+                                       invoiceId: "inv-multi-b",
+                                       seed: "multi-b",
+                                       counter: 2)
+
+        let proofA = OfflineBalanceProof(initialCommitment: certificateA.allowance,
+                                         resultingCommitment: Data(repeating: 0x31, count: 32),
+                                         claimedDelta: "10.00",
+                                         zkProof: validZkProof())
+        let proofB = OfflineBalanceProof(initialCommitment: certificateB.allowance,
+                                         resultingCommitment: Data(repeating: 0x32, count: 32),
+                                         claimedDelta: "20.00",
+                                         zkProof: validZkProof())
+        let transfer = OfflineToOnlineTransfer(
+            bundleId: OfflineReceiptBuilder.generateBundleId(seed: Data("multi-transfer".utf8)),
+            receiver: certificateA.controller,
+            depositAccount: certificateA.controller,
+            receipts: [receiptA, receiptB],
+            balanceProof: proofA,
+            balanceProofs: [
+                OfflineCertificateBalanceProof(senderCertificateId: receiptA.senderCertificateId,
+                                               balanceProof: proofA),
+                OfflineCertificateBalanceProof(senderCertificateId: receiptB.senderCertificateId,
+                                               balanceProof: proofB),
+            ]
+        )
+
+        XCTAssertNoThrow(try OfflineReceiptBuilder.validateTransferReceiver(transfer, chainId: chainId))
+    }
+
+    func testValidateTransferMultiRejectsMissingCertificateProof() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x22, count: 32))
+        let certificateA = try makeCertificate(signingKey: signingKey)
+        let certificateB = OfflineWalletCertificate(
+            controller: certificateA.controller,
+            operatorId: certificateA.operatorId,
+            allowance: OfflineAllowanceCommitment(
+                assetId: certificateA.allowance.assetId,
+                amount: certificateA.allowance.amount,
+                commitment: Data(repeating: 0x6A, count: 32)
+            ),
+            spendPublicKey: certificateA.spendPublicKey,
+            attestationReport: certificateA.attestationReport,
+            issuedAtMs: certificateA.issuedAtMs,
+            expiresAtMs: certificateA.expiresAtMs,
+            policy: certificateA.policy,
+            operatorSignature: certificateA.operatorSignature,
+            metadata: certificateA.metadata,
+            verdictId: certificateA.verdictId,
+            attestationNonce: certificateA.attestationNonce,
+            refreshAtMs: certificateA.refreshAtMs
+        )
+
+        let receiptA = try makeReceipt(certificate: certificateA,
+                                       signingKey: signingKey,
+                                       amount: "10.00",
+                                       invoiceId: "inv-missing-a",
+                                       seed: "missing-a",
+                                       counter: 1)
+        let receiptB = try makeReceipt(certificate: certificateB,
+                                       signingKey: signingKey,
+                                       amount: "20.00",
+                                       invoiceId: "inv-missing-b",
+                                       seed: "missing-b",
+                                       counter: 2)
+
+        let proofA = OfflineBalanceProof(initialCommitment: certificateA.allowance,
+                                         resultingCommitment: Data(repeating: 0x44, count: 32),
+                                         claimedDelta: "10.00",
+                                         zkProof: validZkProof())
+        let transfer = OfflineToOnlineTransfer(
+            bundleId: OfflineReceiptBuilder.generateBundleId(seed: Data("missing-proof".utf8)),
+            receiver: certificateA.controller,
+            depositAccount: certificateA.controller,
+            receipts: [receiptA, receiptB],
+            balanceProof: proofA,
+            balanceProofs: [
+                OfflineCertificateBalanceProof(senderCertificateId: receiptA.senderCertificateId,
+                                               balanceProof: proofA),
+            ]
+        )
+
+        XCTAssertThrowsError(
+            try OfflineReceiptBuilder.validateTransferMulti(
+                transfer,
+                chainId: chainId,
+                certificates: [certificateA, certificateB]
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineReceiptBuilderError, .missingBalanceProofForCertificate)
+        }
     }
 
     // MARK: - Helpers

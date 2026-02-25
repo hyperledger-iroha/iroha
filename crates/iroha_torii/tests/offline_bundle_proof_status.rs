@@ -373,6 +373,7 @@ fn build_fixtures(chain_id: &ChainId, include_proof: bool) -> Fixtures {
         deposit_account: operator.clone(),
         receipts,
         balance_proof,
+        balance_proofs: None,
         aggregate_proof,
         attachments: None,
         platform_snapshot: None,

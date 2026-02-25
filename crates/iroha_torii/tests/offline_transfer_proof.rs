@@ -220,6 +220,7 @@ fn build_transfer(counter: u64) -> OfflineToOnlineTransfer {
         deposit_account: controller,
         receipts: vec![receipt],
         balance_proof,
+        balance_proofs: None,
         aggregate_proof: None,
         attachments: None,
         platform_snapshot: None,

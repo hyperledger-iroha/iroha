@@ -54,6 +54,7 @@ use tower::ServiceExt as _;
 struct Harness {
     app: Router,
     fixtures: Fixtures,
+    state: Arc<State>,
 }
 
 struct Fixtures {
@@ -156,6 +157,53 @@ async fn offline_transfer_detail_returns_404_for_missing_bundle() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn offline_settlement_detail_alias_includes_rejected_reason() {
+    let harness = build_harness();
+    let mut rejected_transfer = harness.fixtures.transfer.clone();
+    rejected_transfer.bundle_id = Hash::new(b"bundle-rejected-detail");
+    rejected_transfer.receipts.clear();
+    let rejected_bundle_hex = hex::encode(rejected_transfer.bundle_id.as_ref());
+
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 1_700_000_002, 0);
+    let mut block = harness.state.block(header);
+    let mut tx = block.transaction();
+    SubmitOfflineToOnlineTransfer {
+        transfer: rejected_transfer,
+    }
+    .execute(&harness.fixtures.receiver, &mut tx)
+    .expect("execute rejected settlement");
+    tx.apply();
+    block.commit().expect("commit rejected settlement");
+
+    let uri = format!("/v1/offline/settlements/{rejected_bundle_hex}?address_format=canonical");
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+    let body: Value = json::from_slice(&bytes).expect("json");
+
+    assert_eq!(
+        body["bundle_id_hex"].as_str(),
+        Some(rejected_bundle_hex.as_str())
+    );
+    assert_eq!(body["status"].as_str(), Some("rejected"));
+    assert_eq!(body["rejection_reason"].as_str(), Some("empty_bundle"));
+    assert_eq!(
+        body["transfer"]["rejection_reason"].as_str(),
+        Some("empty_bundle")
+    );
+}
+
 fn build_harness() -> Harness {
     let cfg = test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -195,7 +243,7 @@ fn build_harness() -> Harness {
         events_sender,
         LiveQueryStore::start_test(),
         kura,
-        state,
+        Arc::clone(&state),
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
@@ -205,6 +253,7 @@ fn build_harness() -> Harness {
     Harness {
         app: torii.api_router_for_tests(),
         fixtures,
+        state,
     }
 }
 
@@ -309,6 +358,7 @@ fn build_fixtures(chain_id: &ChainId) -> Fixtures {
         deposit_account: operator.clone(),
         receipts: vec![receipt],
         balance_proof,
+        balance_proofs: None,
         aggregate_proof: None,
         attachments: None,
         platform_snapshot: None,

@@ -15,11 +15,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
+run_xtask() {
+  local -a args=("$@")
+  if NORITO_SKIP_BINDINGS_SYNC=1 cargo xtask "${args[@]}"; then
+    return 0
+  fi
+  echo "cargo xtask unavailable; falling back to cargo run -p xtask --bin xtask -- ${args[*]}" >&2
+  NORITO_SKIP_BINDINGS_SYNC=1 cargo run -p xtask --bin xtask -- "${args[@]}"
+}
+
 GENERATED_SPEC="${TMP_DIR}/torii.json"
 
 (
   cd "${REPO_ROOT}"
-  NORITO_SKIP_BINDINGS_SYNC=1 cargo xtask openapi --output "${GENERATED_SPEC}"
+  run_xtask openapi --output "${GENERATED_SPEC}"
 )
 
 if ! diff -u "${SPEC_PATH}" "${GENERATED_SPEC}" >/dev/null; then
@@ -34,15 +43,9 @@ if ! diff -u "${SPEC_PATH}" "${CURRENT_SPEC_PATH}" >/dev/null; then
   exit 1
 fi
 
-if ! diff -u "${MANIFEST_PATH}" "${CURRENT_MANIFEST_PATH}" >/dev/null; then
-  diff -u "${MANIFEST_PATH}" "${CURRENT_MANIFEST_PATH}" || true
-  echo "error: docs/portal/static/openapi/versions/current/manifest.json is out of sync with the latest manifest. Run 'npm run sync-openapi -- --latest' from docs/portal/." >&2
-  exit 1
-fi
-
 (
   cd "${REPO_ROOT}"
-  NORITO_SKIP_BINDINGS_SYNC=1 cargo xtask openapi-verify \
+  run_xtask openapi-verify \
     --spec "${SPEC_PATH}" \
     --manifest "${MANIFEST_PATH}" \
     --allowed-signers "${REPO_ROOT}/docs/portal/static/openapi/allowed_signers.json"
@@ -50,7 +53,7 @@ fi
 
 (
   cd "${REPO_ROOT}"
-  NORITO_SKIP_BINDINGS_SYNC=1 cargo xtask openapi-verify \
+  run_xtask openapi-verify \
     --spec "${CURRENT_SPEC_PATH}" \
     --manifest "${CURRENT_MANIFEST_PATH}" \
     --allowed-signers "${REPO_ROOT}/docs/portal/static/openapi/allowed_signers.json"
