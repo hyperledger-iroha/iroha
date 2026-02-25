@@ -77,17 +77,19 @@ impl Actor {
         hash: HashOf<BlockHeader>,
         height: u64,
         locked_hash: HashOf<BlockHeader>,
+        locked_height: u64,
     ) -> bool {
         if hash == locked_hash {
             return false;
         }
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let known_conflict = self
+            .committed_block_hash_for_height(height)
+            .is_some_and(|known_hash| known_hash != hash);
         // Lock rejection may only clear requests that are disproven by committed chain
-        // evidence. Future-height requests must remain tracked until commitment catches up.
-        height <= committed_height
-            && self
-                .committed_block_hash_for_height(height)
-                .is_some_and(|known_hash| known_hash != hash)
+        // evidence or by locally known canonical lock-height ancestry. Future-height requests
+        // above the locked horizon must remain tracked until commitment catches up.
+        (height <= committed_height || height <= locked_height) && known_conflict
     }
 
     fn should_clear_missing_request_on_stale_block_drop(
@@ -958,6 +960,7 @@ impl Actor {
                     hash,
                     pending.height,
                     locked_parent_hash,
+                    height.saturating_sub(1),
                 ) {
                     self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
                 } else {
@@ -986,6 +989,7 @@ impl Actor {
                 hash,
                 request_height,
                 locked_parent_hash,
+                height.saturating_sub(1),
             ) && self.pending.missing_block_requests.contains_key(&hash)
             {
                 self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
@@ -1722,6 +1726,7 @@ impl Actor {
                         block_hash,
                         height,
                         lock.subject_block_hash,
+                        lock.height,
                     ) {
                         self.clear_missing_block_request(
                             &block_hash,
@@ -1750,6 +1755,7 @@ impl Actor {
                         parent_hash,
                         parent_height,
                         lock.subject_block_hash,
+                        lock.height,
                     ) {
                         self.clear_missing_block_request(
                             &parent_hash,
@@ -1904,6 +1910,7 @@ impl Actor {
                                 block_hash,
                                 height,
                                 locked_hash,
+                                lock.height,
                             ) {
                                 self.clear_missing_block_request(
                                     &block_hash,
@@ -1924,6 +1931,7 @@ impl Actor {
                                     parent_hash,
                                     parent_height,
                                     locked_hash,
+                                    lock.height,
                                 ) {
                                     self.clear_missing_block_request(
                                         &parent_hash,

@@ -4,6 +4,24 @@ Last update: 2026-02-25
 - Latest sync (deterministic missing-QC recovery + shared-host soak-profile hardening):
   - Sumeragi deterministic recovery frontier changes remain in place across `crates/iroha_core/src/sumeragi/main_loop/{block_sync.rs,proposal_handlers.rs,qc.rs,votes.rs}` and `crates/iroha_core/src/sumeragi/main_loop.rs` (canonical sparse/no-cert planning, same-event missing-request activation, stale suppression/pruning, sidecar failover hardening, bounded pending behavior with deterministic eviction and telemetry).
   - Izanami shared-host soak profile hardening landed in `crates/izanami/src/chaos.rs`: contention-tolerant DA/recovery windows, long-soak shared-host profile clamping (`max_inflight`, `progress_timeout`) while preserving canonical `tps=5`, and explicit shared-host soak unit coverage.
+- Latest sync (2026-02-25 deterministic-recovery finalize + 5 TPS shared-host measurements):
+  - Finalized lock-conflict stale-branch cleanup in `crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`: `should_clear_missing_request_on_locked_reject(...)` now clears only requests disproven by committed chain or lock-height canonical ancestry, while preserving future-height/uncommitted requests above the lock horizon.
+  - Kept Izanami shared-host long-soak profile wiring in `crates/izanami/src/chaos.rs` (tps/max-inflight/progress-timeout clamp + shared-host recovery profile injection); 2026-02-25 runs show this removes the previous hard stall around height `~513` (now a transient slowdown that recovers), while throughput pace remains below the 3600/3600 acceptance slope.
+  - Additional validation:
+    - `cargo test -p iroha_core --lib defer_qc_if_block_missing_ -- --nocapture` (ok; 6 passed)
+    - `cargo test -p iroha_core --lib block_sync_update_future_window_ -- --nocapture` (ok; 7 passed)
+    - `cargo test -p iroha_core --lib sidecar_mismatch_ -- --nocapture` (ok; 4 passed)
+    - `cargo test -p iroha_core --lib tracked_missing_height_sidecar_failover_forces_fetch -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib block_created_without_hint_rejects_conflicting_lock_ -- --nocapture` (ok; 3 passed)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; 3 passed)
+    - `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs crates/izanami/src/chaos.rs` (ok)
+    - `bash ci/check_sumeragi_formal.sh` (current workspace run failed: `apalache-mc` unavailable and Docker daemon unavailable for fallback)
+  - Probe evidence (fixed `tps=5`, `max_inflight=8`):
+    - Non-profile control progress probe (`RUST_LOG=izanami::summary=info,izanami::workload=warn,izanami::progress=info ... --duration 300s --target-blocks 180`) reached target in `281.188953375s` at `quorum_min_height=180` / `strict_min_height=180`; summary `successes=783 failures=1`; logs `/tmp/izanami_probe_control_progress_20260225.log`, net `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_XTwiJp`.
+    - Shared-host-profile active progress probe (`... --duration 3600s --target-blocks 180`) reached target in `300.866788916s` at `quorum_min_height=185` / `strict_min_height=185`; summary `successes=807 failures=3`; logs `/tmp/izanami_probe_profile_progress_20260225.log`, net `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_52iuYT`.
+    - Shared-host-profile mid-run probe (`... --duration 3600s --target-blocks 600`) crossed the historical `~513` slowdown region, recovered, and reached target in `1082.708463625s` at `quorum_min_height=600` / `strict_min_height=600`; summary `successes=2659 failures=7 izanami_ingress_failover_total=2`; logs `/tmp/izanami_probe_profile_600_20260225.log`, net `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_TIKt7q`.
+    - Shared-host-profile summary-only spot probe (`... --duration 3600s --target-blocks 180`) remains reproducible at `successes=811 failures=0`; logs `/tmp/izanami_probe_profile_20260225.log`, net `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_367Pqb`.
+  - Current acceptance status: deterministic recovery/liveness improved (no 300s no-progress timeout and no prolonged strict/quorum divergence through height `600`), but sustained pace remains about `~0.55-0.64 blocks/s`; extrapolated 3600s height stays well below `3600`, so the 3600/3600 strict-height acceptance gate is still open.
 - Validation (2026-02-25):
   - `bash ci/check_sumeragi_formal.sh` (ok, Apalache `NoError`, `[formal] sumeragi Apalache checks passed`).
   - `cargo test -p iroha_core --lib block_sync_update_records_missing_request_when_sparse_signatures_fail_quorum -- --nocapture` (ok)
