@@ -72,6 +72,44 @@ impl Actor {
                 .is_some_and(|pending| pending == hash)
     }
 
+    fn should_clear_missing_request_on_locked_reject(
+        &self,
+        hash: HashOf<BlockHeader>,
+        height: u64,
+        locked_hash: HashOf<BlockHeader>,
+        locked_height: u64,
+    ) -> bool {
+        if hash == locked_hash {
+            return false;
+        }
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let known_conflict = self
+            .committed_block_hash_for_height(height)
+            .is_some_and(|known_hash| known_hash != hash);
+        // Lock rejection may only clear requests that are disproven by committed chain
+        // evidence or by locally known canonical lock-height ancestry. Future-height requests
+        // above the locked horizon must remain tracked until commitment catches up.
+        (height <= committed_height || height <= locked_height) && known_conflict
+    }
+
+    fn should_clear_missing_request_on_stale_block_drop(
+        &self,
+        hash: HashOf<BlockHeader>,
+        height: u64,
+        committed_height: u64,
+    ) -> bool {
+        if height < committed_height {
+            return true;
+        }
+        // Keep committed-height recovery requests alive when the payload is still unavailable and
+        // local storage has not disproven the hash. This preserves dwell/attempt continuity.
+        if self.block_payload_available_locally(hash) {
+            return true;
+        }
+        self.committed_block_hash_for_height(height)
+            .is_some_and(|known_hash| known_hash != hash)
+    }
+
     #[allow(clippy::unnecessary_wraps)]
     pub(super) fn handle_consensus_params(
         &self,
@@ -871,6 +909,111 @@ impl Actor {
         }
     }
 
+    /// Drop cached branch state at `height` that does not extend `locked_parent_hash`.
+    ///
+    /// This keeps lock-conflicting branch artifacts from repeatedly re-triggering
+    /// missing-qc rotations after deterministic lock rejection.
+    fn purge_locked_conflicting_branch_state(
+        &mut self,
+        height: u64,
+        locked_parent_hash: HashOf<BlockHeader>,
+    ) -> (usize, usize, usize) {
+        let conflicting_pending: Vec<_> = self
+            .pending
+            .pending_blocks
+            .iter()
+            .filter(|(_, pending)| pending.height == height)
+            .filter_map(|(hash, pending)| {
+                pending
+                    .block
+                    .header()
+                    .prev_block_hash()
+                    .filter(|parent| *parent != locked_parent_hash)
+                    .map(|_| *hash)
+            })
+            .collect();
+
+        let mut pending_removed = 0usize;
+        let mut deferred_removed = 0usize;
+        for hash in conflicting_pending {
+            if let Some(pending) = self.pending.pending_blocks.remove(&hash) {
+                pending_removed = pending_removed.saturating_add(1);
+                self.subsystems.validation.inflight.remove(&hash);
+                self.subsystems.validation.superseded_results.remove(&hash);
+                self.pending.pending_fetch_requests.remove(&hash);
+                if self
+                    .deferred_block_sync_updates
+                    .remove(&(pending.height, pending.view, hash))
+                    .is_some()
+                {
+                    deferred_removed = deferred_removed.saturating_add(1);
+                }
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .pop_hint(pending.height, pending.view);
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .pop_proposal(pending.height, pending.view);
+                if self.should_clear_missing_request_on_locked_reject(
+                    hash,
+                    pending.height,
+                    locked_parent_hash,
+                    height.saturating_sub(1),
+                ) {
+                    self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
+                } else {
+                    debug!(
+                        height = pending.height,
+                        view = pending.view,
+                        block = %hash,
+                        locked_hash = %locked_parent_hash,
+                        "preserving missing request for lock-conflicting pending block: hash not yet disproven by committed chain"
+                    );
+                }
+                self.clean_rbc_sessions_for_block(hash, pending.height);
+            }
+        }
+
+        let stale_missing: Vec<_> = self
+            .pending
+            .missing_block_requests
+            .iter()
+            .filter(|(_, request)| request.height == height)
+            .map(|(hash, request)| (*hash, request.height))
+            .collect();
+        let mut missing_removed = 0usize;
+        for (hash, request_height) in stale_missing {
+            if self.should_clear_missing_request_on_locked_reject(
+                hash,
+                request_height,
+                locked_parent_hash,
+                height.saturating_sub(1),
+            ) && self.pending.missing_block_requests.contains_key(&hash)
+            {
+                self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
+                missing_removed = missing_removed.saturating_add(1);
+            }
+        }
+
+        let stale_deferred: Vec<_> = self
+            .deferred_block_sync_updates
+            .keys()
+            .copied()
+            .filter(|(entry_height, _, hash)| {
+                *entry_height == height && *hash != locked_parent_hash
+            })
+            .collect();
+        for key in stale_deferred {
+            if self.deferred_block_sync_updates.remove(&key).is_some() {
+                deferred_removed = deferred_removed.saturating_add(1);
+            }
+        }
+
+        (pending_removed, missing_removed, deferred_removed)
+    }
+
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
     pub(super) fn handle_block_created(
         &mut self,
@@ -933,7 +1076,21 @@ impl Actor {
                 .propose
                 .proposal_cache
                 .prune_height_leq(committed_height);
-            self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+            if self.should_clear_missing_request_on_stale_block_drop(
+                block_hash,
+                height,
+                committed_height,
+            ) {
+                self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+            } else if missing_request {
+                debug!(
+                    height,
+                    view,
+                    committed_height,
+                    block = %block_hash,
+                    "preserving committed-height missing request after stale BlockCreated drop"
+                );
+            }
             self.clean_rbc_sessions_for_block(block_hash, height);
             let matches_committed = committed_hash.is_some_and(|hash| hash == block_hash);
             if !matches_committed {
@@ -1418,31 +1575,82 @@ impl Actor {
         if let Some(hint) = cached_hint {
             let mut hint_highest = hint.highest_qc;
             let hint_highest_missing = !self.block_known_for_lock(hint_highest.subject_block_hash);
-            if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, hint_highest) {
-                let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);
-                let locked_missing =
-                    locked_hash.is_some_and(|hash| !self.block_known_for_lock(hash));
-                if locked_missing {
-                    warn!(
-                        ?reason,
-                        locked_qc_height = self.locked_qc.map(|qc| qc.height),
-                        locked_qc_view = self.locked_qc.map(|qc| qc.view),
-                        locked_qc_hash = ?locked_hash,
-                        hint_highest_qc_height = hint.highest_qc.height,
-                        hint_highest_qc_view = hint.highest_qc.view,
-                        hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
-                        height,
-                        view,
-                        "locked QC missing from kura; accepting BlockCreated and replacing lock"
-                    );
-                    self.locked_qc = Some(hint.highest_qc);
-                    super::status::set_locked_qc(
-                        hint.highest_qc.height,
-                        hint.highest_qc.view,
-                        Some(hint.highest_qc.subject_block_hash),
-                    );
-                } else if hint_highest_missing {
-                    if let Some(lock) = self.locked_qc {
+            if let Err(initial_reason) = ensure_locked_qc_allows(self.locked_qc, hint_highest) {
+                if let Some(new_lock) = realign_locked_to_committed_if_extends(
+                    self.locked_qc,
+                    self.latest_committed_qc(),
+                    hint_highest,
+                    |hash, height| self.parent_hash_for(hash, height),
+                ) {
+                    if self.locked_qc != Some(new_lock) {
+                        info!(
+                            ?initial_reason,
+                            locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                            locked_qc_view = self.locked_qc.map(|qc| qc.view),
+                            locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
+                            committed_qc_height = new_lock.height,
+                            committed_qc_view = new_lock.view,
+                            committed_qc_hash = %new_lock.subject_block_hash,
+                            hint_highest_qc_height = hint.highest_qc.height,
+                            hint_highest_qc_view = hint.highest_qc.view,
+                            hint_highest_qc_hash = %hint.highest_qc.subject_block_hash,
+                            height,
+                            view,
+                            "realigning stale locked QC to committed chain before applying BlockCreated hint"
+                        );
+                        self.locked_qc = Some(new_lock);
+                        super::status::set_locked_qc(
+                            new_lock.height,
+                            new_lock.view,
+                            Some(new_lock.subject_block_hash),
+                        );
+                    }
+                }
+
+                if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, hint_highest) {
+                    let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);
+                    let locked_missing =
+                        locked_hash.is_some_and(|hash| !self.block_known_for_lock(hash));
+                    if locked_missing {
+                        warn!(
+                            ?reason,
+                            locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                            locked_qc_view = self.locked_qc.map(|qc| qc.view),
+                            locked_qc_hash = ?locked_hash,
+                            hint_highest_qc_height = hint.highest_qc.height,
+                            hint_highest_qc_view = hint.highest_qc.view,
+                            hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                            height,
+                            view,
+                            "locked QC missing from kura; accepting BlockCreated and replacing lock"
+                        );
+                        self.locked_qc = Some(hint.highest_qc);
+                        super::status::set_locked_qc(
+                            hint.highest_qc.height,
+                            hint.highest_qc.view,
+                            Some(hint.highest_qc.subject_block_hash),
+                        );
+                    } else if hint_highest_missing {
+                        if let Some(lock) = self.locked_qc {
+                            info!(
+                                ?reason,
+                                locked_qc_height = lock.height,
+                                locked_qc_view = lock.view,
+                                locked_qc_hash = %lock.subject_block_hash,
+                                hint_highest_qc_height = hint.highest_qc.height,
+                                hint_highest_qc_view = hint.highest_qc.view,
+                                hint_highest_qc_hash = %hint.highest_qc.subject_block_hash,
+                                height,
+                                view,
+                                "highest QC block missing locally; accepting BlockCreated on locked chain"
+                            );
+                            hint_highest = lock;
+                        }
+                    } else if let Some(lock) = self.locked_qc.filter(|lock| {
+                        matches!(reason, LockedQcRejection::HeightRegressed { .. })
+                            && lock.height == height
+                            && lock.subject_block_hash == block_hash
+                    }) {
                         info!(
                             ?reason,
                             locked_qc_height = lock.height,
@@ -1453,51 +1661,33 @@ impl Actor {
                             hint_highest_qc_hash = %hint.highest_qc.subject_block_hash,
                             height,
                             view,
-                            "highest QC block missing locally; accepting BlockCreated on locked chain"
+                            block = %block_hash,
+                            "accepting BlockCreated for already-locked block despite stale hint highest QC"
                         );
                         hint_highest = lock;
+                    } else {
+                        super::status::inc_block_created_dropped_by_lock();
+                        #[cfg(feature = "telemetry")]
+                        self.telemetry.inc_block_created_dropped_by_lock();
+                        warn!(
+                            ?reason,
+                            locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                            locked_qc_view = self.locked_qc.map(|qc| qc.view),
+                            locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
+                            hint_highest_qc_height = hint.highest_qc.height,
+                            hint_highest_qc_view = hint.highest_qc.view,
+                            hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                            height,
+                            view,
+                            "BlockCreated rejected by locked QC gate"
+                        );
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::BlockCreated,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::LockedQc,
+                        );
+                        return Ok(());
                     }
-                } else if let Some(lock) = self.locked_qc.filter(|lock| {
-                    matches!(reason, LockedQcRejection::HeightRegressed { .. })
-                        && lock.height == height
-                        && lock.subject_block_hash == block_hash
-                }) {
-                    info!(
-                        ?reason,
-                        locked_qc_height = lock.height,
-                        locked_qc_view = lock.view,
-                        locked_qc_hash = %lock.subject_block_hash,
-                        hint_highest_qc_height = hint.highest_qc.height,
-                        hint_highest_qc_view = hint.highest_qc.view,
-                        hint_highest_qc_hash = %hint.highest_qc.subject_block_hash,
-                        height,
-                        view,
-                        block = %block_hash,
-                        "accepting BlockCreated for already-locked block despite stale hint highest QC"
-                    );
-                    hint_highest = lock;
-                } else {
-                    super::status::inc_block_created_dropped_by_lock();
-                    #[cfg(feature = "telemetry")]
-                    self.telemetry.inc_block_created_dropped_by_lock();
-                    warn!(
-                        ?reason,
-                        locked_qc_height = self.locked_qc.map(|qc| qc.height),
-                        locked_qc_view = self.locked_qc.map(|qc| qc.view),
-                        locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
-                        hint_highest_qc_height = hint.highest_qc.height,
-                        hint_highest_qc_view = hint.highest_qc.view,
-                        hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
-                        height,
-                        view,
-                        "BlockCreated rejected by locked QC gate"
-                    );
-                    self.record_consensus_message_handling(
-                        super::status::ConsensusMessageKind::BlockCreated,
-                        super::status::ConsensusMessageOutcome::Dropped,
-                        super::status::ConsensusMessageReason::LockedQc,
-                    );
-                    return Ok(());
                 }
             }
             if !self.highest_qc_extends_locked(hint_highest) {
@@ -1527,6 +1717,61 @@ impl Actor {
                 }
             }
             if !self.highest_qc_extends_locked(hint_highest) {
+                let (pending_conflicts_purged, missing_conflicts_purged, deferred_conflicts_purged) =
+                    self.locked_qc.map_or((0, 0, 0), |lock| {
+                        self.purge_locked_conflicting_branch_state(height, lock.subject_block_hash)
+                    });
+                if let Some(lock) = self.locked_qc {
+                    if self.should_clear_missing_request_on_locked_reject(
+                        block_hash,
+                        height,
+                        lock.subject_block_hash,
+                        lock.height,
+                    ) {
+                        self.clear_missing_block_request(
+                            &block_hash,
+                            MissingBlockClearReason::Obsolete,
+                        );
+                    } else {
+                        debug!(
+                            height,
+                            view,
+                            block = %block_hash,
+                            locked_hash = %lock.subject_block_hash,
+                            "preserving missing request for lock-rejected block: hash is not yet committed-conflicting"
+                        );
+                    }
+                } else {
+                    self.clear_missing_block_request(
+                        &block_hash,
+                        MissingBlockClearReason::Obsolete,
+                    );
+                }
+                if let Some(lock) = self.locked_qc
+                    && let Some(parent_hash) = header.prev_block_hash()
+                {
+                    let parent_height = height.saturating_sub(1);
+                    if self.should_clear_missing_request_on_locked_reject(
+                        parent_hash,
+                        parent_height,
+                        lock.subject_block_hash,
+                        lock.height,
+                    ) {
+                        self.clear_missing_block_request(
+                            &parent_hash,
+                            MissingBlockClearReason::Obsolete,
+                        );
+                    } else {
+                        debug!(
+                            height,
+                            view,
+                            parent_height,
+                            parent_hash = %parent_hash,
+                            locked_hash = %lock.subject_block_hash,
+                            "preserving missing-parent request after lock rejection: parent hash is not yet committed locally"
+                        );
+                    }
+                }
                 super::status::inc_block_created_dropped_by_lock();
                 #[cfg(feature = "telemetry")]
                 self.telemetry.inc_block_created_dropped_by_lock();
@@ -1537,6 +1782,9 @@ impl Actor {
                     highest_qc_hash = ?hint_highest.subject_block_hash,
                     height,
                     view,
+                    pending_conflicts_purged,
+                    missing_conflicts_purged,
+                    deferred_conflicts_purged,
                     "BlockCreated rejected: highest QC does not extend locked chain"
                 );
                 self.record_consensus_message_handling(
@@ -1551,11 +1799,37 @@ impl Actor {
                 height,
                 view, "BlockCreated arrived without cached ProposalHint"
             );
-            if let Some(lock) = self.locked_qc {
+            if let Some(mut lock) = self.locked_qc {
+                if let Some(highest_qc) = self.highest_qc {
+                    let should_adopt_highest_conflict = highest_qc.height == lock.height
+                        && highest_qc.subject_block_hash != lock.subject_block_hash
+                        && highest_qc.view > lock.view
+                        && ensure_locked_qc_allows(Some(lock), highest_qc).is_ok();
+                    if should_adopt_highest_conflict {
+                        info!(
+                            locked_qc_height = lock.height,
+                            locked_qc_view = lock.view,
+                            locked_qc_hash = %lock.subject_block_hash,
+                            highest_qc_height = highest_qc.height,
+                            highest_qc_view = highest_qc.view,
+                            highest_qc_hash = %highest_qc.subject_block_hash,
+                            height,
+                            view,
+                            "adopting local higher-view highest QC before validating BlockCreated without hint"
+                        );
+                        self.locked_qc = Some(highest_qc);
+                        super::status::set_locked_qc(
+                            highest_qc.height,
+                            highest_qc.view,
+                            Some(highest_qc.subject_block_hash),
+                        );
+                        lock = highest_qc;
+                    }
+                }
                 let locked_hash = lock.subject_block_hash;
                 if self.block_known_for_lock(locked_hash) {
                     let parent_hash = header.prev_block_hash();
-                    let extends = super::chain_extends_tip(
+                    let mut extends = super::chain_extends_tip(
                         block_hash,
                         height,
                         lock.height,
@@ -1568,8 +1842,112 @@ impl Actor {
                             }
                         },
                     );
+                    if matches!(extends, Some(false)) {
+                        let block_qc = crate::sumeragi::consensus::QcHeaderRef {
+                            height,
+                            view,
+                            epoch: self.epoch_for_height(height),
+                            subject_block_hash: block_hash,
+                            phase: crate::sumeragi::consensus::Phase::Commit,
+                        };
+                        if let Some(new_lock) = realign_locked_to_committed_if_extends(
+                            self.locked_qc,
+                            self.latest_committed_qc(),
+                            block_qc,
+                            |hash, height| {
+                                if hash == block_hash {
+                                    parent_hash
+                                } else {
+                                    self.parent_hash_for(hash, height)
+                                }
+                            },
+                        ) {
+                            if self.locked_qc != Some(new_lock) {
+                                info!(
+                                    locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                                    locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
+                                    block_height = height,
+                                    block_hash = %block_hash,
+                                    committed_qc_height = new_lock.height,
+                                    committed_qc_hash = %new_lock.subject_block_hash,
+                                    "resetting locked QC to committed chain before accepting BlockCreated without hint"
+                                );
+                                self.locked_qc = Some(new_lock);
+                                super::status::set_locked_qc(
+                                    new_lock.height,
+                                    new_lock.view,
+                                    Some(new_lock.subject_block_hash),
+                                );
+                            }
+                        }
+                        if let Some(updated_lock) = self.locked_qc {
+                            let updated_locked_hash = updated_lock.subject_block_hash;
+                            extends = super::chain_extends_tip(
+                                block_hash,
+                                height,
+                                updated_lock.height,
+                                updated_locked_hash,
+                                |hash, height| {
+                                    if hash == block_hash {
+                                        parent_hash
+                                    } else {
+                                        self.parent_hash_for(hash, height)
+                                    }
+                                },
+                            );
+                        }
+                    }
                     match extends {
                         Some(false) => {
+                            let (
+                                pending_conflicts_purged,
+                                missing_conflicts_purged,
+                                deferred_conflicts_purged,
+                            ) = self.purge_locked_conflicting_branch_state(height, locked_hash);
+                            // Invariant A: a lock-conflicting branch must not keep stale
+                            // missing-parent requests alive after deterministic rejection.
+                            if self.should_clear_missing_request_on_locked_reject(
+                                block_hash,
+                                height,
+                                locked_hash,
+                                lock.height,
+                            ) {
+                                self.clear_missing_block_request(
+                                    &block_hash,
+                                    MissingBlockClearReason::Obsolete,
+                                );
+                            } else {
+                                debug!(
+                                    height,
+                                    view,
+                                    block = %block_hash,
+                                    locked_hash = %locked_hash,
+                                    "preserving missing request for lock-rejected block: hash is not yet committed-conflicting"
+                                );
+                            }
+                            if let Some(parent_hash) = parent_hash {
+                                let parent_height = height.saturating_sub(1);
+                                if self.should_clear_missing_request_on_locked_reject(
+                                    parent_hash,
+                                    parent_height,
+                                    locked_hash,
+                                    lock.height,
+                                ) {
+                                    self.clear_missing_block_request(
+                                        &parent_hash,
+                                        MissingBlockClearReason::Obsolete,
+                                    );
+                                } else {
+                                    debug!(
+                                        height,
+                                        view,
+                                        parent_height,
+                                        parent_hash = %parent_hash,
+                                        locked_hash = %locked_hash,
+                                        "preserving missing-parent request after lock rejection: parent hash is not yet committed locally"
+                                    );
+                                }
+                            }
                             super::status::inc_block_created_dropped_by_lock();
                             #[cfg(feature = "telemetry")]
                             self.telemetry.inc_block_created_dropped_by_lock();
@@ -1580,6 +1958,9 @@ impl Actor {
                                 height,
                                 view,
                                 block = %block_hash,
+                                pending_conflicts_purged,
+                                missing_conflicts_purged,
+                                deferred_conflicts_purged,
                                 "BlockCreated rejected without hint: block does not extend locked chain"
                             );
                             self.record_consensus_message_handling(
@@ -1916,6 +2297,10 @@ impl Actor {
             }
         }
         if is_active_height {
+            // `BlockCreated` can arrive ahead of `Proposal`/`ProposalHint` on recovery paths.
+            // Mark the slot as observed once the payload is accepted so the FSM does not rotate
+            // solely because proposal metadata was delayed in transit.
+            self.note_proposal_seen(height, view, payload_hash);
             self.note_view_change_from_block(height, view);
         }
         self.record_phase_sample(PipelinePhase::CollectDa, height, view);
@@ -2030,14 +2415,8 @@ impl Actor {
             }
         }
 
-        self.subsystems
-            .propose
-            .proposal_cache
-            .pop_hint(height, view);
-        self.subsystems
-            .propose
-            .proposal_cache
-            .pop_proposal(height, view);
+        // Keep proposal context cached for this slot so stalled peers can recover from
+        // `BlockCreated` retransmits that race ahead of proposal delivery.
         if let Some(block) = self
             .pending
             .pending_blocks

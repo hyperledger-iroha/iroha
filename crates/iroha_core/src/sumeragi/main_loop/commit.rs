@@ -4530,6 +4530,7 @@ impl Actor {
     ) {
         let height = created.block.header().height().get();
         let view = created.block.header().view_change_index();
+        let block_hash = created.block.hash();
         let fanout_peers =
             self.transport_fanout_targets_for_round(peers, height, view, "block_created");
         let online_peers = self
@@ -4555,10 +4556,30 @@ impl Actor {
             trace!(
                 height = created.block.header().height().get(),
                 view = created.block.header().view_change_index(),
-                block = ?created.block.hash(),
+                block = ?block_hash,
                 "skipping block payload gossip: no targets"
             );
             return;
+        }
+        if let Some(hint) = self
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_hint(height, view)
+            .copied()
+            .filter(|hint| hint.block_hash == block_hash)
+        {
+            let hint_msg = Arc::new(BlockMessage::ProposalHint(hint));
+            let hint_encoded = Arc::new(BlockMessageWire::encode_message(hint_msg.as_ref()));
+            for peer in &targets {
+                self.schedule_background(BackgroundRequest::Post {
+                    peer: peer.clone(),
+                    msg: BlockMessageWire::with_encoded(
+                        Arc::clone(&hint_msg),
+                        Arc::clone(&hint_encoded),
+                    ),
+                });
+            }
         }
         let msg = Arc::new(BlockMessage::BlockCreated(created));
         let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
@@ -5424,11 +5445,8 @@ impl Actor {
             .propose
             .forced_view_after_timeout
             .filter(|(forced_height, _)| *forced_height > height);
-        let _retention_floor = height.saturating_sub(1);
-        self.pending
-            .missing_block_requests
-            .retain(|_, request| request.height > height);
         let now = Instant::now();
+        self.prune_stale_missing_requests_for_committed_height(height, now);
         self.clear_missing_block_recovery_for_height(height, now);
         self.clear_sidecar_mismatch_for_height(height);
         self.prune_missing_block_recovery_state(now);
@@ -5904,7 +5922,8 @@ impl Actor {
         if !preserve_proposals_seen {
             self.subsystems.propose.proposals_seen.clear();
         }
-        self.subsystems.propose.proposal_cache = ProposalCache::new(PROPOSAL_CACHE_LIMIT);
+        self.subsystems.propose.proposal_cache =
+            ProposalCache::new(self.recovery_pending_proposal_cap());
         self.reset_collector_state();
         self.subsystems.da_rbc.rbc.pending.clear();
         self.subsystems.da_rbc.rbc.sessions.clear();

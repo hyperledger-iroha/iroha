@@ -338,29 +338,91 @@ impl BlockSyncRequestTracker {
     }
 }
 
+const UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP: u64 = 16;
+const UNKNOWN_PREV_CACHE_RETENTION_HEIGHTS: u64 = 1024;
+
+#[derive(Clone, Copy, Debug)]
+struct UnknownPrevHashState {
+    prev_hash: HashOf<BlockHeader>,
+    latest_hash: Option<HashOf<BlockHeader>>,
+    served_at_height: u64,
+}
+
 fn should_share_unknown_prev_hash(
-    cache: &mut BTreeMap<PeerId, (HashOf<BlockHeader>, u64)>,
+    cache: &mut BTreeMap<PeerId, UnknownPrevHashState>,
     peer_id: &PeerId,
     prev_hash: HashOf<BlockHeader>,
+    latest_hash: Option<HashOf<BlockHeader>>,
     height: u64,
 ) -> bool {
-    match cache.get(peer_id) {
-        Some((last_hash, last_height)) if *last_hash == prev_hash && *last_height == height => {
-            false
+    match cache.get_mut(peer_id) {
+        Some(state) if state.prev_hash == prev_hash && state.latest_hash == latest_hash => {
+            // Unknown-prev requests can repeat rapidly under Byzantine behavior. Serve the same
+            // request only on coarse height steps to avoid saturating honest peers.
+            if height.saturating_sub(state.served_at_height) < UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP
+            {
+                return false;
+            }
+            state.served_at_height = height;
+            true
         }
-        _ => {
-            cache.insert(peer_id.clone(), (prev_hash, height));
+        Some(state) => {
+            *state = UnknownPrevHashState {
+                prev_hash,
+                latest_hash,
+                served_at_height: height,
+            };
+            true
+        }
+        None => {
+            cache.insert(
+                peer_id.clone(),
+                UnknownPrevHashState {
+                    prev_hash,
+                    latest_hash,
+                    served_at_height: height,
+                },
+            );
             true
         }
     }
 }
 
+fn prune_unknown_prev_hashes(cache: &mut BTreeMap<PeerId, UnknownPrevHashState>, height: u64) {
+    cache.retain(|_, state| {
+        height.saturating_sub(state.served_at_height) <= UNKNOWN_PREV_CACHE_RETENTION_HEIGHTS
+    });
+}
+
+const UNKNOWN_PREV_SEEN_REWIND_WINDOW: usize = 1024;
+const UNKNOWN_PREV_MAX_REWIND_WINDOW: usize = 256;
+
+fn unknown_prev_rewind_window(height: usize) -> usize {
+    let max_window = UNKNOWN_PREV_SEEN_REWIND_WINDOW.min(UNKNOWN_PREV_MAX_REWIND_WINDOW);
+    // For unknown-prev recovery, rewind enough to bridge honest divergence but avoid
+    // genesis-prefix replay on short/mid-height chains that can starve range-pull progress.
+    (height / 2).max(1).min(max_window)
+}
+
 fn unknown_prev_fallback_start_height(
     kura: &Kura,
     latest_hash: Option<HashOf<BlockHeader>>,
+    seen_blocks: &BTreeSet<HashOf<BlockHeader>>,
 ) -> (NonZeroUsize, bool) {
+    let rewind_start = |height: NonZeroUsize| {
+        let rewind_window = unknown_prev_rewind_window(height.get());
+        NonZeroUsize::new(
+            height
+                .get()
+                .saturating_sub(rewind_window.saturating_sub(1))
+                .max(1),
+        )
+        .unwrap_or(nonzero_ext::nonzero!(1_usize))
+    };
     let local_tip_height = kura.blocks_count();
-    let local_window = 64usize;
+    // Unknown-prev fallback must rewind far enough to recover lagging honest peers
+    // while staying near-tip enough to avoid low-height genesis-prefix replay loops.
+    let local_window = unknown_prev_rewind_window(local_tip_height);
     let local_fallback_start = local_tip_height
         .saturating_sub(local_window.saturating_sub(1))
         .max(1);
@@ -370,8 +432,20 @@ fn unknown_prev_fallback_start_height(
         .and_then(|hash| kura.get_block_height_by_hash(hash))
         .and_then(|height| height.checked_add(1))
     {
-        Some(known_height) => (known_height, false),
-        None => (local_fallback_start, true),
+        // When `prev_hash` is unknown but `latest_hash` is known, the pair is inconsistent.
+        // Rewind from `latest_hash` instead of starting at `latest + 1`; otherwise responders
+        // can skip too far ahead and strand lagging peers in a missing-parent loop.
+        Some(known_height) => (rewind_start(known_height), false),
+        None => {
+            if let Some(recent_seen_height) = seen_blocks
+                .iter()
+                .filter_map(|hash| kura.get_block_height_by_hash(*hash))
+                .max()
+            {
+                return (rewind_start(recent_seen_height), true);
+            }
+            (local_fallback_start, true)
+        }
     }
 }
 
@@ -634,7 +708,11 @@ mod gossip_backoff_tests {
 
 #[cfg(test)]
 mod unknown_prev_hash_tests {
-    use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        num::NonZeroU64,
+        sync::Arc,
+    };
 
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::block::SignedBlock;
@@ -652,24 +730,72 @@ mod unknown_prev_hash_tests {
         let other_peer = PeerId::new(KeyPair::random().public_key().clone());
         let hash1 = hash(0x11);
         let hash2 = hash(0x22);
-        let mut cache: BTreeMap<PeerId, (HashOf<BlockHeader>, u64)> = BTreeMap::new();
+        let latest1 = Some(hash(0x31));
+        let latest2 = Some(hash(0x32));
+        let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
 
-        assert!(should_share_unknown_prev_hash(&mut cache, &peer, hash1, 10));
-        assert!(!should_share_unknown_prev_hash(
-            &mut cache, &peer, hash1, 10
+        assert!(should_share_unknown_prev_hash(
+            &mut cache, &peer, hash1, latest1, 10
         ));
-        assert!(should_share_unknown_prev_hash(&mut cache, &peer, hash1, 11));
-        assert!(should_share_unknown_prev_hash(&mut cache, &peer, hash2, 11));
+        assert!(!should_share_unknown_prev_hash(
+            &mut cache, &peer, hash1, latest1, 10
+        ));
+        assert!(!should_share_unknown_prev_hash(
+            &mut cache, &peer, hash1, latest1, 11
+        ));
+        assert!(should_share_unknown_prev_hash(
+            &mut cache,
+            &peer,
+            hash1,
+            latest1,
+            10 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+        ));
+        assert!(should_share_unknown_prev_hash(
+            &mut cache, &peer, hash1, latest2, 12
+        ));
+        assert!(should_share_unknown_prev_hash(
+            &mut cache, &peer, hash2, latest2, 12
+        ));
         assert!(should_share_unknown_prev_hash(
             &mut cache,
             &other_peer,
             hash1,
+            latest1,
             11
         ));
     }
 
     #[test]
-    fn unknown_prev_fallback_uses_known_latest_hash_height() {
+    fn prune_unknown_prev_hashes_drops_stale_entries() {
+        let fresh_peer = PeerId::new(KeyPair::random().public_key().clone());
+        let stale_peer = PeerId::new(KeyPair::random().public_key().clone());
+        let prune_at = 10 + UNKNOWN_PREV_CACHE_RETENTION_HEIGHTS + 1;
+        let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
+        cache.insert(
+            fresh_peer.clone(),
+            UnknownPrevHashState {
+                prev_hash: hash(0x41),
+                latest_hash: Some(hash(0x42)),
+                served_at_height: prune_at,
+            },
+        );
+        cache.insert(
+            stale_peer.clone(),
+            UnknownPrevHashState {
+                prev_hash: hash(0x51),
+                latest_hash: Some(hash(0x52)),
+                served_at_height: 10,
+            },
+        );
+
+        prune_unknown_prev_hashes(&mut cache, prune_at);
+
+        assert!(cache.contains_key(&fresh_peer));
+        assert!(!cache.contains_key(&stale_peer));
+    }
+
+    #[test]
+    fn unknown_prev_fallback_rewinds_when_latest_hash_is_known() {
         let kura = Kura::blank_kura_for_testing();
         let keypair = KeyPair::random();
         let block1: SignedBlock =
@@ -690,7 +816,7 @@ mod unknown_prev_hash_tests {
             .expect("store second block");
 
         let (start_height, requested_latest) =
-            unknown_prev_fallback_start_height(&kura, Some(block1.hash()));
+            unknown_prev_fallback_start_height(&kura, Some(block1.hash()), &BTreeSet::new());
         assert!(!requested_latest);
         assert_eq!(start_height.get(), 2);
     }
@@ -714,9 +840,143 @@ mod unknown_prev_hash_tests {
         }
         let unknown_hash = hash(0xEE);
         let (start_height, requested_latest) =
-            unknown_prev_fallback_start_height(&kura, Some(unknown_hash));
+            unknown_prev_fallback_start_height(&kura, Some(unknown_hash), &BTreeSet::new());
         assert!(requested_latest);
-        assert_eq!(start_height.get(), 7);
+        assert_eq!(start_height.get(), 36);
+    }
+
+    #[test]
+    fn unknown_prev_fallback_anchor_rewinds_for_deep_lag_without_seen_hashes() {
+        let kura = Kura::blank_kura_for_testing();
+        let keypair = KeyPair::random();
+        let mut prev = None;
+        for height in 1_u64..=1300_u64 {
+            let parent = prev;
+            let block: SignedBlock =
+                ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                    header.set_height(NonZeroU64::new(height).expect("non-zero height"));
+                    header.set_prev_block_hash(parent);
+                })
+                .into();
+            prev = Some(block.hash());
+            kura.store_block(Arc::new(block))
+                .expect("store deterministic local window block");
+        }
+        let unknown_hash = hash(0xED);
+        let (start_height, requested_latest) =
+            unknown_prev_fallback_start_height(&kura, Some(unknown_hash), &BTreeSet::new());
+        assert!(requested_latest);
+        assert_eq!(start_height.get(), 1045);
+    }
+
+    #[test]
+    fn unknown_prev_fallback_rewinds_known_latest_hash_for_deep_lag() {
+        let kura = Kura::blank_kura_for_testing();
+        let keypair = KeyPair::random();
+        let mut prev = None;
+        let mut latest_known = None;
+        for height in 1_u64..=1300_u64 {
+            let parent = prev;
+            let block: SignedBlock =
+                ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                    header.set_height(NonZeroU64::new(height).expect("non-zero height"));
+                    header.set_prev_block_hash(parent);
+                })
+                .into();
+            if height == 1240 {
+                latest_known = Some(block.hash());
+            }
+            prev = Some(block.hash());
+            kura.store_block(Arc::new(block))
+                .expect("store deterministic local window block");
+        }
+        let latest_known = latest_known.expect("known latest hash recorded");
+        let (start_height, requested_latest) =
+            unknown_prev_fallback_start_height(&kura, Some(latest_known), &BTreeSet::new());
+        assert!(!requested_latest);
+        assert_eq!(start_height.get(), 986);
+    }
+
+    #[test]
+    fn unknown_prev_fallback_rewinds_from_recent_seen_hashes() {
+        let kura = Kura::blank_kura_for_testing();
+        let keypair = KeyPair::random();
+        let mut prev = None;
+        let mut seen_hash = None;
+        for height in 1_u64..=1300_u64 {
+            let parent = prev;
+            let block: SignedBlock =
+                ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                    header.set_height(NonZeroU64::new(height).expect("non-zero height"));
+                    header.set_prev_block_hash(parent);
+                })
+                .into();
+            if height == 1216 {
+                seen_hash = Some(block.hash());
+            }
+            prev = Some(block.hash());
+            kura.store_block(Arc::new(block))
+                .expect("store deterministic local window block");
+        }
+        let unknown_hash = hash(0xEF);
+        let seen_hash = seen_hash.expect("seen hash recorded");
+        let seen = BTreeSet::from([seen_hash]);
+        let (start_height, requested_latest) =
+            unknown_prev_fallback_start_height(&kura, Some(unknown_hash), &seen);
+        assert!(requested_latest);
+        assert_eq!(start_height.get(), 961);
+    }
+
+    #[test]
+    fn unknown_prev_fallback_avoids_genesis_rewind_for_mid_height_known_latest() {
+        let kura = Kura::blank_kura_for_testing();
+        let keypair = KeyPair::random();
+        let mut prev = None;
+        let mut latest_known = None;
+        for height in 1_u64..=700_u64 {
+            let parent = prev;
+            let block: SignedBlock =
+                ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                    header.set_height(NonZeroU64::new(height).expect("non-zero height"));
+                    header.set_prev_block_hash(parent);
+                })
+                .into();
+            if height == 468 {
+                latest_known = Some(block.hash());
+            }
+            prev = Some(block.hash());
+            kura.store_block(Arc::new(block))
+                .expect("store deterministic local window block");
+        }
+        let latest_known = latest_known.expect("known latest hash recorded");
+        let (start_height, requested_latest) =
+            unknown_prev_fallback_start_height(&kura, Some(latest_known), &BTreeSet::new());
+        assert!(!requested_latest);
+        assert_eq!(start_height.get(), 236);
+    }
+
+    #[test]
+    fn unknown_prev_fallback_avoids_genesis_rewind_for_short_divergence() {
+        let kura = Kura::blank_kura_for_testing();
+        let keypair = KeyPair::random();
+        let mut prev = None;
+        for height in 1_u64..=30_u64 {
+            let parent = prev;
+            let block: SignedBlock =
+                ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                    header.set_height(NonZeroU64::new(height).expect("non-zero height"));
+                    header.set_prev_block_hash(parent);
+                })
+                .into();
+            prev = Some(block.hash());
+            kura.store_block(Arc::new(block))
+                .expect("store deterministic local window block");
+        }
+        let unknown_hash = hash(0xEA);
+        let (start_height, requested_latest) =
+            unknown_prev_fallback_start_height(&kura, Some(unknown_hash), &BTreeSet::new());
+        assert!(requested_latest);
+        assert_eq!(start_height.get(), 16);
     }
 }
 
@@ -737,7 +997,7 @@ pub struct BlockSynchronizer {
     state: Arc<State>,
     telemetry: Option<Telemetry>,
     seen_blocks: BTreeSet<(NonZeroU64, HashOf<BlockHeader>)>,
-    unknown_prev_hashes: BTreeMap<PeerId, (HashOf<BlockHeader>, u64)>,
+    unknown_prev_hashes: BTreeMap<PeerId, UnknownPrevHashState>,
     request_tracker: BlockSyncRequestTracker,
     latest_height: u64,
     last_peers: BTreeSet<PeerId>,
@@ -841,15 +1101,16 @@ impl BlockSynchronizer {
         if now_height < previous_height {
             self.unknown_prev_hashes.clear();
         }
+        prune_unknown_prev_hashes(&mut self.unknown_prev_hashes, now_height);
         self.latest_height = now_height;
 
         let peers = self
             .network
             .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
         let peers_changed = self.peer_set_changed(&peers);
-        let has_unknown_prev = !self.unknown_prev_hashes.is_empty();
         let height_changed = now_height != previous_height;
-        let progress = height_changed || peers_changed || has_unknown_prev;
+        // Repeated unknown-prev traffic from faulty peers is not local progress.
+        let progress = height_changed || peers_changed;
         if progress {
             self.gossip_backoff = self.gossip_period;
             let next = now.checked_add(self.gossip_period).unwrap_or(now);
@@ -3647,6 +3908,7 @@ pub mod message {
                                 &mut block_sync.unknown_prev_hashes,
                                 peer_id,
                                 hash,
+                                *latest_hash,
                                 now_height,
                             );
                             if share_unknown_prev {
@@ -3654,6 +3916,7 @@ pub mod message {
                                     unknown_prev_fallback_start_height(
                                         &block_sync.kura,
                                         *latest_hash,
+                                        seen_blocks,
                                     );
                                 if should_request_latest {
                                     block_sync
