@@ -20,6 +20,13 @@ impl Actor {
         )
     }
 
+    pub(super) fn has_missing_block_request_for_height(&self, height: u64) -> bool {
+        self.pending
+            .missing_block_requests
+            .values()
+            .any(|request| request.height == height)
+    }
+
     fn block_sync_qc_final_drop(&mut self, reason: &'static str) {
         super::status::inc_blocksync_qc_final_drop(reason);
         #[cfg(feature = "telemetry")]
@@ -114,6 +121,116 @@ impl Actor {
             reason,
             "forcing block-sync fetch for quarantined QC"
         );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn maybe_request_pending_block_for_missing_qc(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        block_height: u64,
+        block_view: u64,
+        block_signer_count: usize,
+        commit_quorum: usize,
+        block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+        topology: &super::network_topology::Topology,
+    ) -> bool {
+        let now = Instant::now();
+        let retry_window = self.rebroadcast_cooldown();
+        let aggressive_after_attempts = self.recovery_missing_fetch_aggressive_after_attempts();
+        let existing_attempts = self
+            .pending
+            .missing_block_requests
+            .get(&block_hash)
+            .map_or(0, |stats| stats.attempts);
+        let fetch_mode = if existing_attempts >= aggressive_after_attempts {
+            super::MissingBlockFetchMode::AggressiveTopology
+        } else {
+            super::MissingBlockFetchMode::Default
+        };
+        let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
+        let decision = super::plan_missing_block_fetch_with_mode(
+            &mut self.pending.missing_block_requests,
+            block_hash,
+            block_height,
+            block_view,
+            crate::sumeragi::consensus::Phase::Commit,
+            super::MissingBlockPriority::Background,
+            block_signers,
+            topology,
+            now,
+            retry_window,
+            None,
+            signer_fallback_attempts,
+            fetch_mode,
+        );
+        let dwell = self
+            .pending
+            .missing_block_requests
+            .get(&block_hash)
+            .map(|stats| now.saturating_duration_since(stats.first_seen))
+            .unwrap_or_default();
+        let targets_len = match &decision {
+            super::MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+            _ => 0,
+        };
+        self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+
+        // Invariant A: every sparse missing-QC signal must either advance request state in-place
+        // or be explicitly backoff-suppressed with an existing request.
+        let no_targets = matches!(&decision, super::MissingBlockFetchDecision::NoTargets);
+        match &decision {
+            super::MissingBlockFetchDecision::Requested {
+                targets,
+                target_kind,
+            } => {
+                self.request_missing_block(
+                    block_hash,
+                    block_height,
+                    block_view,
+                    super::MissingBlockPriority::Background,
+                    &targets,
+                );
+                info!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    block_signers = block_signer_count,
+                    commit_quorum,
+                    target_kind = target_kind.label(),
+                    retry_window_ms = retry_window.as_millis(),
+                    "requesting pending block to recover missing QC"
+                );
+            }
+            super::MissingBlockFetchDecision::Backoff => {
+                trace!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    retry_window_ms = retry_window.as_millis(),
+                    "suppressing duplicate pending-block fetch during missing-block backoff"
+                );
+            }
+            super::MissingBlockFetchDecision::NoTargets => {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    block_signers = block_signer_count,
+                    commit_quorum,
+                    retry_window_ms = retry_window.as_millis(),
+                    "missing-block recovery tracked but no fetch targets available"
+                );
+            }
+        }
+        let tracked = self
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash);
+        debug_assert!(
+            tracked || no_targets,
+            "sparse missing-QC recovery must track request state unless no targets are available"
+        );
+        tracked
     }
 
     pub(super) fn try_replay_quarantined_block_sync_qcs(
@@ -555,7 +672,10 @@ impl Actor {
         let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
         let send_block_sync = match consensus_mode {
             ConsensusMode::Permissioned => has_roster || has_cached_qc,
-            ConsensusMode::Npos => has_roster,
+            // Missing-block recovery in NPoS must stay on the BlockSyncUpdate path even when
+            // roster sidecars/hints are unavailable, otherwise responders fall back to
+            // BlockCreated and receivers can livelock on lock-conflicting hintless payloads.
+            ConsensusMode::Npos => true,
         };
         if !send_block_sync {
             BlockMessage::BlockCreated(super::message::BlockCreated::from(block))
@@ -575,6 +695,28 @@ impl Actor {
         qc_extends_locked_with_lookup(lock, candidate, |hash, lookup_height| {
             self.parent_hash_for(hash, lookup_height)
         })
+    }
+
+    fn block_sync_qc_same_height_conflict(
+        lock: crate::sumeragi::consensus::QcHeaderRef,
+        qc: &crate::sumeragi::consensus::Qc,
+    ) -> bool {
+        qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash
+    }
+
+    fn block_sync_qc_same_height_recovery_candidate(
+        lock: crate::sumeragi::consensus::QcHeaderRef,
+        qc: &crate::sumeragi::consensus::Qc,
+    ) -> bool {
+        Self::block_sync_qc_same_height_conflict(lock, qc) && qc.view > lock.view
+    }
+
+    fn block_sync_qc_same_height_recoverable(
+        lock: crate::sumeragi::consensus::QcHeaderRef,
+        qc: &crate::sumeragi::consensus::Qc,
+        allow_nonextending_qc: bool,
+    ) -> bool {
+        allow_nonextending_qc && Self::block_sync_qc_same_height_recovery_candidate(lock, qc)
     }
 
     fn defer_block_sync_qc_while_locked_payload_missing(
@@ -716,7 +858,10 @@ impl Actor {
             let created = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
             let created_len =
                 super::consensus_block_wire_len(self.common_config.peer.id(), &created);
-            let send_created_copy = !(allow_hintless_block_sync_bypass && hintless_block_sync);
+            // Always skip the redundant BlockCreated copy for hintless updates. The update path
+            // carries deterministic missing-block recovery logic; the hintless BlockCreated path
+            // can be lock-rejected and amplify view-change churn.
+            let send_created_copy = !hintless_block_sync;
             if send_created_copy && created_len <= self.consensus_payload_frame_cap {
                 for (peer, priority) in peers.iter() {
                     self.send_fetch_pending_block_response(
@@ -778,8 +923,28 @@ impl Actor {
         view: u64,
         requested_missing_block: bool,
     ) -> bool {
-        if requested_missing_block || self.block_known_locally(*block_hash) {
+        if self.block_known_locally(*block_hash) {
             return false;
+        }
+        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let requested_margin = self.recovery_missing_request_stale_height_margin().max(1);
+        let far_ahead_by_committed = height > local_height.saturating_add(requested_margin);
+        if requested_missing_block {
+            // Requested missing-block recovery is only allowed within a bounded forward window.
+            // Apply this gate before parent-availability short-circuit so far-ahead chains cannot
+            // keep inflating pending payload/RBC state while the tracked missing height is stalled.
+            if far_ahead_by_committed {
+                return true;
+            }
+            return false;
+        }
+        let unresolved_lower_missing = self
+            .lowest_unresolved_missing_block_height(local_height)
+            .is_some_and(|missing_height| missing_height < height);
+        if unresolved_lower_missing && far_ahead_by_committed {
+            // A lower missing height is still unresolved; keep recovery deterministic by
+            // suppressing sparse far-ahead updates until the gap closes.
+            return true;
         }
         if parent_hash.is_some_and(|hash| self.block_payload_available_locally(hash)) {
             return false;
@@ -818,7 +983,59 @@ impl Actor {
         }
     }
 
-    fn defer_block_sync_update(
+    fn deferred_block_sync_has_commit_evidence(entry: &super::DeferredBlockSyncUpdate) -> bool {
+        entry.update.commit_qc.is_some()
+            || entry.update.validator_checkpoint.is_some()
+            || entry.update.stake_snapshot.is_some()
+    }
+
+    fn enforce_deferred_block_sync_cap(&mut self) {
+        let cap = self.recovery_pending_block_sync_cap();
+        if cap == 0 {
+            return;
+        }
+        let mut evictions = 0u64;
+        while self.deferred_block_sync_updates.len() > cap {
+            let candidate = self
+                .deferred_block_sync_updates
+                .iter()
+                .min_by_key(|(key, entry)| {
+                    let (height, view, hash) = *key;
+                    (
+                        // Prefer retaining entries carrying commit evidence.
+                        u8::from(Self::deferred_block_sync_has_commit_evidence(entry)),
+                        // Prefer retaining newer views/heights.
+                        view,
+                        height,
+                        hash,
+                    )
+                })
+                .map(|(key, _)| *key);
+            let Some((height, view, hash)) = candidate else {
+                break;
+            };
+            if self
+                .deferred_block_sync_updates
+                .remove(&(height, view, hash))
+                .is_some()
+            {
+                evictions = evictions.saturating_add(1);
+                debug!(
+                    height,
+                    view,
+                    block = %hash,
+                    deferred = self.deferred_block_sync_updates.len(),
+                    cap,
+                    "evicting deferred block sync update due to bounded queue cap"
+                );
+            }
+        }
+        if evictions > 0 {
+            super::status::inc_pending_queue_evictions_total(evictions);
+        }
+    }
+
+    pub(super) fn defer_block_sync_update(
         &mut self,
         mut update: super::message::BlockSyncUpdate,
         sender: Option<PeerId>,
@@ -835,6 +1052,7 @@ impl Actor {
         } else {
             self.deferred_block_sync_updates.insert(key, entry);
         }
+        self.enforce_deferred_block_sync_cap();
         self.record_consensus_message_handling(
             super::status::ConsensusMessageKind::BlockSyncUpdate,
             super::status::ConsensusMessageOutcome::Deferred,
@@ -920,10 +1138,22 @@ impl Actor {
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
         let parent_hash = block.header().prev_block_hash();
-        let mut requested_missing_block = self
+        let requested_missing_block_by_hash = self
             .pending
             .missing_block_requests
             .contains_key(&block_hash);
+        let requested_missing_block_by_height = !requested_missing_block_by_hash
+            && self.has_missing_block_request_for_height(block_height);
+        let mut requested_missing_block =
+            requested_missing_block_by_hash || requested_missing_block_by_height;
+        if requested_missing_block_by_height {
+            debug!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                "treating block sync update as missing-block recovery traffic due to same-height request"
+            );
+        }
         let block_known_locally = self.block_known_locally(block_hash);
         let has_commit_votes = !commit_votes.is_empty();
         let has_commit_evidence =
@@ -997,27 +1227,38 @@ impl Actor {
         }
         if let Some(qc) = incoming_qc.as_ref() {
             if let Some(lock) = self.locked_qc {
-                let same_height_conflict =
-                    qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash;
+                let same_height_conflict = Self::block_sync_qc_same_height_conflict(lock, qc);
                 if same_height_conflict {
-                    if self.defer_block_sync_qc_while_locked_payload_missing(
-                        qc,
-                        "block_sync_update.prefilter.missing_locked_payload",
-                    ) {
-                        return Ok(());
+                    if Self::block_sync_qc_same_height_recovery_candidate(lock, qc) {
+                        info!(
+                            height = qc.height,
+                            view = qc.view,
+                            incoming_hash = %qc.subject_block_hash,
+                            locked_height = lock.height,
+                            locked_view = lock.view,
+                            locked_hash = %lock.subject_block_hash,
+                            "retaining same-height conflicting block sync QC as higher-view recovery candidate"
+                        );
+                    } else {
+                        if self.defer_block_sync_qc_while_locked_payload_missing(
+                            qc,
+                            "block_sync_update.prefilter.missing_locked_payload",
+                        ) {
+                            return Ok(());
+                        }
+                        self.log_block_sync_locked_qc_conflict(
+                            qc,
+                            lock,
+                            "block_sync_update.prefilter.height_conflict",
+                        );
+                        crate::sumeragi::status::inc_block_sync_locked_qc_prefilter_drop();
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::Qc,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::LockedQc,
+                        );
+                        incoming_qc = None;
                     }
-                    self.log_block_sync_locked_qc_conflict(
-                        qc,
-                        lock,
-                        "block_sync_update.prefilter.height_conflict",
-                    );
-                    crate::sumeragi::status::inc_block_sync_locked_qc_prefilter_drop();
-                    self.record_consensus_message_handling(
-                        super::status::ConsensusMessageKind::Qc,
-                        super::status::ConsensusMessageOutcome::Dropped,
-                        super::status::ConsensusMessageReason::LockedQc,
-                    );
-                    incoming_qc = None;
                 }
             }
         }
@@ -1167,9 +1408,12 @@ impl Actor {
         }
         if self.runtime_da_enabled()
             && !requested_missing_block
-            && !self.block_payload_available_locally(block_hash)
+            && !block_known_locally
             && block_height <= local_height.saturating_add(1)
         {
+            // Aborted pending payloads are retained for recovery but must still be treated as
+            // missing for consensus progression, otherwise sparse next-height block-sync updates
+            // can be dropped before they revive the pending entry.
             requested_missing_block = true;
         }
         let has_commit_votes = !commit_votes.is_empty();
@@ -1436,6 +1680,43 @@ impl Actor {
                     MissingBlockClearReason::PayloadAvailable,
                 );
                 return Ok(());
+            }
+            if !block_known {
+                let mut fallback_roster = self.effective_commit_topology();
+                if fallback_roster.is_empty() {
+                    fallback_roster = self.trusted_topology();
+                }
+                if !fallback_roster.is_empty() {
+                    let fallback_topology = super::network_topology::Topology::new(fallback_roster);
+                    let empty_signers =
+                        BTreeSet::<crate::sumeragi::consensus::ValidatorIndex>::new();
+                    if self.maybe_request_pending_block_for_missing_qc(
+                        block_hash,
+                        block_height,
+                        block_view,
+                        block.signatures().count(),
+                        fallback_topology.min_votes_for_commit().max(1),
+                        &empty_signers,
+                        &fallback_topology,
+                    ) {
+                        requested_missing_block = true;
+                    }
+                }
+                if requested_missing_block {
+                    let failover_requested = self.force_tracked_missing_height_sidecar_failover(
+                        block_height,
+                        block_hash,
+                        "block_sync_update_missing_roster",
+                    );
+                    if failover_requested {
+                        debug!(
+                            height = block_height,
+                            view = block_view,
+                            block = %block_hash,
+                            "forced deterministic sidecar failover for tracked missing block without verifiable roster"
+                        );
+                    }
+                }
             }
             warn!(
                 height = block_height,
@@ -1999,7 +2280,8 @@ impl Actor {
             u64::try_from(qc_validate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let hard_locked_conflict = incoming_qc.as_ref().is_some_and(|qc| {
             self.locked_qc.is_some_and(|lock| {
-                qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash
+                Self::block_sync_qc_same_height_conflict(lock, qc)
+                    && !Self::block_sync_qc_same_height_recovery_candidate(lock, qc)
             })
         });
         if hard_locked_conflict
@@ -2053,7 +2335,7 @@ impl Actor {
             );
             return Ok(());
         }
-        if !block_sync_quorum_available(
+        let mut quorum_available = block_sync_quorum_available(
             block_signer_count,
             commit_quorum,
             signature_quorum_met,
@@ -2063,7 +2345,53 @@ impl Actor {
             requested_missing_block,
             block_height,
             local_height,
-        ) {
+        );
+        if !quorum_available
+            && !qc_evidence_present
+            && !commit_cert_present
+            && !checkpoint_present
+            && block_signer_count < commit_quorum
+            && !requested_missing_block
+        {
+            if self.maybe_request_pending_block_for_missing_qc(
+                block_hash,
+                block_height,
+                block_view,
+                block_signer_count,
+                commit_quorum,
+                &block_signers,
+                &topology,
+            ) {
+                // Invariant A: sparse missing-QC updates must transition request state in this
+                // same event step (or stay explicitly suppressed via backoff).
+                requested_missing_block = true;
+                quorum_available = block_sync_quorum_available(
+                    block_signer_count,
+                    commit_quorum,
+                    signature_quorum_met,
+                    qc_evidence_present,
+                    commit_cert_present,
+                    checkpoint_present,
+                    requested_missing_block,
+                    block_height,
+                    local_height,
+                );
+            }
+        }
+        if !quorum_available {
+            if !qc_evidence_present
+                && !commit_cert_present
+                && !checkpoint_present
+                && block_signer_count < commit_quorum
+                && !requested_missing_block
+            {
+                debug!(
+                    hash = ?block_hash,
+                    height = block_height,
+                    view = block_view,
+                    "sparse block sync update remained unrequested after recovery planning"
+                );
+            }
             super::status::inc_block_sync_drop_invalid_signatures();
             let warn_cooldown = self
                 .rebroadcast_cooldown()
@@ -2148,57 +2476,6 @@ impl Actor {
                 .is_ok()
             })
             || incoming_qc_usable;
-        if !qc_evidence_present
-            && !commit_cert_present
-            && !checkpoint_present
-            && block_signer_count < commit_quorum
-            && !requested_missing_block
-        {
-            let now = Instant::now();
-            let cooldown = self.rebroadcast_cooldown();
-            if self.block_sync_fetch_log.allow(block_hash, now, cooldown) {
-                let targets = Self::build_fetch_targets(&block_signers, &topology);
-                if targets.is_empty() {
-                    debug!(
-                        height = block_height,
-                        view = block_view,
-                        block = %block_hash,
-                        "skipping pending-block fetch: no viable targets"
-                    );
-                } else {
-                    let request = super::message::FetchPendingBlock {
-                        requester: self.common_config.peer.id.clone(),
-                        block_hash,
-                        height: block_height,
-                        view: block_view,
-                        priority: None,
-                    };
-                    let msg = BlockMessage::FetchPendingBlock(request);
-                    for peer in targets {
-                        self.schedule_background(BackgroundRequest::Post {
-                            peer,
-                            msg: msg.clone().into(),
-                        });
-                    }
-                    info!(
-                        height = block_height,
-                        view = block_view,
-                        block = %block_hash,
-                        block_signers = block_signer_count,
-                        commit_quorum,
-                        "requesting pending block to recover missing QC"
-                    );
-                }
-            } else {
-                trace!(
-                    height = block_height,
-                    view = block_view,
-                    block = %block_hash,
-                    cooldown_ms = cooldown.as_millis(),
-                    "skipping pending-block fetch due to cooldown"
-                );
-            }
-        }
         info!(
             hash = ?block_hash,
             height = block_height,
@@ -2311,7 +2588,13 @@ impl Actor {
                     return Ok(());
                 }
                 if let Some(lock) = self.locked_qc {
-                    if qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash
+                    let same_height_conflict = Self::block_sync_qc_same_height_conflict(lock, &qc);
+                    if same_height_conflict
+                        && !Self::block_sync_qc_same_height_recoverable(
+                            lock,
+                            &qc,
+                            allow_nonextending_qc,
+                        )
                     {
                         self.log_block_sync_locked_qc_conflict(
                             &qc,
@@ -2324,6 +2607,16 @@ impl Actor {
                             super::status::ConsensusMessageReason::LockedQc,
                         );
                         return Ok(());
+                    } else if same_height_conflict {
+                        info!(
+                            height = qc.height,
+                            view = qc.view,
+                            incoming_hash = %qc.subject_block_hash,
+                            locked_height = lock.height,
+                            locked_view = lock.view,
+                            locked_hash = %lock.subject_block_hash,
+                            "accepting same-height conflicting block sync QC to recover stale lock"
+                        );
                     }
                 }
                 if self.block_sync_qc_is_stale_against_lock(&qc) {
@@ -2679,7 +2972,10 @@ impl Actor {
             epoch: qc.epoch,
         };
         if let Some(lock) = self.locked_qc {
-            if qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash {
+            let same_height_conflict = Self::block_sync_qc_same_height_conflict(lock, &qc);
+            if same_height_conflict
+                && !Self::block_sync_qc_same_height_recoverable(lock, &qc, allow_nonextending_qc)
+            {
                 self.log_block_sync_locked_qc_conflict(
                     &qc,
                     lock,
@@ -2691,6 +2987,16 @@ impl Actor {
                     super::status::ConsensusMessageReason::LockedQc,
                 );
                 return;
+            } else if same_height_conflict {
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    incoming_hash = %qc.subject_block_hash,
+                    locked_height = lock.height,
+                    locked_view = lock.view,
+                    locked_hash = %lock.subject_block_hash,
+                    "accepting same-height conflicting cached block sync QC to recover stale lock"
+                );
             }
         }
         if self.block_sync_qc_is_stale_against_lock(&qc) {
@@ -3099,7 +3405,10 @@ impl Actor {
             return None;
         }
         if let Some(lock) = self.locked_qc {
-            if qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash {
+            let same_height_conflict = Self::block_sync_qc_same_height_conflict(lock, &qc);
+            if same_height_conflict
+                && !Self::block_sync_qc_same_height_recovery_candidate(lock, &qc)
+            {
                 self.log_block_sync_locked_qc_conflict(&qc, lock, "known_block_qc.height_conflict");
                 self.record_consensus_message_handling(
                     super::status::ConsensusMessageKind::Qc,
@@ -3107,6 +3416,16 @@ impl Actor {
                     super::status::ConsensusMessageReason::LockedQc,
                 );
                 return None;
+            } else if same_height_conflict {
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    incoming_hash = %qc.subject_block_hash,
+                    locked_height = lock.height,
+                    locked_view = lock.view,
+                    locked_hash = %lock.subject_block_hash,
+                    "accepting same-height conflicting known-block QC to recover stale lock"
+                );
             }
         }
         if self.block_sync_qc_is_stale_against_lock(&qc) {

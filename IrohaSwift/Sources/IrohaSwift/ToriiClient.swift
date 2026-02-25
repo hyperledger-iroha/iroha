@@ -2510,6 +2510,55 @@ public struct ToriiOfflineAllowanceList: Decodable, Sendable {
     public let total: UInt64
 }
 
+public extension ToriiOfflineAllowanceItem {
+    /// Parsed numeric remaining amount for this certificate, or `nil` when the payload is invalid.
+    var remainingAmountDecimal: Decimal? {
+        let trimmed = remainingAmount.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        return Decimal(string: trimmed)
+    }
+}
+
+public extension ToriiOfflineAllowanceList {
+    /// Sum of all remaining offline allowances across certificates.
+    ///
+    /// Important: this value can be higher than what can be sent in a single receipt.
+    var aggregateRemainingAmount: Decimal {
+        items
+            .compactMap(\.remainingAmountDecimal)
+            .reduce(.zero, +)
+    }
+
+    /// Maximum amount that can be sent in one offline receipt, constrained by one certificate.
+    var maxSingleTransferAmount: Decimal {
+        var maximum = Decimal.zero
+        for amount in items.compactMap(\.remainingAmountDecimal) where amount > maximum {
+            maximum = amount
+        }
+        return maximum
+    }
+
+    /// Returns `true` when any single certificate can cover `amount`.
+    func supportsSingleTransfer(amount: Decimal) -> Bool {
+        guard amount > .zero else {
+            return false
+        }
+        return maxSingleTransferAmount >= amount
+    }
+
+    /// Returns the first allowance whose remaining balance can cover `amount`.
+    func firstAllowanceSupportingSingleTransfer(amount: Decimal) -> ToriiOfflineAllowanceItem? {
+        guard amount > .zero else {
+            return nil
+        }
+        return items.first { item in
+            (item.remainingAmountDecimal ?? .zero) >= amount
+        }
+    }
+}
+
 public struct ToriiOfflineSummaryItem: Decodable, Sendable {
     public let certificateIdHex: String
     public let controllerId: String
@@ -2824,6 +2873,7 @@ public struct ToriiOfflineTransferItem: Codable, Sendable {
     public let refreshAtMs: UInt64?
     public let verdictIdHex: String?
     public let attestationNonceHex: String?
+    public let rejectionReason: String?
     public let platformPolicy: ToriiPlatformPolicy?
     public let platformTokenSnapshot: ToriiOfflinePlatformTokenSnapshot?
     public let transfer: ToriiJSONValue
@@ -2850,6 +2900,7 @@ public struct ToriiOfflineTransferItem: Codable, Sendable {
         case refreshAtMs = "refresh_at_ms"
         case verdictIdHex = "verdict_id_hex"
         case attestationNonceHex = "attestation_nonce_hex"
+        case rejectionReason = "rejection_reason"
         case platformPolicy = "platform_policy"
         case platformTokenSnapshot = "platform_token_snapshot"
         case transfer
@@ -2876,6 +2927,7 @@ public struct ToriiOfflineTransferItem: Codable, Sendable {
                 refreshAtMs: UInt64?,
                 verdictIdHex: String?,
                 attestationNonceHex: String?,
+                rejectionReason: String? = nil,
                 platformPolicy: ToriiPlatformPolicy?,
                 platformTokenSnapshot: ToriiOfflinePlatformTokenSnapshot?,
                 transfer: ToriiJSONValue) {
@@ -2900,6 +2952,7 @@ public struct ToriiOfflineTransferItem: Codable, Sendable {
         self.refreshAtMs = refreshAtMs
         self.verdictIdHex = verdictIdHex
         self.attestationNonceHex = attestationNonceHex
+        self.rejectionReason = rejectionReason
         self.platformPolicy = platformPolicy
         self.platformTokenSnapshot = platformTokenSnapshot
         self.transfer = transfer
@@ -8379,6 +8432,25 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                                                           privateKey: privateKey) }
     }
 
+    /// Reprovisions an existing offline allowance by renewing the certificate with a
+    /// new Pedersen commitment while preserving the current allowance amount and policy.
+    ///
+    /// This is intended for recovery flows that rotate the commitment/blinding without
+    /// changing balances or policy caps.
+    @discardableResult
+    public func reprovisionOfflineAllowance(certificateIdHex: String,
+                                            currentCertificate: OfflineWalletCertificate,
+                                            newCommitment: Data,
+                                            authority: String,
+                                            privateKey: String,
+                                            completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.reprovisionOfflineAllowance(certificateIdHex: certificateIdHex,
+                                                                         currentCertificate: currentCertificate,
+                                                                         newCommitment: newCommitment,
+                                                                         authority: authority,
+                                                                         privateKey: privateKey) }
+    }
+
     @discardableResult
     public func submitOfflineSpendReceipts(_ requestBody: ToriiOfflineSpendReceiptsSubmitRequest,
                                            completion: @escaping (Result<ToriiOfflineSpendReceiptsSubmitResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
@@ -9526,6 +9598,24 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                                          requestBody: renewRequest)
         try ensureTopUpCertificateIdsMatch(issued: issued, registered: registered)
         return ToriiOfflineTopUpResponse(certificate: issued, registration: registered)
+    }
+
+    /// Reprovisions an existing offline allowance by renewing the certificate with a
+    /// new Pedersen commitment while preserving allowance amount/policy fields.
+    ///
+    /// This avoids `topUp(0)` workarounds in recovery flows where only the commitment
+    /// must change.
+    public func reprovisionOfflineAllowance(certificateIdHex: String,
+                                            currentCertificate: OfflineWalletCertificate,
+                                            newCommitment: Data,
+                                            authority: String,
+                                            privateKey: String) async throws -> ToriiOfflineTopUpResponse {
+        let draft = try Self.makeOfflineReprovisionDraft(currentCertificate: currentCertificate,
+                                                         newCommitment: newCommitment)
+        return try await topUpOfflineAllowanceRenewal(certificateIdHex: certificateIdHex,
+                                                      draft: draft,
+                                                      authority: authority,
+                                                      privateKey: privateKey)
     }
 
     public func submitOfflineSpendReceipts(_ requestBody: ToriiOfflineSpendReceiptsSubmitRequest) async throws -> ToriiOfflineSpendReceiptsSubmitResponse {
@@ -11010,6 +11100,34 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
     }
 
+    private static func makeOfflineReprovisionDraft(
+        currentCertificate: OfflineWalletCertificate,
+        newCommitment: Data
+    ) throws -> OfflineWalletCertificateDraft {
+        guard newCommitment.count == 32 else {
+            throw ToriiClientError.invalidPayload("newCommitment must be exactly 32 bytes.")
+        }
+        let allowance = OfflineAllowanceCommitment(
+            assetId: currentCertificate.allowance.assetId,
+            amount: currentCertificate.allowance.amount,
+            commitment: newCommitment
+        )
+        return OfflineWalletCertificateDraft(
+            controller: currentCertificate.controller,
+            operatorId: currentCertificate.operatorId,
+            allowance: allowance,
+            spendPublicKey: currentCertificate.spendPublicKey,
+            attestationReport: currentCertificate.attestationReport,
+            issuedAtMs: currentCertificate.issuedAtMs,
+            expiresAtMs: currentCertificate.expiresAtMs,
+            policy: currentCertificate.policy,
+            metadata: currentCertificate.metadata,
+            verdictId: currentCertificate.verdictId,
+            attestationNonce: currentCertificate.attestationNonce,
+            refreshAtMs: currentCertificate.refreshAtMs
+        )
+    }
+
     public func submitTransaction(data: Data,
                                   mode: PipelineEndpointMode,
                                   idempotencyKey: String? = nil) async throws -> ToriiSubmitTransactionResponse? {
@@ -11825,6 +11943,10 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     private func settlementRejectionReason(from item: ToriiOfflineTransferItem) async throws -> String? {
+        if let reason = item.rejectionReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !reason.isEmpty {
+            return reason
+        }
         if let reason = Self.extractRejectionReason(from: item.transfer) {
             return reason
         }

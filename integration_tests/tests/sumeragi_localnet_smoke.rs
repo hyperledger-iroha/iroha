@@ -22,6 +22,7 @@ use iroha::data_model::{
     name::Name,
     parameter::{BlockParameter, Parameter, SumeragiParameter, system::SumeragiNposParameters},
 };
+use iroha::nexus::verify_lane_relay_envelopes;
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use nonzero_ext::nonzero;
 use norito::json::{Map, Value};
@@ -342,6 +343,96 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
     if sandbox::handle_result(
         result,
         stringify!(permissioned_localnet_produces_blocks_within_bound),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()> {
+    init_instruction_registry();
+    let _guard = LOCALNET_SMOKE_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
+
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_real_genesis_keypair()
+        .with_pipeline_time(SMOKE_PIPELINE_TIME)
+        .with_config_layer(|layer| {
+            layer.write(["sumeragi", "consensus_mode"], "permissioned");
+        });
+
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(sumeragi_status_json_endpoint_decodes_to_wire_end_to_end),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let result: Result<()> = async {
+        wait_for_status_responses(&network, Duration::from_secs(30)).await?;
+        let peer = network
+            .peers()
+            .first()
+            .cloned()
+            .ok_or_else(|| eyre!("network started without peers"))?;
+
+        let url = format!(
+            "{}/v1/sumeragi/status",
+            peer.torii_url().trim_end_matches('/')
+        );
+        let response = HttpClient::new()
+            .get(url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .wrap_err("fetch sumeragi status endpoint as JSON")?;
+        let status = response.status();
+        ensure!(
+            status.is_success(),
+            "sumeragi status endpoint returned {status}"
+        );
+
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        ensure!(
+            content_type.starts_with("application/json"),
+            "expected JSON status payload, got content-type={content_type}"
+        );
+
+        let body = response
+            .bytes()
+            .await
+            .wrap_err("read sumeragi status JSON body")?;
+        let wire: SumeragiStatusWire = norito::json::from_slice(&body)
+            .wrap_err("decode sumeragi status JSON payload into SumeragiStatusWire")?;
+        ensure!(
+            !wire.mode_tag.is_empty(),
+            "decoded sumeragi status wire has empty mode_tag"
+        );
+        verify_lane_relay_envelopes(&wire.lane_relay_envelopes)
+            .wrap_err("lane relay envelope verification failed for JSON status payload")?;
+
+        network.shutdown().await;
+        Ok(())
+    }
+    .await;
+
+    if sandbox::handle_result(
+        result,
+        stringify!(sumeragi_status_json_endpoint_decodes_to_wire_end_to_end),
     )?
     .is_none()
     {

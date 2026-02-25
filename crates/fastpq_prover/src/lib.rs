@@ -23,6 +23,7 @@ pub mod gadgets;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 mod metal;
 mod metal_config;
+mod offline_merge;
 pub mod ordering;
 pub(crate) mod overrides;
 pub mod packing;
@@ -66,6 +67,10 @@ pub use metal::{
     take_queue_depth_stats, take_twiddle_cache_stats,
 };
 pub use metal_config::{FftTuning, PoseidonTuning};
+pub use offline_merge::{
+    OfflineMergeArtifact, OfflineMergeLeaf, OfflineMergeWitness, build_offline_merge_artifact,
+    verify_offline_merge_artifact,
+};
 pub use ordering::ordering_hash;
 pub use overrides::{MetalOverrides, apply_metal_overrides};
 pub use packing::{LIMB_BYTES, PackedBytes, pack_bytes, unpack_bytes};

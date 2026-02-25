@@ -44,9 +44,13 @@ public enum OfflineReceiptBuilderError: Error, LocalizedError, Equatable {
     case missingBalanceProof
     case invalidBalanceProofLength(expected: Int, actual: Int)
     case unsupportedBalanceProofVersion(UInt8)
+    case duplicateBalanceProofCertificate
+    case missingBalanceProofForCertificate
+    case unknownBalanceProofCertificate
     case aggregateOverflow
     case aggregateProofVersionUnsupported(UInt16)
     case aggregateProofRootMismatch
+    case aggregateProofMetadataInvalid(String)
     case aggregateProofHashError(String)
     case aggregateProofRequestEncodingFailed(String)
     case aggregateProofGenerationUnavailable(String)
@@ -136,12 +140,20 @@ public enum OfflineReceiptBuilderError: Error, LocalizedError, Equatable {
             return "Balance proof must be \(expected) bytes (got \(actual))."
         case let .unsupportedBalanceProofVersion(version):
             return "Balance proof version \(version) is not supported."
+        case .duplicateBalanceProofCertificate:
+            return "Balance proofs must not contain duplicate sender certificates."
+        case .missingBalanceProofForCertificate:
+            return "Each sender certificate in receipts must have a balance proof."
+        case .unknownBalanceProofCertificate:
+            return "Balance proof references a sender certificate not present in receipts."
         case .aggregateOverflow:
             return "Aggregate amount exceeds numeric bounds."
         case let .aggregateProofVersionUnsupported(version):
             return "Aggregate proof version \(version) is not supported."
         case .aggregateProofRootMismatch:
             return "Aggregate proof receipts_root does not match transfer receipts."
+        case let .aggregateProofMetadataInvalid(reason):
+            return "Aggregate proof metadata is invalid: \(reason)."
         case let .aggregateProofHashError(reason):
             return "Aggregate proof receipts_root could not be computed: \(reason)."
         case let .aggregateProofRequestEncodingFailed(reason):
@@ -334,10 +346,23 @@ public enum OfflineReceiptBuilder {
         proofCounter: Data? = nil,
         proofReplay: Data? = nil,
         metadata: [String: ToriiJSONValue] = [:],
-        version: UInt16 = 1
+        version: UInt16 = OfflineAggregateProofVersion.legacy
     ) throws -> OfflineAggregateProofEnvelope {
-        guard version == 1 else {
+        guard version == OfflineAggregateProofVersion.legacy
+            || version == OfflineAggregateProofVersion.recursiveStarkV2 else {
             throw OfflineReceiptBuilderError.aggregateProofVersionUnsupported(version)
+        }
+        if version == OfflineAggregateProofVersion.recursiveStarkV2 {
+            if proofSum?.isEmpty != false {
+                throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid("version=2 requires non-empty proof_sum")
+            }
+            if proofCounter?.isEmpty == false {
+                throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid("version=2 requires proof_counter to be empty")
+            }
+            if proofReplay?.isEmpty == false {
+                throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid("version=2 requires proof_replay to be empty")
+            }
+            _ = try aggregateProofMetadataV2(from: metadata)
         }
         let root = try computeReceiptsRoot(receipts: receipts)
         return OfflineAggregateProofEnvelope(
@@ -540,6 +565,51 @@ public enum OfflineReceiptBuilder {
         return transfer
     }
 
+    /// Builds an offline transfer bundle that can spend across multiple sender certificates.
+    ///
+    /// The legacy `balanceProof` field is populated from the first per-certificate
+    /// proof for wire compatibility; actual validation uses `balanceProofs`.
+    public static func buildTransferMulti(
+        bundleId: Data? = nil,
+        bundleIdSeed: Data? = nil,
+        chainId: String,
+        receiver: String,
+        depositAccount: String,
+        receipts: [OfflineSpendReceipt],
+        balanceProofs: [OfflineCertificateBalanceProof],
+        aggregateProof: OfflineAggregateProofEnvelope? = nil,
+        attachments: OfflineProofAttachmentList? = nil,
+        platformSnapshot: OfflinePlatformTokenSnapshot? = nil,
+        sortReceipts: Bool = true,
+        senderCertificates: [OfflineWalletCertificate]
+    ) throws -> OfflineToOnlineTransfer {
+        guard let fallbackProof = balanceProofs.first?.balanceProof else {
+            throw OfflineReceiptBuilderError.missingBalanceProofForCertificate
+        }
+        let finalBundleId: Data
+        if let bundleId {
+            finalBundleId = bundleId
+        } else if let seed = bundleIdSeed {
+            finalBundleId = generateBundleId(seed: seed)
+        } else {
+            finalBundleId = generateBundleId()
+        }
+        let orderedReceipts = sortReceipts ? receipts.sorted(by: receiptSort) : receipts
+        let transfer = OfflineToOnlineTransfer(
+            bundleId: finalBundleId,
+            receiver: receiver,
+            depositAccount: depositAccount,
+            receipts: orderedReceipts,
+            balanceProof: fallbackProof,
+            balanceProofs: balanceProofs,
+            aggregateProof: aggregateProof,
+            attachments: attachments,
+            platformSnapshot: platformSnapshot
+        )
+        try validateTransferMulti(transfer, chainId: chainId, certificates: senderCertificates)
+        return transfer
+    }
+
     /// Validates a receipt for offline submission (sender-side, full certificate available).
     public static func validateReceipt(_ receipt: OfflineSpendReceipt, chainId: String, certificate: OfflineWalletCertificate) throws {
         try validateTxId(receipt.txId)
@@ -682,6 +752,86 @@ public enum OfflineReceiptBuilder {
         try validateAggregateProof(transfer)
     }
 
+    /// Validates a transfer bundle that can include receipts from multiple certificates.
+    public static func validateTransferMulti(_ transfer: OfflineToOnlineTransfer,
+                                             chainId: String,
+                                             certificates: [OfflineWalletCertificate]) throws {
+        try validateBundleId(transfer.bundleId)
+        try validateAccountId(transfer.receiver, field: "receiver")
+        try validateAccountId(transfer.depositAccount, field: "depositAccount")
+        guard !transfer.receipts.isEmpty else {
+            throw OfflineReceiptBuilderError.emptyReceipts
+        }
+        guard receiptsAreCanonical(transfer.receipts) else {
+            throw OfflineReceiptBuilderError.receiptOrderInvalid
+        }
+        let first = transfer.receipts[0]
+        let expectedScope = try counterScope(for: first)
+        let expectedAssetId = first.assetId
+        let bundleScale = try expectedScale(from: first.amount)
+        let expectedTotal = try aggregateAmount(receipts: transfer.receipts)
+        let receiptsByCertificate = groupReceiptsByCertificate(transfer.receipts)
+        let proofByCertificate = try resolveBalanceProofs(transfer, receiptsByCertificate: receiptsByCertificate)
+
+        var certificateById: [Data: OfflineWalletCertificate] = [:]
+        for certificate in certificates {
+            let certificateId = try certificate.certificateId()
+            certificateById[certificateId] = certificate
+        }
+
+        var totalFromProofs = OfflineDecimal.zero(scale: bundleScale)
+        for (certificateId, receipts) in receiptsByCertificate {
+            guard let certificate = certificateById[certificateId] else {
+                throw OfflineReceiptBuilderError.receiptCertificateMismatch
+            }
+            guard let balanceProof = proofByCertificate[certificateId] else {
+                throw OfflineReceiptBuilderError.missingBalanceProofForCertificate
+            }
+            let certificateScale = try expectedScale(for: certificate)
+            let certificateExpected = try aggregateAmount(receipts: receipts)
+            let claimed = try parseAmount(balanceProof.claimedDelta, expectedScale: certificateScale)
+            if !claimed.equals(expected: certificateExpected) {
+                throw OfflineReceiptBuilderError.claimedDeltaMismatch(expected: certificateExpected,
+                                                                     actual: balanceProof.claimedDelta)
+            }
+            try validateBalanceProofShape(balanceProof,
+                                          expectedAssetId: certificate.allowance.assetId,
+                                          expectedScale: certificateScale)
+            totalFromProofs = try totalFromProofs.adding(try parseAmount(balanceProof.claimedDelta,
+                                                                          expectedScale: bundleScale))
+
+            let policyMax = try parseAmount(certificate.policy.maxTxValue, expectedScale: certificateScale)
+            for receipt in receipts {
+                try validateReceipt(receipt, chainId: chainId, certificate: certificate)
+                if receipt.to != transfer.receiver {
+                    throw OfflineReceiptBuilderError.receiptReceiverMismatch
+                }
+                if receipt.from != first.from {
+                    throw OfflineReceiptBuilderError.receiptSenderMismatch
+                }
+                if receipt.assetId != expectedAssetId {
+                    throw OfflineReceiptBuilderError.receiptAssetMismatch
+                }
+                let amount = try parseAmount(receipt.amount, expectedScale: certificateScale)
+                if amount.compare(to: policyMax) == .orderedDescending {
+                    throw OfflineReceiptBuilderError.amountExceedsPolicy(amount: receipt.amount,
+                                                                        max: certificate.policy.maxTxValue)
+                }
+                let scope = try counterScope(for: receipt)
+                if scope != expectedScope {
+                    throw OfflineReceiptBuilderError.mixedCounterScopes
+                }
+            }
+        }
+        let renderedTotal = totalFromProofs.render()
+        if renderedTotal != expectedTotal {
+            throw OfflineReceiptBuilderError.claimedDeltaMismatch(expected: expectedTotal,
+                                                                 actual: renderedTotal)
+        }
+        _ = try OfflineNorito.encodeAssetId(expectedAssetId)
+        try validateAggregateProof(transfer)
+    }
+
     // MARK: - Receiver-side validation (sender_certificate_id only)
 
     /// Validates a receipt on the receiver side where only the 32-byte
@@ -742,40 +892,33 @@ public enum OfflineReceiptBuilder {
             throw OfflineReceiptBuilderError.receiptOrderInvalid
         }
         let first = transfer.receipts[0]
-        // Transfer-level validateSnapshot skipped — no certificate metadata on receiver side.
         let expectedScope = try counterScope(for: first)
-        let expectedCertificateId = first.senderCertificateId
         let expectedAssetId = first.assetId
         let expectedScale = try expectedScale(from: first.amount)
         let expectedSum = try aggregateAmount(receipts: transfer.receipts)
-        let claimed = try parseAmount(transfer.balanceProof.claimedDelta,
-                                      expectedScale: expectedScale)
+        let receiptsByCertificate = groupReceiptsByCertificate(transfer.receipts)
+        let proofByCertificate = try resolveBalanceProofs(transfer, receiptsByCertificate: receiptsByCertificate)
 
-        try validateCommitmentLength(transfer.balanceProof.initialCommitment.commitment)
-        try validateResultingCommitmentLength(transfer.balanceProof.resultingCommitment)
-        guard let proof = transfer.balanceProof.zkProof, !proof.isEmpty else {
-            throw OfflineReceiptBuilderError.missingBalanceProof
+        var totalFromProofs = OfflineDecimal.zero(scale: expectedScale)
+        for (certificateId, receipts) in receiptsByCertificate {
+            guard let balanceProof = proofByCertificate[certificateId] else {
+                throw OfflineReceiptBuilderError.missingBalanceProofForCertificate
+            }
+            let certificateExpected = try aggregateAmount(receipts: receipts)
+            let claimed = try parseAmount(balanceProof.claimedDelta, expectedScale: expectedScale)
+            if !claimed.equals(expected: certificateExpected) {
+                throw OfflineReceiptBuilderError.claimedDeltaMismatch(expected: certificateExpected,
+                                                                     actual: balanceProof.claimedDelta)
+            }
+            try validateBalanceProofShape(balanceProof,
+                                          expectedAssetId: expectedAssetId,
+                                          expectedScale: expectedScale)
+            totalFromProofs = try totalFromProofs.adding(claimed)
         }
-        if proof.count != OfflineBalanceProofBuilder.proofLength {
-            throw OfflineReceiptBuilderError.invalidBalanceProofLength(
-                expected: OfflineBalanceProofBuilder.proofLength,
-                actual: proof.count
-            )
-        }
-        if proof.first != 1 {
-            throw OfflineReceiptBuilderError.unsupportedBalanceProofVersion(proof.first ?? 0)
-        }
-        if transfer.balanceProof.initialCommitment.assetId != expectedAssetId {
-            throw OfflineReceiptBuilderError.balanceProofAssetMismatch
-        }
-        _ = try parseAmount(transfer.balanceProof.initialCommitment.amount,
-                            expectedScale: expectedScale)
-        guard !claimed.isNegative, !claimed.isZero else {
-            throw OfflineReceiptBuilderError.nonPositiveAmount(transfer.balanceProof.claimedDelta)
-        }
-        if !claimed.equals(expected: expectedSum) {
+        let renderedTotal = totalFromProofs.render()
+        if renderedTotal != expectedSum {
             throw OfflineReceiptBuilderError.claimedDeltaMismatch(expected: expectedSum,
-                                                                 actual: transfer.balanceProof.claimedDelta)
+                                                                 actual: renderedTotal)
         }
 
         var invoiceIds = Set<String>()
@@ -793,8 +936,8 @@ public enum OfflineReceiptBuilder {
             if receipt.assetId != expectedAssetId {
                 throw OfflineReceiptBuilderError.receiptAssetMismatch
             }
-            if receipt.senderCertificateId != expectedCertificateId {
-                throw OfflineReceiptBuilderError.receiptCertificateMismatch
+            if proofByCertificate[receipt.senderCertificateId] == nil {
+                throw OfflineReceiptBuilderError.missingBalanceProofForCertificate
             }
             let amount = try parseAmount(receipt.amount, expectedScale: expectedScale)
             guard !amount.isNegative, !amount.isZero else {
@@ -809,6 +952,70 @@ public enum OfflineReceiptBuilder {
     }
 
     // MARK: - Internal validation helpers
+
+    private static func groupReceiptsByCertificate(_ receipts: [OfflineSpendReceipt]) -> [Data: [OfflineSpendReceipt]] {
+        var grouped: [Data: [OfflineSpendReceipt]] = [:]
+        grouped.reserveCapacity(receipts.count)
+        for receipt in receipts {
+            grouped[receipt.senderCertificateId, default: []].append(receipt)
+        }
+        return grouped
+    }
+
+    private static func resolveBalanceProofs(
+        _ transfer: OfflineToOnlineTransfer,
+        receiptsByCertificate: [Data: [OfflineSpendReceipt]]
+    ) throws -> [Data: OfflineBalanceProof] {
+        if let entries = transfer.balanceProofs, !entries.isEmpty {
+            var proofs: [Data: OfflineBalanceProof] = [:]
+            proofs.reserveCapacity(entries.count)
+            for entry in entries {
+                if proofs.updateValue(entry.balanceProof, forKey: entry.senderCertificateId) != nil {
+                    throw OfflineReceiptBuilderError.duplicateBalanceProofCertificate
+                }
+            }
+            for certificateId in receiptsByCertificate.keys where proofs[certificateId] == nil {
+                throw OfflineReceiptBuilderError.missingBalanceProofForCertificate
+            }
+            for certificateId in proofs.keys where receiptsByCertificate[certificateId] == nil {
+                throw OfflineReceiptBuilderError.unknownBalanceProofCertificate
+            }
+            return proofs
+        }
+
+        guard receiptsByCertificate.count == 1,
+              let certificateId = receiptsByCertificate.keys.first else {
+            throw OfflineReceiptBuilderError.missingBalanceProofForCertificate
+        }
+        return [certificateId: transfer.balanceProof]
+    }
+
+    private static func validateBalanceProofShape(_ balanceProof: OfflineBalanceProof,
+                                                  expectedAssetId: String,
+                                                  expectedScale: Int) throws {
+        try validateCommitmentLength(balanceProof.initialCommitment.commitment)
+        try validateResultingCommitmentLength(balanceProof.resultingCommitment)
+        guard let proof = balanceProof.zkProof, !proof.isEmpty else {
+            throw OfflineReceiptBuilderError.missingBalanceProof
+        }
+        if proof.count != OfflineBalanceProofBuilder.proofLength {
+            throw OfflineReceiptBuilderError.invalidBalanceProofLength(
+                expected: OfflineBalanceProofBuilder.proofLength,
+                actual: proof.count
+            )
+        }
+        if proof.first != 1 {
+            throw OfflineReceiptBuilderError.unsupportedBalanceProofVersion(proof.first ?? 0)
+        }
+        if balanceProof.initialCommitment.assetId != expectedAssetId {
+            throw OfflineReceiptBuilderError.balanceProofAssetMismatch
+        }
+        _ = try parseAmount(balanceProof.initialCommitment.amount, expectedScale: expectedScale)
+        let claimed = try parseAmount(balanceProof.claimedDelta, expectedScale: expectedScale)
+        guard !claimed.isNegative, !claimed.isZero else {
+            throw OfflineReceiptBuilderError.nonPositiveAmount(balanceProof.claimedDelta)
+        }
+    }
 
     private static func validateTxId(_ txId: Data) throws {
         guard txId.count == 32 else {
@@ -1203,7 +1410,8 @@ public enum OfflineReceiptBuilder {
 
     private static func validateAggregateProof(_ transfer: OfflineToOnlineTransfer) throws {
         guard let envelope = transfer.aggregateProof else { return }
-        guard envelope.version == 1 else {
+        guard envelope.version == OfflineAggregateProofVersion.legacy
+            || envelope.version == OfflineAggregateProofVersion.recursiveStarkV2 else {
             throw OfflineReceiptBuilderError.aggregateProofVersionUnsupported(envelope.version)
         }
         do {
@@ -1215,6 +1423,102 @@ public enum OfflineReceiptBuilder {
             throw error
         } catch {
             throw OfflineReceiptBuilderError.aggregateProofHashError(String(describing: error))
+        }
+        if envelope.version == OfflineAggregateProofVersion.recursiveStarkV2 {
+            if envelope.proofSum?.isEmpty != false {
+                throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid("version=2 requires non-empty proof_sum")
+            }
+            if envelope.proofCounter?.isEmpty == false {
+                throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid("version=2 requires proof_counter to be empty")
+            }
+            if envelope.proofReplay?.isEmpty == false {
+                throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid("version=2 requires proof_replay to be empty")
+            }
+            _ = try aggregateProofMetadataV2(from: envelope.metadata)
+        }
+    }
+
+    private struct AggregateProofMetadataV2 {
+        let backend: String
+        let circuitId: String
+        let publicInputsBase64: String
+        let recursionDepth: UInt64
+    }
+
+    private static func aggregateProofMetadataV2(
+        from metadata: [String: ToriiJSONValue]
+    ) throws -> AggregateProofMetadataV2 {
+        let backend = try requiredMetadataString(
+            metadata: metadata,
+            key: OfflineAggregateProofMetadataKey.aggregateBackend
+        )
+        if backend != OfflineAggregateProofMetadataKey.recursiveStarkBackend {
+            throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid(
+                "\(OfflineAggregateProofMetadataKey.aggregateBackend) must be \(OfflineAggregateProofMetadataKey.recursiveStarkBackend)"
+            )
+        }
+        let circuitId = try requiredMetadataString(
+            metadata: metadata,
+            key: OfflineAggregateProofMetadataKey.aggregateCircuitId
+        )
+        let publicInputsBase64 = try requiredMetadataString(
+            metadata: metadata,
+            key: OfflineAggregateProofMetadataKey.aggregatePublicInputsBase64
+        )
+        if Data(base64Encoded: publicInputsBase64) == nil {
+            throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid(
+                "\(OfflineAggregateProofMetadataKey.aggregatePublicInputsBase64) must be valid base64"
+            )
+        }
+        let recursionDepth = try requiredMetadataUInt(
+            metadata: metadata,
+            key: OfflineAggregateProofMetadataKey.aggregateRecursionDepth
+        )
+        return AggregateProofMetadataV2(
+            backend: backend,
+            circuitId: circuitId,
+            publicInputsBase64: publicInputsBase64,
+            recursionDepth: recursionDepth
+        )
+    }
+
+    private static func requiredMetadataString(
+        metadata: [String: ToriiJSONValue],
+        key: String
+    ) throws -> String {
+        guard let value = metadata[key] else {
+            throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid("missing \(key)")
+        }
+        guard case .string(let raw) = value else {
+            throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid("\(key) must be a string")
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid("\(key) must be non-empty")
+        }
+        return trimmed
+    }
+
+    private static func requiredMetadataUInt(
+        metadata: [String: ToriiJSONValue],
+        key: String
+    ) throws -> UInt64 {
+        guard let value = metadata[key] else {
+            throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid("missing \(key)")
+        }
+        switch value {
+        case .number(let raw):
+            guard raw.isFinite, raw >= 0, raw.rounded(.towardZero) == raw else {
+                throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid("\(key) must be a non-negative integer")
+            }
+            return UInt64(raw)
+        case .string(let raw):
+            guard let parsed = UInt64(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid("\(key) must be a non-negative integer")
+            }
+            return parsed
+        default:
+            throw OfflineReceiptBuilderError.aggregateProofMetadataInvalid("\(key) must be a non-negative integer")
         }
     }
 

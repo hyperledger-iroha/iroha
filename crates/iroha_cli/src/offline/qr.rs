@@ -79,11 +79,19 @@ impl QrEncodeArgs {
         };
         let (envelope, frames) = QrStreamEncoder::encode_frames(&payload, options)?;
         let output_dir = &self.output;
-        fs::create_dir_all(output_dir)
-            .map_err(|err| eyre!("failed to create output dir {}: {err}", output_dir.display()))?;
+        fs::create_dir_all(output_dir).map_err(|err| {
+            eyre!(
+                "failed to create output dir {}: {err}",
+                output_dir.display()
+            )
+        })?;
         let frames_dir = output_dir.join("frames");
-        fs::create_dir_all(&frames_dir)
-            .map_err(|err| eyre!("failed to create frames dir {}: {err}", frames_dir.display()))?;
+        fs::create_dir_all(&frames_dir).map_err(|err| {
+            eyre!(
+                "failed to create frames dir {}: {err}",
+                frames_dir.display()
+            )
+        })?;
 
         let mut manifest_frames: Vec<Value> = Vec::new();
         let mut rendered = Vec::new();
@@ -91,9 +99,8 @@ impl QrEncodeArgs {
             let bytes = frame.encode();
             let file_name = format!("frame_{idx:04}.bin");
             let path = frames_dir.join(&file_name);
-            fs::write(&path, &bytes).map_err(|err| {
-                eyre!("failed to write frame {}: {err}", path.display())
-            })?;
+            fs::write(&path, &bytes)
+                .map_err(|err| eyre!("failed to write frame {}: {err}", path.display()))?;
             let mut frame_map = Map::new();
             frame_map.insert("index".to_string(), Value::from(idx as u64));
             frame_map.insert(
@@ -104,16 +111,17 @@ impl QrEncodeArgs {
                 "file".to_string(),
                 Value::from(format!("frames/{file_name}")),
             );
-            frame_map.insert(
-                "bytes_hex".to_string(),
-                Value::from(hex::encode(&bytes)),
-            );
+            frame_map.insert("bytes_hex".to_string(), Value::from(hex::encode(&bytes)));
             manifest_frames.push(Value::Object(frame_map));
             if self.format != QrOutputFormat::Frames {
                 let payload_bytes = encode_frame_bytes(&bytes, self.frame_encoding)?;
-                let code = QrCode::with_error_correction_level(payload_bytes.as_slice(), self.ecc.into())
-                    .map_err(|err| eyre!("failed to render QR code: {err}"))?;
-                rendered.push(RenderedFrame { index: idx as u32, code });
+                let code =
+                    QrCode::with_error_correction_level(payload_bytes.as_slice(), self.ecc.into())
+                        .map_err(|err| eyre!("failed to render QR code: {err}"))?;
+                rendered.push(RenderedFrame {
+                    index: idx as u32,
+                    code,
+                });
             }
         }
 
@@ -193,7 +201,10 @@ impl QrEncodeArgs {
             "payload_kind".to_string(),
             Value::from(self.payload_kind.label()),
         );
-        manifest_map.insert("chunk_size".to_string(), Value::from(self.chunk_size as u64));
+        manifest_map.insert(
+            "chunk_size".to_string(),
+            Value::from(self.chunk_size as u64),
+        );
         manifest_map.insert(
             "parity_group".to_string(),
             Value::from(self.parity_group as u64),
@@ -225,7 +236,10 @@ impl QrEncodeArgs {
         let manifest_json =
             norito::json::to_string_pretty(&manifest).map_err(|err| eyre!("{err}"))?;
         fs::write(&manifest_path, format!("{manifest_json}\n")).map_err(|err| {
-            eyre!("failed to write manifest {}: {err}", manifest_path.display())
+            eyre!(
+                "failed to write manifest {}: {err}",
+                manifest_path.display()
+            )
         })?;
 
         Ok(())
@@ -289,10 +303,12 @@ impl QrDecodeArgs {
             }
         }
         let result = result.ok_or_else(|| eyre!("missing frames; payload not complete"))?;
-        let payload = result.payload.clone().ok_or_else(|| eyre!("missing payload"))?;
-        fs::write(&self.output, &payload).map_err(|err| {
-            eyre!("failed to write payload {}: {err}", self.output.display())
-        })?;
+        let payload = result
+            .payload
+            .clone()
+            .ok_or_else(|| eyre!("missing payload"))?;
+        fs::write(&self.output, &payload)
+            .map_err(|err| eyre!("failed to write payload {}: {err}", self.output.display()))?;
         if let Some(path) = self.output_manifest {
             let mut manifest_map = Map::new();
             manifest_map.insert("version".to_string(), Value::from(1u64));
@@ -319,9 +335,8 @@ impl QrDecodeArgs {
             );
             let manifest = Value::Object(manifest_map);
             let rendered = norito::json::to_string_pretty(&manifest)?;
-            fs::write(&path, format!("{rendered}\n")).map_err(|err| {
-                eyre!("failed to write manifest {}: {err}", path.display())
-            })?;
+            fs::write(&path, format!("{rendered}\n"))
+                .map_err(|err| eyre!("failed to write manifest {}: {err}", path.display()))?;
         }
         Ok(())
     }
@@ -527,11 +542,7 @@ fn render_image(code: &QrCode, dimension: u32) -> Result<GrayImage> {
     })
 }
 
-fn render_sakura_rgba(
-    frame: &GrayImage,
-    frame_index: u32,
-    frame_count: u32,
-) -> image::RgbaImage {
+fn render_sakura_rgba(frame: &GrayImage, frame_index: u32, frame_count: u32) -> image::RgbaImage {
     let frame_count = frame_count.max(1);
     let phase = (frame_index % frame_count) as f64 / frame_count as f64;
     let angle = phase * std::f64::consts::TAU;
@@ -565,8 +576,7 @@ fn render_sakura_rgba(
             if SAKURA_PETAL_ALPHA > 0.0 {
                 let mut petal_alpha = 0.0;
                 for petal_index in 0..SAKURA_PETAL_COUNT {
-                    let petal_phase =
-                        (petal_index as f64 / SAKURA_PETAL_COUNT as f64) + phase;
+                    let petal_phase = (petal_index as f64 / SAKURA_PETAL_COUNT as f64) + phase;
                     let petal_angle = petal_phase * std::f64::consts::TAU;
                     let cx = 0.5 + petal_angle.cos() * SAKURA_PETAL_ORBIT;
                     let cy = 0.5 + petal_angle.sin() * SAKURA_PETAL_ORBIT + drift;
@@ -574,8 +584,7 @@ fn render_sakura_rgba(
                     let dy = ny - cy;
                     let dist = (dx * dx + dy * dy).sqrt();
                     if dist < SAKURA_PETAL_RADIUS {
-                        let alpha =
-                            (1.0 - dist / SAKURA_PETAL_RADIUS) * SAKURA_PETAL_ALPHA;
+                        let alpha = (1.0 - dist / SAKURA_PETAL_RADIUS) * SAKURA_PETAL_ALPHA;
                         if alpha > petal_alpha {
                             petal_alpha = alpha;
                         }
@@ -598,8 +607,7 @@ fn render_sakura_rgba(
         }
     }
 
-    image::RgbaImage::from_raw(frame.width, frame.height, rgba)
-        .expect("rgba buffer size")
+    image::RgbaImage::from_raw(frame.width, frame.height, rgba).expect("rgba buffer size")
 }
 
 fn render_sakura_wind_rgba(
@@ -666,10 +674,9 @@ fn render_sakura_wind_rgba(
             let mut b = lerp(SAKURA_BG_START[2], SAKURA_BG_END[2], t);
 
             if SAKURA_WIND_STREAK_ALPHA > 0.0 {
-                let streak = (nx * SAKURA_WIND_STREAK_FREQ_X
-                    + ny * SAKURA_WIND_STREAK_FREQ_Y
-                    + wind_angle)
-                    .sin();
+                let streak =
+                    (nx * SAKURA_WIND_STREAK_FREQ_X + ny * SAKURA_WIND_STREAK_FREQ_Y + wind_angle)
+                        .sin();
                 let streak = (streak * 0.5 + 0.5) * SAKURA_WIND_STREAK_ALPHA;
                 r = (r + streak).min(1.0);
                 g = (g + streak).min(1.0);
@@ -680,8 +687,7 @@ fn render_sakura_wind_rgba(
                 let drift = (phase * std::f64::consts::TAU).sin() * SAKURA_WIND_PETAL_DRIFT;
                 let mut petal_alpha = 0.0;
                 for petal_index in 0..SAKURA_WIND_PETAL_COUNT {
-                    let petal_phase =
-                        (petal_index as f64 / SAKURA_WIND_PETAL_COUNT as f64) + phase;
+                    let petal_phase = (petal_index as f64 / SAKURA_WIND_PETAL_COUNT as f64) + phase;
                     let petal_angle = petal_phase * std::f64::consts::TAU;
                     let cx = 0.5 + petal_angle.cos() * SAKURA_WIND_PETAL_ORBIT + wind_dir_x * drift;
                     let cy = 0.5 + petal_angle.sin() * SAKURA_WIND_PETAL_ORBIT + wind_dir_y * drift;
@@ -727,16 +733,19 @@ fn render_sakura_wind_rgba(
                         let dy = local_y - wind_dir_y * offset;
                         let angle = wind_angle + gust * 0.6;
                         let core = dx * dx + dy * dy <= core_radius_sq;
-                        let petal =
-                            petal_mask(dx, dy, angle, SAKURA_WIND_PETAL_MAJOR, SAKURA_WIND_PETAL_MINOR)
-                                || petal_mask(
-                                    dx,
-                                    dy,
-                                    angle + 1.1,
-                                    SAKURA_WIND_PETAL_SECONDARY_MAJOR,
-                                    SAKURA_WIND_PETAL_SECONDARY_MINOR,
-                                )
-                                || core;
+                        let petal = petal_mask(
+                            dx,
+                            dy,
+                            angle,
+                            SAKURA_WIND_PETAL_MAJOR,
+                            SAKURA_WIND_PETAL_MINOR,
+                        ) || petal_mask(
+                            dx,
+                            dy,
+                            angle + 1.1,
+                            SAKURA_WIND_PETAL_SECONDARY_MAJOR,
+                            SAKURA_WIND_PETAL_SECONDARY_MINOR,
+                        ) || core;
                         if petal {
                             r = SAKURA_INK[0];
                             g = SAKURA_INK[1];
@@ -785,7 +794,12 @@ fn sakura_storm_glyph_index(mx: u32, my: u32, frame_index: u32, frame_count: u32
     (v as usize) % SAKURA_STORM_GLYPHS.len()
 }
 
-fn sakura_storm_glyph_hit(glyph_index: usize, local_x: u32, local_y: u32, module_size: u32) -> bool {
+fn sakura_storm_glyph_hit(
+    glyph_index: usize,
+    local_x: u32,
+    local_y: u32,
+    module_size: u32,
+) -> bool {
     if module_size < 6 {
         return false;
     }
@@ -868,8 +882,8 @@ fn render_sakura_storm_rgba(
 
             let angle = cy.atan2(cx);
             for ring_idx in 0..SAKURA_STORM_RING_RADII.len() {
-                let dr = ((radial - SAKURA_STORM_RING_RADII[ring_idx]).abs())
-                    / SAKURA_STORM_RING_BAND;
+                let dr =
+                    ((radial - SAKURA_STORM_RING_RADII[ring_idx]).abs()) / SAKURA_STORM_RING_BAND;
                 if dr > 1.6 {
                     continue;
                 }
@@ -880,8 +894,8 @@ fn render_sakura_storm_rgba(
                 if dot_wave <= SAKURA_STORM_RING_THRESHOLD {
                     continue;
                 }
-                let alpha = ((1.0 - dr / 1.6).clamp(0.0, 1.0))
-                    * (0.45 + 0.55 * dot_wave.clamp(0.0, 1.0));
+                let alpha =
+                    ((1.0 - dr / 1.6).clamp(0.0, 1.0)) * (0.45 + 0.55 * dot_wave.clamp(0.0, 1.0));
                 let cardinal = ((angle * 2.0).cos().abs()).powf(18.0);
                 let ring_color = if cardinal > 0.66 {
                     SAKURA_STORM_RING_BRIGHT
@@ -893,7 +907,11 @@ fn render_sakura_storm_rgba(
                 b = lerp(b, ring_color[2], alpha);
             }
 
-            if x >= qr_offset && x < qr_offset + qr_size && y >= qr_offset && y < qr_offset + qr_size {
+            if x >= qr_offset
+                && x < qr_offset + qr_size
+                && y >= qr_offset
+                && y < qr_offset + qr_size
+            {
                 let rel_x = x - qr_offset;
                 let rel_y = y - qr_offset;
                 let module_x = rel_x / module_size;
@@ -927,7 +945,8 @@ fn render_sakura_storm_rgba(
                             r = SAKURA_STORM_DARK_MODULE[0];
                             g = SAKURA_STORM_DARK_MODULE[1];
                             b = SAKURA_STORM_DARK_MODULE[2];
-                            let glyph_idx = sakura_storm_glyph_index(mx, my, frame_index, frame_count);
+                            let glyph_idx =
+                                sakura_storm_glyph_index(mx, my, frame_index, frame_count);
                             if sakura_storm_glyph_hit(glyph_idx, local_x, local_y, module_size) {
                                 r = SAKURA_STORM_GLYPH[0];
                                 g = SAKURA_STORM_GLYPH[1];
@@ -1010,7 +1029,10 @@ fn write_png(
     frame_index: u32,
     frame_count: u32,
 ) -> Result<()> {
-    if matches!(style, QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm) {
+    if matches!(
+        style,
+        QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm
+    ) {
         return Err(eyre!(
             "sakura-wind/sakura-storm render requires the RGBA pipeline"
         ));
@@ -1039,16 +1061,14 @@ fn write_png(
     Ok(())
 }
 
-fn write_apng(
-    path: &Path,
-    frames: &[GrayImage],
-    fps: u16,
-    style: QrRenderStyle,
-) -> Result<()> {
+fn write_apng(path: &Path, frames: &[GrayImage], fps: u16, style: QrRenderStyle) -> Result<()> {
     if frames.is_empty() {
         return Err(eyre!("no frames to encode"));
     }
-    if matches!(style, QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm) {
+    if matches!(
+        style,
+        QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm
+    ) {
         return Err(eyre!(
             "sakura-wind/sakura-storm render requires the RGBA pipeline"
         ));
@@ -1085,16 +1105,14 @@ fn write_apng(
     Ok(())
 }
 
-fn write_gif(
-    path: &Path,
-    frames: &[GrayImage],
-    fps: u16,
-    style: QrRenderStyle,
-) -> Result<()> {
+fn write_gif(path: &Path, frames: &[GrayImage], fps: u16, style: QrRenderStyle) -> Result<()> {
     if frames.is_empty() {
         return Err(eyre!("no frames to encode"));
     }
-    if matches!(style, QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm) {
+    if matches!(
+        style,
+        QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm
+    ) {
         return Err(eyre!(
             "sakura-wind/sakura-storm render requires the RGBA pipeline"
         ));
@@ -1172,8 +1190,7 @@ fn grayscale_to_rgba(frame: &GrayImage) -> image::RgbaImage {
     for gray in &frame.data {
         rgba.extend_from_slice(&[*gray, *gray, *gray, 0xFF]);
     }
-    image::RgbaImage::from_raw(frame.width, frame.height, rgba)
-        .expect("rgba buffer size")
+    image::RgbaImage::from_raw(frame.width, frame.height, rgba).expect("rgba buffer size")
 }
 
 fn frame_delay_ms(fps: u16) -> u16 {
@@ -1248,7 +1265,10 @@ mod tests {
                 QrPayloadKindArg::OfflineToOnlineTransfer,
                 "offline_to_online_transfer",
             ),
-            (QrPayloadKindArg::OfflineSpendReceipt, "offline_spend_receipt"),
+            (
+                QrPayloadKindArg::OfflineSpendReceipt,
+                "offline_spend_receipt",
+            ),
             (QrPayloadKindArg::OfflineEnvelope, "offline_envelope"),
         ];
 
@@ -1493,8 +1513,7 @@ mod tests {
             },
         )
         .expect("encode");
-        let bytes_per_second =
-            estimate_payload_bytes_per_second(payload.len(), frames.len(), 12);
+        let bytes_per_second = estimate_payload_bytes_per_second(payload.len(), frames.len(), 12);
         assert!(
             bytes_per_second >= 3_000,
             "expected at least 3000 B/s, got {bytes_per_second}"

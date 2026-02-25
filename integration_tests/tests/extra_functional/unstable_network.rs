@@ -960,8 +960,14 @@ impl UnstableNetwork {
         network.ensure_blocks(init_blocks).await?;
 
         let peers = network.peers();
+        let initial_non_empty = peers
+            .iter()
+            .filter_map(|peer| peer.best_effort_block_height())
+            .map(|height| height.non_empty)
+            .max()
+            .unwrap_or(0);
         let round_ctx = RoundContext {
-            init_blocks,
+            initial_non_empty,
             asset_definition_id: &asset_definition_id,
             account_id: &account_id,
         };
@@ -970,7 +976,8 @@ impl UnstableNetwork {
                 .await?;
         }
 
-        let expected_height = init_blocks + u64::try_from(self.n_rounds).unwrap_or(0);
+        let expected_height =
+            round_ctx.initial_non_empty + u64::try_from(self.n_rounds).unwrap_or(0);
         Self::assert_total_supply(
             &network,
             &asset_definition_id,
@@ -1136,7 +1143,7 @@ impl UnstableNetwork {
             "Begin round"
         );
 
-        let target_height = ctx.init_blocks + (round_index as u64) + 1;
+        let target_height = ctx.initial_non_empty + (round_index as u64) + 1;
         let chain_id = network.chain_id();
         let peer_ids: Vec<_> = peers.iter().map(NetworkPeer::id).collect();
         let peers_by_id: HashMap<PeerId, NetworkPeer> = peers
@@ -1578,7 +1585,7 @@ impl UnstableNetwork {
 }
 
 struct RoundContext<'a> {
-    init_blocks: u64,
+    initial_non_empty: u64,
     asset_definition_id: &'a AssetDefinitionId,
     account_id: &'a AccountId,
 }

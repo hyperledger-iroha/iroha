@@ -51,33 +51,47 @@ export function parseArgs(argv) {
   return options;
 }
 
+function runCargo(repoRoot, args) {
+  return new Promise((resolve) => {
+    const child = spawn('cargo', args, {
+      cwd: repoRoot,
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        NORITO_SKIP_BINDINGS_SYNC: '1'
+      }
+    });
+    child.on('close', (code) => resolve(code ?? 1));
+  });
+}
+
 const defaultContext = {
   repoRoot: defaultRepoRoot,
   outputDir: defaultOutputDir,
   versionsDir: defaultVersionsDir,
   async generateSpec(repoRoot, outputFile) {
-    await new Promise((resolve, reject) => {
-      const child = spawn(
-        'cargo',
-        ['xtask', 'openapi', '--output', outputFile],
-        {
-          cwd: repoRoot,
-          stdio: 'inherit',
-          env: {
-            ...process.env,
-            NORITO_SKIP_BINDINGS_SYNC: '1'
-          }
-        }
-      );
+    const primaryCode = await runCargo(repoRoot, ['xtask', 'openapi', '--output', outputFile]);
+    if (primaryCode === 0) {
+      return;
+    }
 
-      child.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`cargo xtask openapi exited with code ${code}`));
-        }
-      });
-    });
+    console.warn(
+      `cargo xtask openapi exited with code ${primaryCode}; falling back to 'cargo run -p xtask --bin xtask -- openapi ...'`
+    );
+    const fallbackCode = await runCargo(repoRoot, [
+      'run',
+      '-p',
+      'xtask',
+      '--bin',
+      'xtask',
+      '--',
+      'openapi',
+      '--output',
+      outputFile,
+    ]);
+    if (fallbackCode !== 0) {
+      throw new Error(`OpenAPI generation failed (primary=${primaryCode}, fallback=${fallbackCode})`);
+    }
   },
 };
 

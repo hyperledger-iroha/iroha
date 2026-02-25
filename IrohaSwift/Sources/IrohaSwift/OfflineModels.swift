@@ -572,6 +572,29 @@ public struct OfflineBalanceProof: Sendable, Equatable {
     private static let noritoTypeName = "iroha_data_model::offline::model::OfflineBalanceProof"
 }
 
+public struct OfflineCertificateBalanceProof: Sendable, Equatable {
+    public let senderCertificateId: Data
+    public let balanceProof: OfflineBalanceProof
+
+    public init(senderCertificateId: Data, balanceProof: OfflineBalanceProof) {
+        self.senderCertificateId = senderCertificateId
+        self.balanceProof = balanceProof
+    }
+
+    func noritoPayload() throws -> Data {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(try OfflineNorito.encodeHash(senderCertificateId))
+        writer.writeField(try balanceProof.noritoPayload())
+        return writer.data
+    }
+
+    public func noritoEncoded() throws -> Data {
+        OfflineNorito.wrap(typeName: Self.noritoTypeName, payload: try noritoPayload())
+    }
+
+    private static let noritoTypeName = "iroha_data_model::offline::model::OfflineCertificateBalanceProof"
+}
+
 public struct OfflinePoseidonDigest: Sendable, Equatable {
     public let bytes: Data
 
@@ -597,6 +620,17 @@ public enum OfflineAggregateProofMetadataKey {
     public static let sumCircuit = "fastpq.circuit.sum"
     public static let counterCircuit = "fastpq.circuit.counter"
     public static let replayCircuit = "fastpq.circuit.replay"
+    public static let aggregateBackend = "offline.aggregate.backend"
+    public static let aggregateCircuitId = "offline.aggregate.circuit_id"
+    public static let aggregatePublicInputsBase64 = "offline.aggregate.public_inputs_b64"
+    public static let aggregateRecursionDepth = "offline.aggregate.recursion_depth"
+
+    public static let recursiveStarkBackend = "stark/fri-v1/poseidon2-goldilocks-v1"
+}
+
+public enum OfflineAggregateProofVersion {
+    public static let legacy: UInt16 = 1
+    public static let recursiveStarkV2: UInt16 = 2
 }
 
 public struct OfflineAggregateProofEnvelope: Sendable, Equatable {
@@ -664,6 +698,7 @@ public struct OfflineToOnlineTransfer: Sendable, Equatable {
     public let depositAccount: String
     public let receipts: [OfflineSpendReceipt]
     public let balanceProof: OfflineBalanceProof
+    public let balanceProofs: [OfflineCertificateBalanceProof]?
     public let aggregateProof: OfflineAggregateProofEnvelope?
     public let attachments: OfflineProofAttachmentList?
     public let platformSnapshot: OfflinePlatformTokenSnapshot?
@@ -673,6 +708,7 @@ public struct OfflineToOnlineTransfer: Sendable, Equatable {
                 depositAccount: String,
                 receipts: [OfflineSpendReceipt],
                 balanceProof: OfflineBalanceProof,
+                balanceProofs: [OfflineCertificateBalanceProof]? = nil,
                 aggregateProof: OfflineAggregateProofEnvelope? = nil,
                 attachments: OfflineProofAttachmentList? = nil,
                 platformSnapshot: OfflinePlatformTokenSnapshot? = nil) {
@@ -681,6 +717,7 @@ public struct OfflineToOnlineTransfer: Sendable, Equatable {
         self.depositAccount = depositAccount
         self.receipts = receipts
         self.balanceProof = balanceProof
+        self.balanceProofs = balanceProofs
         self.aggregateProof = aggregateProof
         self.attachments = attachments
         self.platformSnapshot = platformSnapshot
@@ -693,6 +730,12 @@ public struct OfflineToOnlineTransfer: Sendable, Equatable {
         writer.writeField(try OfflineNorito.encodeAccountId(depositAccount))
         writer.writeField(try OfflineNorito.encodeVec(receipts, encode: { try $0.noritoPayload() }))
         writer.writeField(try balanceProof.noritoPayload())
+        writer.writeField(try OfflineNorito.encodeOption(
+            balanceProofs,
+            encode: { proofs in
+                try OfflineNorito.encodeVec(proofs, encode: { try $0.noritoPayload() })
+            }
+        ))
         writer.writeField(try OfflineNorito.encodeOption(aggregateProof, encode: { try $0.noritoPayload() }))
         writer.writeField(try OfflineNorito.encodeOption(attachments, encode: { try $0.noritoPayload() }))
         writer.writeField(try OfflineNorito.encodeOption(platformSnapshot, encode: { try $0.noritoPayload() }))
