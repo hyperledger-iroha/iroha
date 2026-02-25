@@ -48791,11 +48791,13 @@ async fn assemble_proposal_defers_when_highest_qc_block_missing() {
     let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
     state.push_block_hash_for_testing(locked_hash);
 
-    let epoch = actor.epoch_for_height(1);
+    let highest_qc_height = 2u64;
+    let locked_epoch = actor.epoch_for_height(1);
+    let highest_qc_epoch = actor.epoch_for_height(highest_qc_height);
     actor.locked_qc = Some(QcHeaderRef {
         height: 1,
         view: 0,
-        epoch,
+        epoch: locked_epoch,
         subject_block_hash: locked_hash,
         phase: Phase::Commit,
     });
@@ -48810,14 +48812,14 @@ async fn assemble_proposal_defers_when_highest_qc_block_missing() {
         )
         .expect("push tx");
 
-    let height = 2u64;
+    let height = highest_qc_height.saturating_add(1);
     let view = 0u64;
     let missing_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; Hash::LENGTH]));
     let highest_qc = QcHeaderRef {
-        height: 1,
+        height: highest_qc_height,
         view: 0,
-        epoch,
+        epoch: highest_qc_epoch,
         subject_block_hash: missing_hash,
         phase: Phase::Commit,
     };
@@ -48852,6 +48854,15 @@ async fn assemble_proposal_defers_when_highest_qc_block_missing() {
     assert_eq!(request.view, highest_qc.view);
     assert_eq!(request.phase, Phase::Commit);
     assert_eq!(request.priority, super::MissingBlockPriority::Consensus);
+    let first_attempts = request.attempts;
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .contains(&(height, view, missing_hash)),
+        "defer marker should be recorded for the missing highest-QC key"
+    );
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
         !posts.iter().any(|post| matches!(
@@ -48863,6 +48874,42 @@ async fn assemble_proposal_defers_when_highest_qc_block_missing() {
                 )
         )),
         "proposal messages should not be enqueued while waiting on missing block"
+    );
+
+    let _ = harness.background_rx.try_iter().count();
+    let assembled_second = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            /*leader_index*/ 0,
+            /*local_validator_index*/ local_idx,
+            None,
+            Instant::now(),
+        )
+        .expect("second proposal assembly should succeed");
+    assert!(
+        !assembled_second,
+        "repeated proposal assembly should stay deferred while highest QC is missing"
+    );
+    let request_after = actor
+        .pending
+        .missing_block_requests
+        .get(&missing_hash)
+        .expect("missing-block request should remain tracked");
+    assert_eq!(
+        request_after.attempts, first_attempts,
+        "same defer key should not re-trigger highest-QC reacquire each loop tick"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .len(),
+        1,
+        "only one active defer marker should exist for the same key"
     );
 
     super::status::set_locked_qc(0, 0, None);

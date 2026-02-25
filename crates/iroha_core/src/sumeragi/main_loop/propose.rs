@@ -550,9 +550,13 @@ impl Actor {
         );
         let proposal_height = height;
         let proposal_epoch = self.epoch_for_height(proposal_height);
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        self.prune_highest_qc_missing_defer_markers(committed_height);
         self.init_collector_plan(topology, proposal_height, view);
         if proposal_height > 1 && !self.block_known_locally(highest_qc.subject_block_hash) {
-            self.observe_new_view_highest_qc(highest_qc);
+            if self.mark_highest_qc_missing_defer_for_round(proposal_height, view, highest_qc) {
+                self.observe_new_view_highest_qc(highest_qc);
+            }
             if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
                 ProposalDeferWarningKind::HighestQcMissing,
                 proposal_height,
@@ -580,7 +584,9 @@ impl Actor {
         );
         if prev_block.is_none() && proposal_height > 1 {
             if !self.block_known_locally(highest_qc.subject_block_hash) {
-                self.observe_new_view_highest_qc(highest_qc);
+                if self.mark_highest_qc_missing_defer_for_round(proposal_height, view, highest_qc) {
+                    self.observe_new_view_highest_qc(highest_qc);
+                }
             }
             if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
                 ProposalDeferWarningKind::ParentMissing,
@@ -2587,7 +2593,11 @@ impl Actor {
                             locked_hash = ?locked_hash,
                             "highest QC block missing locally; deferring proposal"
                         );
-                        self.observe_new_view_highest_qc(highest_qc);
+                        if self
+                            .mark_highest_qc_missing_defer_for_round(height, view_idx, highest_qc)
+                        {
+                            self.observe_new_view_highest_qc(highest_qc);
+                        }
                         return false;
                     }
                     if !locked_missing {

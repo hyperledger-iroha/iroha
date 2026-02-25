@@ -19488,13 +19488,132 @@ fn replay_roster_for_block(
         }
     }
 
+    let fallback_roster = fallback.as_ref().to_vec();
+    if !fallback_roster.is_empty() {
+        return fallback_roster;
+    }
+
     let view = state.view();
     let commit_topology = view.commit_topology();
     if !commit_topology.is_empty() {
         return commit_topology.iter().cloned().collect();
     }
 
-    fallback.as_ref().to_vec()
+    Vec::new()
+}
+
+fn replay_skip_block_signatures_enabled() -> bool {
+    std::env::var("IROHA_REPLAY_SKIP_BLOCK_SIGNATURE_VALIDATION")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
+fn replay_signature_error_recoverable(err: &crate::block::BlockValidationError) -> bool {
+    matches!(
+        err,
+        crate::block::BlockValidationError::SignatureVerification(
+            crate::block::SignatureVerificationError::UnknownSignature
+                | crate::block::SignatureVerificationError::UnknownSignatory
+                | crate::block::SignatureVerificationError::LeaderMissing
+        )
+    )
+}
+
+fn replay_remap_block_signature_indices_to_topology(
+    block: &mut SignedBlock,
+    topology: &crate::sumeragi::network_topology::Topology,
+) -> Result<(), crate::block::BlockValidationError> {
+    use crate::block::SignatureVerificationError;
+    use iroha_crypto::Algorithm;
+    use iroha_data_model::block::BlockSignature;
+
+    let block_hash = block.hash();
+    let mut remapped: std::collections::BTreeSet<BlockSignature> = std::collections::BTreeSet::new();
+
+    for signature in block.signatures() {
+        let is_eligible = |peer: &PeerId| {
+            peer.public_key().algorithm() == Algorithm::BlsNormal
+                && !matches!(
+                    topology.role(peer),
+                    crate::sumeragi::network_topology::Role::Undefined
+                )
+        };
+
+        let mut resolved: Option<usize> = None;
+        let mut ambiguous = false;
+
+        if let Ok(raw_idx) = usize::try_from(signature.index()) {
+            if let Some(peer) = topology.as_ref().get(raw_idx) {
+                if is_eligible(peer)
+                    && signature
+                        .signature()
+                        .verify_hash(peer.public_key(), block_hash)
+                        .is_ok()
+                {
+                    resolved = Some(raw_idx);
+                }
+            }
+        }
+
+        if resolved.is_none() {
+            for (idx, peer) in topology.as_ref().iter().enumerate() {
+                if !is_eligible(peer) {
+                    continue;
+                }
+                if signature
+                    .signature()
+                    .verify_hash(peer.public_key(), block_hash)
+                    .is_err()
+                {
+                    continue;
+                }
+                if resolved.is_some() {
+                    ambiguous = true;
+                    break;
+                }
+                resolved = Some(idx);
+            }
+        }
+
+        let Some(mapped_idx) = resolved else {
+            return Err(crate::block::BlockValidationError::SignatureVerification(
+                SignatureVerificationError::UnknownSignature,
+            ));
+        };
+        if ambiguous {
+            return Err(crate::block::BlockValidationError::SignatureVerification(
+                SignatureVerificationError::UnknownSignature,
+            ));
+        }
+
+        let mapped = BlockSignature::new(mapped_idx as u64, signature.signature().clone());
+        if !remapped.insert(mapped) {
+            return Err(crate::block::BlockValidationError::SignatureVerification(
+                SignatureVerificationError::DuplicateSignature { signer: mapped_idx },
+            ));
+        }
+    }
+
+    if remapped.is_empty() {
+        return Err(crate::block::BlockValidationError::SignatureVerification(
+            SignatureVerificationError::NotEnoughSignatures {
+                votes_count: 0,
+                min_votes_for_commit: topology.min_votes_for_commit(),
+            },
+        ));
+    }
+
+    block.replace_signatures(remapped).map_err(|_| {
+        crate::block::BlockValidationError::SignatureVerification(
+            SignatureVerificationError::Other,
+        )
+    })?;
+    Ok(())
 }
 
 /// Replay blocks from the local Kura store into the provided [`State`], rebuilding world state
@@ -19560,6 +19679,12 @@ pub fn replay_blocks_from_kura_range(
         maybe.ok_or_else(|| eyre!("genesis account not found in world state during replay"))?
     };
     let time_source = TimeSource::new_system();
+    let replay_skip_block_signatures = replay_skip_block_signatures_enabled();
+    if replay_skip_block_signatures {
+        iroha_logger::warn!(
+            "IROHA_REPLAY_SKIP_BLOCK_SIGNATURE_VALIDATION is enabled: replay will bypass block signature checks"
+        );
+    }
 
     for height in start_height..=block_count {
         let nz = NonZeroUsize::new(height)
@@ -19594,18 +19719,110 @@ pub fn replay_blocks_from_kura_range(
                 }
             }
         }
-        let mut voting_block: Option<crate::sumeragi::VotingBlock> = None;
-        let validation = ValidBlock::validate_keep_voting_block(
-            signed_block,
-            &block_topology,
-            &state.chain_id.clone(),
-            &genesis_account,
-            &time_source,
-            state,
-            &mut voting_block,
-            false,
-        )
-        .unpack(|_| {});
+        let validate = |candidate: SignedBlock,
+                        candidate_topology: &crate::sumeragi::network_topology::Topology| {
+            let mut voting_block: Option<crate::sumeragi::VotingBlock> = None;
+            ValidBlock::validate_keep_voting_block_for_replay(
+                candidate,
+                candidate_topology,
+                &state.chain_id.clone(),
+                &genesis_account,
+                &time_source,
+                state,
+                &mut voting_block,
+                false,
+                replay_skip_block_signatures,
+            )
+            .unpack(|_| {})
+        };
+        let mut validation_topology = block_topology;
+        let mut validation = validate(signed_block.clone(), &validation_topology);
+        let original_failed_block = validation
+            .as_ref()
+            .err()
+            .map(|(failed_block, _)| (**failed_block).clone());
+
+        if !replay_skip_block_signatures {
+            match validation {
+                Err((failed_block, err))
+                    if matches!(
+                        *err,
+                        crate::block::BlockValidationError::SignatureVerification(
+                            crate::block::SignatureVerificationError::UnknownSignature
+                                | crate::block::SignatureVerificationError::UnknownSignatory
+                        )
+                    ) =>
+                {
+                    let mut recovered = *failed_block;
+                    match replay_remap_block_signature_indices_to_topology(
+                        &mut recovered,
+                        &validation_topology,
+                    ) {
+                        Ok(()) => {
+                            validation = validate(recovered, &validation_topology);
+                        }
+                        Err(remap_err) => {
+                            validation = Err((Box::new(recovered), Box::new(remap_err)));
+                        }
+                    }
+                }
+                Err((failed_block, err)) => {
+                    validation = Err((failed_block, err));
+                }
+                Ok(ok) => {
+                    validation = Ok(ok);
+                }
+            }
+
+            if let (Some(failed_block), Err((_, err))) = (original_failed_block, &validation) {
+                if replay_signature_error_recoverable(err.as_ref()) {
+                    let base_peers = validation_topology.as_ref().to_vec();
+                    if base_peers.len() > 1 {
+                        for offset in 1..base_peers.len() {
+                            let mut rotated = base_peers.clone();
+                            rotated.rotate_left(offset);
+                            let rotated_topology =
+                                crate::sumeragi::network_topology::Topology::new(rotated);
+
+                            let mut attempt = validate(failed_block.clone(), &rotated_topology);
+                            let needs_remap = matches!(
+                                &attempt,
+                                Err((_, rotated_err))
+                                    if matches!(
+                                        **rotated_err,
+                                        crate::block::BlockValidationError::SignatureVerification(
+                                            crate::block::SignatureVerificationError::UnknownSignature
+                                                | crate::block::SignatureVerificationError::UnknownSignatory
+                                        )
+                                    )
+                            );
+                            if needs_remap {
+                                let mut remapped = match &attempt {
+                                    Err((failed_rotated, _)) => (**failed_rotated).clone(),
+                                    Ok(_) => unreachable!(
+                                        "needs_remap derived from an error result"
+                                    ),
+                                };
+                                if replay_remap_block_signature_indices_to_topology(
+                                    &mut remapped,
+                                    &rotated_topology,
+                                )
+                                .is_ok()
+                                {
+                                    attempt = validate(remapped, &rotated_topology);
+                                }
+                            }
+
+                            if attempt.is_ok() {
+                                validation_topology = rotated_topology;
+                                validation = attempt;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let (valid_block, mut state_block) = match validation {
             Ok(ok) => ok,
             Err((failed_block, err)) => {
@@ -19617,7 +19834,7 @@ pub fn replay_blocks_from_kura_range(
                     height,
                     hash = %failed_block.hash(),
                     sig_indices = ?sig_indices,
-                    leader_index = block_topology.leader_index(),
+                    leader_index = validation_topology.leader_index(),
                     ?err,
                     "failed to validate block during replay"
                 );
@@ -20164,6 +20381,141 @@ mod replay_validation_tests {
         )
         .expect("replay should honor commit roster journal ordering");
         assert_eq!(replay_state.view().height(), 2);
+    }
+
+    #[test]
+    fn replay_recovers_rotated_signature_topology_without_roster_metadata() {
+        use std::{borrow::Cow, collections::BTreeSet};
+
+        use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+        use iroha_data_model::{DomainId, account::AccountId, block::BlockSignature, peer::PeerId};
+        use iroha_genesis::GENESIS_DOMAIN_ID;
+
+        let chain_id = ChainId::from("iroha:test:replay-signature-rotation-recovery");
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let user_domain: DomainId = "users".parse().expect("domain id");
+        let user_id = AccountId::new(user_domain.clone(), user_keypair.public_key().clone());
+
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+        crate::sumeragi::status::reset_validator_checkpoints_for_tests();
+
+        let peer_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let fallback_peers = vec![
+            PeerId::new(peer_a.public_key().clone()),
+            PeerId::new(peer_b.public_key().clone()),
+        ];
+        let fallback_topology =
+            crate::sumeragi::network_topology::Topology::new(fallback_peers.clone());
+
+        let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let genesis_block = SignedBlock::genesis(
+            vec![tx_genesis],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            None,
+            None,
+        );
+
+        let world = World::with(
+            [
+                Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
+                Domain::new(user_domain.clone()).build(&genesis_id),
+            ],
+            [
+                Account::new(genesis_id.clone()).build(&genesis_id),
+                Account::new(user_id.clone()).build(&genesis_id),
+            ],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
+        {
+            let mut params_block = state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        let height = 2_u64;
+        let view = 0_u64;
+        let prf_seed = {
+            let state_view = state.view();
+            crate::sumeragi::prf_seed_for_height(&state_view, height)
+        };
+        let mut expected_topology = crate::sumeragi::network_topology::Topology::new(fallback_peers);
+        expected_topology.canonicalize_order();
+        expected_topology.shuffle_prf(prf_seed, height);
+        expected_topology.nth_rotation(view);
+        let leader_is_peer_a = expected_topology.leader().public_key() == peer_a.public_key();
+        let mismatched_signer = if leader_is_peer_a {
+            peer_b.private_key()
+        } else {
+            peer_a.private_key()
+        };
+
+        let tx_block2 = TransactionBuilder::new(chain_id.clone(), user_id.clone())
+            .with_instructions([Log::new(
+                iroha_logger::Level::INFO,
+                "signature-rotation-replay".to_owned(),
+            )])
+            .sign(user_keypair.private_key());
+        let accepted_block2 =
+            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
+        let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
+            .chain(0, Some(&genesis_block))
+            // Produce a block then rewrite signatures to a deterministic index/signer mismatch.
+            .sign(mismatched_signer)
+            .unpack(|_| {});
+        let mut signed_block2: SignedBlock = block2.into();
+        let forged_signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(mismatched_signer, signed_block2.header().hash()),
+        );
+        signed_block2
+            .replace_signatures(BTreeSet::from([forged_signature]))
+            .expect("replace signatures");
+
+        kura.store_block(Arc::new(genesis_block))
+            .expect("store genesis");
+        kura.store_block(Arc::new(signed_block2.clone()))
+            .expect("store block2");
+
+        let replay_world = World::with(
+            [
+                Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
+                Domain::new(user_domain).build(&genesis_id),
+            ],
+            [
+                Account::new(genesis_id.clone()).build(&genesis_id),
+                Account::new(user_id).build(&genesis_id),
+            ],
+            [],
+        );
+        let mut replay_state = State::new_with_chain(
+            replay_world,
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id,
+        );
+        {
+            let mut params_block = replay_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        replay_blocks_from_kura(
+            &kura,
+            &mut replay_state,
+            &fallback_topology,
+            2,
+            ConsensusMode::Permissioned,
+        )
+        .expect("replay should recover via rotated signature topology");
+        assert_eq!(replay_state.view().height(), 2);
+        assert_eq!(replay_state.view().latest_block_hash(), Some(signed_block2.hash()));
     }
 }
 
