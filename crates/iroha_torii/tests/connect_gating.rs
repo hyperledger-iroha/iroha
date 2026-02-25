@@ -533,6 +533,17 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 ),
                 range_pull_escalation_after_hash_misses:
                     iroha_config::parameters::defaults::sumeragi::RANGE_PULL_ESCALATION_AFTER_HASH_MISSES,
+                missing_request_stale_height_margin:
+                    iroha_config::parameters::defaults::sumeragi::
+                        RECOVERY_MISSING_REQUEST_STALE_HEIGHT_MARGIN,
+                pending_block_sync_cap:
+                    iroha_config::parameters::defaults::sumeragi::
+                        RECOVERY_PENDING_BLOCK_SYNC_CAP,
+                pending_proposal_cap:
+                    iroha_config::parameters::defaults::sumeragi::RECOVERY_PENDING_PROPOSAL_CAP,
+                missing_fetch_aggressive_after_attempts:
+                    iroha_config::parameters::defaults::sumeragi::
+                        RECOVERY_MISSING_FETCH_AGGRESSIVE_AFTER_ATTEMPTS,
             },
             fanout: A::SumeragiFanout {
                 large_set_threshold:
