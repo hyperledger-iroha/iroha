@@ -19403,6 +19403,17 @@ fn replay_roster_for_block(
     fallback.as_ref().to_vec()
 }
 
+fn replay_skip_block_signatures_enabled() -> bool {
+    std::env::var("IROHA_REPLAY_SKIP_BLOCK_SIGNATURE_VALIDATION")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
 /// Replay blocks from the local Kura store into the provided [`State`], rebuilding world state
 /// when a snapshot is unavailable.
 /// Uses the configured consensus mode as a fallback when resolving topology rotation.
@@ -19466,6 +19477,12 @@ pub fn replay_blocks_from_kura_range(
         maybe.ok_or_else(|| eyre!("genesis account not found in world state during replay"))?
     };
     let time_source = TimeSource::new_system();
+    let replay_skip_block_signatures = replay_skip_block_signatures_enabled();
+    if replay_skip_block_signatures {
+        iroha_logger::warn!(
+            "IROHA_REPLAY_SKIP_BLOCK_SIGNATURE_VALIDATION is enabled: replay will bypass block signature checks"
+        );
+    }
 
     for height in start_height..=block_count {
         let nz = NonZeroUsize::new(height)
@@ -19501,7 +19518,7 @@ pub fn replay_blocks_from_kura_range(
             }
         }
         let mut voting_block: Option<crate::sumeragi::VotingBlock> = None;
-        let validation = ValidBlock::validate_keep_voting_block(
+        let validation = ValidBlock::validate_keep_voting_block_for_replay(
             signed_block,
             &block_topology,
             &state.chain_id.clone(),
@@ -19510,6 +19527,7 @@ pub fn replay_blocks_from_kura_range(
             state,
             &mut voting_block,
             false,
+            replay_skip_block_signatures,
         )
         .unpack(|_| {});
         let (valid_block, mut state_block) = match validation {
