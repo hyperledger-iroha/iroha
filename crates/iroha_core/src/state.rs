@@ -3176,6 +3176,19 @@ impl GovernanceProposalRecord {
             iroha_data_model::governance::types::ProposalKind::DeployContract(payload) => {
                 Some(payload)
             }
+            iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_) => None,
+        }
+    }
+
+    /// Access the runtime-upgrade payload when the proposal represents a runtime upgrade.
+    pub fn as_runtime_upgrade(
+        &self,
+    ) -> Option<&iroha_data_model::governance::types::RuntimeUpgradeProposal> {
+        match &self.kind {
+            iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(payload) => {
+                Some(payload)
+            }
+            iroha_data_model::governance::types::ProposalKind::DeployContract(_) => None,
         }
     }
 }
@@ -13886,6 +13899,51 @@ impl State {
             if applied > 0 {
                 sb.confidential_registry_dirty = true;
             }
+            let upgrades_to_activate: Vec<(iroha_data_model::runtime::RuntimeUpgradeId, u16)> = wtx
+                .runtime_upgrades
+                .iter()
+                .filter_map(|(id, rec)| {
+                    if matches!(
+                        rec.status,
+                        iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
+                    ) && rec.manifest.start_height == now_h
+                        && now_h < rec.manifest.end_height
+                    {
+                        Some((*id, rec.manifest.abi_version))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for (id, abi_version) in upgrades_to_activate {
+                if let Some(mut rec) = wtx.runtime_upgrades.get(&id).cloned()
+                    && matches!(
+                        rec.status,
+                        iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
+                    )
+                    && rec.manifest.start_height == now_h
+                    && now_h < rec.manifest.end_height
+                {
+                    rec.status =
+                        iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(now_h);
+                    wtx.runtime_upgrades.insert(id, rec);
+                    wtx.emit_events(Some(
+                        iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeEvent::Activated(
+                            iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeActivated {
+                                id,
+                                abi_version,
+                                at_height: now_h,
+                            },
+                        ),
+                    ));
+                    #[cfg(feature = "telemetry")]
+                    {
+                        if let Some(telemetry) = wtx.telemetry {
+                            telemetry.inc_runtime_upgrade_event("activated");
+                        }
+                    }
+                }
+            }
             let term_blocks = sb.gov.parliament_term_blocks.max(1);
             let council_epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
             // Collect candidates to open (avoid borrow conflicts)
@@ -13903,9 +13961,45 @@ impl State {
                         wtx.governance_stage_approvals
                             .get(rid)
                             .is_some_and(|approval| {
-                                approval.quorum_met(ParliamentBody::RulesCommittee, council_epoch)
-                                    && approval
-                                        .quorum_met(ParliamentBody::AgendaCouncil, council_epoch)
+                                let proposal_kind = hex::decode(rid.trim_start_matches("0x"))
+                                    .ok()
+                                    .and_then(|bytes| {
+                                        if bytes.len() != 32 {
+                                            return None;
+                                        }
+                                        let mut id = [0u8; 32];
+                                        id.copy_from_slice(&bytes);
+                                        wtx.governance_proposals
+                                            .get(&id)
+                                            .map(|proposal| proposal.kind.clone())
+                                    });
+                                match proposal_kind {
+                                    Some(
+                                        iroha_data_model::governance::types::ProposalKind::DeployContract(_),
+                                    ) => {
+                                        approval.quorum_met(
+                                            ParliamentBody::RulesCommittee,
+                                            council_epoch,
+                                        ) && approval.quorum_met(
+                                            ParliamentBody::AgendaCouncil,
+                                            council_epoch,
+                                        )
+                                    }
+                                    Some(
+                                        iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_),
+                                    ) => [
+                                        ParliamentBody::RulesCommittee,
+                                        ParliamentBody::AgendaCouncil,
+                                        ParliamentBody::InterestPanel,
+                                        ParliamentBody::ReviewPanel,
+                                        ParliamentBody::PolicyJury,
+                                        ParliamentBody::OversightCommittee,
+                                        ParliamentBody::FmaCommittee,
+                                    ]
+                                    .into_iter()
+                                    .all(|body| approval.quorum_met(body, council_epoch)),
+                                    None => false,
+                                }
                             });
                     if approved {
                         Some((rid.clone(), rec.h_start, rec.h_end))

@@ -512,6 +512,12 @@ impl From<crate::isi::governance::ProposeDeployContract> for InstructionBox {
     }
 }
 #[cfg(feature = "governance")]
+impl From<crate::isi::governance::ProposeRuntimeUpgradeProposal> for InstructionBox {
+    fn from(i: crate::isi::governance::ProposeRuntimeUpgradeProposal) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+#[cfg(feature = "governance")]
 impl From<crate::isi::governance::CastZkBallot> for InstructionBox {
     fn from(i: crate::isi::governance::CastZkBallot) -> Self {
         InstructionBox(Box::new(i))
