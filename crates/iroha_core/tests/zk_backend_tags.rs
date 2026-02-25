@@ -14,6 +14,7 @@ use iroha_data_model::{ValidationFail, prelude::*, transaction::signed::Transact
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 
+#[path = "common/world_fixture.rs"]
 mod test_world;
 
 fn new_block_ctx() -> (State, iroha_data_model::block::BlockHeader) {

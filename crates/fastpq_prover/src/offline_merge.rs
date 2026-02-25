@@ -65,11 +65,7 @@ pub fn build_offline_merge_artifact(witness: &OfflineMergeWitness) -> OfflineMer
     let recursion_depth = if leaves.is_empty() {
         0
     } else {
-        leaves
-            .len()
-            .next_power_of_two()
-            .trailing_zeros()
-            .max(1)
+        leaves.len().next_power_of_two().trailing_zeros().max(1)
     };
     OfflineMergeArtifact {
         transcript_digest,

@@ -415,6 +415,60 @@ mod tests {
     }
 
     #[test]
+    fn batch_verification_rejects_non_adjacent_duplicate_tuple() {
+        let lane_id = LaneId::new(12);
+        let dataspace_id = DataSpaceId::new(6);
+        let duplicate_height = 19_u64;
+        let duplicate_header = header_with_da_hash(
+            NonZeroU64::new(duplicate_height).expect("nonzero height"),
+            None,
+        );
+        let duplicate_settlement = sample_settlement(lane_id, dataspace_id, duplicate_height);
+        let first = CrossLaneTransferBuilder::new(
+            duplicate_header.clone(),
+            None,
+            None,
+            duplicate_settlement.clone(),
+        )
+        .build()
+        .expect("first envelope should be valid")
+        .envelope()
+        .clone();
+        let third =
+            CrossLaneTransferBuilder::new(duplicate_header, None, None, duplicate_settlement)
+                .build()
+                .expect("third envelope should be valid")
+                .envelope()
+                .clone();
+
+        let middle_header = header_with_da_hash(
+            NonZeroU64::new(duplicate_height + 1).expect("nonzero height"),
+            None,
+        );
+        let middle_settlement = sample_settlement(lane_id, dataspace_id, duplicate_height + 1);
+        let middle = CrossLaneTransferBuilder::new(middle_header, None, None, middle_settlement)
+            .build()
+            .expect("middle envelope should be valid")
+            .envelope()
+            .clone();
+
+        let err = verify_lane_relay_envelopes(&[first, middle, third])
+            .expect_err("non-adjacent duplicate tuple should be rejected");
+        match err {
+            CrossLaneProofError::DuplicateProof {
+                lane_id: duplicate_lane_id,
+                dataspace_id: duplicate_dataspace,
+                block_height,
+            } => {
+                assert_eq!(duplicate_lane_id, lane_id);
+                assert_eq!(duplicate_dataspace, dataspace_id);
+                assert_eq!(block_height, duplicate_height);
+            }
+            other => panic!("unexpected duplicate proof error: {other:?}"),
+        }
+    }
+
+    #[test]
     fn batch_verification_allows_distinct_dataspaces_on_same_lane_and_height() {
         let lane_id = LaneId::new(10);
         let first_dataspace = DataSpaceId::new(4);
