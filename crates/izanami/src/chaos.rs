@@ -23,7 +23,7 @@ use iroha_genesis::GenesisBlock;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
 use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use tokio::{
-    sync::{Notify, OwnedSemaphorePermit, Semaphore},
+    sync::{Notify, Semaphore},
     task::{JoinHandle, JoinSet, spawn_blocking},
     time::{self, MissedTickBehavior},
 };
@@ -108,9 +108,11 @@ const IZANAMI_WORKER_FAILURE_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
 const IZANAMI_PEER_LOG_BASE_LEVEL: &str = "WARN";
 const IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS: u64 = 16;
 const IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_WINDOW_SECS: u64 = 60;
+const IZANAMI_SHARED_HOST_RECOVERY_MIN_DURATION_SECS: u64 = 1_200;
 const IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS: u64 = 3_600;
 const IZANAMI_SHARED_HOST_SOAK_TPS_CAP: f64 = 5.0;
 const IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_CAP: usize = 8;
+const IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER: usize = 8;
 const IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS: u64 = 600;
 const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 900;
 const IZANAMI_SHARED_HOST_SOAK_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 4;
@@ -665,15 +667,20 @@ fn default_nexus_pipeline_time() -> Duration {
 }
 
 fn is_shared_host_stable_soak(config: &ChaosConfig) -> bool {
+    is_shared_host_stable_recovery_run(config)
+        && config.duration >= Duration::from_secs(IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS)
+}
+
+fn is_shared_host_stable_recovery_run(config: &ChaosConfig) -> bool {
     config.nexus.is_some()
         && matches!(config.workload_profile, WorkloadProfile::Stable)
         && config.faulty_peers == 0
         && config.peer_count >= 4
-        && config.duration >= Duration::from_secs(IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS)
+        && config.duration >= Duration::from_secs(IZANAMI_SHARED_HOST_RECOVERY_MIN_DURATION_SECS)
 }
 
 fn recovery_profile_for(config: &ChaosConfig) -> RecoveryProfile {
-    if is_shared_host_stable_soak(config) {
+    if is_shared_host_stable_recovery_run(config) {
         shared_host_recovery_profile()
     } else {
         baseline_recovery_profile()
@@ -690,10 +697,9 @@ fn apply_shared_host_stable_soak_profile(config: &mut ChaosConfig) {
     let original_progress_timeout = config.progress_timeout;
     let original_pipeline_time = config.pipeline_time;
 
-    config.tps = config.tps.min(IZANAMI_SHARED_HOST_SOAK_TPS_CAP);
-    config.max_inflight = config
-        .max_inflight
-        .min(IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_CAP);
+    // Keep the shared-host soak load shape fixed so pilot runs stay comparable.
+    config.tps = IZANAMI_SHARED_HOST_SOAK_TPS_CAP;
+    config.max_inflight = IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_CAP;
     config.progress_timeout = config.progress_timeout.max(Duration::from_secs(
         IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS,
     ));
@@ -1362,6 +1368,7 @@ impl IzanamiRunner {
         let stop_notify = run_control.stop_notifier();
         let deadline = run_control.deadline();
         let submission_counter = Arc::clone(submission_counter);
+        let backlog_limit = submission_backlog_limit(self.config.max_inflight);
         let handle = tokio::spawn(async move {
             let mut ticker = time::interval(interval);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -1376,19 +1383,23 @@ impl IzanamiRunner {
                 if run_control.should_stop() {
                     break;
                 }
-                let permit = match semaphore.clone().acquire_owned().await {
-                    Ok(permit) => permit,
-                    Err(_) => break,
-                };
+                if !wait_for_submission_capacity(
+                    &mut submissions,
+                    backlog_limit,
+                    stop_notify.as_ref(),
+                    deadline,
+                )
+                .await
+                {
+                    break;
+                }
                 if run_control.should_stop() {
-                    drop(permit);
                     break;
                 }
                 let plan = match workload.next_plan(&mut load_rng).await {
                     Ok(plan) => plan,
                     Err(err) => {
                         warn!(target: "izanami::workload", ?err, "failed to build transaction plan");
-                        drop(permit);
                         continue;
                     }
                 };
@@ -1396,11 +1407,12 @@ impl IzanamiRunner {
                 let ingress_pool = Arc::clone(&ingress_pool);
                 let submission_counter = Arc::clone(&submission_counter);
                 let workload = Arc::clone(&workload);
+                let semaphore = Arc::clone(&semaphore);
                 submissions.spawn(async move {
                     submit_plan(
                         &ingress_pool,
                         plan,
-                        permit,
+                        semaphore,
                         &metrics,
                         &submission_counter,
                         &workload,
@@ -1421,6 +1433,35 @@ fn drain_ready_submissions(submissions: &mut JoinSet<()>) {
     while let Some(result) = submissions.try_join_next() {
         let _ = result;
     }
+}
+
+fn submission_backlog_limit(max_inflight: usize) -> usize {
+    max_inflight
+        .max(1)
+        .saturating_mul(IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER)
+}
+
+async fn wait_for_submission_capacity(
+    submissions: &mut JoinSet<()>,
+    backlog_limit: usize,
+    stop_notify: &Notify,
+    deadline: Instant,
+) -> bool {
+    while submissions.len() >= backlog_limit {
+        let joined = tokio::select! {
+            result = submissions.join_next() => result,
+            () = stop_notify.notified() => return false,
+            () = time::sleep_until(deadline.into()) => return false,
+        };
+        match joined {
+            Some(result) => {
+                let _ = result;
+                drain_ready_submissions(submissions);
+            }
+            None => return false,
+        }
+    }
+    true
 }
 
 fn tune_ingress_client(mut client: Client) -> Client {
@@ -1787,7 +1828,7 @@ fn record_plan_skip(
 async fn submit_plan(
     ingress_pool: &Arc<IngressEndpointPool>,
     plan: TransactionPlan,
-    _permit: OwnedSemaphorePermit,
+    semaphore: Arc<Semaphore>,
     metrics: &Arc<Metrics>,
     submission_counter: &Arc<AtomicU64>,
     workload: &Arc<WorkloadEngine>,
@@ -1887,25 +1928,55 @@ async fn submit_plan(
         }
     }
 
+    let permit = match semaphore.acquire_owned().await {
+        Ok(permit) => permit,
+        Err(_) => {
+            warn!(
+                target: "izanami::workload",
+                plan = plan_label,
+                "submission permit channel closed before submit"
+            );
+            if expect_success {
+                metrics.record_failure();
+            } else {
+                metrics.record_expected_failure();
+            }
+            workload.record_result(&plan, false).await;
+            return;
+        }
+    };
+
     let ingress_pool_for_submit = Arc::clone(&ingress_pool);
     let signer_for_submit = signer.clone();
     let instructions_for_submit = instructions.clone();
     let submission_counter_for_submit = Arc::clone(&submission_counter);
-    let succeeded = run_submission(plan_label, expect_success, metrics, move || {
-        run_with_queue_timeout_retry(plan_label, || {
-            ingress_pool_for_submit.run_with_failover("submit_all_blocking_with_metadata", |peer| {
-                let client = tune_ingress_client(peer.client_for(
-                    &signer_for_submit.id,
-                    signer_for_submit.key_pair.private_key().clone(),
-                ));
-                let metadata = submission_metadata(submission_counter_for_submit.as_ref());
-                client
-                    .submit_all_blocking_with_metadata(instructions_for_submit.clone(), metadata)
-                    .map(|_| ())
+    let succeeded = run_submission(
+        plan_label,
+        expect_success,
+        Arc::clone(&metrics),
+        move || {
+            run_with_queue_timeout_retry(plan_label, || {
+                ingress_pool_for_submit.run_with_failover(
+                    "submit_all_blocking_with_metadata",
+                    |peer| {
+                        let client = tune_ingress_client(peer.client_for(
+                            &signer_for_submit.id,
+                            signer_for_submit.key_pair.private_key().clone(),
+                        ));
+                        let metadata = submission_metadata(submission_counter_for_submit.as_ref());
+                        client
+                            .submit_all_blocking_with_metadata(
+                                instructions_for_submit.clone(),
+                                metadata,
+                            )
+                            .map(|_| ())
+                    },
+                )
             })
-        })
-    })
+        },
+    )
     .await;
+    drop(permit);
     if !succeeded {
         if let Some((trigger_id, _)) = mint_target {
             match query_trigger_repetitions_with_failover(
@@ -2518,6 +2589,41 @@ mod tests {
     }
 
     #[test]
+    fn shared_host_stable_soak_profile_pins_canonical_load_shape() {
+        let mut config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(3_600),
+            pipeline_time: None,
+            target_blocks: Some(3_600),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            seed: Some(17),
+            tps: 3.0,
+            max_inflight: 6,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+        };
+
+        assert!(is_shared_host_stable_soak(&config));
+        apply_shared_host_stable_soak_profile(&mut config);
+
+        assert_eq!(
+            config.tps, IZANAMI_SHARED_HOST_SOAK_TPS_CAP,
+            "shared-host soak should pin canonical TPS for deterministic pilots"
+        );
+        assert_eq!(
+            config.max_inflight, IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_CAP,
+            "shared-host soak should pin canonical max_inflight baseline"
+        );
+    }
+
+    #[test]
     fn shared_host_stable_soak_profile_does_not_touch_non_soak_runs() {
         let mut config = ChaosConfig {
             allow_net: true,
@@ -2546,6 +2652,62 @@ mod tests {
         assert_eq!(config.max_inflight, 8);
         assert_eq!(config.progress_timeout, Duration::from_secs(300));
         assert_eq!(config.pipeline_time, None);
+        assert_eq!(recovery_profile_for(&config), baseline_recovery_profile());
+    }
+
+    #[test]
+    fn shared_host_recovery_profile_applies_to_stable_pilot_runs() {
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1_200),
+            pipeline_time: None,
+            target_blocks: Some(1_200),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            seed: Some(12),
+            tps: 5.0,
+            max_inflight: 8,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+        };
+
+        assert!(!is_shared_host_stable_soak(&config));
+        assert!(is_shared_host_stable_recovery_run(&config));
+        assert_eq!(
+            recovery_profile_for(&config),
+            shared_host_recovery_profile()
+        );
+    }
+
+    #[test]
+    fn shared_host_recovery_profile_does_not_apply_below_pilot_duration() {
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(600),
+            pipeline_time: None,
+            target_blocks: Some(600),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            seed: Some(15),
+            tps: 5.0,
+            max_inflight: 8,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+        };
+
+        assert!(!is_shared_host_stable_recovery_run(&config));
         assert_eq!(recovery_profile_for(&config), baseline_recovery_profile());
     }
 
@@ -3100,6 +3262,119 @@ mod tests {
             0,
             "drain should clear completed submissions within timeout"
         );
+    }
+
+    #[test]
+    fn submission_backlog_limit_scales_from_max_inflight() {
+        assert_eq!(
+            submission_backlog_limit(8),
+            8 * IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER
+        );
+        assert_eq!(
+            submission_backlog_limit(0),
+            IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn submission_permit_scope_does_not_block_precheck_phase() {
+        let semaphore = Arc::new(Semaphore::new(1));
+        let saturated = semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("must acquire permit");
+        let precheck_started = Arc::new(Notify::new());
+        let submit_started = Arc::new(Notify::new());
+
+        let semaphore_for_task = Arc::clone(&semaphore);
+        let precheck_for_task = Arc::clone(&precheck_started);
+        let submit_for_task = Arc::clone(&submit_started);
+        let task = tokio::spawn(async move {
+            precheck_for_task.notify_one();
+            let permit = semaphore_for_task
+                .acquire_owned()
+                .await
+                .expect("submit stage should acquire permit once available");
+            submit_for_task.notify_one();
+            drop(permit);
+        });
+
+        timeout(Duration::from_millis(200), precheck_started.notified())
+            .await
+            .expect("precheck phase should proceed even when submit permits are saturated");
+        assert!(
+            timeout(Duration::from_millis(100), submit_started.notified())
+                .await
+                .is_err(),
+            "submit stage should remain blocked while permits are saturated"
+        );
+
+        drop(saturated);
+        timeout(Duration::from_secs(1), submit_started.notified())
+            .await
+            .expect("submit stage should proceed after permit release");
+        task.await.expect("permit-scope task should finish");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_for_submission_capacity_enforces_backlog_bound() {
+        let backlog_limit = submission_backlog_limit(1);
+        let gate = Arc::new(Notify::new());
+        let mut submissions = JoinSet::new();
+        for _ in 0..backlog_limit {
+            let gate = Arc::clone(&gate);
+            submissions.spawn(async move {
+                gate.notified().await;
+            });
+        }
+        assert_eq!(submissions.len(), backlog_limit);
+
+        let stop_notify = Notify::new();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        {
+            let wait_future = wait_for_submission_capacity(
+                &mut submissions,
+                backlog_limit,
+                &stop_notify,
+                deadline,
+            );
+            tokio::pin!(wait_future);
+
+            assert!(
+                timeout(Duration::from_millis(100), &mut wait_future)
+                    .await
+                    .is_err(),
+                "capacity wait should block while backlog remains saturated"
+            );
+
+            gate.notify_one();
+
+            assert!(
+                timeout(Duration::from_secs(1), &mut wait_future)
+                    .await
+                    .expect("capacity wait should complete after one task finishes"),
+                "capacity wait should continue when stop/deadline are not reached"
+            );
+        }
+        assert!(
+            submissions.len() < backlog_limit,
+            "draining one completed submission should reduce backlog below the cap"
+        );
+
+        let gate_for_new_submission = Arc::clone(&gate);
+        submissions.spawn(async move {
+            gate_for_new_submission.notified().await;
+        });
+        assert!(
+            submissions.len() <= backlog_limit,
+            "queued submissions should stay bounded by max_inflight * backlog multiplier"
+        );
+
+        submissions.abort_all();
+        while let Some(result) = submissions.join_next().await {
+            let _ = result;
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

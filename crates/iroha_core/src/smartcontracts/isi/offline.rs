@@ -1,9 +1,9 @@
 #![allow(clippy::items_after_test_module, clippy::redundant_pub_crate)]
 
 use super::prelude::*;
-use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
 #[cfg(feature = "zk-stark")]
 use crate::zk_stark::verify_stark_fri_envelope;
+use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
 mod aggregate_proof;
 mod balance_proof;
 use std::{
@@ -4154,13 +4154,14 @@ pub mod isi {
             ));
         }
 
-        let expected_inputs = aggregate_v2_public_inputs_digest(transfer, receipts_root).map_err(|err| {
-            rejection_error(
-                OfflineTransferRejectionReason::AggregateProofHashError,
-                platform,
-                format!("failed to derive aggregate v2 public inputs: {err}"),
-            )
-        })?;
+        let expected_inputs =
+            aggregate_v2_public_inputs_digest(transfer, receipts_root).map_err(|err| {
+                rejection_error(
+                    OfflineTransferRejectionReason::AggregateProofHashError,
+                    platform,
+                    format!("failed to derive aggregate v2 public inputs: {err}"),
+                )
+            })?;
         let provided_inputs = BASE64_STANDARD
             .decode(public_inputs_b64.as_bytes())
             .map_err(|_| {
@@ -4193,8 +4194,14 @@ pub mod isi {
             ));
         }
 
-        if envelope.proof_counter.as_ref().is_some_and(|bytes| !bytes.is_empty())
-            || envelope.proof_replay.as_ref().is_some_and(|bytes| !bytes.is_empty())
+        if envelope
+            .proof_counter
+            .as_ref()
+            .is_some_and(|bytes| !bytes.is_empty())
+            || envelope
+                .proof_replay
+                .as_ref()
+                .is_some_and(|bytes| !bytes.is_empty())
         {
             return Err(rejection_error(
                 OfflineTransferRejectionReason::AggregateProofHashError,
@@ -4232,7 +4239,7 @@ pub mod isi {
                         "aggregate proof version {} is not supported",
                         envelope.version
                     ),
-                ))
+                ));
             }
         }
 

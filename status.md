@@ -1,6 +1,60 @@
 # Status
 
 Last update: 2026-02-25
+- Latest sync (2026-02-25 pilot + acceptance reruns, fixed `--tps 5 --max-inflight 8`):
+  - Executed pilot gate rerun (`--duration 1200s --target-blocks 1200 --tps 5 --max-inflight 8 --workload-profile stable`) with artifacts:
+    - log: `/tmp/izanami_pilot_1200_scopefix_20260225T205417.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_h3D6yj`
+  - Pilot outcome: failed at duration end with `izanami run stopped before target blocks reached`; final `quorum_min_height=650`, `strict_min_height=650`, max strict/quorum gap `1`, summary `successes=3089 failures=1 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`.
+  - Executed acceptance gate rerun (`--duration 3600s --target-blocks 3600 --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`) with artifacts:
+    - log: `/tmp/izanami_acceptance_3600_scopefix_20260225T212106.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_jPd2Rd`
+  - Acceptance outcome: failed at duration end with `izanami run stopped before target blocks reached`; final `quorum_min_height=1546`, `strict_min_height=1546`, max strict/quorum gap `1`, summary `successes=7525 failures=6 izanami_ingress_failover_total=10 izanami_ingress_endpoint_unhealthy_total=4`; workload log includes `Repeated instruction` rejections (`4` occurrences).
+  - Interpretation: the prior sustained lagging-peer split/churn symptom did not reproduce (strict/quorum remained aligned within `±1`), but throughput is still below gate slope (`650/1200` pilot, `1546/3600` acceptance), so the remaining blocker is submit/ingress-path throughput under shared-host conditions rather than consensus deadlock.
+- Latest sync (2026-02-25 pilot/acceptance gate prep with fixed `--tps 5 --max-inflight 8`):
+  - Root-cause split now tracked explicitly: 1200s pilot failures are recovery-churn dominated (strict/quorum split + fallback-anchor loops), while 3600s under-target runs are submit-path throughput limited (not consensus deadlock).
+  - `crates/izanami/src/chaos.rs` updates:
+    - added `is_shared_host_stable_recovery_run(...)` (`nexus`, stable profile, `faulty_peers=0`, `peer_count>=4`, `duration>=1200s`) and switched `recovery_profile_for(...)` to this selector so pilot-scale stable runs use shared-host recovery tuning;
+    - kept load-shape pinning (`tps=5`, `max_inflight=8`, progress-timeout floor, pipeline-time floor) gated only by `is_shared_host_stable_soak(...)` (`duration>=3600s`);
+    - narrowed semaphore scope: load supervisor no longer acquires submit permits before plan generation/prechecks; `submit_plan(...)` now acquires permit only immediately before submit RPC/retry and releases it right after submit result;
+    - added deterministic submit backlog cap `IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER=8` and enforced queue bound `submissions.len() < max_inflight * multiplier` before admitting new submit tasks.
+  - Added/updated regression coverage in `crates/izanami/src/chaos.rs`:
+    - `shared_host_recovery_profile_applies_to_stable_pilot_runs`;
+    - `shared_host_recovery_profile_does_not_apply_below_pilot_duration`;
+    - `submission_permit_scope_does_not_block_precheck_phase`;
+    - `wait_for_submission_capacity_enforces_backlog_bound`.
+  - Validation:
+    - `cargo fmt --all` (ok)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; 4 passed)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok; 2 passed)
+    - `cargo test -p izanami submission_ -- --nocapture` (ok; 8 passed)
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok)
+    - `bash ci/check_sumeragi_formal.sh` (failed in this environment: `apalache-mc` missing and Docker daemon unavailable)
+  - Gate rerun artifact slots in this prep note are superseded by executed artifacts listed in the newer sync entry above.
+- Latest sync (2026-02-25 lagging-peer recovery storm suppression + inflight A/B lock):
+  - Root-cause statement: the blocker is lagging-peer recovery storm churn (fallback-anchor + missing-QC/proposal-missing loops), not ingress saturation.
+  - Implemented deterministic suppression/cleanup hardening in `crates/iroha_core/src/block_sync.rs`, `crates/iroha_core/src/sumeragi/main_loop.rs`, `crates/iroha_core/src/sumeragi/main_loop/propose.rs`, and `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+    - unknown-prev fallback serving now suppresses repeated responses for the same requester/frontier unless local canonical state advances enough to provide new content;
+    - proposal assembly now tracks one active highest-QC-missing defer marker per `(height, view, highest_qc_hash)` and triggers at most one reacquire action per key until state advancement/cleanup.
+  - Shared-host load-shape baseline is now pinned for stable-soak runs in `crates/izanami/src/chaos.rs` (`tps=5`, `max_inflight=8`), with new regression `shared_host_stable_soak_profile_pins_canonical_load_shape`.
+  - A/B pilot evidence (1200s, `--tps 5`, stable profile):
+    - `max_inflight=8`: `/tmp/izanami_pilot_1200_inflight8_20260225T162303.log` (`successes=2918`, `failures=9`), sampler `/tmp/izanami_pilot_1200_inflight8_samples_20260225T1634.jsonl` (`max_strict=654`, `max_divergence=1`, `missing_block_fetch_total<=1437`).
+    - `max_inflight=6`: `/tmp/izanami_pilot_1200_inflight6_20260225T165243.log` (`successes=1720`, `failures=22`), sampler `/tmp/izanami_pilot_1200_inflight6_samples_20260225T1654.jsonl` (`max_strict=426`, `max_divergence=134`, `missing_block_fetch_total<=9583`).
+    - Decision: keep `max_inflight=8` baseline; do not use 6 for shared-host acceptance runs.
+  - Soak artifacts:
+    - Pilot gate artifacts: `/tmp/izanami_pilot_1200_inflight8_20260225T162303.log`, `/tmp/izanami_pilot_1200_inflight8_samples_20260225T1634.jsonl`, `/tmp/izanami_pilot_1200_inflight6_20260225T165243.log`, `/tmp/izanami_pilot_1200_inflight6_samples_20260225T1654.jsonl`.
+    - Latest full-soak acceptance artifact remains `/tmp/izanami_canonical_long_rerun_20260224T023548.log` with network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_yZLSlT` (gate still open).
+  - Validation:
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib assemble_proposal_defers_when_highest_qc_block_missing -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib block_sync_update_records_missing_request_when_sparse_signatures_fail_quorum -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib deferred_missing_payload_qc_expiry_is_bounded -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib sidecar_mismatch_final_drop_trips_after_retry_cap -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib force_view_change_if_idle_suppresses_ -- --nocapture` (ok; 2 tests)
+    - `cargo test -p iroha_core --lib highest_qc_fetch_suppresses_committed_height_hash_conflict -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib block_created_without_hint_rejects_conflicting_lock_ -- --nocapture` (ok; 3 tests)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; 4 tests)
+    - `bash ci/check_sumeragi_formal.sh` (failed in this environment: `apalache-mc` not installed; Docker daemon unavailable)
 - Latest sync (deterministic missing-QC recovery + shared-host soak-profile hardening):
   - Sumeragi deterministic recovery frontier changes remain in place across `crates/iroha_core/src/sumeragi/main_loop/{block_sync.rs,proposal_handlers.rs,qc.rs,votes.rs}` and `crates/iroha_core/src/sumeragi/main_loop.rs` (canonical sparse/no-cert planning, same-event missing-request activation, stale suppression/pruning, sidecar failover hardening, bounded pending behavior with deterministic eviction and telemetry).
   - Izanami shared-host soak profile hardening landed in `crates/izanami/src/chaos.rs`: contention-tolerant DA/recovery windows, long-soak shared-host profile clamping (`max_inflight`, `progress_timeout`) while preserving canonical `tps=5`, and explicit shared-host soak unit coverage.
