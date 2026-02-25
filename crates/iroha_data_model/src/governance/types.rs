@@ -23,7 +23,7 @@ use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
 
 use crate::{
     account::AccountId, asset::AssetId, isi::governance::CouncilDerivationKind,
-    smart_contract::manifest::ManifestProvenance,
+    runtime::RuntimeUpgradeManifest, smart_contract::manifest::ManifestProvenance,
 };
 
 /// Errors emitted when parsing hex-encoded hashes used by governance payloads.
@@ -399,6 +399,8 @@ impl JsonDeserialize for AbiVersion {
 pub enum ProposalKind {
     /// Deploy an IVM contract identified by namespace + contract id and content hashes.
     DeployContract(DeployContractProposal),
+    /// Schedule a runtime upgrade manifest through governance.
+    RuntimeUpgrade(RuntimeUpgradeProposal),
 }
 
 /// Proposal payload for deploying an IVM contract via governance.
@@ -421,6 +423,17 @@ pub struct DeployContractProposal {
     /// Optional manifest provenance used to attest the manifest when absent on-chain.
     #[norito(default)]
     pub manifest_provenance: Option<ManifestProvenance>,
+}
+
+/// Proposal payload for scheduling a runtime upgrade through governance.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RuntimeUpgradeProposal {
+    /// Canonical runtime-upgrade manifest payload.
+    pub manifest: RuntimeUpgradeManifest,
 }
 
 /// Inclusive execution window for enactment certificates.
@@ -979,6 +992,35 @@ mod tests {
                     proposal.code_hash_hex.to_hex()
                 );
             }
+            ProposalKind::RuntimeUpgrade(_) => panic!("unexpected runtime-upgrade proposal"),
+        }
+    }
+
+    #[test]
+    fn runtime_upgrade_proposal_roundtrip() {
+        let manifest = RuntimeUpgradeManifest {
+            name: "gov runtime upgrade".to_owned(),
+            description: "runtime proposal roundtrip".to_owned(),
+            abi_version: 1,
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            added_syscalls: Vec::new(),
+            added_pointer_types: Vec::new(),
+            start_height: 42,
+            end_height: 99,
+            sbom_digests: Vec::new(),
+            slsa_attestation: Vec::new(),
+            provenance: Vec::new(),
+        };
+        let payload = ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal { manifest });
+        let framed = norito::to_bytes(&payload).expect("encode runtime-upgrade proposal");
+        let decoded = norito::decode_from_bytes::<ProposalKind>(&framed)
+            .expect("decode runtime-upgrade proposal");
+        match decoded {
+            ProposalKind::RuntimeUpgrade(inner) => {
+                assert_eq!(inner.manifest.abi_version, 1);
+                assert_eq!(inner.manifest.start_height, 42);
+            }
+            ProposalKind::DeployContract(_) => panic!("unexpected deploy-contract proposal"),
         }
     }
 

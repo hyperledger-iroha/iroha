@@ -11780,6 +11780,35 @@ mod tests {
         (status, relay_envelope)
     }
 
+    fn make_lane_relay_for_status(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        block_height: u64,
+        timestamp_ms: u64,
+    ) -> LaneRelayEnvelope {
+        let settlement = LaneBlockCommitment {
+            block_height,
+            lane_id,
+            dataspace_id,
+            tx_count: 1,
+            total_local_micro: 10,
+            total_xor_due_micro: 5,
+            total_xor_after_haircut_micro: 4,
+            total_xor_variance_micro: 1,
+            swap_metadata: None,
+            receipts: Vec::new(),
+        };
+        let block_header = BlockHeader::new(
+            NonZeroU64::new(block_height).expect("nonzero height"),
+            None,
+            None,
+            None,
+            timestamp_ms,
+            0,
+        );
+        LaneRelayEnvelope::new(block_header, None, None, settlement, 0).expect("lane relay")
+    }
+
     fn config_factory() -> Config {
         let (account_id, key_pair) = gen_account_in("wonderland");
         Config {
@@ -15150,6 +15179,41 @@ mod tests {
     }
 
     #[test]
+    fn get_sumeragi_status_wire_rejects_malformed_json_payload() {
+        let client = client_with_base_url(base_url());
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(br#"{"lane_relay_envelopes":["#.to_vec())
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let result = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_sumeragi_status_wire()
+        });
+        assert!(result.is_err(), "malformed json should be rejected");
+    }
+
+    #[test]
+    fn get_sumeragi_status_wire_rejects_json_payload_missing_required_fields() {
+        let client = client_with_base_url(base_url());
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(br#"{}"#.to_vec())
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let result = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_sumeragi_status_wire()
+        });
+        assert!(
+            result.is_err(),
+            "structurally invalid json payload should be rejected"
+        );
+    }
+
+    #[test]
     fn get_cross_lane_transfer_proofs_returns_verified_envelopes() {
         let client = client_with_base_url(base_url());
         let (status, relay_envelope) = sample_sumeragi_status_with_relay();
@@ -15167,6 +15231,46 @@ mod tests {
         .expect("decode lane relays");
         assert_eq!(proofs.len(), 1);
         assert_eq!(proofs[0].envelope(), &relay_envelope);
+    }
+
+    #[test]
+    fn get_cross_lane_transfer_proofs_accepts_json_status_payload() {
+        let client = client_with_base_url(base_url());
+        let (status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let body = norito::json::to_vec(&status).expect("encode status payload as json");
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(body)
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let proofs = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_cross_lane_transfer_proofs()
+        })
+        .expect("decode lane relays from json payload");
+        assert_eq!(proofs.len(), 1);
+        assert_eq!(proofs[0].envelope(), &relay_envelope);
+    }
+
+    #[test]
+    fn get_cross_lane_transfer_proofs_returns_empty_for_empty_envelopes() {
+        let client = client_with_base_url(base_url());
+        let (mut status, _) = sample_sumeragi_status_with_relay();
+        status.lane_relay_envelopes = Vec::new();
+        let body = norito::to_bytes(&status).expect("encode status payload");
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(body)
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let proofs = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_cross_lane_transfer_proofs()
+        })
+        .expect("empty relay list should decode");
+        assert!(proofs.is_empty(), "expected no cross-lane proofs");
     }
 
     #[test]
@@ -15189,6 +15293,161 @@ mod tests {
         assert!(
             err.to_string().contains("duplicate relay envelope"),
             "expected duplicate detection error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn get_cross_lane_transfer_proofs_accepts_distinct_dataspaces_on_same_lane_and_height() {
+        let client = client_with_base_url(base_url());
+        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let second = make_lane_relay_for_status(
+            relay_envelope.lane_id,
+            DataSpaceId::new(relay_envelope.dataspace_id.as_u64() + 1),
+            relay_envelope.block_height,
+            1_700_000_100_000,
+        );
+        status.lane_relay_envelopes = vec![relay_envelope.clone(), second.clone()];
+        let body = norito::to_bytes(&status).expect("encode status payload");
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(body)
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let proofs = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_cross_lane_transfer_proofs()
+        })
+        .expect("decode lane relays");
+        assert_eq!(proofs.len(), 2);
+        assert!(
+            proofs
+                .iter()
+                .any(|proof| proof.envelope() == &relay_envelope)
+        );
+        assert!(proofs.iter().any(|proof| proof.envelope() == &second));
+    }
+
+    #[test]
+    fn get_cross_lane_transfer_proofs_accepts_distinct_lanes_on_same_dataspace_and_height() {
+        let client = client_with_base_url(base_url());
+        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let second = make_lane_relay_for_status(
+            LaneId::new(relay_envelope.lane_id.as_u32() + 1),
+            relay_envelope.dataspace_id,
+            relay_envelope.block_height,
+            1_700_000_105_000,
+        );
+        status.lane_relay_envelopes = vec![relay_envelope.clone(), second.clone()];
+        let body = norito::to_bytes(&status).expect("encode status payload");
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(body)
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let proofs = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_cross_lane_transfer_proofs()
+        })
+        .expect("decode lane relays");
+        assert_eq!(proofs.len(), 2);
+        assert!(
+            proofs
+                .iter()
+                .any(|proof| proof.envelope() == &relay_envelope)
+        );
+        assert!(proofs.iter().any(|proof| proof.envelope() == &second));
+    }
+
+    #[test]
+    fn get_cross_lane_transfer_proofs_preserves_envelope_order() {
+        let client = client_with_base_url(base_url());
+        let (mut status, first) = sample_sumeragi_status_with_relay();
+        let second = make_lane_relay_for_status(
+            LaneId::new(first.lane_id.as_u32() + 2),
+            DataSpaceId::new(first.dataspace_id.as_u64() + 3),
+            first.block_height + 4,
+            1_700_000_115_000,
+        );
+        status.lane_relay_envelopes = vec![second.clone(), first.clone()];
+        let body = norito::to_bytes(&status).expect("encode status payload");
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(body)
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let proofs = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_cross_lane_transfer_proofs()
+        })
+        .expect("decode ordered lane relays");
+        assert_eq!(proofs.len(), 2);
+        assert_eq!(proofs[0].envelope(), &second, "first proof order mismatch");
+        assert_eq!(proofs[1].envelope(), &first, "second proof order mismatch");
+    }
+
+    #[test]
+    fn get_cross_lane_transfer_proofs_accepts_same_lane_dataspace_across_heights() {
+        let client = client_with_base_url(base_url());
+        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let second = make_lane_relay_for_status(
+            relay_envelope.lane_id,
+            relay_envelope.dataspace_id,
+            relay_envelope.block_height + 1,
+            1_700_000_110_000,
+        );
+        status.lane_relay_envelopes = vec![relay_envelope.clone(), second.clone()];
+        let body = norito::to_bytes(&status).expect("encode status payload");
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(body)
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let proofs = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_cross_lane_transfer_proofs()
+        })
+        .expect("decode lane relays");
+        assert_eq!(proofs.len(), 2);
+        assert!(
+            proofs
+                .iter()
+                .any(|proof| proof.envelope() == &relay_envelope)
+        );
+        assert!(proofs.iter().any(|proof| proof.envelope() == &second));
+    }
+
+    #[test]
+    fn get_cross_lane_transfer_proofs_reports_invalid_relay_before_duplicate_error() {
+        let client = client_with_base_url(base_url());
+        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let mut tampered_duplicate = relay_envelope.clone();
+        tampered_duplicate.settlement_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
+        status.lane_relay_envelopes = vec![relay_envelope, tampered_duplicate];
+        let body = norito::to_bytes(&status).expect("encode status payload");
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(body)
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let err = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_cross_lane_transfer_proofs()
+        })
+        .expect_err("invalid relay must be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("Invalid lane relay envelope in status payload"),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            !message.contains("duplicate relay envelope"),
+            "duplicate detection should not run before relay verification: {message}"
         );
     }
 

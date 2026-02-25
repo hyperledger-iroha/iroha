@@ -56,6 +56,20 @@ require_nonnegative_int() {
   fi
 }
 
+require_option_value() {
+  local flag="$1"
+  local value="${2-}"
+  local allow_option_like="${3-false}"
+  if [[ -z "${value}" ]]; then
+    echo "Missing value for ${flag}" >&2
+    exit 2
+  fi
+  if [[ "${allow_option_like}" != true ]] && [[ "${value}" == --* ]]; then
+    echo "Missing value for ${flag}" >&2
+    exit 2
+  fi
+}
+
 require_command() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
@@ -87,42 +101,52 @@ CACHED_RUNTIME_TEST_BIN=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --cross-runs)
+      require_option_value "--cross-runs" "${2-}"
       CROSS_RUNS="$2"
       shift 2
       ;;
     --runtime-runs)
+      require_option_value "--runtime-runs" "${2-}"
       RUNTIME_RUNS="$2"
       shift 2
       ;;
     --cross-soak-iterations)
+      require_option_value "--cross-soak-iterations" "${2-}"
       CROSS_SOAK_ITERATIONS="$2"
       shift 2
       ;;
     --runtime-bench-iterations)
+      require_option_value "--runtime-bench-iterations" "${2-}"
       RUNTIME_BENCH_ITERATIONS="$2"
       shift 2
       ;;
     --cross-timeout-s)
+      require_option_value "--cross-timeout-s" "${2-}"
       CROSS_TIMEOUT_S="$2"
       shift 2
       ;;
     --runtime-timeout-s)
+      require_option_value "--runtime-timeout-s" "${2-}"
       RUNTIME_TIMEOUT_S="$2"
       shift 2
       ;;
     --target-dir)
+      require_option_value "--target-dir" "${2-}" true
       TARGET_DIR="$2"
       shift 2
       ;;
     --output-dir)
+      require_option_value "--output-dir" "${2-}" true
       OUTPUT_DIR="$2"
       shift 2
       ;;
     --cargo-jobs)
+      require_option_value "--cargo-jobs" "${2-}"
       CARGO_JOBS="$2"
       shift 2
       ;;
     --test-threads)
+      require_option_value "--test-threads" "${2-}"
       TEST_THREADS="$2"
       shift 2
       ;;
@@ -219,19 +243,57 @@ build_env_vars() {
 
 run_with_timeout() {
   local timeout_s="$1"
-  shift
+  local timeout_marker="$2"
+  shift 2
+  rm -f "${timeout_marker}"
   if [[ "$timeout_s" -gt 0 ]]; then
-    python3 - "$timeout_s" "$@" <<'PY'
+    MATRIX_TIMEOUT_MARKER="${timeout_marker}" python3 - "$timeout_s" "$@" <<'PY'
+import os
+import signal
 import subprocess
 import sys
 
 timeout_s = int(sys.argv[1])
 command = sys.argv[2:]
+timeout_marker = os.environ.get("MATRIX_TIMEOUT_MARKER")
+
+process = subprocess.Popen(command, start_new_session=True)
 try:
-    completed = subprocess.run(command, check=False, timeout=timeout_s)
+    sys.exit(process.wait(timeout=timeout_s))
 except subprocess.TimeoutExpired:
+    if timeout_marker:
+        with open(timeout_marker, "w", encoding="utf-8") as marker:
+            marker.write("1\n")
+    pgid = None
+    try:
+        pgid = os.getpgid(process.pid)
+    except Exception:
+        pgid = None
+    if pgid is not None:
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except Exception:
+            pass
+    else:
+        try:
+            process.terminate()
+        except Exception:
+            pass
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except Exception:
+                pass
+        else:
+            try:
+                process.kill()
+            except Exception:
+                pass
+        process.wait()
     sys.exit(124)
-sys.exit(completed.returncode)
 PY
   else
     "$@"
@@ -266,17 +328,42 @@ list_mod_test_binaries_by_mtime_desc() {
 
 resolve_mod_test_binary_for_filter() {
   local test_filter="$1"
-  local candidate list_output
+  local candidate list_output expected_test_id
+  expected_test_id=$(expected_test_id_for_filter "${test_filter}")
 
   while IFS=$'\t' read -r _mtime candidate; do
     list_output=$("${candidate}" "${test_filter}" --list 2>/dev/null || true)
-    if printf '%s\n' "${list_output}" | rg -q -F "${test_filter}"; then
+    while IFS= read -r listed_line; do
+      [[ "${listed_line}" == *": test" ]] || continue
+      local listed_test
+      listed_test="${listed_line%: test}"
+      if [[ "${listed_test}" == "${expected_test_id}" ]] || [[ "${listed_test}" == *"::${test_filter}" ]]; then
+        printf '%s\n' "${candidate}"
+        return 0
+      fi
+    done < <(printf '%s\n' "${list_output}")
+    if [[ -n "${expected_test_id}" ]] && printf '%s\n' "${list_output}" | rg -q -F "${expected_test_id}: test"; then
       printf '%s\n' "${candidate}"
       return 0
     fi
   done < <(list_mod_test_binaries_by_mtime_desc | sort -rn -k1,1)
 
   return 1
+}
+
+expected_test_id_for_filter() {
+  local test_filter="$1"
+  case "${test_filter}" in
+    cross_dataspace_atomic_swap_is_all_or_nothing)
+      printf '%s\n' "nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing"
+      ;;
+    runtime_nexus_registration_reports_lane_lifecycle_costs)
+      printf '%s\n' "nexus::runtime_dataspace_registration_perf::runtime_nexus_registration_reports_lane_lifecycle_costs"
+      ;;
+    *)
+      printf '%s\n' "${test_filter}"
+      ;;
+  esac
 }
 
 require_resolved_test_binary() {
@@ -294,6 +381,7 @@ require_resolved_test_binary() {
 run_cross() {
   local run_index="$1"
   local log_path="${OUTPUT_DIR}/cross_run_${run_index}.log"
+  local timeout_marker="${OUTPUT_DIR}/.cross_run_${run_index}.timed_out"
   local start_ts end_ts duration_s code
   local timed_out=0
   local test_bin test_filter
@@ -312,14 +400,15 @@ run_cross() {
     command=(cargo test -p integration_tests --test mod "${test_filter}" -- --nocapture --test-threads="${TEST_THREADS}")
   fi
   start_ts=$(date +%s)
-  if run_with_timeout "${CROSS_TIMEOUT_S}" env "${ENV_VARS[@]}" "${command[@]}" >"${log_path}" 2>&1; then
+  if run_with_timeout "${CROSS_TIMEOUT_S}" "${timeout_marker}" env "${ENV_VARS[@]}" "${command[@]}" >"${log_path}" 2>&1; then
     code=0
   else
     code=$?
   fi
-  if [[ "${code}" -eq 124 ]]; then
+  if [[ -f "${timeout_marker}" ]]; then
     timed_out=1
   fi
+  rm -f "${timeout_marker}"
   end_ts=$(date +%s)
   duration_s=$((end_ts - start_ts))
 
@@ -349,6 +438,7 @@ run_cross() {
 run_runtime() {
   local run_index="$1"
   local log_path="${OUTPUT_DIR}/runtime_run_${run_index}.log"
+  local timeout_marker="${OUTPUT_DIR}/.runtime_run_${run_index}.timed_out"
   local start_ts end_ts duration_s code
   local timed_out=0
   local test_bin test_filter
@@ -367,14 +457,15 @@ run_runtime() {
     command=(cargo test -p integration_tests --test mod "${test_filter}" -- --nocapture --test-threads="${TEST_THREADS}")
   fi
   start_ts=$(date +%s)
-  if run_with_timeout "${RUNTIME_TIMEOUT_S}" env "${ENV_VARS[@]}" "${command[@]}" >"${log_path}" 2>&1; then
+  if run_with_timeout "${RUNTIME_TIMEOUT_S}" "${timeout_marker}" env "${ENV_VARS[@]}" "${command[@]}" >"${log_path}" 2>&1; then
     code=0
   else
     code=$?
   fi
-  if [[ "${code}" -eq 124 ]]; then
+  if [[ -f "${timeout_marker}" ]]; then
     timed_out=1
   fi
+  rm -f "${timeout_marker}"
   end_ts=$(date +%s)
   duration_s=$((end_ts - start_ts))
 
@@ -667,6 +758,25 @@ with open(out_json, "w", encoding="utf-8") as f:
 PY
 }
 
+FINALIZED_OUTPUTS=false
+finalize_outputs() {
+  if [[ "${FINALIZED_OUTPUTS}" == true ]]; then
+    return 0
+  fi
+  FINALIZED_OUTPUTS=true
+  set +e
+  echo "CROSS_CSV=${CROSS_CSV}"
+  echo "RUNTIME_CSV=${RUNTIME_CSV}"
+  cat "${CROSS_CSV}"
+  cat "${RUNTIME_CSV}"
+  cross_summary_line | tee -a "${SUMMARY_TXT}"
+  runtime_summary_line | tee -a "${SUMMARY_TXT}"
+  write_json_summary
+  echo "SUMMARY_TXT=${SUMMARY_TXT}"
+  echo "SUMMARY_JSON=${SUMMARY_JSON}"
+  return 0
+}
+
 echo "Output directory: ${OUTPUT_DIR}"
 echo "Cross runs enabled: ${RUN_CROSS}, runs: ${CROSS_RUNS}, soak iterations: ${CROSS_SOAK_ITERATIONS}, timeout: ${CROSS_TIMEOUT_S}s"
 echo "Runtime runs enabled: ${RUN_RUNTIME}, runs: ${RUNTIME_RUNS}, bench iterations: ${RUNTIME_BENCH_ITERATIONS}, timeout: ${RUNTIME_TIMEOUT_S}s"
@@ -678,6 +788,7 @@ echo "Summary JSON include rows: ${SUMMARY_JSON_ROWS}"
 echo "Skip build: ${SKIP_BUILD}"
 echo "Skip bindings sync: ${SKIP_BINDINGS_SYNC}"
 echo "Continue on failure: ${CONTINUE_ON_FAILURE}"
+trap finalize_outputs EXIT
 
 if [[ "${RUN_CROSS}" == true ]]; then
   for i in $(seq 1 "${CROSS_RUNS}"); do
@@ -696,13 +807,3 @@ if [[ "${RUN_RUNTIME}" == true ]]; then
 else
   echo "[matrix] runtime runs skipped"
 fi
-
-echo "CROSS_CSV=${CROSS_CSV}"
-echo "RUNTIME_CSV=${RUNTIME_CSV}"
-cat "${CROSS_CSV}"
-cat "${RUNTIME_CSV}"
-cross_summary_line | tee -a "${SUMMARY_TXT}"
-runtime_summary_line | tee -a "${SUMMARY_TXT}"
-write_json_summary
-echo "SUMMARY_TXT=${SUMMARY_TXT}"
-echo "SUMMARY_JSON=${SUMMARY_JSON}"

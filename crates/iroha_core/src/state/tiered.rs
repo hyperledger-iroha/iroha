@@ -2467,6 +2467,7 @@ mod measured_bytes_impls {
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
             ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalKind,
+            RuntimeUpgradeProposal,
         },
         ipfs::IpfsPath,
         isi::governance::CouncilDerivationKind,
@@ -3353,11 +3354,22 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for RuntimeUpgradeProposal {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<RuntimeUpgradeProposal>();
+            total = total.saturating_add(self.manifest.measured_bytes_extra());
+            total
+        }
+    }
+
     impl MeasuredBytes for ProposalKind {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ProposalKind>();
             match self {
                 ProposalKind::DeployContract(payload) => {
+                    total = total.saturating_add(payload.measured_bytes_extra());
+                }
+                ProposalKind::RuntimeUpgrade(payload) => {
                     total = total.saturating_add(payload.measured_bytes_extra());
                 }
             }

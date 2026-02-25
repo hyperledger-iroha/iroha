@@ -169,6 +169,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::endorsement::SetDomainEndorsementPolicy>,
     dispatch_instruction::<iroha_data_model::isi::endorsement::SubmitDomainEndorsement>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeDeployContract>,
+    dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::CastZkBallot>,
     dispatch_instruction::<iroha_data_model::isi::governance::CastPlainBallot>,
     dispatch_instruction::<iroha_data_model::isi::governance::EnactReferendum>,

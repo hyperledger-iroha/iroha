@@ -98,7 +98,12 @@ Note on API: In this codebase, Torii is an HTTP/WebSocket API (Axum). Tests shou
   - `IROHA_TESTUS_MAX_HEIGHT_SKEW` (default `2`) sets allowed validator height skew.
   - `IROHA_TESTUS_MAX_HEIGHT_SKEW_GRACE_SECS` (default `30`) allows transient skew bursts; only sustained unrecovered breaches fail.
   - `IROHA_TESTUS_STALL_TIMEOUT_SECS` (default `300`) controls max no-progress window for `max_height` before stall failure.
+  - `IROHA_TESTUS_SIM_SEED` (default `testus-public-sim`) overrides the deterministic simulation seed so multi-seed soak matrices can replay different churn/load schedules.
 - Simulation summary is written under the run temp directory as `localnet/testus_simulation_summary.json`; set `IROHA_TESTUS_KEEP_LOCALNET=1` to keep artifacts on success/failure.
+- Membership churn lag accounting is quorum-first:
+  - `membership_churn_lagged_cycles` increments only for hard lag signals (membership submit timeout/duplicate-lag handling, propagation timeout, or quorum convergence timeout).
+  - `membership_churn_warning_cycles` tracks warning-only degradation (joiner catch-up stall threshold crossings and all-validator-only convergence lag when quorum convergence is healthy).
+  - Membership churn backoff is applied only when `membership_churn_lagged_cycles` increments.
 
 ## CI Usage
 

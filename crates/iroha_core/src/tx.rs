@@ -2579,33 +2579,13 @@ fn enforce_runtime_upgrade_hook(
     rules: &GovernanceRules,
     tx: &SignedTransaction,
 ) -> Result<bool, TransactionRejectionReason> {
-    let mut contains_runtime_upgrade = false;
-    if let Executable::Instructions(instructions) = tx.instructions() {
-        for instruction in instructions {
-            if instruction
-                .as_any()
-                .downcast_ref::<ProposeRuntimeUpgrade>()
-                .is_some()
-                || instruction
-                    .as_any()
-                    .downcast_ref::<ActivateRuntimeUpgrade>()
-                    .is_some()
-                || instruction
-                    .as_any()
-                    .downcast_ref::<CancelRuntimeUpgrade>()
-                    .is_some()
-            {
-                contains_runtime_upgrade = true;
-                break;
-            }
-        }
-    }
+    let contains_runtime_upgrade = contains_runtime_upgrade_instruction(tx);
     if !contains_runtime_upgrade {
         return Ok(false);
     }
 
     let Some(hook) = rules.hooks.runtime_upgrade.as_ref() else {
-        return Ok(false);
+        return Ok(true);
     };
 
     if !hook.allow {
@@ -2661,7 +2641,75 @@ fn enforce_runtime_upgrade_hook(
         }
     }
 
-    Ok(true)
+    Ok(contains_runtime_upgrade)
+}
+
+fn contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
+    if let Executable::Instructions(instructions) = tx.instructions() {
+        return instructions.iter().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<ProposeRuntimeUpgrade>()
+                .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<ActivateRuntimeUpgrade>()
+                    .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<CancelRuntimeUpgrade>()
+                    .is_some()
+        });
+    }
+    false
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeUpgradeModuleKind {
+    Parliament,
+    LocalAdmins,
+}
+
+fn resolve_runtime_upgrade_module_kind(
+    module_name: Option<&str>,
+    catalog: &iroha_config::parameters::actual::GovernanceCatalog,
+) -> Option<RuntimeUpgradeModuleKind> {
+    let configured = module_name.or(catalog.default_module.as_deref())?;
+    let module_type = catalog
+        .modules
+        .get(configured)
+        .and_then(|module| module.module_type.as_deref())
+        .unwrap_or(configured);
+    let normalized = module_type.trim().to_ascii_lowercase().replace('-', "_");
+    if normalized.contains("parliament") {
+        Some(RuntimeUpgradeModuleKind::Parliament)
+    } else {
+        Some(RuntimeUpgradeModuleKind::LocalAdmins)
+    }
+}
+
+fn enforce_runtime_upgrade_dataspace_policy(
+    alias: &str,
+    dataspace_id: NexusDataSpaceId,
+    module_name: Option<&str>,
+    catalog: &iroha_config::parameters::actual::GovernanceCatalog,
+) -> Result<(), TransactionRejectionReason> {
+    let Some(module_kind) = resolve_runtime_upgrade_module_kind(module_name, catalog) else {
+        return Err(reject_lane_policy(
+            alias,
+            "runtime upgrade policy requires a governance module".to_string(),
+        ));
+    };
+    if dataspace_id == NexusDataSpaceId::GLOBAL
+        && !matches!(module_kind, RuntimeUpgradeModuleKind::Parliament)
+    {
+        return Err(reject_lane_policy(
+            alias,
+            "runtime upgrades in universal dataspace require a parliament governance module"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn extract_lane_identity_metadata(
@@ -2765,6 +2813,7 @@ fn enforce_lane_policies(
         |status| status.alias.clone(),
     );
 
+    let mut runtime_upgrade_present = false;
     if let Some(status) = manifest_status.as_ref() {
         if let Some(rules) = status.rules() {
             if !rules.validators.is_empty()
@@ -2795,8 +2844,23 @@ fn enforce_lane_policies(
                 &state_transaction.world,
             )?;
 
-            let _ = enforce_runtime_upgrade_hook(&lane_alias, rules, tx)?;
+            runtime_upgrade_present = enforce_runtime_upgrade_hook(&lane_alias, rules, tx)?;
         }
+    }
+
+    if !runtime_upgrade_present {
+        runtime_upgrade_present = contains_runtime_upgrade_instruction(tx);
+    }
+    if runtime_upgrade_present && state_transaction.nexus.enabled {
+        let module_name = manifest_status
+            .as_ref()
+            .and_then(|status| status.governance.as_deref());
+        enforce_runtime_upgrade_dataspace_policy(
+            &lane_alias,
+            dataspace_id,
+            module_name,
+            &state_transaction.nexus.governance,
+        )?;
     }
 
     let privacy_proofs = collect_lane_privacy_proofs(tx);

@@ -3,6 +3,7 @@
 
 use std::{
     fs,
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     thread,
@@ -24,6 +25,7 @@ const EXPANDED_PROVISIONED_LANES: usize = 2;
 const PRIMARY_LANE_ID: u32 = 0;
 const ELASTIC_LANE_ID: u32 = 1;
 const LOAD_TX_COUNT: usize = 48;
+const STRICT_CYCLE_LOAD_TX_COUNT: usize = 96;
 const LANE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const EXPANSION_PROBE_INTERVAL: Duration = Duration::from_millis(250);
 const EXPANSION_TOP_UP_EVERY_HEARTBEATS: u64 = 4;
@@ -36,8 +38,16 @@ const EXPANSION_POST_STORAGE_TOP_UP_TX_COUNT: usize = 64;
 const AUTOSCALE_COOLDOWN_CLEARANCE_BLOCK_DELTA: u64 = 2;
 const AUTOSCALE_COOLDOWN_CLEARANCE_TIMEOUT: Duration = Duration::from_secs(45);
 const CONTRACTION_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
+const STRICT_CONTRACTION_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 const SCALE_OUT_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
+const STRICT_SCALE_OUT_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
 const SCALE_IN_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
+const AUTOSCALE_SOAK_DURATION: Duration = Duration::from_secs(30 * 60);
+const AUTOSCALE_SOAK_CYCLE_RETRY_LIMIT: usize = 4;
+const AUTOSCALE_SOAK_DEFAULT_SEED: &str = "autoscale-localnet-soak-default";
+const AUTOSCALE_SOAK_SEED_ENV: &str = "IROHA_AUTOSCALE_SOAK_SEED";
+const AUTOSCALE_SOAK_ARTIFACT_DIR_ENV: &str = "IROHA_AUTOSCALE_SOAK_ARTIFACT_DIR";
+const AUTOSCALE_SOAK_FORCE_FAIL_CYCLE_ENV: &str = "IROHA_AUTOSCALE_SOAK_FORCE_FAIL_CYCLE";
 const TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const QUORUM_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const STATUS_SNAPSHOT_RETRY_LIMIT: u32 = 5;
@@ -124,6 +134,590 @@ struct ElasticLaneStorageStats {
 struct AutoscaleTransitionStats {
     scale_out_transitions: u64,
     scale_in_transitions: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ExpandContractCycleOutcome {
+    expansion_time_s: f64,
+    contraction_time_s: f64,
+    peers_with_scale_out_after_expansion: usize,
+    peers_with_scale_in_after_expansion: usize,
+    peers_with_scale_in_since_cycle_start: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SoakTimingSummary {
+    min_s: f64,
+    avg_s: f64,
+    max_s: f64,
+}
+
+impl SoakTimingSummary {
+    fn from_samples(samples: &[f64]) -> Self {
+        if samples.is_empty() {
+            return Self::default();
+        }
+        let mut min_s = f64::INFINITY;
+        let mut max_s = f64::NEG_INFINITY;
+        let mut total = 0.0_f64;
+        for sample in samples {
+            min_s = min_s.min(*sample);
+            max_s = max_s.max(*sample);
+            total += sample;
+        }
+        Self {
+            min_s,
+            avg_s: total / samples.len() as f64,
+            max_s,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct AutoscaleSoakRunSummary {
+    test_name: String,
+    started_at_unix_ms: u64,
+    ended_at_unix_ms: u64,
+    duration_s: f64,
+    cycles_completed: usize,
+    attempts_total: usize,
+    attempt_failures_total: usize,
+    retries_used_total: usize,
+    max_attempt_used_in_any_cycle: usize,
+    expansion_timing: SoakTimingSummary,
+    contraction_timing: SoakTimingSummary,
+    scale_out_quorum_misses_total: usize,
+    scale_in_post_expansion_quorum_misses_total: usize,
+    final_result: String,
+    failure_cycle: Option<usize>,
+    failure_reason: Option<String>,
+}
+
+impl AutoscaleSoakRunSummary {
+    fn to_json_value(&self) -> norito::json::Value {
+        let mut map = norito::json::Map::new();
+        map.insert(
+            "test_name".into(),
+            norito::json::Value::from(self.test_name.clone()),
+        );
+        map.insert(
+            "started_at_unix_ms".into(),
+            norito::json::Value::from(self.started_at_unix_ms),
+        );
+        map.insert(
+            "ended_at_unix_ms".into(),
+            norito::json::Value::from(self.ended_at_unix_ms),
+        );
+        map.insert(
+            "duration_s".into(),
+            norito::json::Value::from(self.duration_s),
+        );
+        map.insert(
+            "cycles_completed".into(),
+            norito::json::Value::from(usize_to_u64(self.cycles_completed)),
+        );
+        map.insert(
+            "attempts_total".into(),
+            norito::json::Value::from(usize_to_u64(self.attempts_total)),
+        );
+        map.insert(
+            "attempt_failures_total".into(),
+            norito::json::Value::from(usize_to_u64(self.attempt_failures_total)),
+        );
+        map.insert(
+            "retries_used_total".into(),
+            norito::json::Value::from(usize_to_u64(self.retries_used_total)),
+        );
+        map.insert(
+            "max_attempt_used_in_any_cycle".into(),
+            norito::json::Value::from(usize_to_u64(self.max_attempt_used_in_any_cycle)),
+        );
+        map.insert(
+            "expansion_time_s_min".into(),
+            norito::json::Value::from(self.expansion_timing.min_s),
+        );
+        map.insert(
+            "expansion_time_s_avg".into(),
+            norito::json::Value::from(self.expansion_timing.avg_s),
+        );
+        map.insert(
+            "expansion_time_s_max".into(),
+            norito::json::Value::from(self.expansion_timing.max_s),
+        );
+        map.insert(
+            "contraction_time_s_min".into(),
+            norito::json::Value::from(self.contraction_timing.min_s),
+        );
+        map.insert(
+            "contraction_time_s_avg".into(),
+            norito::json::Value::from(self.contraction_timing.avg_s),
+        );
+        map.insert(
+            "contraction_time_s_max".into(),
+            norito::json::Value::from(self.contraction_timing.max_s),
+        );
+        map.insert(
+            "scale_out_quorum_misses_total".into(),
+            norito::json::Value::from(usize_to_u64(self.scale_out_quorum_misses_total)),
+        );
+        map.insert(
+            "scale_in_post_expansion_quorum_misses_total".into(),
+            norito::json::Value::from(usize_to_u64(
+                self.scale_in_post_expansion_quorum_misses_total,
+            )),
+        );
+        map.insert(
+            "final_result".into(),
+            norito::json::Value::from(self.final_result.clone()),
+        );
+        map.insert(
+            "failure_cycle".into(),
+            self.failure_cycle
+                .map(usize_to_u64)
+                .map(norito::json::Value::from)
+                .unwrap_or(norito::json::Value::Null),
+        );
+        map.insert(
+            "failure_reason".into(),
+            self.failure_reason
+                .clone()
+                .map(norito::json::Value::from)
+                .unwrap_or(norito::json::Value::Null),
+        );
+        norito::json::Value::Object(map)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct AutoscaleSoakCycleEvent {
+    event_type: &'static str,
+    timestamp_unix_ms: u64,
+    elapsed_s: f64,
+    cycle_index: usize,
+    attempt: usize,
+    quorum_required: usize,
+    scale_out_transition_peers: Option<usize>,
+    scale_in_peers_after_expansion: Option<usize>,
+    scale_in_peers_since_cycle_start: Option<usize>,
+    expansion_time_s: Option<f64>,
+    contraction_time_s: Option<f64>,
+    reason: Option<String>,
+}
+
+impl AutoscaleSoakCycleEvent {
+    fn to_json_value(&self) -> norito::json::Value {
+        let mut map = norito::json::Map::new();
+        map.insert(
+            "event_type".into(),
+            norito::json::Value::from(self.event_type.to_owned()),
+        );
+        map.insert(
+            "timestamp_unix_ms".into(),
+            norito::json::Value::from(self.timestamp_unix_ms),
+        );
+        map.insert(
+            "elapsed_s".into(),
+            norito::json::Value::from(self.elapsed_s),
+        );
+        map.insert(
+            "cycle_index".into(),
+            norito::json::Value::from(usize_to_u64(self.cycle_index)),
+        );
+        map.insert(
+            "attempt".into(),
+            norito::json::Value::from(usize_to_u64(self.attempt)),
+        );
+        map.insert(
+            "quorum_required".into(),
+            norito::json::Value::from(usize_to_u64(self.quorum_required)),
+        );
+        map.insert(
+            "scale_out_transition_peers".into(),
+            self.scale_out_transition_peers
+                .map(usize_to_u64)
+                .map(norito::json::Value::from)
+                .unwrap_or(norito::json::Value::Null),
+        );
+        map.insert(
+            "scale_in_peers_after_expansion".into(),
+            self.scale_in_peers_after_expansion
+                .map(usize_to_u64)
+                .map(norito::json::Value::from)
+                .unwrap_or(norito::json::Value::Null),
+        );
+        map.insert(
+            "scale_in_peers_since_cycle_start".into(),
+            self.scale_in_peers_since_cycle_start
+                .map(usize_to_u64)
+                .map(norito::json::Value::from)
+                .unwrap_or(norito::json::Value::Null),
+        );
+        map.insert(
+            "expansion_time_s".into(),
+            self.expansion_time_s
+                .map(norito::json::Value::from)
+                .unwrap_or(norito::json::Value::Null),
+        );
+        map.insert(
+            "contraction_time_s".into(),
+            self.contraction_time_s
+                .map(norito::json::Value::from)
+                .unwrap_or(norito::json::Value::Null),
+        );
+        map.insert(
+            "reason".into(),
+            self.reason
+                .clone()
+                .map(norito::json::Value::from)
+                .unwrap_or(norito::json::Value::Null),
+        );
+        norito::json::Value::Object(map)
+    }
+}
+
+#[derive(Debug)]
+struct AutoscaleSoakReporter {
+    test_name: String,
+    started_at_unix_ms: u64,
+    started_at: Instant,
+    summary_path: PathBuf,
+    events_path: PathBuf,
+    events_writer: BufWriter<fs::File>,
+    cycles_completed: usize,
+    attempts_total: usize,
+    attempt_failures_total: usize,
+    retries_used_total: usize,
+    max_attempt_used_in_any_cycle: usize,
+    expansion_times_s: Vec<f64>,
+    contraction_times_s: Vec<f64>,
+    scale_out_quorum_misses_total: usize,
+    scale_in_post_expansion_quorum_misses_total: usize,
+}
+
+impl AutoscaleSoakReporter {
+    fn from_paths(test_name: &str, summary_path: PathBuf, events_path: PathBuf) -> Result<Self> {
+        if let Some(parent) = summary_path.parent() {
+            fs::create_dir_all(parent).map_err(|err| {
+                eyre!(
+                    "create autoscale soak summary dir {}: {err}",
+                    parent.display()
+                )
+            })?;
+        }
+        if let Some(parent) = events_path.parent() {
+            fs::create_dir_all(parent).map_err(|err| {
+                eyre!(
+                    "create autoscale soak events dir {}: {err}",
+                    parent.display()
+                )
+            })?;
+        }
+        let events_file = fs::File::create(&events_path).map_err(|err| {
+            eyre!(
+                "create autoscale soak event file {}: {err}",
+                events_path.display()
+            )
+        })?;
+        Ok(Self {
+            test_name: test_name.to_owned(),
+            started_at_unix_ms: current_unix_ms(),
+            started_at: Instant::now(),
+            summary_path,
+            events_path,
+            events_writer: BufWriter::new(events_file),
+            cycles_completed: 0,
+            attempts_total: 0,
+            attempt_failures_total: 0,
+            retries_used_total: 0,
+            max_attempt_used_in_any_cycle: 0,
+            expansion_times_s: Vec::new(),
+            contraction_times_s: Vec::new(),
+            scale_out_quorum_misses_total: 0,
+            scale_in_post_expansion_quorum_misses_total: 0,
+        })
+    }
+
+    fn new(network: &sandbox::SerializedNetwork, test_name: &str) -> Result<Self> {
+        let artifact_root = autoscale_soak_artifact_root(network)?;
+        fs::create_dir_all(&artifact_root).map_err(|err| {
+            eyre!(
+                "create autoscale soak artifact dir {}: {err}",
+                artifact_root.display()
+            )
+        })?;
+        let summary_path = artifact_root.join("autoscale_soak_summary.json");
+        let events_path = artifact_root.join("autoscale_soak_events.jsonl");
+
+        eprintln!(
+            "[autoscale-localnet][soak] artifacts: summary={}, events={}",
+            summary_path.display(),
+            events_path.display()
+        );
+
+        Self::from_paths(test_name, summary_path, events_path)
+    }
+
+    #[cfg(test)]
+    fn new_for_paths(summary_path: PathBuf, events_path: PathBuf, test_name: &str) -> Result<Self> {
+        Self::from_paths(test_name, summary_path, events_path)
+    }
+
+    fn summary_path(&self) -> &Path {
+        &self.summary_path
+    }
+
+    fn events_path(&self) -> &Path {
+        &self.events_path
+    }
+
+    fn write_event(&mut self, mut event: AutoscaleSoakCycleEvent) -> Result<()> {
+        event.timestamp_unix_ms = current_unix_ms();
+        event.elapsed_s = self.started_at.elapsed().as_secs_f64();
+        let line = norito::json::to_string(&event.to_json_value())
+            .map_err(|err| eyre!("serialize autoscale soak event JSON: {err}"))?;
+        writeln!(self.events_writer, "{line}").map_err(|err| {
+            eyre!(
+                "write autoscale soak event JSONL {}: {err}",
+                self.events_path.display()
+            )
+        })?;
+        self.events_writer.flush().map_err(|err| {
+            eyre!(
+                "flush autoscale soak event JSONL {}: {err}",
+                self.events_path.display()
+            )
+        })?;
+        Ok(())
+    }
+
+    fn record_cycle_start(&mut self, cycle_index: usize, quorum_required: usize) -> Result<()> {
+        self.write_event(AutoscaleSoakCycleEvent {
+            event_type: "cycle_start",
+            timestamp_unix_ms: 0,
+            elapsed_s: 0.0,
+            cycle_index,
+            attempt: 0,
+            quorum_required,
+            scale_out_transition_peers: None,
+            scale_in_peers_after_expansion: None,
+            scale_in_peers_since_cycle_start: None,
+            expansion_time_s: None,
+            contraction_time_s: None,
+            reason: None,
+        })
+    }
+
+    fn record_attempt_start(
+        &mut self,
+        cycle_index: usize,
+        attempt: usize,
+        quorum_required: usize,
+        load_tx_count: usize,
+    ) -> Result<()> {
+        self.attempts_total = self.attempts_total.saturating_add(1);
+        self.max_attempt_used_in_any_cycle = self.max_attempt_used_in_any_cycle.max(attempt);
+        self.write_event(AutoscaleSoakCycleEvent {
+            event_type: "attempt_start",
+            timestamp_unix_ms: 0,
+            elapsed_s: 0.0,
+            cycle_index,
+            attempt,
+            quorum_required,
+            scale_out_transition_peers: None,
+            scale_in_peers_after_expansion: None,
+            scale_in_peers_since_cycle_start: None,
+            expansion_time_s: None,
+            contraction_time_s: None,
+            reason: Some(format!("load_tx_count={load_tx_count}")),
+        })
+    }
+
+    fn record_attempt_retry(
+        &mut self,
+        cycle_index: usize,
+        attempt: usize,
+        quorum_required: usize,
+        next_attempt: usize,
+        reason: &str,
+    ) -> Result<()> {
+        self.attempt_failures_total = self.attempt_failures_total.saturating_add(1);
+        self.retries_used_total = self.retries_used_total.saturating_add(1);
+        self.write_event(AutoscaleSoakCycleEvent {
+            event_type: "attempt_retry",
+            timestamp_unix_ms: 0,
+            elapsed_s: 0.0,
+            cycle_index,
+            attempt,
+            quorum_required,
+            scale_out_transition_peers: None,
+            scale_in_peers_after_expansion: None,
+            scale_in_peers_since_cycle_start: None,
+            expansion_time_s: None,
+            contraction_time_s: None,
+            reason: Some(format!("next_attempt={next_attempt}; reason={reason}")),
+        })
+    }
+
+    fn record_attempt_failure(
+        &mut self,
+        cycle_index: usize,
+        attempt: usize,
+        quorum_required: usize,
+        reason: &str,
+    ) -> Result<()> {
+        self.attempt_failures_total = self.attempt_failures_total.saturating_add(1);
+        self.write_event(AutoscaleSoakCycleEvent {
+            event_type: "contraction_result",
+            timestamp_unix_ms: 0,
+            elapsed_s: 0.0,
+            cycle_index,
+            attempt,
+            quorum_required,
+            scale_out_transition_peers: None,
+            scale_in_peers_after_expansion: None,
+            scale_in_peers_since_cycle_start: None,
+            expansion_time_s: None,
+            contraction_time_s: None,
+            reason: Some(format!("attempt_failed={reason}")),
+        })
+    }
+
+    fn record_cycle_success(
+        &mut self,
+        cycle_index: usize,
+        attempt: usize,
+        quorum_required: usize,
+        cycle_outcome: &ExpandContractCycleOutcome,
+    ) -> Result<()> {
+        self.cycles_completed = self.cycles_completed.saturating_add(1);
+        self.expansion_times_s.push(cycle_outcome.expansion_time_s);
+        self.contraction_times_s
+            .push(cycle_outcome.contraction_time_s);
+
+        if cycle_outcome.peers_with_scale_out_after_expansion < quorum_required {
+            self.scale_out_quorum_misses_total =
+                self.scale_out_quorum_misses_total.saturating_add(1);
+        }
+        if cycle_outcome.peers_with_scale_in_after_expansion < quorum_required {
+            self.scale_in_post_expansion_quorum_misses_total = self
+                .scale_in_post_expansion_quorum_misses_total
+                .saturating_add(1);
+        }
+
+        self.write_event(AutoscaleSoakCycleEvent {
+            event_type: "expansion_result",
+            timestamp_unix_ms: 0,
+            elapsed_s: 0.0,
+            cycle_index,
+            attempt,
+            quorum_required,
+            scale_out_transition_peers: Some(cycle_outcome.peers_with_scale_out_after_expansion),
+            scale_in_peers_after_expansion: None,
+            scale_in_peers_since_cycle_start: Some(
+                cycle_outcome.peers_with_scale_in_since_cycle_start,
+            ),
+            expansion_time_s: Some(cycle_outcome.expansion_time_s),
+            contraction_time_s: None,
+            reason: None,
+        })?;
+        self.write_event(AutoscaleSoakCycleEvent {
+            event_type: "contraction_result",
+            timestamp_unix_ms: 0,
+            elapsed_s: 0.0,
+            cycle_index,
+            attempt,
+            quorum_required,
+            scale_out_transition_peers: None,
+            scale_in_peers_after_expansion: Some(cycle_outcome.peers_with_scale_in_after_expansion),
+            scale_in_peers_since_cycle_start: Some(
+                cycle_outcome.peers_with_scale_in_since_cycle_start,
+            ),
+            expansion_time_s: None,
+            contraction_time_s: Some(cycle_outcome.contraction_time_s),
+            reason: None,
+        })?;
+        self.write_event(AutoscaleSoakCycleEvent {
+            event_type: "cycle_complete",
+            timestamp_unix_ms: 0,
+            elapsed_s: 0.0,
+            cycle_index,
+            attempt,
+            quorum_required,
+            scale_out_transition_peers: Some(cycle_outcome.peers_with_scale_out_after_expansion),
+            scale_in_peers_after_expansion: Some(cycle_outcome.peers_with_scale_in_after_expansion),
+            scale_in_peers_since_cycle_start: Some(
+                cycle_outcome.peers_with_scale_in_since_cycle_start,
+            ),
+            expansion_time_s: Some(cycle_outcome.expansion_time_s),
+            contraction_time_s: Some(cycle_outcome.contraction_time_s),
+            reason: None,
+        })
+    }
+
+    fn finalize(
+        mut self,
+        final_result: &str,
+        failure_cycle: Option<usize>,
+        failure_reason: Option<String>,
+    ) -> Result<()> {
+        self.write_event(AutoscaleSoakCycleEvent {
+            event_type: "run_complete",
+            timestamp_unix_ms: 0,
+            elapsed_s: 0.0,
+            cycle_index: failure_cycle.unwrap_or(self.cycles_completed),
+            attempt: self.max_attempt_used_in_any_cycle,
+            quorum_required: 0,
+            scale_out_transition_peers: None,
+            scale_in_peers_after_expansion: None,
+            scale_in_peers_since_cycle_start: None,
+            expansion_time_s: None,
+            contraction_time_s: None,
+            reason: Some(
+                failure_reason
+                    .clone()
+                    .map(|reason| format!("result={final_result}; reason={reason}"))
+                    .unwrap_or_else(|| format!("result={final_result}")),
+            ),
+        })?;
+        self.events_writer.flush().map_err(|err| {
+            eyre!(
+                "flush autoscale soak event JSONL {}: {err}",
+                self.events_path.display()
+            )
+        })?;
+
+        let ended_at_unix_ms = current_unix_ms();
+        let summary = AutoscaleSoakRunSummary {
+            test_name: self.test_name.clone(),
+            started_at_unix_ms: self.started_at_unix_ms,
+            ended_at_unix_ms,
+            duration_s: self.started_at.elapsed().as_secs_f64(),
+            cycles_completed: self.cycles_completed,
+            attempts_total: self.attempts_total,
+            attempt_failures_total: self.attempt_failures_total,
+            retries_used_total: self.retries_used_total,
+            max_attempt_used_in_any_cycle: self.max_attempt_used_in_any_cycle,
+            expansion_timing: SoakTimingSummary::from_samples(&self.expansion_times_s),
+            contraction_timing: SoakTimingSummary::from_samples(&self.contraction_times_s),
+            scale_out_quorum_misses_total: self.scale_out_quorum_misses_total,
+            scale_in_post_expansion_quorum_misses_total: self
+                .scale_in_post_expansion_quorum_misses_total,
+            final_result: final_result.to_owned(),
+            failure_cycle,
+            failure_reason,
+        };
+
+        let mut rendered = norito::json::to_string_pretty(&summary.to_json_value())
+            .map_err(|err| eyre!("serialize autoscale soak summary JSON: {err}"))?;
+        rendered.push('\n');
+        fs::write(&self.summary_path, rendered).map_err(|err| {
+            eyre!(
+                "write autoscale soak summary {}: {err}",
+                self.summary_path.display()
+            )
+        })?;
+        Ok(())
+    }
 }
 
 fn collect_directory_tree_stats(root: &Path) -> Result<ElasticLaneStorageStats> {
@@ -328,6 +922,17 @@ fn peers_with_scale_in_transition(
                     .unwrap_or_default()
         })
         .count()
+}
+
+fn scale_in_transition_counts(
+    current: &[AutoscaleTransitionStats],
+    baseline_after_expansion: &[AutoscaleTransitionStats],
+    baseline_since_cycle_start: Option<&[AutoscaleTransitionStats]>,
+) -> (usize, Option<usize>) {
+    let peers_after_expansion = peers_with_scale_in_transition(current, baseline_after_expansion);
+    let peers_since_cycle_start = baseline_since_cycle_start
+        .map(|baseline| peers_with_scale_in_transition(current, baseline));
+    (peers_after_expansion, peers_since_cycle_start)
 }
 
 fn peer_client_with_timeout(peer: &NetworkPeer) -> Client {
@@ -964,6 +1569,65 @@ fn wait_for_storage_lane_count(
     ))
 }
 
+fn usize_to_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn current_unix_ms() -> u64 {
+    UNIX_EPOCH
+        .elapsed()
+        .ok()
+        .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
+        .unwrap_or_default()
+}
+
+fn autoscale_soak_artifact_root(network: &sandbox::SerializedNetwork) -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os(AUTOSCALE_SOAK_ARTIFACT_DIR_ENV) {
+        return Ok(PathBuf::from(path));
+    }
+    let peer_dir = network
+        .peer()
+        .kura_store_dir()
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| eyre!("derive peer directory from kura_store_dir"))?;
+    Ok(peer_dir.parent().map(Path::to_path_buf).unwrap_or(peer_dir))
+}
+
+fn deterministic_seed_hash(seed: &str) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = OFFSET_BASIS;
+    for byte in seed.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
+}
+
+fn configure_load_sequence_seed(seed: Option<&str>) -> u64 {
+    let sequence_seed = seed
+        .filter(|value| !value.trim().is_empty())
+        .map(deterministic_seed_hash)
+        .unwrap_or_default();
+    LOAD_TX_SEQUENCE.store(sequence_seed, Ordering::Relaxed);
+    sequence_seed
+}
+
+fn autoscale_soak_seed() -> String {
+    std::env::var(AUTOSCALE_SOAK_SEED_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| AUTOSCALE_SOAK_DEFAULT_SEED.to_owned())
+}
+
+fn autoscale_soak_force_fail_cycle() -> Option<usize> {
+    std::env::var(AUTOSCALE_SOAK_FORCE_FAIL_CYCLE_ENV)
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+}
+
 fn submit_load_round_robin(clients: &[Client], tx_count: usize) -> Result<()> {
     ensure!(
         !clients.is_empty(),
@@ -973,8 +1637,10 @@ fn submit_load_round_robin(clients: &[Client], tx_count: usize) -> Result<()> {
     let mut submitted = 0_usize;
     let mut first_error = None::<String>;
     for tx in 0..tx_count {
-        let client = &clients[tx % clients.len()];
         let load_sequence = LOAD_TX_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let client_index =
+            usize::try_from(load_sequence % usize_to_u64(clients.len())).unwrap_or(0);
+        let client = &clients[client_index];
         match client.submit(Log::new(
             Level::INFO,
             format!("autoscale-load-{load_sequence}"),
@@ -994,11 +1660,28 @@ fn submit_load_round_robin(clients: &[Client], tx_count: usize) -> Result<()> {
             "[autoscale-localnet] partial load submission: submitted {submitted}/{tx_count}; first error: {first_error:?}"
         );
     }
+    validate_load_submission_outcome(tx_count, submitted, first_error.as_deref())?;
+    Ok(())
+}
+
+fn validate_load_submission_outcome(
+    attempted: usize,
+    submitted: usize,
+    first_error: Option<&str>,
+) -> Result<()> {
     ensure!(
-        tx_count == 0 || submitted > 0,
-        "all autoscale load submissions failed ({submitted}/{tx_count}); first error: {first_error:?}"
+        attempted == 0 || submitted > 0,
+        "all autoscale load submissions failed ({submitted}/{attempted}); first error: {first_error:?}"
     );
     Ok(())
+}
+
+fn soak_cycle_load_tx_count(attempt: usize) -> usize {
+    STRICT_CYCLE_LOAD_TX_COUNT.saturating_mul(attempt.max(1))
+}
+
+fn should_run_cooldown_clearance(cycle_index: usize, attempt: usize) -> bool {
+    cycle_index > 1 && attempt <= 1
 }
 
 fn expansion_top_up_tx_count(heartbeat_seq: u64) -> usize {
@@ -1014,21 +1697,39 @@ fn expansion_top_up_tx_count(heartbeat_seq: u64) -> usize {
     0
 }
 
+fn expansion_scaled_top_up_tx_count(heartbeat_seq: u64, cycle_load_tx_count: usize) -> usize {
+    let baseline = expansion_top_up_tx_count(heartbeat_seq);
+    if baseline == 0 {
+        return 0;
+    }
+
+    if heartbeat_seq % EXPANSION_REINFORCE_EVERY_HEARTBEATS == 0 {
+        return baseline.max(cycle_load_tx_count.saturating_div(2));
+    }
+    baseline.max(cycle_load_tx_count.saturating_div(4))
+}
+
+fn expansion_post_storage_top_up_tx_count(cycle_load_tx_count: usize) -> usize {
+    EXPANSION_POST_STORAGE_TOP_UP_TX_COUNT.max(cycle_load_tx_count)
+}
+
 fn expansion_probe_top_up_tx_count(
     heartbeat_seq: u64,
     storage_expanded: bool,
     elapsed: Duration,
+    cycle_load_tx_count: usize,
 ) -> usize {
     if storage_expanded && elapsed >= EXPANSION_STATUS_SIGNAL_GRACE {
-        return EXPANSION_POST_STORAGE_TOP_UP_TX_COUNT;
+        return expansion_post_storage_top_up_tx_count(cycle_load_tx_count);
     }
-    expansion_top_up_tx_count(heartbeat_seq)
+    expansion_scaled_top_up_tx_count(heartbeat_seq, cycle_load_tx_count)
 }
 
 fn wait_for_expanded_lanes_with_heartbeat(
     network: &sandbox::SerializedNetwork,
     heartbeat_client: &Client,
     top_up_clients: &[Client],
+    cycle_load_tx_count: usize,
     baseline_status_snapshot: &[PeerStatusSnapshot],
     baseline_elastic_storage_snapshot: &[Option<ElasticLaneStorageStats>],
     baseline_autoscale_transitions: &[AutoscaleTransitionStats],
@@ -1132,8 +1833,12 @@ fn wait_for_expanded_lanes_with_heartbeat(
                     last_heartbeat_error = Some(heartbeat_err.to_string());
                 }
                 heartbeat_seq = heartbeat_seq.saturating_add(1);
-                let top_up_tx_count =
-                    expansion_probe_top_up_tx_count(heartbeat_seq, storage_expanded, elapsed);
+                let top_up_tx_count = expansion_probe_top_up_tx_count(
+                    heartbeat_seq,
+                    storage_expanded,
+                    elapsed,
+                    cycle_load_tx_count,
+                );
                 if top_up_tx_count > 0 {
                     if let Err(top_up_err) =
                         submit_load_round_robin(top_up_clients, top_up_tx_count)
@@ -1229,8 +1934,12 @@ fn wait_for_expanded_lanes_with_heartbeat(
         }
         heartbeat_seq = heartbeat_seq.saturating_add(1);
 
-        let top_up_tx_count =
-            expansion_probe_top_up_tx_count(heartbeat_seq, storage_expanded, elapsed);
+        let top_up_tx_count = expansion_probe_top_up_tx_count(
+            heartbeat_seq,
+            storage_expanded,
+            elapsed,
+            cycle_load_tx_count,
+        );
         if top_up_tx_count > 0 {
             if let Err(err) = submit_load_round_robin(top_up_clients, top_up_tx_count) {
                 last_top_up_error = Some(err.to_string());
@@ -1308,7 +2017,8 @@ fn wait_for_contracted_lanes(
     quorum_required: usize,
     timeout: Duration,
     context: &str,
-    baseline_autoscale_transitions: Option<&[AutoscaleTransitionStats]>,
+    baseline_autoscale_transitions_since_cycle_start: Option<&[AutoscaleTransitionStats]>,
+    baseline_autoscale_transitions_after_expansion: Option<&[AutoscaleTransitionStats]>,
     require_scale_in_transition: bool,
     heartbeat_interval: Duration,
 ) -> Result<()> {
@@ -1320,7 +2030,8 @@ fn wait_for_contracted_lanes(
     let mut last_status_error = None::<String>;
     let mut last_transition_error = None::<String>;
     let mut last_heartbeat_error = None::<String>;
-    let mut last_scale_in_transition_peers = 0_usize;
+    let mut last_scale_in_transition_peers_after_expansion = 0_usize;
+    let mut last_scale_in_transition_peers_since_cycle_start = None::<usize>;
 
     while started.elapsed() <= timeout {
         let status_snapshot = match status_snapshot(network) {
@@ -1344,13 +2055,22 @@ fn wait_for_contracted_lanes(
         let contracted_on_quorum =
             contraction_observed_on_quorum_peers(&status_snapshot, quorum_required);
         let scale_in_transition_observed_on_quorum = if require_scale_in_transition {
-            let baseline = baseline_autoscale_transitions.unwrap_or_default();
+            let baseline_after_expansion =
+                baseline_autoscale_transitions_after_expansion.unwrap_or_default();
             match autoscale_transition_snapshot(network) {
                 Ok(snapshot) => {
-                    let peers_with_scale_in = peers_with_scale_in_transition(&snapshot, baseline);
-                    last_scale_in_transition_peers = peers_with_scale_in;
+                    let (peers_with_scale_in_after_expansion, peers_with_scale_in_since_cycle) =
+                        scale_in_transition_counts(
+                            &snapshot,
+                            baseline_after_expansion,
+                            baseline_autoscale_transitions_since_cycle_start,
+                        );
+                    last_scale_in_transition_peers_after_expansion =
+                        peers_with_scale_in_after_expansion;
+                    last_scale_in_transition_peers_since_cycle_start =
+                        peers_with_scale_in_since_cycle;
                     last_transition_snapshot = snapshot;
-                    peers_with_scale_in >= quorum_required
+                    peers_with_scale_in_after_expansion >= quorum_required
                 }
                 Err(err) => {
                     last_transition_error = Some(err.to_string());
@@ -1379,10 +2099,13 @@ fn wait_for_contracted_lanes(
         thread::sleep(heartbeat_interval);
     }
 
+    let since_cycle_start_diagnostics = last_scale_in_transition_peers_since_cycle_start
+        .map(|peers| format!("{peers}/{TOTAL_PEERS}"))
+        .unwrap_or_else(|| "n/a".to_owned());
     Err(eyre!(
-        "{context}: timed out waiting for contracted lane profile (lane {PRIMARY_LANE_ID} active; lane {ELASTIC_LANE_ID} undeclared and idle on >= {quorum_required}/{TOTAL_PEERS} peers{}) ; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last autoscale transition snapshot: {last_transition_snapshot:?}; last scale-in transition peers: {last_scale_in_transition_peers}/{TOTAL_PEERS}; last status error: {last_status_error:?}; last transition error: {last_transition_error:?}; last heartbeat error: {last_heartbeat_error:?}",
+        "{context}: timed out waiting for contracted lane profile (lane {PRIMARY_LANE_ID} active; lane {ELASTIC_LANE_ID} undeclared and idle on >= {quorum_required}/{TOTAL_PEERS} peers{}) ; last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last autoscale transition snapshot: {last_transition_snapshot:?}; last scale-in transition peers after expansion: {last_scale_in_transition_peers_after_expansion}/{TOTAL_PEERS}; last scale-in transition peers since cycle start: {since_cycle_start_diagnostics}; last status error: {last_status_error:?}; last transition error: {last_transition_error:?}; last heartbeat error: {last_heartbeat_error:?}",
         if require_scale_in_transition {
-            " and deterministic autoscale scale-in transitions observed on quorum peers"
+            " and deterministic autoscale scale-in transitions observed on quorum peers after expansion baseline"
         } else {
             ""
         }
@@ -1394,9 +2117,11 @@ fn run_expand_contract_cycle(
     submitters: &[Client],
     quorum_required: usize,
     cycle_index: usize,
+    attempt: usize,
     require_scale_out_transition: bool,
     require_scale_in_transition: bool,
-) -> Result<()> {
+    load_tx_count: usize,
+) -> Result<ExpandContractCycleOutcome> {
     let pre_contraction_context = format!("autoscale contraction pre-check cycle {cycle_index}");
     wait_for_contracted_lanes(
         network,
@@ -1406,11 +2131,12 @@ fn run_expand_contract_cycle(
         SCALE_IN_WAIT_TIMEOUT,
         &pre_contraction_context,
         None,
+        None,
         false,
         CONTRACTION_HEARTBEAT_INTERVAL,
     )?;
 
-    if cycle_index > 1 {
+    if should_run_cooldown_clearance(cycle_index, attempt) {
         let cooldown_probe_client = peer_client_with_timeout(network.peer());
         let cooldown_baseline_status = status_snapshot(network)?;
         let cooldown_baseline_height = max_non_empty_height(&cooldown_baseline_status);
@@ -1438,10 +2164,10 @@ fn run_expand_contract_cycle(
     let pre_cycle_max_txs_rejected = max_txs_rejected(&pre_cycle_status);
 
     let load_started = Instant::now();
-    submit_load_round_robin(submitters, LOAD_TX_COUNT)?;
+    submit_load_round_robin(submitters, load_tx_count)?;
     eprintln!(
         "[autoscale-localnet][cycle {cycle_index}] load submission ({} tx): {:.3}s",
-        LOAD_TX_COUNT,
+        load_tx_count,
         load_started.elapsed().as_secs_f64()
     );
     let activity_probe_client = peer_client_with_timeout(network.peer());
@@ -1463,23 +2189,30 @@ fn run_expand_contract_cycle(
     let expansion_started = Instant::now();
     let expansion_context = format!("autoscale expansion cycle {cycle_index}");
     let expansion_prefix = format!("autoscale-expand-probe-cycle-{cycle_index}");
+    let scale_out_timeout = if require_scale_out_transition {
+        STRICT_SCALE_OUT_WAIT_TIMEOUT
+    } else {
+        SCALE_OUT_WAIT_TIMEOUT
+    };
     wait_for_expanded_lanes_with_heartbeat(
         network,
         &expansion_probe_client,
         submitters,
+        load_tx_count,
         &pre_cycle_status,
         &pre_cycle_elastic_storage,
         &pre_cycle_autoscale_transitions,
         require_scale_out_transition,
         quorum_required,
-        SCALE_OUT_WAIT_TIMEOUT,
+        scale_out_timeout,
         &expansion_context,
         &expansion_prefix,
         EXPANSION_PROBE_INTERVAL,
     )?;
+    let expansion_time_s = expansion_started.elapsed().as_secs_f64();
     eprintln!(
         "[autoscale-localnet][cycle {cycle_index}] expansion wait: {:.3}s",
-        expansion_started.elapsed().as_secs_f64()
+        expansion_time_s
     );
     let post_expansion_autoscale_transitions = autoscale_transition_snapshot(network)?;
     let peers_with_scale_out = peers_with_scale_out_transition(
@@ -1494,8 +2227,12 @@ fn run_expand_contract_cycle(
         "[autoscale-localnet][cycle {cycle_index}] autoscale transition snapshot after expansion: scale-out peers with new transitions {peers_with_scale_out}/{TOTAL_PEERS}, scale-in peers since cycle start {peers_with_scale_in_before_contraction}/{TOTAL_PEERS}"
     );
 
-    let contraction_heartbeat_client =
-        (!require_scale_in_transition).then(|| peer_client_with_timeout(network.peer()));
+    let contraction_heartbeat_client = Some(peer_client_with_timeout(network.peer()));
+    let contraction_heartbeat_interval = if require_scale_in_transition {
+        STRICT_CONTRACTION_HEARTBEAT_INTERVAL
+    } else {
+        CONTRACTION_HEARTBEAT_INTERVAL
+    };
     let contraction_started = Instant::now();
     let contraction_context = format!("autoscale contraction cycle {cycle_index}");
     let contraction_prefix = format!("autoscale-heartbeat-cycle-{cycle_index}");
@@ -1507,12 +2244,14 @@ fn run_expand_contract_cycle(
         SCALE_IN_WAIT_TIMEOUT,
         &contraction_context,
         Some(&pre_cycle_autoscale_transitions),
+        Some(&post_expansion_autoscale_transitions),
         require_scale_in_transition,
-        CONTRACTION_HEARTBEAT_INTERVAL,
+        contraction_heartbeat_interval,
     )?;
+    let contraction_time_s = contraction_started.elapsed().as_secs_f64();
     eprintln!(
         "[autoscale-localnet][cycle {cycle_index}] contraction wait: {:.3}s",
-        contraction_started.elapsed().as_secs_f64()
+        contraction_time_s
     );
     let post_contraction_autoscale_transitions = autoscale_transition_snapshot(network)?;
     let peers_with_scale_in_after_expansion = peers_with_scale_in_transition(
@@ -1528,8 +2267,8 @@ fn run_expand_contract_cycle(
     );
     if require_scale_in_transition {
         ensure!(
-            peers_with_scale_in_since_cycle_start >= quorum_required,
-            "autoscale cycle {cycle_index}: contraction profile was observed but deterministic autoscale scale-in transitions were not observed on quorum peers within the cycle window (scale-in peers since cycle start: {peers_with_scale_in_since_cycle_start}/{TOTAL_PEERS}; after expansion snapshot: {peers_with_scale_in_after_expansion}/{TOTAL_PEERS}; required quorum: {quorum_required})"
+            peers_with_scale_in_after_expansion >= quorum_required,
+            "autoscale cycle {cycle_index}: contraction profile was observed but deterministic autoscale scale-in transitions were not observed on quorum peers after expansion (scale-in peers after expansion snapshot: {peers_with_scale_in_after_expansion}/{TOTAL_PEERS}; since cycle start: {peers_with_scale_in_since_cycle_start}/{TOTAL_PEERS}; required quorum: {quorum_required})"
         );
     }
     let post_cycle_status = status_snapshot(network)?;
@@ -1546,12 +2285,19 @@ fn run_expand_contract_cycle(
         "autoscale cycle {cycle_index}: chain activity did not advance (blocks_non_empty: {pre_cycle_max_non_empty_height}->{post_cycle_max_non_empty_height}, txs_approved: {pre_cycle_max_txs_approved}->{post_cycle_max_txs_approved}, txs_rejected: {pre_cycle_max_txs_rejected}->{post_cycle_max_txs_rejected})"
     );
 
-    Ok(())
+    Ok(ExpandContractCycleOutcome {
+        expansion_time_s,
+        contraction_time_s,
+        peers_with_scale_out_after_expansion: peers_with_scale_out,
+        peers_with_scale_in_after_expansion,
+        peers_with_scale_in_since_cycle_start,
+    })
 }
 
 #[test]
 fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
     let context = stringify!(nexus_autoscale_expands_and_contracts_lanes_in_localnet);
+    configure_load_sequence_seed(None);
     let test_started = Instant::now();
     let startup_started = Instant::now();
     let Some((network, _rt)) =
@@ -1594,7 +2340,16 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
     )?;
     eprintln!("[autoscale-localnet] dynamic commit quorum (2f+1): {quorum_required}");
 
-    run_expand_contract_cycle(&network, &submitters, quorum_required, 1, false, false)?;
+    let _cycle_outcome = run_expand_contract_cycle(
+        &network,
+        &submitters,
+        quorum_required,
+        1,
+        1,
+        false,
+        false,
+        LOAD_TX_COUNT,
+    )?;
     eprintln!(
         "[autoscale-localnet] total runtime: {:.3}s",
         test_started.elapsed().as_secs_f64()
@@ -1606,6 +2361,7 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
 #[test]
 fn nexus_autoscale_repeats_expand_contract_cycles_in_localnet() -> Result<()> {
     let context = stringify!(nexus_autoscale_repeats_expand_contract_cycles_in_localnet);
+    configure_load_sequence_seed(None);
     let test_started = Instant::now();
     let startup_started = Instant::now();
     let Some((network, _rt)) =
@@ -1648,8 +2404,26 @@ fn nexus_autoscale_repeats_expand_contract_cycles_in_localnet() -> Result<()> {
     )?;
     eprintln!("[autoscale-localnet][multi-cycle] dynamic commit quorum (2f+1): {quorum_required}");
 
-    run_expand_contract_cycle(&network, &submitters, quorum_required, 1, true, true)?;
-    run_expand_contract_cycle(&network, &submitters, quorum_required, 2, true, false)?;
+    let _cycle_1_outcome = run_expand_contract_cycle(
+        &network,
+        &submitters,
+        quorum_required,
+        1,
+        1,
+        true,
+        true,
+        STRICT_CYCLE_LOAD_TX_COUNT,
+    )?;
+    let _cycle_2_outcome = run_expand_contract_cycle(
+        &network,
+        &submitters,
+        quorum_required,
+        2,
+        1,
+        true,
+        true,
+        STRICT_CYCLE_LOAD_TX_COUNT,
+    )?;
 
     eprintln!(
         "[autoscale-localnet][multi-cycle] total runtime: {:.3}s",
@@ -1658,19 +2432,200 @@ fn nexus_autoscale_repeats_expand_contract_cycles_in_localnet() -> Result<()> {
     Ok(())
 }
 
+#[test]
+#[ignore = "long-running autoscale soak"]
+fn nexus_autoscale_soak_expand_contract_cycles_in_localnet() -> Result<()> {
+    let context = stringify!(nexus_autoscale_soak_expand_contract_cycles_in_localnet);
+    let soak_seed = autoscale_soak_seed();
+    let load_sequence_seed = configure_load_sequence_seed(Some(&soak_seed));
+    let test_started = Instant::now();
+    let startup_started = Instant::now();
+    let Some((network, _rt)) =
+        sandbox::start_network_blocking_or_skip(autoscale_localnet_builder(), context)?
+    else {
+        return Ok(());
+    };
+    eprintln!(
+        "[autoscale-localnet][soak] network startup: {:.3}s",
+        startup_started.elapsed().as_secs_f64()
+    );
+
+    ensure!(
+        network.peers().len() == TOTAL_PEERS,
+        "expected {TOTAL_PEERS} peers, got {}",
+        network.peers().len()
+    );
+
+    let baseline_started = Instant::now();
+    wait_for_storage_lane_count(
+        &network,
+        INITIAL_PROVISIONED_LANES,
+        SCALE_OUT_WAIT_TIMEOUT,
+        "baseline lane count for soak",
+    )?;
+    eprintln!(
+        "[autoscale-localnet][soak] baseline lane count wait: {:.3}s",
+        baseline_started.elapsed().as_secs_f64()
+    );
+
+    let submitters: Vec<Client> = network
+        .peers()
+        .iter()
+        .map(peer_client_with_timeout)
+        .collect();
+    let quorum_required = wait_for_commit_quorum_required(
+        &network,
+        QUORUM_DISCOVERY_TIMEOUT,
+        "discover autoscale commit quorum for soak",
+    )?;
+    eprintln!("[autoscale-localnet][soak] dynamic commit quorum (2f+1): {quorum_required}");
+    eprintln!(
+        "[autoscale-localnet][soak] deterministic seed ({AUTOSCALE_SOAK_SEED_ENV}): {soak_seed}; load sequence start: {load_sequence_seed}"
+    );
+
+    let mut soak_reporter = AutoscaleSoakReporter::new(&network, context)?;
+    let force_fail_cycle = autoscale_soak_force_fail_cycle();
+    if let Some(forced_cycle) = force_fail_cycle {
+        eprintln!(
+            "[autoscale-localnet][soak] forcing fail at cycle {forced_cycle} via {AUTOSCALE_SOAK_FORCE_FAIL_CYCLE_ENV}"
+        );
+    }
+
+    let soak_started = Instant::now();
+    let mut cycle_index = 1_usize;
+    let mut failure_cycle = None::<usize>;
+    let soak_result = 'soak: {
+        while soak_started.elapsed() < AUTOSCALE_SOAK_DURATION {
+            if force_fail_cycle == Some(cycle_index) {
+                let forced_reason = format!(
+                    "autoscale soak forced failure at cycle {cycle_index} via {AUTOSCALE_SOAK_FORCE_FAIL_CYCLE_ENV}"
+                );
+                soak_reporter.record_attempt_failure(
+                    cycle_index,
+                    0,
+                    quorum_required,
+                    &forced_reason,
+                )?;
+                failure_cycle = Some(cycle_index);
+                break 'soak Err(eyre!(forced_reason));
+            }
+            soak_reporter.record_cycle_start(cycle_index, quorum_required)?;
+            let mut attempt = 1_usize;
+            loop {
+                let attempt_load_tx_count = soak_cycle_load_tx_count(attempt);
+                soak_reporter.record_attempt_start(
+                    cycle_index,
+                    attempt,
+                    quorum_required,
+                    attempt_load_tx_count,
+                )?;
+                eprintln!(
+                    "[autoscale-localnet][soak][cycle {cycle_index}] attempt {attempt}/{AUTOSCALE_SOAK_CYCLE_RETRY_LIMIT} (load tx count: {attempt_load_tx_count})"
+                );
+                match run_expand_contract_cycle(
+                    &network,
+                    &submitters,
+                    quorum_required,
+                    cycle_index,
+                    attempt,
+                    true,
+                    true,
+                    attempt_load_tx_count,
+                ) {
+                    Ok(cycle_outcome) => {
+                        soak_reporter.record_cycle_success(
+                            cycle_index,
+                            attempt,
+                            quorum_required,
+                            &cycle_outcome,
+                        )?;
+                        cycle_index = cycle_index.saturating_add(1);
+                        break;
+                    }
+                    Err(err) if attempt < AUTOSCALE_SOAK_CYCLE_RETRY_LIMIT => {
+                        let next_attempt = attempt.saturating_add(1);
+                        let next_load_tx_count = soak_cycle_load_tx_count(next_attempt);
+                        soak_reporter.record_attempt_retry(
+                            cycle_index,
+                            attempt,
+                            quorum_required,
+                            next_attempt,
+                            &err.to_string(),
+                        )?;
+                        eprintln!(
+                            "[autoscale-localnet][soak][cycle {cycle_index}] attempt {attempt} failed; retrying with attempt {next_attempt}/{AUTOSCALE_SOAK_CYCLE_RETRY_LIMIT} (load tx count: {next_load_tx_count}): {err}"
+                        );
+                        attempt = next_attempt;
+                    }
+                    Err(err) => {
+                        let failure = format!(
+                            "autoscale soak cycle {cycle_index} failed after {attempt} attempt(s): {err}"
+                        );
+                        soak_reporter.record_attempt_failure(
+                            cycle_index,
+                            attempt,
+                            quorum_required,
+                            &failure,
+                        )?;
+                        failure_cycle = Some(cycle_index);
+                        break 'soak Err(eyre!(failure));
+                    }
+                }
+            }
+        }
+
+        ensure!(
+            cycle_index > 1,
+            "autoscale soak completed without running a full cycle"
+        );
+        eprintln!(
+            "[autoscale-localnet][soak] cycles completed: {}; soak runtime: {:.3}s; total runtime: {:.3}s",
+            cycle_index - 1,
+            soak_started.elapsed().as_secs_f64(),
+            test_started.elapsed().as_secs_f64()
+        );
+        Ok(())
+    };
+
+    let summary_path = soak_reporter.summary_path().to_path_buf();
+    let events_path = soak_reporter.events_path().to_path_buf();
+    let finalize_result = match &soak_result {
+        Ok(()) => soak_reporter.finalize("pass", None, None),
+        Err(err) => soak_reporter.finalize("fail", failure_cycle, Some(err.to_string())),
+    };
+    if let Err(finalize_err) = finalize_result {
+        return Err(match soak_result {
+            Ok(()) => finalize_err,
+            Err(run_err) => eyre!(
+                "{run_err}; failed to persist soak artifacts (summary={}, events={}): {finalize_err}",
+                summary_path.display(),
+                events_path.display()
+            ),
+        });
+    }
+    soak_result
+}
+
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{fs, time::Duration};
+
+    use eyre::Result;
+    use tempfile::tempdir;
 
     use super::{
         AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER, AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
+        AutoscaleSoakCycleEvent, AutoscaleSoakReporter, AutoscaleSoakRunSummary,
         AutoscaleTransitionStats, ElasticLaneStorageStats, LaneCommitmentSnapshot,
-        LaneStatusSnapshot, LaneValidatorSnapshot, PeerStatusSnapshot,
+        LaneStatusSnapshot, LaneValidatorSnapshot, PeerStatusSnapshot, SoakTimingSummary,
         contraction_observed_on_quorum_peers, elastic_lane_storage_progressed,
         expansion_observed_on_quorum_or_scale_out_transition, expansion_observed_on_quorum_peers,
-        expansion_observed_on_storage, expansion_probe_top_up_tx_count, expansion_top_up_tx_count,
+        expansion_observed_on_storage, expansion_probe_top_up_tx_count,
+        expansion_scaled_top_up_tx_count, expansion_top_up_tx_count,
         parse_autoscale_transition_stats, peers_with_scale_in_transition,
-        peers_with_scale_out_transition, scale_out_transition_observed_on_quorum_peers,
+        peers_with_scale_out_transition, scale_in_transition_counts,
+        scale_out_transition_observed_on_quorum_peers, should_run_cooldown_clearance,
+        soak_cycle_load_tx_count, validate_load_submission_outcome,
     };
 
     #[test]
@@ -1688,21 +2643,86 @@ mod tests {
     #[test]
     fn expansion_probe_top_up_intensifies_after_storage_grace() {
         assert_eq!(
-            expansion_probe_top_up_tx_count(4, false, Duration::from_secs(8)),
-            expansion_top_up_tx_count(4)
+            expansion_probe_top_up_tx_count(4, false, Duration::from_secs(8), 96),
+            24
         );
         assert_eq!(
-            expansion_probe_top_up_tx_count(4, true, Duration::from_secs(7)),
-            expansion_top_up_tx_count(4)
+            expansion_probe_top_up_tx_count(4, true, Duration::from_secs(7), 96),
+            24
         );
         assert_eq!(
-            expansion_probe_top_up_tx_count(1, true, Duration::from_secs(8)),
-            64
+            expansion_probe_top_up_tx_count(1, true, Duration::from_secs(8), 96),
+            96
         );
         assert_eq!(
-            expansion_probe_top_up_tx_count(7, true, Duration::from_secs(15)),
-            64
+            expansion_probe_top_up_tx_count(7, true, Duration::from_secs(15), 384),
+            384
         );
+    }
+
+    #[test]
+    fn expansion_scaled_top_up_respects_strict_cycle_load() {
+        assert_eq!(expansion_scaled_top_up_tx_count(4, 0), 16);
+        assert_eq!(expansion_scaled_top_up_tx_count(4, 96), 24);
+        assert_eq!(expansion_scaled_top_up_tx_count(12, 96), 48);
+        assert_eq!(expansion_scaled_top_up_tx_count(12, 384), 192);
+    }
+
+    #[test]
+    fn load_submission_outcome_accepts_full_success() {
+        assert!(validate_load_submission_outcome(8, 8, None).is_ok());
+    }
+
+    #[test]
+    fn load_submission_outcome_accepts_partial_success() {
+        assert!(validate_load_submission_outcome(8, 3, Some("peer timeout")).is_ok());
+    }
+
+    #[test]
+    fn load_submission_outcome_rejects_total_failure() {
+        let err = validate_load_submission_outcome(8, 0, Some("peer timeout"))
+            .expect_err("all failed submissions must be rejected");
+        assert!(
+            err.to_string()
+                .contains("all autoscale load submissions failed")
+        );
+    }
+
+    #[test]
+    fn load_submission_outcome_accepts_zero_attempts() {
+        assert!(validate_load_submission_outcome(0, 0, None).is_ok());
+    }
+
+    #[test]
+    fn soak_cycle_load_profile_escalates_per_attempt() {
+        assert_eq!(
+            soak_cycle_load_tx_count(0),
+            super::STRICT_CYCLE_LOAD_TX_COUNT
+        );
+        assert_eq!(
+            soak_cycle_load_tx_count(1),
+            super::STRICT_CYCLE_LOAD_TX_COUNT
+        );
+        assert_eq!(
+            soak_cycle_load_tx_count(2),
+            super::STRICT_CYCLE_LOAD_TX_COUNT * 2
+        );
+        assert_eq!(
+            soak_cycle_load_tx_count(3),
+            super::STRICT_CYCLE_LOAD_TX_COUNT * 3
+        );
+        assert_eq!(
+            soak_cycle_load_tx_count(4),
+            super::STRICT_CYCLE_LOAD_TX_COUNT * 4
+        );
+    }
+
+    #[test]
+    fn cooldown_clearance_runs_once_per_cycle() {
+        assert!(!should_run_cooldown_clearance(1, 1));
+        assert!(should_run_cooldown_clearance(2, 1));
+        assert!(!should_run_cooldown_clearance(2, 2));
+        assert!(!should_run_cooldown_clearance(2, 3));
     }
 
     #[test]
@@ -1799,6 +2819,201 @@ mod tests {
 
         assert_eq!(peers_with_scale_out_transition(&current, &baseline), 2);
         assert_eq!(peers_with_scale_in_transition(&current, &baseline), 2);
+    }
+
+    #[test]
+    fn strict_scale_in_quorum_passes_with_post_expansion_transitions() {
+        let baseline_since_cycle_start = vec![AutoscaleTransitionStats::default(); 4];
+        let baseline_after_expansion = vec![
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 1,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 1,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+        ];
+        let current = vec![
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 2,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 2,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 1,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+        ];
+        let (after_expansion, since_cycle_start) = scale_in_transition_counts(
+            &current,
+            &baseline_after_expansion,
+            Some(&baseline_since_cycle_start),
+        );
+        assert_eq!(after_expansion, 3);
+        assert_eq!(since_cycle_start, Some(3));
+        assert!(after_expansion >= 3);
+    }
+
+    #[test]
+    fn strict_scale_in_quorum_rejects_cycle_start_only_deltas() {
+        let baseline_since_cycle_start = vec![AutoscaleTransitionStats::default(); 4];
+        let baseline_after_expansion = vec![
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 1,
+            };
+            4
+        ];
+        let current = baseline_after_expansion.clone();
+        let (after_expansion, since_cycle_start) = scale_in_transition_counts(
+            &current,
+            &baseline_after_expansion,
+            Some(&baseline_since_cycle_start),
+        );
+        assert_eq!(after_expansion, 0);
+        assert_eq!(since_cycle_start, Some(4));
+        assert!(after_expansion < 3);
+        assert!(since_cycle_start.unwrap_or_default() >= 3);
+    }
+
+    #[test]
+    fn soak_summary_serialization_contains_required_fields() {
+        let summary = AutoscaleSoakRunSummary {
+            test_name: "nexus_autoscale_soak_expand_contract_cycles_in_localnet".to_owned(),
+            started_at_unix_ms: 100,
+            ended_at_unix_ms: 200,
+            duration_s: 100.0,
+            cycles_completed: 4,
+            attempts_total: 5,
+            attempt_failures_total: 1,
+            retries_used_total: 1,
+            max_attempt_used_in_any_cycle: 2,
+            expansion_timing: SoakTimingSummary {
+                min_s: 1.0,
+                avg_s: 2.0,
+                max_s: 3.0,
+            },
+            contraction_timing: SoakTimingSummary {
+                min_s: 4.0,
+                avg_s: 5.0,
+                max_s: 6.0,
+            },
+            scale_out_quorum_misses_total: 0,
+            scale_in_post_expansion_quorum_misses_total: 1,
+            final_result: "fail".to_owned(),
+            failure_cycle: Some(3),
+            failure_reason: Some("strict contraction miss".to_owned()),
+        };
+        let encoded = summary.to_json_value();
+        let root = encoded.as_object().expect("summary json must be an object");
+        assert!(root.contains_key("test_name"));
+        assert!(root.contains_key("started_at_unix_ms"));
+        assert!(root.contains_key("ended_at_unix_ms"));
+        assert!(root.contains_key("duration_s"));
+        assert!(root.contains_key("cycles_completed"));
+        assert!(root.contains_key("attempts_total"));
+        assert!(root.contains_key("attempt_failures_total"));
+        assert!(root.contains_key("retries_used_total"));
+        assert!(root.contains_key("max_attempt_used_in_any_cycle"));
+        assert!(root.contains_key("expansion_time_s_min"));
+        assert!(root.contains_key("expansion_time_s_avg"));
+        assert!(root.contains_key("expansion_time_s_max"));
+        assert!(root.contains_key("contraction_time_s_min"));
+        assert!(root.contains_key("contraction_time_s_avg"));
+        assert!(root.contains_key("contraction_time_s_max"));
+        assert!(root.contains_key("scale_out_quorum_misses_total"));
+        assert!(root.contains_key("scale_in_post_expansion_quorum_misses_total"));
+        assert!(root.contains_key("final_result"));
+        assert!(root.contains_key("failure_cycle"));
+        assert!(root.contains_key("failure_reason"));
+    }
+
+    #[test]
+    fn soak_event_serialization_contains_cycle_attempt_and_reason() {
+        let event = AutoscaleSoakCycleEvent {
+            event_type: "attempt_retry",
+            timestamp_unix_ms: 123,
+            elapsed_s: 9.0,
+            cycle_index: 7,
+            attempt: 3,
+            quorum_required: 3,
+            scale_out_transition_peers: Some(2),
+            scale_in_peers_after_expansion: Some(1),
+            scale_in_peers_since_cycle_start: Some(4),
+            expansion_time_s: Some(2.5),
+            contraction_time_s: Some(3.5),
+            reason: Some("retrying after timeout".to_owned()),
+        };
+        let encoded = event.to_json_value();
+        let root = encoded.as_object().expect("event json must be an object");
+        assert_eq!(
+            root.get("cycle_index")
+                .and_then(norito::json::Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(
+            root.get("attempt").and_then(norito::json::Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            root.get("reason").and_then(norito::json::Value::as_str),
+            Some("retrying after timeout")
+        );
+    }
+
+    #[test]
+    fn soak_reporter_flushes_artifacts_on_failure() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let summary_path = temp_dir.path().join("autoscale_soak_summary.json");
+        let events_path = temp_dir.path().join("autoscale_soak_events.jsonl");
+        let mut reporter =
+            AutoscaleSoakReporter::new_for_paths(summary_path.clone(), events_path.clone(), "x")?;
+        reporter.record_cycle_start(1, 3)?;
+        reporter.record_attempt_start(1, 1, 3, 96)?;
+        reporter.record_attempt_failure(1, 1, 3, "forced failure")?;
+        reporter.finalize("fail", Some(1), Some("forced failure".to_owned()))?;
+
+        assert!(summary_path.exists(), "summary file must exist");
+        assert!(events_path.exists(), "events file must exist");
+
+        let summary_content = fs::read_to_string(&summary_path)?;
+        let summary_json: norito::json::Value = norito::json::from_str(&summary_content)?;
+        let summary_root = summary_json
+            .as_object()
+            .expect("summary payload must be object");
+        assert_eq!(
+            summary_root
+                .get("final_result")
+                .and_then(norito::json::Value::as_str),
+            Some("fail")
+        );
+
+        let events_content = fs::read_to_string(&events_path)?;
+        assert!(
+            events_content.lines().count() >= 3,
+            "expected JSONL event lines"
+        );
+        assert!(
+            events_content.contains("\"event_type\":\"run_complete\""),
+            "run_complete event must be emitted"
+        );
+        Ok(())
     }
 
     #[test]
