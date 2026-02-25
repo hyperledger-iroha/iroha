@@ -509,6 +509,158 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         XCTAssertTrue(queue.isEmpty)
     }
 
+    func testOfflineReprovisionRequestsPreserveAmountAndPolicy() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let assetId = "rose#wonderland#\(accountId)"
+        let existingCertificate = OfflineWalletCertificate(
+            controller: accountId,
+            operatorId: accountId,
+            allowance: OfflineAllowanceCommitment(
+                assetId: assetId,
+                amount: "45.00",
+                commitment: Data(repeating: 0x11, count: 32)
+            ),
+            spendPublicKey: "ed0120cafebabe",
+            attestationReport: Data([0x01, 0x02, 0x03]),
+            issuedAtMs: 1_700_000_000_000,
+            expiresAtMs: 1_800_000_000_000,
+            policy: OfflineWalletPolicy(maxBalance: "100.00", maxTxValue: "25.00", expiresAtMs: 1_800_000_000_000),
+            operatorSignature: Data(repeating: 0xCD, count: 64)
+        )
+
+        let newCommitment = Data(repeating: 0x7A, count: 32)
+        let renewedCertificateIdHex = "beadfeed"
+        let renewedPayloadObject: [String: Any] = [
+            "controller": existingCertificate.controller,
+            "operator": existingCertificate.operatorId,
+            "allowance": [
+                "asset": existingCertificate.allowance.assetId,
+                "amount": existingCertificate.allowance.amount,
+                "commitment": newCommitment.map(Int.init)
+            ],
+            "spend_public_key": existingCertificate.spendPublicKey,
+            "attestation_report": existingCertificate.attestationReport.map(Int.init),
+            "issued_at_ms": existingCertificate.issuedAtMs,
+            "expires_at_ms": existingCertificate.expiresAtMs,
+            "policy": [
+                "max_balance": existingCertificate.policy.maxBalance,
+                "max_tx_value": existingCertificate.policy.maxTxValue,
+                "expires_at_ms": existingCertificate.policy.expiresAtMs
+            ],
+            "operator_signature": "AB",
+            "metadata": [:],
+            "verdict_id_hex": NSNull(),
+            "attestation_nonce_hex": NSNull(),
+            "refresh_at_ms": NSNull()
+        ]
+        let issuePayload = try JSONSerialization.data(
+            withJSONObject: [
+                "certificate_id_hex": renewedCertificateIdHex,
+                "certificate": renewedPayloadObject
+            ],
+            options: [.sortedKeys]
+        )
+        let renewPayload = try JSONSerialization.data(
+            withJSONObject: ["certificate_id_hex": renewedCertificateIdHex],
+            options: [.sortedKeys]
+        )
+
+        var queue: [ExpectedRequest] = [
+            ExpectedRequest(method: "POST", path: "/v1/offline/certificates/deadbeef/renew/issue", responseBody: issuePayload, assertBody: { data in
+                let body = try XCTUnwrap(data)
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                let certificate = try XCTUnwrap(json["certificate"] as? [String: Any])
+                let allowance = try XCTUnwrap(certificate["allowance"] as? [String: Any])
+                XCTAssertEqual(allowance["asset"] as? String, assetId)
+                XCTAssertEqual(allowance["amount"] as? String, "45.00")
+                let commitment = try XCTUnwrap(allowance["commitment"] as? [NSNumber])
+                XCTAssertEqual(commitment.count, 32)
+                XCTAssertEqual(commitment.first?.intValue, 0x7A)
+                let policy = try XCTUnwrap(certificate["policy"] as? [String: Any])
+                XCTAssertEqual(policy["max_balance"] as? String, "100.00")
+                XCTAssertEqual(policy["max_tx_value"] as? String, "25.00")
+            }),
+            ExpectedRequest(method: "POST", path: "/v1/offline/allowances/deadbeef/renew", responseBody: renewPayload, assertBody: { data in
+                let body = try XCTUnwrap(data)
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(json["authority"] as? String, accountId)
+                let certificate = try XCTUnwrap(json["certificate"] as? [String: Any])
+                let allowance = try XCTUnwrap(certificate["allowance"] as? [String: Any])
+                XCTAssertEqual(allowance["amount"] as? String, "45.00")
+                let policy = try XCTUnwrap(certificate["policy"] as? [String: Any])
+                XCTAssertEqual(policy["max_balance"] as? String, "100.00")
+                XCTAssertNotNil(certificate["operator_signature"] as? String)
+            })
+        ]
+
+        OfflineStubURLProtocol.handler = { request in
+            guard !queue.isEmpty else {
+                throw URLError(.badServerResponse)
+            }
+            let expected = queue.removeFirst()
+            XCTAssertEqual(request.httpMethod, expected.method)
+            XCTAssertEqual(request.url?.path, expected.path)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            let body = try self.requestBody(from: request)
+            try expected.assertBody?(body)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, expected.responseBody)
+        }
+
+        let client = makeClient()
+        let result = try await client.reprovisionOfflineAllowance(
+            certificateIdHex: "deadbeef",
+            currentCertificate: existingCertificate,
+            newCommitment: newCommitment,
+            authority: accountId,
+            privateKey: "ed0120cafebabe"
+        )
+        XCTAssertEqual(result.certificate.certificateIdHex.lowercased(), renewedCertificateIdHex)
+        XCTAssertEqual(result.registration.certificateIdHex.lowercased(), renewedCertificateIdHex)
+        XCTAssertTrue(queue.isEmpty)
+    }
+
+    func testOfflineReprovisionRejectsInvalidCommitmentLength() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let assetId = "rose#wonderland#\(accountId)"
+        let existingCertificate = OfflineWalletCertificate(
+            controller: accountId,
+            operatorId: accountId,
+            allowance: OfflineAllowanceCommitment(
+                assetId: assetId,
+                amount: "45.00",
+                commitment: Data(repeating: 0x11, count: 32)
+            ),
+            spendPublicKey: "ed0120cafebabe",
+            attestationReport: Data([0x01, 0x02, 0x03]),
+            issuedAtMs: 1_700_000_000_000,
+            expiresAtMs: 1_800_000_000_000,
+            policy: OfflineWalletPolicy(maxBalance: "100.00", maxTxValue: "25.00", expiresAtMs: 1_800_000_000_000),
+            operatorSignature: Data(repeating: 0xCD, count: 64)
+        )
+
+        let client = makeClient()
+        do {
+            _ = try await client.reprovisionOfflineAllowance(
+                certificateIdHex: "deadbeef",
+                currentCertificate: existingCertificate,
+                newCommitment: Data([0x01, 0x02, 0x03]),
+                authority: accountId,
+                privateKey: "ed0120cafebabe"
+            )
+            XCTFail("expected invalid payload error")
+        } catch let error as ToriiClientError {
+            guard case let .invalidPayload(reason) = error else {
+                XCTFail("unexpected error: \(error)")
+                return
+            }
+            XCTAssertTrue(reason.contains("newCommitment must be exactly 32 bytes"))
+        }
+    }
+
     func testGetSettlementStatusReturnsSettledWhenSettlementRecordExists() async throws {
         let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
         let assetId = "rose#wonderland#\(accountId)"
@@ -665,6 +817,190 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         XCTAssertEqual(step, 2)
     }
 
+    func testGetSettlementStatusReturnsRejectedFromDuplicateBundleSubmitRejectCode() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let emptyListPayload = """
+        {"items": [], "total": 0}
+        """.data(using: .utf8)!
+        let rejectCode = "duplicate_bundle"
+        var step = 0
+
+        OfflineStubURLProtocol.handler = { request in
+            step += 1
+            switch step {
+            case 1:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 400,
+                                               httpVersion: nil,
+                                               headerFields: ["x-iroha-reject-code": rejectCode])!
+                return (response, Data())
+            case 2:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements/query")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, emptyListPayload)
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+
+        let request = ToriiOfflineSettlementSubmitRequest(
+            authority: accountId,
+            privateKey: "ed0120deadbeef",
+            transfer: .object(["bundle_id": .string("aa")])
+        )
+        let client = makeClient()
+        do {
+            _ = try await client.submitOfflineSettlement(request)
+            XCTFail("expected submit to fail")
+        } catch let error as ToriiClientError {
+            guard case let .httpStatus(code, _, headerRejectCode) = error else {
+                XCTFail("unexpected error type: \(error)")
+                return
+            }
+            XCTAssertEqual(code, 400)
+            XCTAssertEqual(headerRejectCode, rejectCode)
+        }
+
+        let status = try await client.getSettlementStatus(bundleIdHex: "aa")
+        XCTAssertEqual(status, .rejected(reason: rejectCode))
+        XCTAssertEqual(step, 2)
+    }
+
+    func testGetSettlementStatusReturnsRejectedAfterAcceptedSubmitWhenServerRowAppears() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let submitPayload = """
+        {"bundle_id_hex": "aa"}
+        """.data(using: .utf8)!
+        let settlementPayload = """
+        {
+          "items": [{
+            "bundle_id_hex": "aa",
+            "controller_id": "\(accountId)",
+            "controller_display": "\(accountId)",
+            "receiver_id": "\(accountId)",
+            "receiver_display": "\(accountId)",
+            "deposit_account_id": "\(accountId)",
+            "deposit_account_display": "\(accountId)",
+            "receipt_count": 1,
+            "total_amount": "10",
+            "claimed_delta": "10",
+            "status": "rejected",
+            "rejection_reason": "allowance_exceeded",
+            "recorded_at_ms": 123,
+            "recorded_at_height": 456,
+            "transfer": {}
+          }],
+          "total": 1
+        }
+        """.data(using: .utf8)!
+        var step = 0
+
+        OfflineStubURLProtocol.handler = { request in
+            step += 1
+            switch step {
+            case 1:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, submitPayload)
+            case 2:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements/query")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, settlementPayload)
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+
+        let request = ToriiOfflineSettlementSubmitRequest(
+            authority: accountId,
+            privateKey: "ed0120deadbeef",
+            transfer: .object(["bundle_id": .string("aa")])
+        )
+        let client = makeClient()
+        _ = try await client.submitOfflineSettlement(request)
+        let status = try await client.getSettlementStatus(bundleIdHex: "aa")
+        XCTAssertEqual(status, .rejected(reason: "allowance_exceeded"))
+        XCTAssertEqual(step, 2)
+    }
+
+    func testGetSettlementStatusReturnsSettledAfterAcceptedSubmitWhenServerRowAppears() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let submitPayload = """
+        {"bundle_id_hex": "aa"}
+        """.data(using: .utf8)!
+        let settlementPayload = """
+        {
+          "items": [{
+            "bundle_id_hex": "aa",
+            "controller_id": "\(accountId)",
+            "controller_display": "\(accountId)",
+            "receiver_id": "\(accountId)",
+            "receiver_display": "\(accountId)",
+            "deposit_account_id": "\(accountId)",
+            "deposit_account_display": "\(accountId)",
+            "receipt_count": 1,
+            "total_amount": "10",
+            "claimed_delta": "10",
+            "status": "settled",
+            "recorded_at_ms": 123,
+            "recorded_at_height": 456,
+            "transfer": {}
+          }],
+          "total": 1
+        }
+        """.data(using: .utf8)!
+        var step = 0
+
+        OfflineStubURLProtocol.handler = { request in
+            step += 1
+            switch step {
+            case 1:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, submitPayload)
+            case 2:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements/query")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, settlementPayload)
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+
+        let request = ToriiOfflineSettlementSubmitRequest(
+            authority: accountId,
+            privateKey: "ed0120deadbeef",
+            transfer: .object(["bundle_id": .string("aa")])
+        )
+        let client = makeClient()
+        _ = try await client.submitOfflineSettlement(request)
+        let status = try await client.getSettlementStatus(bundleIdHex: "aa")
+        XCTAssertEqual(status, .settled)
+        XCTAssertEqual(step, 2)
+    }
+
     func testGetSettlementStatusReturnsRejectedReasonFromRevocation() async throws {
         let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
         let settlementPayload = """
@@ -739,6 +1075,49 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         let status = try await client.getSettlementStatus(bundleIdHex: "aa")
         XCTAssertEqual(status, .rejected(reason: "policy_violation"))
         XCTAssertEqual(step, 2)
+    }
+
+    func testGetSettlementStatusReturnsRejectedReasonFromTopLevelField() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let settlementPayload = """
+        {
+          "items": [{
+            "bundle_id_hex": "aa",
+            "controller_id": "\(accountId)",
+            "controller_display": "\(accountId)",
+            "receiver_id": "\(accountId)",
+            "receiver_display": "\(accountId)",
+            "deposit_account_id": "\(accountId)",
+            "deposit_account_display": "\(accountId)",
+            "receipt_count": 1,
+            "total_amount": "10",
+            "claimed_delta": "10",
+            "status": "rejected",
+            "rejection_reason": "allowance_exceeded",
+            "recorded_at_ms": 123,
+            "recorded_at_height": 456,
+            "transfer": {}
+          }],
+          "total": 1
+        }
+        """.data(using: .utf8)!
+        var calls = 0
+
+        OfflineStubURLProtocol.handler = { request in
+            calls += 1
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/offline/settlements/query")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, settlementPayload)
+        }
+
+        let client = makeClient()
+        let status = try await client.getSettlementStatus(bundleIdHex: "aa")
+        XCTAssertEqual(status, .rejected(reason: "allowance_exceeded"))
+        XCTAssertEqual(calls, 1)
     }
 
     func testGetSettlementStatusReturnsUnknownForUnobservedBundle() async throws {

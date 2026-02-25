@@ -7,11 +7,11 @@ mod offline_balance_proof_utils;
 use std::{str::FromStr, sync::Arc};
 
 use axum::{
-    Router,
     body::Body,
     http::{Request, StatusCode},
+    Router,
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
@@ -24,21 +24,24 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
-    ChainId,
     account::{Account, AccountId},
     asset::{AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
     domain::Domain,
-    isi::{Mint, offline::RegisterOfflineAllowance},
+    isi::{
+        offline::{RegisterOfflineAllowance, SubmitOfflineToOnlineTransfer},
+        Mint,
+    },
     metadata::Metadata,
     offline::{
-        AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineAllowanceCommitment,
+        compute_receipts_root, AppleAppAttestProof, OfflineAllowanceCommitment,
         OfflinePlatformProof, OfflineSpendReceipt, OfflineToOnlineTransfer,
-        OfflineWalletCertificate, OfflineWalletPolicy, compute_receipts_root,
+        OfflineWalletCertificate, OfflineWalletPolicy, OFFLINE_ASSET_ENABLED_METADATA_KEY,
     },
+    ChainId,
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec};
-use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
+use iroha_torii::{test_utils, MaybeTelemetry, OnlinePeersProvider, Torii};
 use nonzero_ext::nonzero;
 use norito::json::{self, Value};
 use offline_balance_proof_utils::{build_balance_proof_for_allowance, scalar_bytes};
@@ -68,7 +71,12 @@ fn build_harness() -> Harness {
     let query = LiveQueryStore::start_test();
     let fixtures = build_fixtures();
     let world = world_from_fixtures(&fixtures);
-    let state = Arc::new(State::new_for_testing(world, Arc::clone(&kura), query));
+    let mut state =
+        State::new_with_chain(world, Arc::clone(&kura), query, ChainId::from("test-chain"));
+    state.settlement.offline.skip_platform_attestation = true;
+    state.settlement.offline.proof_mode =
+        iroha_config::parameters::actual::OfflineProofMode::Optional;
+    let state = Arc::new(state);
 
     let queue_cfg = QueueConfig::default();
     let (events_sender, _) = broadcast::channel(64);
@@ -241,6 +249,7 @@ fn build_fixtures() -> Fixtures {
         deposit_account: operator.clone(),
         receipts: vec![receipt.clone()],
         balance_proof,
+        balance_proofs: None,
         aggregate_proof: None,
         attachments: None,
         platform_snapshot: None,
@@ -386,6 +395,441 @@ async fn offline_settlements_submit_returns_bundle_id() {
     );
 }
 
+#[tokio::test]
+async fn offline_settlements_submit_persists_settled_record() {
+    let harness = build_harness();
+    seed_allowance(&harness.state, harness.fixtures.certificate.clone());
+
+    let mut map = json::Map::new();
+    map.insert(
+        "authority".into(),
+        json::to_value(&harness.fixtures.receiver).expect("authority value"),
+    );
+    map.insert(
+        "private_key".into(),
+        Value::from(
+            iroha_crypto::ExposedPrivateKey(harness.fixtures.receiver_keys.private_key().clone())
+                .to_string(),
+        ),
+    );
+    map.insert(
+        "transfer".into(),
+        json::to_value(&harness.fixtures.transfer.clone()).expect("transfer value"),
+    );
+    let body = json::to_vec(&Value::Object(map)).expect("serialize request");
+
+    let submit_resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/settlements")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(submit_resp.status(), StatusCode::OK);
+
+    let submit_bytes = submit_resp
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let submit_json: Value = json::from_slice(&submit_bytes).expect("json");
+    let expected_bundle = hex::encode(harness.fixtures.transfer.bundle_id.as_ref());
+    assert_eq!(
+        submit_json["bundle_id_hex"].as_str(),
+        Some(expected_bundle.as_str())
+    );
+
+    // The integration harness does not run block production, so we materialize
+    // the queued settlement by executing the instruction directly.
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 1_700_000_200, 0);
+    let mut block = harness.state.block(header);
+    let mut tx = block.transaction();
+    SubmitOfflineToOnlineTransfer {
+        transfer: harness.fixtures.transfer.clone(),
+    }
+    .execute(&harness.fixtures.receiver, &mut tx)
+    .expect("materialize settled settlement row");
+    tx.apply();
+    block.commit().expect("commit settled settlement row");
+
+    let mut query_envelope = json::Map::new();
+    query_envelope.insert(
+        "filter".into(),
+        eq_filter("bundle_id_hex", Value::from(expected_bundle.clone())),
+    );
+    query_envelope.insert(
+        "sort".into(),
+        Value::Array(vec![Value::Object({
+            let mut map = json::Map::new();
+            map.insert("key".into(), Value::from("recorded_at_ms"));
+            map.insert("order".into(), Value::from("desc"));
+            map
+        })]),
+    );
+    query_envelope.insert(
+        "pagination".into(),
+        Value::Object({
+            let mut map = json::Map::new();
+            map.insert("limit".into(), Value::from(1u64));
+            map.insert("offset".into(), Value::from(0u64));
+            map
+        }),
+    );
+    query_envelope.insert("fetch_size".into(), Value::from(32u64));
+    let query_body = json::to_vec(&Value::Object(query_envelope)).expect("serialize envelope");
+
+    let query_resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/settlements/query")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(query_body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(query_resp.status(), StatusCode::OK);
+
+    let query_bytes = query_resp
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let query_json: Value = json::from_slice(&query_bytes).expect("json");
+    assert_eq!(query_json["total"].as_u64(), Some(1));
+    let item = &query_json["items"][0];
+    assert_eq!(
+        item["bundle_id_hex"].as_str(),
+        Some(expected_bundle.as_str())
+    );
+    assert_eq!(item["status"].as_str(), Some("settled"));
+    assert!(item["rejection_reason"].is_null());
+    assert!(item["transfer"]["rejection_reason"].is_null());
+}
+
+#[tokio::test]
+async fn offline_settlements_submit_persists_rejected_record_for_offline_error() {
+    let harness = build_harness();
+    seed_allowance(&harness.state, harness.fixtures.certificate.clone());
+
+    let mut rejected_transfer = harness.fixtures.transfer.clone();
+    rejected_transfer.bundle_id = Hash::new(b"bundle-submit-rejected");
+    rejected_transfer.receipts.clear();
+    let expected_bundle = hex::encode(rejected_transfer.bundle_id.as_ref());
+
+    let mut map = json::Map::new();
+    map.insert(
+        "authority".into(),
+        json::to_value(&harness.fixtures.receiver).expect("authority value"),
+    );
+    map.insert(
+        "private_key".into(),
+        Value::from(
+            iroha_crypto::ExposedPrivateKey(harness.fixtures.receiver_keys.private_key().clone())
+                .to_string(),
+        ),
+    );
+    map.insert(
+        "transfer".into(),
+        json::to_value(&rejected_transfer).expect("transfer value"),
+    );
+    let body = json::to_vec(&Value::Object(map)).expect("serialize request");
+
+    let submit_resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/settlements")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(submit_resp.status(), StatusCode::OK);
+
+    let submit_bytes = submit_resp
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let submit_json: Value = json::from_slice(&submit_bytes).expect("json");
+    assert_eq!(
+        submit_json["bundle_id_hex"].as_str(),
+        Some(expected_bundle.as_str())
+    );
+
+    // The integration harness does not run block production, so we materialize
+    // the queued settlement by executing the instruction directly.
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 1_700_000_002, 0);
+    let mut block = harness.state.block(header);
+    let mut tx = block.transaction();
+    SubmitOfflineToOnlineTransfer {
+        transfer: rejected_transfer,
+    }
+    .execute(&harness.fixtures.receiver, &mut tx)
+    .expect("materialize rejected settlement row");
+    tx.apply();
+    block.commit().expect("commit rejected settlement row");
+
+    let mut query_envelope = json::Map::new();
+    query_envelope.insert(
+        "filter".into(),
+        eq_filter("bundle_id_hex", Value::from(expected_bundle.clone())),
+    );
+    query_envelope.insert(
+        "sort".into(),
+        Value::Array(vec![Value::Object({
+            let mut map = json::Map::new();
+            map.insert("key".into(), Value::from("recorded_at_ms"));
+            map.insert("order".into(), Value::from("desc"));
+            map
+        })]),
+    );
+    query_envelope.insert(
+        "pagination".into(),
+        Value::Object({
+            let mut map = json::Map::new();
+            map.insert("limit".into(), Value::from(1u64));
+            map.insert("offset".into(), Value::from(0u64));
+            map
+        }),
+    );
+    query_envelope.insert("fetch_size".into(), Value::from(32u64));
+    let query_body = json::to_vec(&Value::Object(query_envelope)).expect("serialize envelope");
+
+    let query_resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/settlements/query")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(query_body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(query_resp.status(), StatusCode::OK);
+
+    let query_bytes = query_resp
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let query_json: Value = json::from_slice(&query_bytes).expect("json");
+    assert_eq!(query_json["total"].as_u64(), Some(1));
+    let item = &query_json["items"][0];
+    assert_eq!(
+        item["bundle_id_hex"].as_str(),
+        Some(expected_bundle.as_str())
+    );
+    assert_eq!(item["status"].as_str(), Some("rejected"));
+    assert_eq!(item["rejection_reason"].as_str(), Some("empty_bundle"));
+    assert_eq!(
+        item["transfer"]["rejection_reason"].as_str(),
+        Some("empty_bundle")
+    );
+}
+
+#[tokio::test]
+async fn offline_settlements_submit_rejects_duplicate_bundle_with_reject_code() {
+    let harness = build_harness();
+    seed_allowance(&harness.state, harness.fixtures.certificate.clone());
+
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 1_700_000_002, 0);
+    let mut block = harness.state.block(header);
+    let mut tx = block.transaction();
+    SubmitOfflineToOnlineTransfer {
+        transfer: harness.fixtures.transfer.clone(),
+    }
+    .execute(&harness.fixtures.receiver, &mut tx)
+    .expect("seed transfer record");
+    tx.apply();
+    block.commit().expect("commit seeded transfer record");
+
+    let mut map = json::Map::new();
+    map.insert(
+        "authority".into(),
+        json::to_value(&harness.fixtures.receiver).expect("authority value"),
+    );
+    map.insert(
+        "private_key".into(),
+        Value::from(
+            iroha_crypto::ExposedPrivateKey(harness.fixtures.receiver_keys.private_key().clone())
+                .to_string(),
+        ),
+    );
+    map.insert(
+        "transfer".into(),
+        json::to_value(&harness.fixtures.transfer.clone()).expect("transfer value"),
+    );
+    let body = json::to_vec(&Value::Object(map)).expect("serialize request");
+
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/settlements")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let reject_code = resp
+        .headers()
+        .get("x-iroha-reject-code")
+        .and_then(|value| value.to_str().ok());
+    assert_eq!(reject_code, Some("duplicate_bundle"));
+}
+
+#[tokio::test]
+async fn offline_settlements_query_includes_rejected_record_with_reason() {
+    let harness = build_harness();
+    seed_allowance(&harness.state, harness.fixtures.certificate.clone());
+
+    let mut rejected_transfer = harness.fixtures.transfer.clone();
+    rejected_transfer.bundle_id = Hash::new(b"bundle-rejected");
+    rejected_transfer.receipts.clear();
+    let rejected_bundle_hex = hex::encode(rejected_transfer.bundle_id.as_ref());
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 1_700_000_002, 0);
+    let mut block = harness.state.block(header);
+    let mut tx = block.transaction();
+    SubmitOfflineToOnlineTransfer {
+        transfer: rejected_transfer,
+    }
+    .execute(&harness.fixtures.receiver, &mut tx)
+    .expect("execute settlement submit");
+    tx.apply();
+    block.commit().expect("commit rejected settlement record");
+
+    let mut pagination = json::Map::new();
+    pagination.insert("limit".into(), Value::from(1u64));
+    pagination.insert("offset".into(), Value::from(0u64));
+    let mut sort_entry = json::Map::new();
+    sort_entry.insert("key".into(), Value::from("recorded_at_ms"));
+    sort_entry.insert("order".into(), Value::from("desc"));
+    let mut query_envelope = json::Map::new();
+    query_envelope.insert(
+        "filter".into(),
+        eq_filter("bundle_id_hex", Value::from(rejected_bundle_hex.clone())),
+    );
+    query_envelope.insert("sort".into(), Value::Array(vec![Value::Object(sort_entry)]));
+    query_envelope.insert("pagination".into(), Value::Object(pagination));
+    query_envelope.insert("fetch_size".into(), Value::from(32u64));
+    let query_body = json::to_vec(&Value::Object(query_envelope)).expect("serialize envelope");
+
+    let query_resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/settlements/query")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(query_body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(query_resp.status(), StatusCode::OK);
+    let query_bytes = query_resp
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let query_json: Value = json::from_slice(&query_bytes).expect("json");
+    assert_eq!(query_json["total"].as_u64(), Some(1));
+    let items = query_json["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 1);
+    let item = &items[0];
+    assert_eq!(
+        item["bundle_id_hex"].as_str(),
+        Some(rejected_bundle_hex.as_str())
+    );
+    assert_eq!(item["status"].as_str(), Some("rejected"));
+    assert_eq!(item["rejection_reason"].as_str(), Some("empty_bundle"));
+    assert_eq!(
+        item["transfer"]["rejection_reason"].as_str(),
+        Some("empty_bundle")
+    );
+
+    let mut status_envelope = json::Map::new();
+    status_envelope.insert(
+        "filter".into(),
+        eq_filter("status", Value::from("rejected")),
+    );
+    status_envelope.insert(
+        "sort".into(),
+        Value::Array(vec![Value::Object({
+            let mut map = json::Map::new();
+            map.insert("key".into(), Value::from("recorded_at_ms"));
+            map.insert("order".into(), Value::from("desc"));
+            map
+        })]),
+    );
+    status_envelope.insert(
+        "pagination".into(),
+        Value::Object({
+            let mut map = json::Map::new();
+            map.insert("limit".into(), Value::from(10u64));
+            map.insert("offset".into(), Value::from(0u64));
+            map
+        }),
+    );
+    status_envelope.insert("fetch_size".into(), Value::from(32u64));
+    let status_body = json::to_vec(&Value::Object(status_envelope)).expect("serialize envelope");
+
+    let status_resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/settlements/query")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(status_body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(status_resp.status(), StatusCode::OK);
+    let status_bytes = status_resp
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let status_json: Value = json::from_slice(&status_bytes).expect("json");
+    assert_eq!(status_json["total"].as_u64(), Some(1));
+    assert_eq!(
+        status_json["items"][0]["bundle_id_hex"].as_str(),
+        Some(rejected_bundle_hex.as_str())
+    );
+}
+
 fn seed_allowance(state: &Arc<State>, certificate: OfflineWalletCertificate) {
     let controller = certificate.controller.clone();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_001, 0);
@@ -402,6 +846,20 @@ fn seed_allowance(state: &Arc<State>, certificate: OfflineWalletCertificate) {
         .expect("allowance registration");
     tx.apply();
     block.commit().expect("commit seeded allowance");
+}
+
+fn eq_filter(field: &str, value: Value) -> Value {
+    Value::Object(
+        [
+            ("op".into(), Value::from("eq")),
+            (
+                "args".into(),
+                Value::Array(vec![Value::from(field.to_owned()), value]),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    )
 }
 
 #[tokio::test]
