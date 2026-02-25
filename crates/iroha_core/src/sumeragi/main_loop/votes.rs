@@ -1116,6 +1116,44 @@ impl Actor {
         force_fetch: bool,
         observe_sidecar_mismatch: bool,
     ) -> bool {
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if highest.height <= committed_height {
+            match self.committed_block_hash_for_height(highest.height) {
+                Some(committed_hash) if committed_hash != highest.subject_block_hash => {
+                    self.clear_missing_block_request(
+                        &highest.subject_block_hash,
+                        MissingBlockClearReason::Obsolete,
+                    );
+                    self.clear_sidecar_mismatch_for_height(highest.height);
+                    debug!(
+                        height = highest.height,
+                        view = highest.view,
+                        committed_height,
+                        committed_hash = %committed_hash,
+                        highest_hash = %highest.subject_block_hash,
+                        source,
+                        "suppressing highest QC missing-block fetch for committed-height hash conflict"
+                    );
+                    return false;
+                }
+                None => {
+                    self.clear_missing_block_request(
+                        &highest.subject_block_hash,
+                        MissingBlockClearReason::Obsolete,
+                    );
+                    debug!(
+                        height = highest.height,
+                        view = highest.view,
+                        committed_height,
+                        highest_hash = %highest.subject_block_hash,
+                        source,
+                        "suppressing highest QC missing-block fetch: committed height absent locally"
+                    );
+                    return false;
+                }
+                _ => {}
+            }
+        }
         let payload_available =
             self.block_payload_available_for_progress(highest.subject_block_hash);
         let local_known = self
