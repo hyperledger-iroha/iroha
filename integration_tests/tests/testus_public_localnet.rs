@@ -61,7 +61,7 @@ const INTERIM_CONVERGENCE_TIMEOUT_SECS: u64 = 45;
 const INTERIM_LAG_CHURN_BACKOFF_SECS: u64 = 30;
 const JOINER_STALL_LOG_EVERY: u64 = 5;
 const JOINER_PROGRESS_LOG_EVERY: u64 = 5;
-const JOINER_STALL_LAG_THRESHOLD: u64 = 3;
+const JOINER_STALL_WARNING_THRESHOLD: u64 = 3;
 const LOCALNET_BLOCK_TIME_MS: u64 = 1_000;
 const LOCALNET_COMMIT_TIME_MS: u64 = 1_000;
 const LOCALNET_TRANSACTION_TTL_MS: i64 = 7_200_000;
@@ -175,6 +175,7 @@ struct SimulationSummary {
     membership_join_cycles: u64,
     membership_leave_cycles: u64,
     membership_churn_lagged_cycles: u64,
+    membership_churn_warning_cycles: u64,
     max_height_skew_observed: u64,
     view_changes_start: u64,
     view_changes_end: u64,
@@ -200,6 +201,7 @@ impl SimulationSummary {
             "membership_join_cycles": (self.membership_join_cycles),
             "membership_leave_cycles": (self.membership_leave_cycles),
             "membership_churn_lagged_cycles": (self.membership_churn_lagged_cycles),
+            "membership_churn_warning_cycles": (self.membership_churn_warning_cycles),
             "max_height_skew_observed": (self.max_height_skew_observed),
             "view_changes_start": (self.view_changes_start),
             "view_changes_end": (self.view_changes_end),
@@ -211,6 +213,22 @@ impl SimulationSummary {
             "saturated_samples": (self.saturated_samples),
             "total_samples": (self.total_samples),
         })
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct MembershipCycleOutcome {
+    hard_lagged: bool,
+    warning_lagged: bool,
+}
+
+impl MembershipCycleOutcome {
+    fn mark_hard_lag(&mut self) {
+        self.hard_lagged = true;
+    }
+
+    fn mark_warning_lag(&mut self) {
+        self.warning_lagged = true;
     }
 }
 
@@ -467,10 +485,14 @@ async fn testus_public_localnet_5tps_churn_stability() -> Result<()> {
     let _guard = sandbox::serial_guard();
 
     let cfg = SimulationConfig::from_env();
+    let seed = std::env::var("IROHA_TESTUS_SIM_SEED")
+        .ok()
+        .filter(|seed| !seed.trim().is_empty())
+        .unwrap_or_else(|| "testus-public-sim".to_owned());
     let temp_dir = localnet_tempdir("testus-simulation")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async move {
-        let mut harness = setup_testus_harness(&out_dir, "testus-public-sim").await?;
+        let mut harness = setup_testus_harness(&out_dir, &seed).await?;
         let summary = run_testus_simulation(
             &mut harness,
             cfg,
@@ -524,6 +546,7 @@ async fn run_testus_simulation(
     let mut membership_join_cycles = 0_u64;
     let mut membership_leave_cycles = 0_u64;
     let mut membership_churn_lagged_cycles = 0_u64;
+    let mut membership_churn_warning_cycles = 0_u64;
     let mut max_height_skew_observed = 0_u64;
     let mut saturated_samples = 0_u64;
     let mut total_samples = 0_u64;
@@ -620,7 +643,7 @@ async fn run_testus_simulation(
                 "no validator endpoint is reachable before membership churn"
             );
             let churn_start = Instant::now();
-            let lagged = if joiner_active {
+            let outcome = if joiner_active {
                 membership_leave_cycle(harness).await?
             } else {
                 membership_join_cycle(harness, &mut joiner_warning_state).await?
@@ -651,15 +674,21 @@ async fn run_testus_simulation(
             }
             last_min_progress_at = Instant::now();
             joiner_active = !joiner_active;
-            if lagged {
+            if outcome.hard_lagged {
                 membership_churn_lagged_cycles = membership_churn_lagged_cycles.saturating_add(1);
                 eprintln!(
                     "membership churn lagged; applying next-cycle backoff of {}s",
                     INTERIM_LAG_CHURN_BACKOFF_SECS
                 );
             }
-            next_membership_churn =
-                next_membership_churn_deadline(Instant::now(), cfg.churn_interval, lagged);
+            if outcome.warning_lagged {
+                membership_churn_warning_cycles = membership_churn_warning_cycles.saturating_add(1);
+            }
+            next_membership_churn = next_membership_churn_deadline(
+                Instant::now(),
+                cfg.churn_interval,
+                membership_backoff_requires_hard_lag(outcome),
+            );
             continue;
         }
 
@@ -786,11 +815,14 @@ async fn run_testus_simulation(
 
     if joiner_active {
         let churn_start = Instant::now();
-        let lagged = membership_leave_cycle(harness).await?;
+        let outcome = membership_leave_cycle(harness).await?;
         paused_for_churn = paused_for_churn.saturating_add(churn_start.elapsed());
         membership_leave_cycles = membership_leave_cycles.saturating_add(1);
-        if lagged {
+        if outcome.hard_lagged {
             membership_churn_lagged_cycles = membership_churn_lagged_cycles.saturating_add(1);
+        }
+        if outcome.warning_lagged {
+            membership_churn_warning_cycles = membership_churn_warning_cycles.saturating_add(1);
         }
     }
 
@@ -920,6 +952,7 @@ async fn run_testus_simulation(
         membership_join_cycles,
         membership_leave_cycles,
         membership_churn_lagged_cycles,
+        membership_churn_warning_cycles,
         max_height_skew_observed,
         view_changes_start,
         view_changes_end,
@@ -1000,14 +1033,14 @@ fn validator_restart_catchup_target(baseline: u64) -> u64 {
 async fn membership_join_cycle(
     harness: &mut TestusHarness,
     joiner_warning_state: &mut JoinerCatchupWarningState,
-) -> Result<bool> {
-    let mut lagged = false;
+) -> Result<MembershipCycleOutcome> {
+    let mut outcome = MembershipCycleOutcome::default();
     let baseline =
         validator_max_height_with_retry(&harness.validator_clients, READY_TIMEOUT).await?;
     let is_registered = match is_peer_present(&harness.primary_client, &harness.joiner.peer_id) {
         Ok(is_registered) => is_registered,
         Err(err) => {
-            lagged = true;
+            outcome.mark_warning_lag();
             eprintln!(
                 "joiner registration pre-check lagged; proceeding with best-effort register: err={err:?}"
             );
@@ -1022,7 +1055,7 @@ async fn membership_join_cycle(
             submit_instruction_with_retry(&harness.primary_client, &register, READY_TIMEOUT).await
         {
             if is_register_duplicate_error(&err) || is_submit_timeout_error(&err) {
-                lagged = true;
+                outcome.mark_hard_lag();
                 eprintln!("joiner register submission lagged: err={err:?}");
             } else {
                 return Err(err).wrap_err("submit joiner register instruction");
@@ -1037,7 +1070,7 @@ async fn membership_join_cycle(
         )
         .await
         {
-            lagged = true;
+            outcome.mark_hard_lag();
             eprintln!(
                 "joiner register propagation lagged: timeout={join_propagation_timeout:?}, err={err:?}"
             );
@@ -1068,9 +1101,7 @@ async fn membership_join_cycle(
                         "joiner catch-up stalled after registration: baseline={baseline}, target={catchup_target}, start={start}, current={current}, consecutive_stalled_cycles={stalled_count}"
                     );
                 }
-                if should_count_joiner_stall_as_lagged(stalled_count) {
-                    lagged = true;
-                }
+                record_joiner_stall_warning(&mut outcome, stalled_count);
             }
         },
         Err(err) => {
@@ -1080,9 +1111,7 @@ async fn membership_join_cycle(
                     "joiner catch-up stalled after registration: baseline={baseline}, target={catchup_target}, err={err:?}, consecutive_stalled_cycles={stalled_count}"
                 );
             }
-            if should_count_joiner_stall_as_lagged(stalled_count) {
-                lagged = true;
-            }
+            record_joiner_stall_warning(&mut outcome, stalled_count);
         }
     }
     let convergence_target =
@@ -1098,7 +1127,7 @@ async fn membership_join_cycle(
     )
     .await
     {
-        lagged = true;
+        outcome.mark_hard_lag();
         eprintln!("membership join quorum convergence lagged: {err:?}");
     } else if let Err(err) = wait_for_cluster_convergence(
         &harness.validator_clients,
@@ -1108,11 +1137,12 @@ async fn membership_join_cycle(
     )
     .await
     {
+        outcome.mark_warning_lag();
         eprintln!(
             "membership join all-validator convergence lagged; quorum convergence is healthy: {err:?}"
         );
     }
-    Ok(lagged)
+    Ok(outcome)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1162,8 +1192,21 @@ fn assess_joiner_catchup(start: u64, current: u64, target: u64) -> JoinerCatchup
     }
 }
 
-fn should_count_joiner_stall_as_lagged(consecutive_stalled_cycles: u64) -> bool {
-    consecutive_stalled_cycles >= JOINER_STALL_LAG_THRESHOLD
+fn should_count_joiner_stall_as_warning(consecutive_stalled_cycles: u64) -> bool {
+    consecutive_stalled_cycles >= JOINER_STALL_WARNING_THRESHOLD
+}
+
+fn record_joiner_stall_warning(
+    outcome: &mut MembershipCycleOutcome,
+    consecutive_stalled_cycles: u64,
+) {
+    if should_count_joiner_stall_as_warning(consecutive_stalled_cycles) {
+        outcome.mark_warning_lag();
+    }
+}
+
+fn membership_backoff_requires_hard_lag(outcome: MembershipCycleOutcome) -> bool {
+    outcome.hard_lagged
 }
 
 async fn wait_for_height_or_progress(
@@ -1197,26 +1240,29 @@ async fn wait_for_height_or_progress(
     }
 }
 
-async fn membership_leave_cycle(harness: &mut TestusHarness) -> Result<bool> {
-    let mut lagged = false;
+async fn membership_leave_cycle(harness: &mut TestusHarness) -> Result<MembershipCycleOutcome> {
+    let mut outcome = MembershipCycleOutcome::default();
     let should_unregister = match is_peer_present(&harness.primary_client, &harness.joiner.peer_id)
     {
         Ok(is_registered) => is_registered,
         Err(err) => {
-            lagged = true;
+            outcome.mark_warning_lag();
             eprintln!(
                 "joiner unregister pre-check lagged; proceeding with best-effort unregister: err={err:?}"
             );
             true
         }
     };
+    // Stop the joiner process before waiting for peer removal propagation.
+    // This avoids counting active-connection linger as unregister propagation lag.
+    harness.localnet.stop_joiner()?;
     if should_unregister {
         let unregister: InstructionBox = Unregister::peer(harness.joiner.peer_id.clone()).into();
         if let Err(err) =
             submit_instruction_with_retry(&harness.primary_client, &unregister, READY_TIMEOUT).await
         {
             if is_unregister_missing_peer_error(&err) || is_submit_timeout_error(&err) {
-                lagged = true;
+                outcome.mark_hard_lag();
                 eprintln!("joiner unregister submission lagged: err={err:?}");
             } else {
                 return Err(err).wrap_err("submit joiner unregister instruction");
@@ -1231,13 +1277,12 @@ async fn membership_leave_cycle(harness: &mut TestusHarness) -> Result<bool> {
         )
         .await
         {
-            lagged = true;
+            outcome.mark_hard_lag();
             eprintln!(
                 "joiner unregister propagation lagged: timeout={leave_propagation_timeout:?}, err={err:?}"
             );
         }
     }
-    harness.localnet.stop_joiner()?;
     let convergence_target =
         validator_max_height_with_retry(&harness.validator_clients, READY_TIMEOUT).await?;
     let convergence_timeout = Duration::from_secs(INTERIM_CONVERGENCE_TIMEOUT_SECS);
@@ -1251,7 +1296,7 @@ async fn membership_leave_cycle(harness: &mut TestusHarness) -> Result<bool> {
     )
     .await
     {
-        lagged = true;
+        outcome.mark_hard_lag();
         eprintln!("membership leave quorum convergence lagged: {err:?}");
     } else if let Err(err) = wait_for_cluster_convergence(
         &harness.validator_clients,
@@ -1261,11 +1306,12 @@ async fn membership_leave_cycle(harness: &mut TestusHarness) -> Result<bool> {
     )
     .await
     {
+        outcome.mark_warning_lag();
         eprintln!(
             "membership leave all-validator convergence lagged; quorum convergence is healthy: {err:?}"
         );
     }
-    Ok(lagged)
+    Ok(outcome)
 }
 
 async fn setup_testus_harness(out_dir: &Path, seed: &str) -> Result<TestusHarness> {
@@ -2655,6 +2701,57 @@ fn next_membership_churn_deadline_adds_backoff_when_lagged() {
 }
 
 #[test]
+fn membership_backoff_triggers_only_on_hard_lag() {
+    let now = Instant::now();
+    let interval = Duration::from_secs(30);
+    let warning_only = MembershipCycleOutcome {
+        hard_lagged: false,
+        warning_lagged: true,
+    };
+    let warning_deadline = next_membership_churn_deadline(
+        now,
+        interval,
+        membership_backoff_requires_hard_lag(warning_only),
+    );
+    assert_eq!(warning_deadline.duration_since(now), interval);
+
+    let hard_lagged = MembershipCycleOutcome {
+        hard_lagged: true,
+        warning_lagged: false,
+    };
+    let hard_deadline = next_membership_churn_deadline(
+        now,
+        interval,
+        membership_backoff_requires_hard_lag(hard_lagged),
+    );
+    assert_eq!(
+        hard_deadline.duration_since(now),
+        interval.saturating_add(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS))
+    );
+}
+
+#[test]
+fn stalled_joiner_catchup_marks_warning_without_hard_lag() {
+    let mut outcome = MembershipCycleOutcome::default();
+    record_joiner_stall_warning(&mut outcome, JOINER_STALL_WARNING_THRESHOLD);
+    assert!(outcome.warning_lagged);
+    assert!(!outcome.hard_lagged);
+}
+
+#[test]
+fn propagation_and_quorum_failures_mark_hard_lag() {
+    let mut propagation_timeout = MembershipCycleOutcome::default();
+    propagation_timeout.mark_hard_lag();
+    assert!(propagation_timeout.hard_lagged);
+    assert!(!propagation_timeout.warning_lagged);
+
+    let mut quorum_timeout = MembershipCycleOutcome::default();
+    quorum_timeout.mark_hard_lag();
+    assert!(quorum_timeout.hard_lagged);
+    assert!(!quorum_timeout.warning_lagged);
+}
+
+#[test]
 fn effective_final_settle_window_scales_with_duration() {
     assert_eq!(
         effective_final_settle_window(Duration::from_secs(3_600)),
@@ -2741,9 +2838,46 @@ fn apply_client_transaction_ttl_caps_status_timeout() {
 }
 
 #[test]
-fn joiner_stall_lag_threshold_matches_policy() {
-    assert!(!should_count_joiner_stall_as_lagged(0));
-    assert!(!should_count_joiner_stall_as_lagged(1));
-    assert!(!should_count_joiner_stall_as_lagged(2));
-    assert!(should_count_joiner_stall_as_lagged(3));
+fn joiner_stall_warning_threshold_matches_policy() {
+    assert!(!should_count_joiner_stall_as_warning(0));
+    assert!(!should_count_joiner_stall_as_warning(1));
+    assert!(!should_count_joiner_stall_as_warning(2));
+    assert!(should_count_joiner_stall_as_warning(3));
+}
+
+#[test]
+fn simulation_summary_json_includes_membership_warning_cycles() {
+    let summary = SimulationSummary {
+        duration_secs: 60,
+        target_tps: 5,
+        tx_attempted: 300,
+        tx_sent: 295,
+        tx_submit_errors: 0,
+        process_churn_cycles: 4,
+        process_churn_lagged_cycles: 0,
+        membership_join_cycles: 3,
+        membership_leave_cycles: 3,
+        membership_churn_lagged_cycles: 1,
+        membership_churn_warning_cycles: 2,
+        max_height_skew_observed: 1,
+        view_changes_start: 0,
+        view_changes_end: 0,
+        view_change_rate_per_sec: 0.0,
+        scheduled_tps: 5.0,
+        submitted_tps: 4.9,
+        committed_tps: 4.8,
+        committed_txs_min_delta: 288,
+        saturated_samples: 0,
+        total_samples: 60,
+    };
+    let value = summary.to_json_value();
+    let object = value
+        .as_object()
+        .expect("summary must render to JSON object");
+    assert_eq!(
+        object
+            .get("membership_churn_warning_cycles")
+            .and_then(norito::json::Value::as_u64),
+        Some(2)
+    );
 }

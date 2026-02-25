@@ -380,6 +380,11 @@ mod tests {
     }
 
     #[test]
+    fn batch_verification_accepts_empty_envelopes() {
+        verify_lane_relay_envelopes(&[]).expect("empty relay envelope batch should be valid");
+    }
+
+    #[test]
     fn batch_verification_rejects_duplicates() {
         let lane_id = LaneId::new(10);
         let dataspace_id = DataSpaceId::new(4);
@@ -407,5 +412,221 @@ mod tests {
             }
             other => panic!("unexpected duplicate proof error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn batch_verification_rejects_non_adjacent_duplicate_tuple() {
+        let lane_id = LaneId::new(12);
+        let dataspace_id = DataSpaceId::new(6);
+        let duplicate_height = 19_u64;
+        let duplicate_header = header_with_da_hash(
+            NonZeroU64::new(duplicate_height).expect("nonzero height"),
+            None,
+        );
+        let duplicate_settlement = sample_settlement(lane_id, dataspace_id, duplicate_height);
+        let first = CrossLaneTransferBuilder::new(
+            duplicate_header.clone(),
+            None,
+            None,
+            duplicate_settlement.clone(),
+        )
+        .build()
+        .expect("first envelope should be valid")
+        .envelope()
+        .clone();
+        let third =
+            CrossLaneTransferBuilder::new(duplicate_header, None, None, duplicate_settlement)
+                .build()
+                .expect("third envelope should be valid")
+                .envelope()
+                .clone();
+
+        let middle_header = header_with_da_hash(
+            NonZeroU64::new(duplicate_height + 1).expect("nonzero height"),
+            None,
+        );
+        let middle_settlement = sample_settlement(lane_id, dataspace_id, duplicate_height + 1);
+        let middle = CrossLaneTransferBuilder::new(middle_header, None, None, middle_settlement)
+            .build()
+            .expect("middle envelope should be valid")
+            .envelope()
+            .clone();
+
+        let err = verify_lane_relay_envelopes(&[first, middle, third])
+            .expect_err("non-adjacent duplicate tuple should be rejected");
+        match err {
+            CrossLaneProofError::DuplicateProof {
+                lane_id: duplicate_lane_id,
+                dataspace_id: duplicate_dataspace,
+                block_height,
+            } => {
+                assert_eq!(duplicate_lane_id, lane_id);
+                assert_eq!(duplicate_dataspace, dataspace_id);
+                assert_eq!(block_height, duplicate_height);
+            }
+            other => panic!("unexpected duplicate proof error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn batch_verification_allows_distinct_dataspaces_on_same_lane_and_height() {
+        let lane_id = LaneId::new(10);
+        let first_dataspace = DataSpaceId::new(4);
+        let second_dataspace = DataSpaceId::new(5);
+        let header = header_with_da_hash(NonZeroU64::new(11).expect("nonzero height"), None);
+        let first_settlement = sample_settlement(lane_id, first_dataspace, header.height().get());
+        let second_settlement = sample_settlement(lane_id, second_dataspace, header.height().get());
+
+        let first = CrossLaneTransferBuilder::new(header.clone(), None, None, first_settlement)
+            .build()
+            .expect("first envelope should be valid")
+            .envelope()
+            .clone();
+        let second = CrossLaneTransferBuilder::new(header, None, None, second_settlement)
+            .build()
+            .expect("second envelope should be valid")
+            .envelope()
+            .clone();
+
+        verify_lane_relay_envelopes(&[first, second])
+            .expect("distinct dataspaces on same lane/height should not be duplicates");
+    }
+
+    #[test]
+    fn batch_verification_allows_distinct_lanes_on_same_dataspace_and_height() {
+        let first_lane = LaneId::new(10);
+        let second_lane = LaneId::new(11);
+        let dataspace_id = DataSpaceId::new(4);
+        let header = header_with_da_hash(NonZeroU64::new(11).expect("nonzero height"), None);
+        let first_settlement = sample_settlement(first_lane, dataspace_id, header.height().get());
+        let second_settlement = sample_settlement(second_lane, dataspace_id, header.height().get());
+
+        let first = CrossLaneTransferBuilder::new(header.clone(), None, None, first_settlement)
+            .build()
+            .expect("first envelope should be valid")
+            .envelope()
+            .clone();
+        let second = CrossLaneTransferBuilder::new(header, None, None, second_settlement)
+            .build()
+            .expect("second envelope should be valid")
+            .envelope()
+            .clone();
+
+        verify_lane_relay_envelopes(&[first, second])
+            .expect("distinct lanes on same dataspace/height should not be duplicates");
+    }
+
+    #[test]
+    fn batch_verification_duplicate_detection_depends_on_full_tuple_permutations() {
+        let base_lane = LaneId::new(30);
+        let base_dataspace = DataSpaceId::new(40);
+        let base_height = 21_u64;
+
+        let build_envelope = |lane_id: LaneId, dataspace_id: DataSpaceId, block_height: u64| {
+            let header =
+                header_with_da_hash(NonZeroU64::new(block_height).expect("nonzero height"), None);
+            let settlement = sample_settlement(lane_id, dataspace_id, block_height);
+            CrossLaneTransferBuilder::new(header, None, None, settlement)
+                .build()
+                .expect("envelope should be valid")
+                .envelope()
+                .clone()
+        };
+
+        let base = build_envelope(base_lane, base_dataspace, base_height);
+        for lane_matches in [true, false] {
+            for dataspace_matches in [true, false] {
+                for height_matches in [true, false] {
+                    let lane_id = if lane_matches {
+                        base_lane
+                    } else {
+                        LaneId::new(base_lane.as_u32() + 1)
+                    };
+                    let dataspace_id = if dataspace_matches {
+                        base_dataspace
+                    } else {
+                        DataSpaceId::new(base_dataspace.as_u64() + 1)
+                    };
+                    let block_height = if height_matches {
+                        base_height
+                    } else {
+                        base_height + 1
+                    };
+                    let second = build_envelope(lane_id, dataspace_id, block_height);
+
+                    let result = verify_lane_relay_envelopes(&[base.clone(), second]);
+                    let should_duplicate = lane_matches && dataspace_matches && height_matches;
+                    if should_duplicate {
+                        assert!(
+                            matches!(result, Err(CrossLaneProofError::DuplicateProof { .. })),
+                            "expected duplicate for exact tuple match (lane={lane_matches}, dataspace={dataspace_matches}, height={height_matches})"
+                        );
+                    } else {
+                        assert!(
+                            result.is_ok(),
+                            "expected non-duplicate for tuple permutation (lane={lane_matches}, dataspace={dataspace_matches}, height={height_matches})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn batch_verification_reports_relay_error_before_duplicate_key_check() {
+        let lane_id = LaneId::new(20);
+        let dataspace_id = DataSpaceId::new(8);
+        let header = header_with_da_hash(NonZeroU64::new(15).expect("nonzero height"), None);
+        let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
+        let valid = CrossLaneTransferBuilder::new(header, None, None, settlement)
+            .build()
+            .expect("envelope should be valid")
+            .envelope()
+            .clone();
+
+        let mut tampered_duplicate = valid.clone();
+        tampered_duplicate.settlement_hash = HashOf::from_untyped_unchecked(Hash::new([0xEE; 4]));
+
+        let err = verify_lane_relay_envelopes(&[valid, tampered_duplicate])
+            .expect_err("invalid envelope should be rejected before duplicate check");
+        assert!(matches!(
+            err,
+            CrossLaneProofError::Relay(LaneRelayError::SettlementHashMismatch)
+        ));
+    }
+
+    #[test]
+    fn builder_rejects_settlement_height_mismatch() {
+        let lane_id = LaneId::new(2);
+        let dataspace_id = DataSpaceId::new(3);
+        let header = header_with_da_hash(NonZeroU64::new(12).expect("nonzero height"), None);
+        let settlement = sample_settlement(lane_id, dataspace_id, header.height().get() - 1);
+
+        let err = CrossLaneTransferBuilder::new(header, None, None, settlement)
+            .build()
+            .expect_err("settlement/header mismatch should fail");
+        assert!(matches!(
+            err,
+            CrossLaneProofError::Relay(LaneRelayError::SettlementBlockHeightMismatch)
+        ));
+    }
+
+    #[test]
+    fn builder_rejects_da_commitment_hash_mismatch() {
+        let lane_id = LaneId::new(2);
+        let dataspace_id = DataSpaceId::new(3);
+        let header_da_hash = Some(HashOf::from_untyped_unchecked(Hash::new([0x11; 4])));
+        let provided_da_hash = Some(HashOf::from_untyped_unchecked(Hash::new([0x22; 4])));
+        let header =
+            header_with_da_hash(NonZeroU64::new(12).expect("nonzero height"), header_da_hash);
+        let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
+
+        let err = CrossLaneTransferBuilder::new(header, None, provided_da_hash, settlement)
+            .build()
+            .expect_err("da mismatch should fail");
+        assert!(matches!(
+            err,
+            CrossLaneProofError::Relay(LaneRelayError::DaCommitmentHashMismatch)
+        ));
     }
 }

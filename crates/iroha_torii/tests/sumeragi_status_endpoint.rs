@@ -281,6 +281,142 @@ async fn sumeragi_status_endpoint_shape() {
 
 #[allow(clippy::await_holding_lock)]
 #[tokio::test]
+async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
+    let _guard = status_lock().lock().unwrap();
+    let app = build_status_router();
+
+    let json_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sumeragi/status")
+                .header("Accept", "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(json_resp.status(), StatusCode::OK);
+    assert!(
+        json_resp
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("application/json")),
+        "expected JSON content type"
+    );
+    let json_bytes = BodyExt::collect(json_resp.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let json_payload: norito::json::Value =
+        norito::json::from_slice(&json_bytes).expect("decode status JSON payload");
+    let json_root = json_payload
+        .as_object()
+        .expect("status JSON payload should be an object");
+
+    let norito_resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sumeragi/status")
+                .header("Accept", "application/x-norito")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(norito_resp.status(), StatusCode::OK);
+    assert_eq!(
+        norito_resp
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/x-norito")
+    );
+    let norito_bytes = BodyExt::collect(norito_resp.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let norito_wire: SumeragiStatusWire =
+        norito::decode_from_bytes(&norito_bytes).expect("decode status Norito payload");
+
+    assert_eq!(
+        json_root
+            .get("mode_tag")
+            .and_then(norito::json::Value::as_str),
+        Some(norito_wire.mode_tag.as_str())
+    );
+    assert_eq!(
+        json_root
+            .get("leader_index")
+            .and_then(norito::json::Value::as_u64),
+        Some(norito_wire.leader_index)
+    );
+    let highest_qc = json_root
+        .get("highest_qc")
+        .and_then(norito::json::Value::as_object)
+        .expect("highest_qc object");
+    assert_eq!(
+        highest_qc
+            .get("height")
+            .and_then(norito::json::Value::as_u64),
+        Some(norito_wire.highest_qc_height)
+    );
+    assert_eq!(
+        highest_qc.get("view").and_then(norito::json::Value::as_u64),
+        Some(norito_wire.highest_qc_view)
+    );
+    let locked_qc = json_root
+        .get("locked_qc")
+        .and_then(norito::json::Value::as_object)
+        .expect("locked_qc object");
+    assert_eq!(
+        locked_qc
+            .get("height")
+            .and_then(norito::json::Value::as_u64),
+        Some(norito_wire.locked_qc_height)
+    );
+    assert_eq!(
+        locked_qc.get("view").and_then(norito::json::Value::as_u64),
+        Some(norito_wire.locked_qc_view)
+    );
+
+    let json_relay_envelopes = json_root
+        .get("lane_relay_envelopes")
+        .and_then(norito::json::Value::as_array)
+        .expect("lane_relay_envelopes array");
+    assert_eq!(
+        json_relay_envelopes.len(),
+        norito_wire.lane_relay_envelopes.len()
+    );
+    if let Some(first_wire) = norito_wire.lane_relay_envelopes.first() {
+        let first_json = json_relay_envelopes
+            .first()
+            .and_then(norito::json::Value::as_object)
+            .expect("first lane relay envelope JSON object");
+        assert_eq!(
+            first_json
+                .get("lane_id")
+                .and_then(norito::json::Value::as_u64),
+            Some(u64::from(first_wire.lane_id.as_u32()))
+        );
+        assert_eq!(
+            first_json
+                .get("dataspace_id")
+                .and_then(norito::json::Value::as_u64),
+            Some(first_wire.dataspace_id.as_u64())
+        );
+        assert_eq!(
+            first_json
+                .get("block_height")
+                .and_then(norito::json::Value::as_u64),
+            Some(first_wire.block_height)
+        );
+    }
+}
+
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
 async fn sumeragi_status_endpoint_locked_qc_monotonic() {
     let _guard = status_lock().lock().unwrap();
     iroha_core::sumeragi::status::set_locked_qc(0, 0, None);

@@ -17,7 +17,9 @@ use norito::codec::{Decode, Encode};
 pub use self::at_window_placeholder::AtWindow;
 #[cfg(feature = "governance")]
 pub use crate::governance::types::AtWindow;
-use crate::{prelude::*, smart_contract::manifest::ManifestProvenance};
+use crate::{
+    prelude::*, runtime::RuntimeUpgradeManifest, smart_contract::manifest::ManifestProvenance,
+};
 
 #[cfg(not(feature = "governance"))]
 mod at_window_placeholder {
@@ -119,6 +121,19 @@ pub struct ProposeDeployContract {
 }
 
 impl crate::seal::Instruction for ProposeDeployContract {}
+
+/// Propose a runtime upgrade manifest through governance.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+pub struct ProposeRuntimeUpgradeProposal {
+    /// Canonical runtime-upgrade manifest payload.
+    pub manifest: RuntimeUpgradeManifest,
+    /// Optional referendum window override (inclusive).
+    pub window: Option<AtWindow>,
+    /// Optional voting mode for the referendum created by this proposal (default Zk).
+    pub mode: Option<VotingMode>,
+}
+
+impl crate::seal::Instruction for ProposeRuntimeUpgradeProposal {}
 
 /// Cast a ZK ballot (default voting mode)
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
@@ -390,6 +405,34 @@ mod tests {
         let mut cur = enc.as_slice();
         let dec = ProposeDeployContract::decode(&mut cur).unwrap();
         assert_eq!(p, dec);
+    }
+
+    #[test]
+    fn runtime_upgrade_proposal_roundtrip() {
+        let ins = ProposeRuntimeUpgradeProposal {
+            manifest: RuntimeUpgradeManifest {
+                name: "runtime-upgrade".to_string(),
+                description: "isi roundtrip".to_string(),
+                abi_version: 1,
+                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+                added_syscalls: Vec::new(),
+                added_pointer_types: Vec::new(),
+                start_height: 100,
+                end_height: 200,
+                sbom_digests: Vec::new(),
+                slsa_attestation: Vec::new(),
+                provenance: Vec::new(),
+            },
+            window: Some(AtWindow {
+                lower: 10,
+                upper: 20,
+            }),
+            mode: Some(VotingMode::Plain),
+        };
+        let enc = norito::codec::Encode::encode(&ins);
+        let mut cur = enc.as_slice();
+        let dec = ProposeRuntimeUpgradeProposal::decode(&mut cur).unwrap();
+        assert_eq!(ins, dec);
     }
 
     #[test]

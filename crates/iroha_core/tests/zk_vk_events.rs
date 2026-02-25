@@ -17,6 +17,7 @@ use iroha_data_model::{
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 
+#[path = "common/world_fixture.rs"]
 mod test_world;
 
 #[test]
