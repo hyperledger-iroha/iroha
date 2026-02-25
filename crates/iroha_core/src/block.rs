@@ -3867,6 +3867,38 @@ pub(crate) mod valid {
                 voting_block,
                 soft_fork,
                 None,
+                false,
+            )
+        }
+
+        /// Replay-specific validation entrypoint that can optionally bypass block signature checks.
+        ///
+        /// This is intentionally crate-private and should only be used for controlled migration or
+        /// recovery scenarios where historical blocks cannot be validated with current signature
+        /// semantics.
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) fn validate_keep_voting_block_for_replay<'state>(
+            block: SignedBlock,
+            topology: &Topology,
+            expected_chain_id: &ChainId,
+            genesis_account: &AccountId,
+            time_source: &TimeSource,
+            state: &'state State,
+            voting_block: &mut Option<VotingBlock>,
+            soft_fork: bool,
+            skip_block_signatures: bool,
+        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+            Self::validate_keep_voting_block_inner(
+                block,
+                topology,
+                expected_chain_id,
+                genesis_account,
+                time_source,
+                state,
+                voting_block,
+                soft_fork,
+                None,
+                skip_block_signatures,
             )
         }
 
@@ -3893,6 +3925,7 @@ pub(crate) mod valid {
                 voting_block,
                 soft_fork,
                 Some(timings),
+                false,
             )
         }
 
@@ -3907,6 +3940,7 @@ pub(crate) mod valid {
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             timings: Option<&mut ValidationTimings>,
+            skip_block_signatures: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             let total_start = Instant::now();
             let stateless_start = Instant::now();
@@ -3936,6 +3970,7 @@ pub(crate) mod valid {
                     &view,
                     soft_fork,
                     time_source,
+                    skip_block_signatures,
                 ) {
                     Ok(data) => {
                         if let Some(timings) = timings.as_deref_mut() {
@@ -4159,6 +4194,7 @@ pub(crate) mod valid {
                     &view,
                     soft_fork,
                     time_source,
+                    false,
                 ) {
                     Ok(data) => data,
                     Err(error) => {
@@ -4320,6 +4356,7 @@ pub(crate) mod valid {
             state: &impl StateReadOnly,
             soft_fork: bool,
             time_source: &TimeSource,
+            skip_block_signatures: bool,
         ) -> Result<StaticValidationData, BlockValidationError> {
             let state_height = state.block_hashes().len();
             let expected_block_height = if soft_fork {
@@ -4421,12 +4458,14 @@ pub(crate) mod valid {
                     return Err(BlockValidationError::BlockInThePast);
                 }
 
-                Self::verify_leader_signature(block, topology)?;
-                // Enforce BLS-normal for validator signatures (Set A + Set B).
-                Self::verify_validator_signatures(block, topology)?;
-                Self::verify_no_undefined_signatures(block, topology)?;
-                Self::verify_unique_signers(block)?;
-                Self::enforce_consensus_key_lifecycle(block, topology, state)?;
+                if !skip_block_signatures {
+                    Self::verify_leader_signature(block, topology)?;
+                    // Enforce BLS-normal for validator signatures (Set A + Set B).
+                    Self::verify_validator_signatures(block, topology)?;
+                    Self::verify_no_undefined_signatures(block, topology)?;
+                    Self::verify_unique_signers(block)?;
+                    Self::enforce_consensus_key_lifecycle(block, topology, state)?;
+                }
             }
 
             let crypto_cfg = state.crypto();
@@ -5417,6 +5456,7 @@ pub(crate) mod valid {
                 state,
                 soft_fork,
                 time_source,
+                false,
             )?;
             let committed_heights = Self::committed_heights_for_block(block, state.transactions());
             let txs_for_cache: Vec<&SignedTransaction> = block.external_transactions().collect();
@@ -9835,6 +9875,7 @@ pub(crate) mod valid {
                     &view,
                     false,
                     &time_source,
+                    false,
                 )
                 .expect("static state-dependent validation should succeed")
             };
@@ -9910,6 +9951,7 @@ pub(crate) mod valid {
                     &view,
                     false,
                     &time_source,
+                    false,
                 )
                 .expect("static state-dependent validation should succeed")
             };
