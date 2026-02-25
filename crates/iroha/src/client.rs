@@ -15214,6 +15214,24 @@ mod tests {
     }
 
     #[test]
+    fn get_sumeragi_status_wire_accepts_json_payload_without_content_type_header() {
+        let client = client_with_base_url(base_url());
+        let (status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let body = norito::json::to_vec(&status).expect("encode status payload as json");
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .body(body)
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let decoded = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_sumeragi_status_wire()
+        })
+        .expect("decode sumeragi status without content type");
+        assert_eq!(decoded.lane_relay_envelopes, vec![relay_envelope]);
+    }
+
+    #[test]
     fn get_cross_lane_transfer_proofs_returns_verified_envelopes() {
         let client = client_with_base_url(base_url());
         let (status, relay_envelope) = sample_sumeragi_status_with_relay();
@@ -15290,6 +15308,29 @@ mod tests {
             client.get_cross_lane_transfer_proofs()
         })
         .expect_err("duplicates should be rejected");
+        assert!(
+            err.to_string().contains("duplicate relay envelope"),
+            "expected duplicate detection error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn get_cross_lane_transfer_proofs_rejects_duplicate_keys_from_json_payload() {
+        let client = client_with_base_url(base_url());
+        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
+        status.lane_relay_envelopes = vec![relay_envelope.clone(), relay_envelope];
+        let body = norito::json::to_vec(&status).expect("encode status payload as json");
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(body)
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let err = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_cross_lane_transfer_proofs()
+        })
+        .expect_err("duplicate json relay tuples should be rejected");
         assert!(
             err.to_string().contains("duplicate relay envelope"),
             "expected duplicate detection error, got {err:?}"
@@ -15440,6 +15481,38 @@ mod tests {
             client.get_cross_lane_transfer_proofs()
         })
         .expect_err("invalid relay must be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("Invalid lane relay envelope in status payload"),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            !message.contains("duplicate relay envelope"),
+            "duplicate detection should not run before relay verification: {message}"
+        );
+    }
+
+    #[test]
+    fn get_cross_lane_transfer_proofs_reports_invalid_relay_before_duplicate_error_from_json_payload()
+     {
+        let client = client_with_base_url(base_url());
+        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let mut tampered_duplicate = relay_envelope.clone();
+        tampered_duplicate.settlement_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0xAC; Hash::LENGTH]));
+        status.lane_relay_envelopes = vec![relay_envelope, tampered_duplicate];
+        let body = norito::json::to_vec(&status).expect("encode status payload as json");
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(body)
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let err = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_cross_lane_transfer_proofs()
+        })
+        .expect_err("invalid json relay must be rejected");
         let message = err.to_string();
         assert!(
             message.contains("Invalid lane relay envelope in status payload"),

@@ -14,6 +14,7 @@ use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
+#[path = "common/world_fixture.rs"]
 mod test_world;
 
 #[test]

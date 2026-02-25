@@ -59,6 +59,7 @@ use kaigi_zk::{
 };
 use rand_core_06::OsRng;
 
+#[path = "common/world_fixture.rs"]
 mod test_world;
 
 const ROSTER_VK_NAME: &str = "kaigi_roster_v1";
