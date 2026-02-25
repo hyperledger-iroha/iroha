@@ -71,8 +71,17 @@ fn build_harness() -> Harness {
     let query = LiveQueryStore::start_test();
     let fixtures = build_fixtures();
     let world = world_from_fixtures(&fixtures);
-    let mut state =
-        State::new_with_chain(world, Arc::clone(&kura), query, ChainId::from("test-chain"));
+    let chain_id = ChainId::from("test-chain");
+    #[cfg(feature = "telemetry")]
+    let mut state = State::new_with_chain(
+        world,
+        Arc::clone(&kura),
+        query,
+        chain_id.clone(),
+        iroha_core::telemetry::StateTelemetry::default(),
+    );
+    #[cfg(not(feature = "telemetry"))]
+    let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
     state.settlement.offline.skip_platform_attestation = true;
     state.settlement.offline.proof_mode =
         iroha_config::parameters::actual::OfflineProofMode::Optional;
@@ -85,7 +94,7 @@ fn build_harness() -> Harness {
     drop(peers_tx);
 
     let torii = Torii::new_with_handle(
-        ChainId::from("test-chain"),
+        chain_id,
         kiso,
         cfg.torii.clone(),
         queue,

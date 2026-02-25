@@ -236,6 +236,8 @@ const SERIAL_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 const MIN_NETWORK_PEERS: usize = 4; // DA-enabled consensus can stall with fewer peers.
 const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 64; // Match iroha_test_network default.
+const NETWORK_START_ATTEMPTS: usize = 2;
+const NETWORK_START_RETRY_DELAY: Duration = Duration::from_secs(1);
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
 
@@ -386,6 +388,14 @@ fn panic_reason(panic: &(dyn Any + Send)) -> Option<String> {
         .or_else(|| panic.downcast_ref::<String>().cloned())
 }
 
+fn is_retryable_network_startup_error(err: &Report) -> bool {
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        text.contains("expected peers to start within timeout")
+            || text.contains("peer startup failed; startup snapshot:")
+    })
+}
+
 /// Attempt to start a blocking test network; fail when the sandbox forbids binding sockets.
 ///
 /// # Errors
@@ -417,9 +427,21 @@ pub fn start_network_blocking_or_skip(
             panic::resume_unwind(panic);
         }
     };
-    runtime
-        .block_on(async { network.start_all().await })
-        .map_err(|err| sandbox_error(err, context))?;
+    for attempt in 1..=NETWORK_START_ATTEMPTS {
+        match runtime.block_on(async { network.start_all().await }) {
+            Ok(_) => break,
+            Err(err)
+                if attempt < NETWORK_START_ATTEMPTS && is_retryable_network_startup_error(&err) =>
+            {
+                eprintln!(
+                    "warning: {context} network startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; retrying in {:?}: {err}",
+                    NETWORK_START_RETRY_DELAY
+                );
+                std::thread::sleep(NETWORK_START_RETRY_DELAY);
+            }
+            Err(err) => return Err(sandbox_error(err, context)),
+        }
+    }
     runtime
         .block_on(async { network.ensure_blocks(1).await })
         .map_err(|err| sandbox_error(err.wrap_err("reach block 1"), context))?;
@@ -495,10 +517,21 @@ pub async fn start_network_async_or_skip(
             panic::resume_unwind(panic);
         }
     };
-    network
-        .start_all()
-        .await
-        .map_err(|err| sandbox_error(err, context))?;
+    for attempt in 1..=NETWORK_START_ATTEMPTS {
+        match network.start_all().await {
+            Ok(_) => break,
+            Err(err)
+                if attempt < NETWORK_START_ATTEMPTS && is_retryable_network_startup_error(&err) =>
+            {
+                eprintln!(
+                    "warning: {context} network startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; retrying in {:?}: {err}",
+                    NETWORK_START_RETRY_DELAY
+                );
+                tokio::time::sleep(NETWORK_START_RETRY_DELAY).await;
+            }
+            Err(err) => return Err(sandbox_error(err, context)),
+        }
+    }
     network
         .ensure_blocks(1)
         .await
@@ -753,6 +786,23 @@ mod tests {
             panic_reason(panic_payload.as_ref()),
             Some("operation not permitted".to_string())
         );
+    }
+
+    #[test]
+    fn startup_retry_classifier_matches_timeout_snapshot_errors() {
+        let err = Report::msg(
+            "expected peers to start within timeout (240s); startup snapshot: [peer#0 running=true]",
+        );
+        assert!(is_retryable_network_startup_error(&err));
+
+        let err = Report::msg("peer startup failed; startup snapshot: [peer#1 running=false]");
+        assert!(is_retryable_network_startup_error(&err));
+    }
+
+    #[test]
+    fn startup_retry_classifier_ignores_non_startup_errors() {
+        let err = Report::msg("failed to parse account_id literal");
+        assert!(!is_retryable_network_startup_error(&err));
     }
 
     #[test]

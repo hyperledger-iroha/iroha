@@ -345,6 +345,8 @@ const UNKNOWN_PREV_CACHE_RETENTION_HEIGHTS: u64 = 1024;
 struct UnknownPrevHashState {
     prev_hash: HashOf<BlockHeader>,
     latest_hash: Option<HashOf<BlockHeader>>,
+    fallback_start_height: NonZeroUsize,
+    local_head_hash: Option<HashOf<BlockHeader>>,
     served_at_height: u64,
 }
 
@@ -353,16 +355,25 @@ fn should_share_unknown_prev_hash(
     peer_id: &PeerId,
     prev_hash: HashOf<BlockHeader>,
     latest_hash: Option<HashOf<BlockHeader>>,
+    fallback_start_height: NonZeroUsize,
+    local_head_hash: Option<HashOf<BlockHeader>>,
     height: u64,
 ) -> bool {
     match cache.get_mut(peer_id) {
-        Some(state) if state.prev_hash == prev_hash && state.latest_hash == latest_hash => {
-            // Unknown-prev requests can repeat rapidly under Byzantine behavior. Serve the same
-            // request only on coarse height steps to avoid saturating honest peers.
-            if height.saturating_sub(state.served_at_height) < UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP
-            {
+        Some(state)
+            if state.prev_hash == prev_hash
+                && state.latest_hash == latest_hash
+                && state.fallback_start_height == fallback_start_height =>
+        {
+            // Serve the same requester/frontier tuple only when local canonical state advanced
+            // enough to provide new range content.
+            let local_head_advanced = local_head_hash != state.local_head_hash
+                || height.saturating_sub(state.served_at_height)
+                    >= UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP;
+            if !local_head_advanced {
                 return false;
             }
+            state.local_head_hash = local_head_hash;
             state.served_at_height = height;
             true
         }
@@ -370,6 +381,8 @@ fn should_share_unknown_prev_hash(
             *state = UnknownPrevHashState {
                 prev_hash,
                 latest_hash,
+                fallback_start_height,
+                local_head_hash,
                 served_at_height: height,
             };
             true
@@ -380,6 +393,8 @@ fn should_share_unknown_prev_hash(
                 UnknownPrevHashState {
                     prev_hash,
                     latest_hash,
+                    fallback_start_height,
+                    local_head_hash,
                     served_at_height: height,
                 },
             );
@@ -735,33 +750,94 @@ mod unknown_prev_hash_tests {
         let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
 
         assert!(should_share_unknown_prev_hash(
-            &mut cache, &peer, hash1, latest1, 10
+            &mut cache,
+            &peer,
+            hash1,
+            latest1,
+            nonzero_ext::nonzero!(10_usize),
+            Some(hash(0x81)),
+            10
         ));
         assert!(!should_share_unknown_prev_hash(
-            &mut cache, &peer, hash1, latest1, 10
+            &mut cache,
+            &peer,
+            hash1,
+            latest1,
+            nonzero_ext::nonzero!(10_usize),
+            Some(hash(0x81)),
+            10
         ));
         assert!(!should_share_unknown_prev_hash(
-            &mut cache, &peer, hash1, latest1, 11
+            &mut cache,
+            &peer,
+            hash1,
+            latest1,
+            nonzero_ext::nonzero!(10_usize),
+            Some(hash(0x81)),
+            11
         ));
         assert!(should_share_unknown_prev_hash(
             &mut cache,
             &peer,
             hash1,
             latest1,
+            nonzero_ext::nonzero!(10_usize),
+            Some(hash(0x82)),
             10 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
         ));
         assert!(should_share_unknown_prev_hash(
-            &mut cache, &peer, hash1, latest2, 12
+            &mut cache,
+            &peer,
+            hash1,
+            latest2,
+            nonzero_ext::nonzero!(12_usize),
+            Some(hash(0x82)),
+            12
         ));
         assert!(should_share_unknown_prev_hash(
-            &mut cache, &peer, hash2, latest2, 12
+            &mut cache,
+            &peer,
+            hash2,
+            latest2,
+            nonzero_ext::nonzero!(12_usize),
+            Some(hash(0x82)),
+            12
         ));
         assert!(should_share_unknown_prev_hash(
             &mut cache,
             &other_peer,
             hash1,
             latest1,
+            nonzero_ext::nonzero!(11_usize),
+            Some(hash(0x81)),
             11
+        ));
+        assert!(should_share_unknown_prev_hash(
+            &mut cache,
+            &peer,
+            hash2,
+            latest2,
+            nonzero_ext::nonzero!(13_usize),
+            Some(hash(0x82)),
+            12
+        ));
+        assert!(!should_share_unknown_prev_hash(
+            &mut cache,
+            &peer,
+            hash2,
+            latest2,
+            nonzero_ext::nonzero!(13_usize),
+            Some(hash(0x82)),
+            12
+        ));
+        assert!(should_share_unknown_prev_hash(
+            &mut cache,
+            &peer,
+            hash2,
+            latest2,
+            nonzero_ext::nonzero!(13_usize),
+            Some(hash(0x83)),
+            12
         ));
     }
 
@@ -776,6 +852,8 @@ mod unknown_prev_hash_tests {
             UnknownPrevHashState {
                 prev_hash: hash(0x41),
                 latest_hash: Some(hash(0x42)),
+                fallback_start_height: nonzero_ext::nonzero!(1_usize),
+                local_head_hash: Some(hash(0x43)),
                 served_at_height: prune_at,
             },
         );
@@ -784,6 +862,8 @@ mod unknown_prev_hash_tests {
             UnknownPrevHashState {
                 prev_hash: hash(0x51),
                 latest_hash: Some(hash(0x52)),
+                fallback_start_height: nonzero_ext::nonzero!(1_usize),
+                local_head_hash: Some(hash(0x53)),
                 served_at_height: 10,
             },
         );
@@ -3904,20 +3984,22 @@ pub mod message {
                         } else {
                             let now_height = u64::try_from(block_sync.state.committed_height())
                                 .unwrap_or(u64::MAX);
+                            let (fallback_start_height, should_request_latest) =
+                                unknown_prev_fallback_start_height(
+                                    &block_sync.kura,
+                                    *latest_hash,
+                                    seen_blocks,
+                                );
                             share_unknown_prev = should_share_unknown_prev_hash(
                                 &mut block_sync.unknown_prev_hashes,
                                 peer_id,
                                 hash,
                                 *latest_hash,
+                                fallback_start_height,
+                                local_latest_block_hash,
                                 now_height,
                             );
                             if share_unknown_prev {
-                                let (fallback_start_height, should_request_latest) =
-                                    unknown_prev_fallback_start_height(
-                                        &block_sync.kura,
-                                        *latest_hash,
-                                        seen_blocks,
-                                    );
                                 if should_request_latest {
                                     block_sync
                                         .request_latest_blocks_from_peer(peer_id.clone())

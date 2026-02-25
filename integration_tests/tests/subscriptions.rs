@@ -13,7 +13,7 @@ use iroha::{
     data_model::{Level, asset::AssetId, prelude::*},
 };
 use iroha_test_network::*;
-use iroha_test_samples::{ALICE_ID, BOB_ID};
+use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
@@ -254,6 +254,22 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let asset_id = asset_id.clone();
                 let amount = initial_balance.clone();
                 move || client.submit_blocking(Mint::asset_numeric(amount, asset_id))
+            })
+            .await??;
+            let bob_client = network
+                .peer()
+                .client_for(&subscriber, BOB_KEYPAIR.private_key().clone());
+            let transfer_permission: Permission =
+                iroha_executor_data_model::permission::asset::CanTransferAsset {
+                    asset: asset_id.clone(),
+                }
+                .into();
+            spawn_blocking({
+                let client = bob_client.clone();
+                let provider = provider.clone();
+                move || {
+                    client.submit_blocking(Grant::account_permission(transfer_permission, provider))
+                }
             })
             .await??;
 
@@ -501,6 +517,22 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 let asset_id = asset_id.clone();
                 let amount = initial_balance.clone();
                 move || client.submit_blocking(Mint::asset_numeric(amount, asset_id))
+            })
+            .await??;
+            let bob_client = network
+                .peer()
+                .client_for(&subscriber, BOB_KEYPAIR.private_key().clone());
+            let transfer_permission: Permission =
+                iroha_executor_data_model::permission::asset::CanTransferAsset {
+                    asset: asset_id.clone(),
+                }
+                .into();
+            spawn_blocking({
+                let client = bob_client.clone();
+                let provider = provider.clone();
+                move || {
+                    client.submit_blocking(Grant::account_permission(transfer_permission, provider))
+                }
             })
             .await??;
 
