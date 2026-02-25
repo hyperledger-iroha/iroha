@@ -357,13 +357,15 @@ public final class NoritoAdapters {
 
     @Override
     public void encode(NoritoEncoder encoder, byte[] value) {
-      encoder.writeLength(value.length, false);
+      final boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+      encoder.writeLength(value.length, compactLen);
       encoder.writeBytes(value);
     }
 
     @Override
     public byte[] decode(NoritoDecoder decoder) {
-      long length = decoder.readLength(false);
+      final boolean compactLen = decoder.compactLenActive();
+      long length = decoder.readLength(compactLen);
       if (length > Integer.MAX_VALUE) {
         throw new IllegalArgumentException("Raw byte vector too large");
       }

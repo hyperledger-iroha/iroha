@@ -5,6 +5,7 @@ import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
+import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
 /** Norito codec for encrypted Connect envelopes used by wallet-role flows. */
@@ -30,6 +31,7 @@ public final class ConnectEnvelopeCodec {
   private static final TypeAdapter<String> STRING = NoritoAdapters.stringAdapter();
   private static final TypeAdapter<Boolean> BOOL = NoritoAdapters.boolAdapter();
   private static final TypeAdapter<byte[]> BYTE_VECTOR = NoritoAdapters.byteVecAdapter();
+  private static final TypeAdapter<byte[]> RAW_BYTES = NoritoAdapters.rawByteVecAdapter();
 
   private ConnectEnvelopeCodec() {}
 
@@ -305,14 +307,49 @@ public final class ConnectEnvelopeCodec {
       new TypeAdapter<>() {
         @Override
         public void encode(final NoritoEncoder encoder, final WalletSignature value) {
-          UINT8.encode(encoder, (long) value.algorithm);
-          BYTE_VECTOR.encode(encoder, value.signature);
+          // Rust `WalletSignatureV1` is encoded as a Norito struct with per-field lengths.
+          final byte[] algorithmField;
+          {
+            final NoritoEncoder child = encoder.childEncoder();
+            UINT32.encode(child, (long) value.algorithm);
+            algorithmField = child.toByteArray();
+          }
+          final byte[] signatureField;
+          {
+            final NoritoEncoder child = encoder.childEncoder();
+            BYTE_VECTOR.encode(child, value.signature);
+            signatureField = child.toByteArray();
+          }
+          final boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+          encoder.writeLength(algorithmField.length, compactLen);
+          encoder.writeBytes(algorithmField);
+          encoder.writeLength(signatureField.length, compactLen);
+          encoder.writeBytes(signatureField);
         }
 
         @Override
         public WalletSignature decode(final NoritoDecoder decoder) {
-          final int algorithm = UINT8.decode(decoder).intValue();
-          final byte[] signature = BYTE_VECTOR.decode(decoder);
+          final boolean compactLen = decoder.compactLenActive();
+
+          final long algorithmLength = decoder.readLength(compactLen);
+          final byte[] algorithmBytes = decoder.readBytes((int) algorithmLength);
+          final NoritoDecoder algorithmDecoder =
+              new NoritoDecoder(algorithmBytes, decoder.flags(), decoder.flagsHint());
+          final int algorithm = UINT32.decode(algorithmDecoder).intValue();
+          if (algorithmDecoder.remaining() != 0) {
+            throw new IllegalArgumentException(
+                "wallet_signature.algorithm trailing bytes: " + algorithmDecoder.remaining());
+          }
+
+          final long signatureLength = decoder.readLength(compactLen);
+          final byte[] signatureBytes = decoder.readBytes((int) signatureLength);
+          final NoritoDecoder signatureDecoder =
+              new NoritoDecoder(signatureBytes, decoder.flags(), decoder.flagsHint());
+          final byte[] signature = BYTE_VECTOR.decode(signatureDecoder);
+          if (signatureDecoder.remaining() != 0) {
+            throw new IllegalArgumentException(
+                "wallet_signature.signature trailing bytes: " + signatureDecoder.remaining());
+          }
           return new WalletSignature(algorithm, signature);
         }
       };
@@ -371,12 +408,12 @@ public final class ConnectEnvelopeCodec {
           if (value instanceof SignRequestRawPayload raw) {
             UINT32.encode(encoder, (long) PAYLOAD_SIGN_REQUEST_RAW);
             STRING.encode(encoder, raw.domainTag);
-            BYTE_VECTOR.encode(encoder, raw.bytes);
+            RAW_BYTES.encode(encoder, raw.bytes);
             return;
           }
           if (value instanceof SignRequestTxPayload tx) {
             UINT32.encode(encoder, (long) PAYLOAD_SIGN_REQUEST_TX);
-            BYTE_VECTOR.encode(encoder, tx.txBytes);
+            RAW_BYTES.encode(encoder, tx.txBytes);
             return;
           }
           if (value instanceof SignResultOkPayload ok) {
@@ -408,11 +445,11 @@ public final class ConnectEnvelopeCodec {
           }
           if (tag == PAYLOAD_SIGN_REQUEST_RAW) {
             final String domainTag = STRING.decode(decoder);
-            final byte[] bytes = BYTE_VECTOR.decode(decoder);
+            final byte[] bytes = RAW_BYTES.decode(decoder);
             return new SignRequestRawPayload(domainTag, bytes);
           }
           if (tag == PAYLOAD_SIGN_REQUEST_TX) {
-            final byte[] txBytes = BYTE_VECTOR.decode(decoder);
+            final byte[] txBytes = RAW_BYTES.decode(decoder);
             return new SignRequestTxPayload(txBytes);
           }
           if (tag == PAYLOAD_SIGN_RESULT_OK) {
