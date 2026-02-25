@@ -6071,6 +6071,7 @@ struct ProposeState {
     adaptive_state: AdaptiveObservabilityState,
     collector_role_index: Option<ValidatorIndex>,
     new_view_tracker: NewViewTracker,
+    highest_qc_missing_defer_markers: BTreeSet<(u64, u64, HashOf<BlockHeader>)>,
     proposals_seen: BTreeSet<(u64, u64)>,
     pacemaker_backpressure: PacemakerBackpressure,
     pacemaker_backpressure_tracker: pacing::PacemakerBackpressureTracker,
@@ -9868,6 +9869,7 @@ impl Actor {
             adaptive_state,
             collector_role_index: None,
             new_view_tracker: NewViewTracker::default(),
+            highest_qc_missing_defer_markers: BTreeSet::new(),
             proposals_seen: BTreeSet::new(),
             pacemaker_backpressure: PacemakerBackpressure::new(),
             pacemaker_backpressure_tracker: pacing::PacemakerBackpressureTracker::new(),
@@ -17121,9 +17123,48 @@ impl Actor {
         }
     }
 
-    pub(super) fn clear_consensus_recovery_for_round(&mut self, height: u64, _view: u64) {
+    pub(super) fn clear_consensus_recovery_for_round(&mut self, height: u64, view: u64) {
         self.consensus_recovery
             .retain(|(entry_height, _), _| *entry_height != height);
+        self.subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .retain(|(marker_height, marker_view, _)| {
+                *marker_height != height || *marker_view > view
+            });
+    }
+
+    fn prune_highest_qc_missing_defer_markers(&mut self, committed_height: u64) {
+        let stale_markers: Vec<_> = self
+            .subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .iter()
+            .copied()
+            .filter(|(height, _, hash)| {
+                *height <= committed_height || self.block_known_locally(*hash)
+            })
+            .collect();
+        for marker in stale_markers {
+            self.subsystems
+                .propose
+                .highest_qc_missing_defer_markers
+                .remove(&marker);
+        }
+    }
+
+    fn mark_highest_qc_missing_defer_for_round(
+        &mut self,
+        height: u64,
+        view: u64,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+    ) -> bool {
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        self.prune_highest_qc_missing_defer_markers(committed_height);
+        self.subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .insert((height, view, highest_qc.subject_block_hash))
     }
 
     fn prune_stale_consensus_recovery(&mut self, now: Instant) {
@@ -18197,6 +18238,12 @@ impl Actor {
     }
 
     fn prune_stale_view_state(&mut self, height: u64, min_view: u64) {
+        self.subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .retain(|(marker_height, marker_view, _)| {
+                *marker_height != height || *marker_view >= min_view
+            });
         let da_enabled = self.runtime_da_enabled();
         // Keep DA availability state across view changes until payloads are durably resolved.
         // In DA mode, retain stale pending payloads (as aborted) so block sync can still

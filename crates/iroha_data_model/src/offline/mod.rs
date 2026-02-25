@@ -2586,8 +2586,10 @@ mod model {
                     .balance_proof_for_certificate(certificate_id)
                     .ok_or(OfflineProofRequestError::MissingBalanceProof)?;
                 let ordered = canonical_receipts(&certificate_receipts);
-                let receipt_amounts: Vec<_> =
-                    ordered.iter().map(|receipt| receipt.amount.clone()).collect();
+                let receipt_amounts: Vec<_> = ordered
+                    .iter()
+                    .map(|receipt| receipt.amount.clone())
+                    .collect();
                 let blinding_seeds = ordered
                     .iter()
                     .map(|receipt| {
