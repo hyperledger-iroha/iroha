@@ -20,7 +20,7 @@ impl Actor {
         )
     }
 
-    fn has_missing_block_request_for_height(&self, height: u64) -> bool {
+    pub(super) fn has_missing_block_request_for_height(&self, height: u64) -> bool {
         self.pending
             .missing_block_requests
             .values()
@@ -923,8 +923,28 @@ impl Actor {
         view: u64,
         requested_missing_block: bool,
     ) -> bool {
-        if requested_missing_block || self.block_known_locally(*block_hash) {
+        if self.block_known_locally(*block_hash) {
             return false;
+        }
+        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let requested_margin = self.recovery_missing_request_stale_height_margin().max(1);
+        let far_ahead_by_committed = height > local_height.saturating_add(requested_margin);
+        if requested_missing_block {
+            // Requested missing-block recovery is only allowed within a bounded forward window.
+            // Apply this gate before parent-availability short-circuit so far-ahead chains cannot
+            // keep inflating pending payload/RBC state while the tracked missing height is stalled.
+            if far_ahead_by_committed {
+                return true;
+            }
+            return false;
+        }
+        let unresolved_lower_missing = self
+            .lowest_unresolved_missing_block_height(local_height)
+            .is_some_and(|missing_height| missing_height < height);
+        if unresolved_lower_missing && far_ahead_by_committed {
+            // A lower missing height is still unresolved; keep recovery deterministic by
+            // suppressing sparse far-ahead updates until the gap closes.
+            return true;
         }
         if parent_hash.is_some_and(|hash| self.block_payload_available_locally(hash)) {
             return false;
@@ -1661,7 +1681,7 @@ impl Actor {
                 );
                 return Ok(());
             }
-            if !requested_missing_block && !block_known {
+            if !block_known {
                 let mut fallback_roster = self.effective_commit_topology();
                 if fallback_roster.is_empty() {
                     fallback_roster = self.trusted_topology();
@@ -1680,6 +1700,21 @@ impl Actor {
                         &fallback_topology,
                     ) {
                         requested_missing_block = true;
+                    }
+                }
+                if requested_missing_block {
+                    let failover_requested = self.force_tracked_missing_height_sidecar_failover(
+                        block_height,
+                        block_hash,
+                        "block_sync_update_missing_roster",
+                    );
+                    if failover_requested {
+                        debug!(
+                            height = block_height,
+                            view = block_view,
+                            block = %block_hash,
+                            "forced deterministic sidecar failover for tracked missing block without verifiable roster"
+                        );
                     }
                 }
             }

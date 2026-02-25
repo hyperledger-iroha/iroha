@@ -315,6 +315,49 @@ impl Actor {
             );
             return;
         }
+        if let Some(existing_key) = self
+            .deferred_missing_payload_qcs
+            .iter()
+            .find(|(existing_key, entry)| {
+                **existing_key != key
+                    && entry.qc.phase == qc.phase
+                    && entry.qc.height == qc.height
+                    && entry.qc.subject_block_hash == qc.subject_block_hash
+            })
+            .map(|(existing_key, _)| *existing_key)
+        {
+            if let Some(mut existing) = self.deferred_missing_payload_qcs.remove(&existing_key) {
+                if existing.qc.view > qc.view {
+                    let retained_view = existing.qc.view;
+                    existing.last_attempt = now;
+                    self.deferred_missing_payload_qcs
+                        .insert(existing_key, existing);
+                    debug!(
+                        phase = ?qc.phase,
+                        height = qc.height,
+                        view = qc.view,
+                        retained_view,
+                        block = %qc.subject_block_hash,
+                        reason,
+                        "keeping higher-view deferred QC for missing payload"
+                    );
+                } else {
+                    existing.qc = qc.clone();
+                    existing.last_attempt = now;
+                    existing.reason = reason;
+                    self.deferred_missing_payload_qcs.insert(key, existing);
+                    debug!(
+                        phase = ?qc.phase,
+                        height = qc.height,
+                        view = qc.view,
+                        block = %qc.subject_block_hash,
+                        reason,
+                        "coalesced deferred missing-payload QC onto latest view"
+                    );
+                }
+            }
+            return;
+        }
 
         if self.deferred_missing_payload_qcs.len() >= DEFERRED_MISSING_PAYLOAD_QC_CAP {
             let oldest = self

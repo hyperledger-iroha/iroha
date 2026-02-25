@@ -1,9 +1,29 @@
 # Status
 
-Last update: 2026-02-24
+Last update: 2026-02-25
+- Latest sync (deterministic missing-QC recovery + shared-host soak-profile hardening):
+  - Sumeragi deterministic recovery frontier changes remain in place across `crates/iroha_core/src/sumeragi/main_loop/{block_sync.rs,proposal_handlers.rs,qc.rs,votes.rs}` and `crates/iroha_core/src/sumeragi/main_loop.rs` (canonical sparse/no-cert planning, same-event missing-request activation, stale suppression/pruning, sidecar failover hardening, bounded pending behavior with deterministic eviction and telemetry).
+  - Izanami shared-host soak profile hardening landed in `crates/izanami/src/chaos.rs`: contention-tolerant DA/recovery windows, long-soak shared-host profile clamping (`max_inflight`, `progress_timeout`) while preserving canonical `tps=5`, and explicit shared-host soak unit coverage.
+- Validation (2026-02-25):
+  - `bash ci/check_sumeragi_formal.sh` (ok, Apalache `NoError`, `[formal] sumeragi Apalache checks passed`).
+  - `cargo test -p iroha_core --lib block_sync_update_records_missing_request_when_sparse_signatures_fail_quorum -- --nocapture` (ok)
+  - `cargo test -p iroha_core --lib retry_missing_block_requests_applies_configured_backoff_before_retrying -- --nocapture` (ok)
+  - `cargo test -p iroha_core --lib prune_stale_missing_requests_clears_linked_state_and_records_counter -- --nocapture` (ok)
+  - `cargo test -p iroha_core --lib deferred_block_sync_queue_cap_prefers_evidence_and_newer_views -- --nocapture` (ok)
+  - `cargo test -p iroha_core --lib proposal_cache_enforces_proposal_limit -- --nocapture` (ok)
+  - `cargo test -p iroha_core --lib proposal_cache_overflow_increments_eviction_counter -- --nocapture` (ok)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_suppresses_stale_missing_qc_round -- --nocapture` (ok)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_suppresses_missing_qc_round_stale_against_qc_head -- --nocapture` (ok)
+  - `cargo test -p iroha_core --lib tracked_missing_height_sidecar_failover_forces_fetch -- --nocapture` (ok)
+  - `cargo test -p izanami derive_npos_timing_ -- --nocapture` (ok)
+  - `cargo test -p izanami shared_host_stable_soak_profile_caps_load_and_timeout -- --nocapture` (ok)
+  - `cargo test -p izanami shared_host_stable_soak_profile_does_not_touch_non_soak_runs -- --nocapture` (ok)
+  - `cargo build -p izanami --release` (ok)
+- Shared-host soak probe status (2026-02-25):
+  - Executed repeated long-soak-profile probes (`--duration 3600s --target-blocks 180`) in both debug and release Izanami runners with latest profile tuning; representative logs: `/tmp/izanami_probe_3600dur_180target_20260225T111333.log`, `/tmp/izanami_probe2_3600dur_180target_20260225T112014.log`, `/tmp/izanami_probe3_3600dur_180target_20260225T112627.log`, `/tmp/izanami_probe4_3600dur_180target_20260225T113212.log`, `/tmp/izanami_release_probe_3600dur_180target_20260225T114144.log`.
+  - Observed strict-height growth remains ~`0.6-0.7 blocks/s` on this shared host despite profile tuning; 3600s acceptance target (`all peers >= 3600`) is not yet met in this environment.
 - Follow-up hardening for deterministic missing-QC recovery (2026-02-24): `crates/iroha_core/src/sumeragi/main_loop/votes.rs` now forces `MissingBlockFetchMode::AggressiveTopology` for highest-QC missing-block reacquire while sidecar quarantine is active; `crates/iroha_core/src/sumeragi/main_loop.rs` stale-height pruning now always clears linked validation inflight/superseded state and RBC sessions by `(hash,height)` even if the pending block entry is already absent; and new debug assertions codify the sparse/backoff + stale-prune invariants.
 - Validation (follow-up): `cargo test -p iroha_core deferred_block_sync_queue_cap -- --nocapture` (ok), `cargo test -p iroha_core --lib sumeragi::main_loop::tests::block_sync_update_records_missing_request_when_sparse_signatures_fail_quorum -- --nocapture` (ok), `cargo test -p iroha_core --lib sumeragi::main_loop::tests::prune_stale_missing_requests_clears_linked_state_and_records_counter -- --nocapture` (ok), `cargo test -p iroha_core --lib sumeragi::main_loop::tests::force_view_change_if_idle_suppresses_stale_missing_qc_round -- --nocapture` (ok), `cargo test -p iroha_core --lib sumeragi::main_loop::tests::sidecar_noncanonical_mismatch_retargets_missing_request_to_canonical_hash -- --nocapture` (ok), `cargo test -p iroha_core --lib sumeragi::main_loop::tests::sidecar_mismatch_final_drop_trips_after_retry_cap -- --nocapture` (ok), `cargo test -p iroha_core --lib sumeragi::main_loop::tests::new_view_highest_qc_fetch_uses_commit_topology_when_roster_missing -- --nocapture` (ok).
-- Formal check status in this environment: `bash ci/check_sumeragi_formal.sh` currently fails with `apalache-mc not found` (Docker fallback unavailable because daemon is not running).
 - Landed the deterministic missing-QC recovery FSM tranche across Sumeragi (`crates/iroha_core/src/sumeragi/main_loop{.rs,/block_sync.rs,/commit.rs,/mode.rs,/proposals.rs,/tests.rs}`, `crates/iroha_core/src/sumeragi/status.rs`) and config plumbing (`crates/iroha_config/src/parameters/{defaults.rs,user.rs,actual.rs}`, `crates/iroha_config/tests/fixtures.rs`): sparse `BlockSyncUpdate` recovery now uses canonical `plan_missing_block_fetch_with_mode(...)`, `requested_missing_block` becomes effective in the same event transition, stale missing requests are pruned on head advance, deferred/pending queues are bounded with deterministic eviction, and stale missing-QC rounds are converted to cleanup instead of repeated view-change churn.
 - Added deterministic recovery knobs in `sumeragi.recovery`: `missing_request_stale_height_margin` (default `16`), `pending_block_sync_cap` (default `256`), `pending_proposal_cap` (default `128`), and `missing_fetch_aggressive_after_attempts` (default `2`), with validation coverage in `iroha_config`.
 - Added/expanded consensus telemetry counters: `missing_request_pruned_stale_height`, `pending_queue_evictions_total`, and `missing_qc_trigger_suppressed_stale`.

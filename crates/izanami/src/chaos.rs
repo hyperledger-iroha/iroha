@@ -31,7 +31,7 @@ use toml::Table;
 use tracing::{debug, info, warn};
 
 use crate::{
-    config::ChaosConfig,
+    config::{ChaosConfig, WorkloadProfile},
     faults::{
         self, CpuStressConfig, DiskSaturationConfig, FaultConfig, NetworkLatencyConfig,
         NetworkPartitionConfig,
@@ -57,19 +57,20 @@ const IZANAMI_PACING_GOVERNOR_MAX_FACTOR_BPS: i64 = 10_000;
 const IZANAMI_COLLECTORS_K: u16 = 4;
 const IZANAMI_REDUNDANT_SEND_R: u8 = 4;
 const IZANAMI_PACING_FACTOR_BPS: u32 = 10_000;
-const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 2;
-const IZANAMI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 1;
-const IZANAMI_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 250;
+// Shared-host soak profile: bias towards deterministic progress over peak throughput.
+const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 3;
+const IZANAMI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 2;
+const IZANAMI_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 1_000;
 const IZANAMI_FUTURE_HEIGHT_WINDOW: i64 = 2;
 const IZANAMI_FUTURE_VIEW_WINDOW: i64 = 2;
-const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 180;
-const IZANAMI_NPOS_COMMIT_TIME_MS: i64 = 180;
+const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 150;
+const IZANAMI_NPOS_COMMIT_TIME_MS: i64 = 240;
 const IZANAMI_RECOVERY_HEIGHT_ATTEMPT_CAP: i64 = 24;
-const IZANAMI_RECOVERY_HEIGHT_WINDOW_MS: i64 = 1000;
-const IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 700;
+const IZANAMI_RECOVERY_HEIGHT_WINDOW_MS: i64 = 6_000;
+const IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 3_000;
 const IZANAMI_RECOVERY_NO_ROSTER_FALLBACK_VIEWS: i64 = 2;
 const IZANAMI_RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW: i64 = 2;
-const IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 1000;
+const IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 6_000;
 const IZANAMI_RECOVERY_MISSING_BLOCK_HEIGHT_TTL_MS: i64 = IZANAMI_RECOVERY_HEIGHT_WINDOW_MS;
 const IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: i64 = 2;
 const IZANAMI_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: i64 = 1;
@@ -107,6 +108,10 @@ const IZANAMI_WORKER_FAILURE_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
 const IZANAMI_PEER_LOG_BASE_LEVEL: &str = "WARN";
 const IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS: u64 = 16;
 const IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_WINDOW_SECS: u64 = 60;
+const IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS: u64 = 3_600;
+const IZANAMI_SHARED_HOST_SOAK_TPS_CAP: f64 = 5.0;
+const IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_CAP: usize = 8;
+const IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS: u64 = 600;
 
 #[derive(Clone, Copy, Debug)]
 struct IngressEndpointPoolConfig {
@@ -598,6 +603,51 @@ fn default_nexus_pipeline_time() -> Duration {
     Duration::from_millis(block_ms.saturating_add(commit_ms))
 }
 
+fn is_shared_host_stable_soak(config: &ChaosConfig) -> bool {
+    config.nexus.is_some()
+        && matches!(config.workload_profile, WorkloadProfile::Stable)
+        && config.faulty_peers == 0
+        && config.peer_count >= 4
+        && config.duration >= Duration::from_secs(IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS)
+}
+
+fn apply_shared_host_stable_soak_profile(config: &mut ChaosConfig) {
+    if !is_shared_host_stable_soak(config) {
+        return;
+    }
+
+    let original_tps = config.tps;
+    let original_max_inflight = config.max_inflight;
+    let original_progress_timeout = config.progress_timeout;
+
+    config.tps = config.tps.min(IZANAMI_SHARED_HOST_SOAK_TPS_CAP);
+    config.max_inflight = config
+        .max_inflight
+        .min(IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_CAP);
+    config.progress_timeout = config.progress_timeout.max(Duration::from_secs(
+        IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS,
+    ));
+
+    if (config.tps - original_tps).abs() > f64::EPSILON
+        || config.max_inflight != original_max_inflight
+        || config.progress_timeout != original_progress_timeout
+    {
+        info!(
+            target: "izanami::profile",
+            peers = config.peer_count,
+            duration_secs = config.duration.as_secs(),
+            target_blocks = config.target_blocks.unwrap_or_default(),
+            original_tps,
+            tuned_tps = config.tps,
+            original_max_inflight,
+            tuned_max_inflight = config.max_inflight,
+            original_progress_timeout_secs = original_progress_timeout.as_secs(),
+            tuned_progress_timeout_secs = config.progress_timeout.as_secs(),
+            "applied shared-host stable soak profile for deterministic long-run progress"
+        );
+    }
+}
+
 fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>) -> NetworkBuilder {
     let mut genesis = genesis;
     let mut builder = NetworkBuilder::new()
@@ -1013,6 +1063,9 @@ pub struct IzanamiRunner {
 
 impl IzanamiRunner {
     pub async fn new(config: ChaosConfig) -> Result<Self> {
+        let mut config = config;
+        apply_shared_host_stable_soak_profile(&mut config);
+
         if !config.allow_net {
             return Err(eyre!(
                 "allow_net=false: enable networking via --allow-net or persisted configuration"
@@ -2291,6 +2344,76 @@ mod tests {
             timing.precommit_ms >= IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS,
             "precommit timeout must respect minimum floor"
         );
+    }
+
+    #[test]
+    fn shared_host_stable_soak_profile_caps_load_and_timeout() {
+        let mut config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(3_600),
+            pipeline_time: None,
+            target_blocks: Some(3_600),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            seed: Some(7),
+            tps: 5.0,
+            max_inflight: 8,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+        };
+
+        assert!(is_shared_host_stable_soak(&config));
+        apply_shared_host_stable_soak_profile(&mut config);
+
+        assert_eq!(
+            config.tps, 5.0,
+            "shared-host soak should preserve canonical 5 TPS pacing"
+        );
+        assert!(
+            config.max_inflight <= IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_CAP,
+            "shared-host soak should clamp max inflight"
+        );
+        assert!(
+            config.progress_timeout
+                >= Duration::from_secs(IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS),
+            "shared-host soak should raise progress-timeout floor"
+        );
+    }
+
+    #[test]
+    fn shared_host_stable_soak_profile_does_not_touch_non_soak_runs() {
+        let mut config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(600),
+            pipeline_time: None,
+            target_blocks: Some(600),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            seed: Some(9),
+            tps: 5.0,
+            max_inflight: 8,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+        };
+
+        assert!(!is_shared_host_stable_soak(&config));
+        apply_shared_host_stable_soak_profile(&mut config);
+
+        assert!((config.tps - 5.0).abs() <= f64::EPSILON);
+        assert_eq!(config.max_inflight, 8);
+        assert_eq!(config.progress_timeout, Duration::from_secs(300));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
