@@ -187,6 +187,65 @@ final class OfflineToriiEncodingTests: XCTestCase {
         XCTAssertEqual(provisionedPayload["challenge_hash"]?.normalizedString, hashLiteral(hash))
     }
 
+    func testTransferToriiJSONIncludesPerCertificateBalanceProofs() throws {
+        let certificate = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
+        let receiptA = try makeReceipt(certificate: certificate)
+        let challengeHashB = IrohaHash.hash(Data("challenge-b".utf8))
+        let receiptB = OfflineSpendReceipt(
+            txId: IrohaHash.hash(Data("receipt-b".utf8)),
+            from: receiptA.from,
+            to: receiptA.to,
+            assetId: receiptA.assetId,
+            amount: receiptA.amount,
+            issuedAtMs: receiptA.issuedAtMs + 1,
+            invoiceId: "inv-2",
+            platformProof: .appleAppAttest(
+                AppleAppAttestProof(keyId: Data("swift-tests".utf8).base64EncodedString(),
+                                    counter: 2,
+                                    assertion: Data([0xAB]),
+                                    challengeHash: challengeHashB)
+            ),
+            platformSnapshot: nil,
+            senderCertificateId: IrohaHash.hash(Data("certificate-b".utf8)),
+            senderSignature: Data(repeating: 0x02, count: 64)
+        )
+
+        let proofA = OfflineBalanceProof(
+            initialCommitment: certificate.allowance,
+            resultingCommitment: Data(repeating: 0x22, count: 32),
+            claimedDelta: "10",
+            zkProof: validZkProof()
+        )
+        let proofB = OfflineBalanceProof(
+            initialCommitment: certificate.allowance,
+            resultingCommitment: Data(repeating: 0x33, count: 32),
+            claimedDelta: "10",
+            zkProof: validZkProof()
+        )
+        let transfer = OfflineToOnlineTransfer(
+            bundleId: IrohaHash.hash(Data("bundle-multi".utf8)),
+            receiver: certificate.controller,
+            depositAccount: certificate.controller,
+            receipts: [receiptA, receiptB],
+            balanceProof: proofA,
+            balanceProofs: [
+                OfflineCertificateBalanceProof(senderCertificateId: receiptA.senderCertificateId,
+                                               balanceProof: proofA),
+                OfflineCertificateBalanceProof(senderCertificateId: receiptB.senderCertificateId,
+                                               balanceProof: proofB),
+            ]
+        )
+
+        let json = try transfer.toriiJSON()
+        guard case let .object(object) = json else {
+            return XCTFail("expected transfer JSON object")
+        }
+        guard case let .array(perCertificate) = object["balance_proofs"] else {
+            return XCTFail("expected balance_proofs array")
+        }
+        XCTAssertEqual(perCertificate.count, 2)
+    }
+
     func testSubmitRequestsFromModels() throws {
         let certificate = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
         let receipt = try makeReceipt(certificate: certificate)

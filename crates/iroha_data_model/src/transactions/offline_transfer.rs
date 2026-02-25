@@ -52,6 +52,9 @@ pub struct OfflineTransferSummary {
     pub total_amount: Numeric,
     /// Lifecycle status tracked on-ledger.
     pub status: OfflineTransferStatus,
+    /// Stable rejection code when `status=rejected`.
+    #[norito(default)]
+    pub rejection_reason: Option<String>,
     /// Unix timestamp (ms) when the bundle settled on-ledger.
     pub recorded_at_ms: u64,
     /// Height where the bundle settled.
@@ -110,6 +113,7 @@ impl From<OfflineTransferRecord> for OfflineTransferSummary {
             transfer,
             controller,
             status,
+            rejection_reason,
             recorded_at_ms,
             recorded_at_height,
             archived_at_height,
@@ -128,6 +132,7 @@ impl From<OfflineTransferRecord> for OfflineTransferSummary {
             receipt_count,
             total_amount,
             status,
+            rejection_reason,
             recorded_at_ms,
             recorded_at_height,
             archived_at_height,
@@ -381,6 +386,7 @@ mod tests {
             deposit_account: receipt.to.clone(),
             receipts: vec![receipt],
             balance_proof,
+            balance_proofs: None,
             aggregate_proof: None,
             attachments: None,
             platform_snapshot: Some(OfflinePlatformTokenSnapshot {
@@ -392,6 +398,7 @@ mod tests {
             transfer,
             controller: sample_account(0xC1, "sbp"),
             status: OfflineTransferStatus::Settled,
+            rejection_reason: None,
             recorded_at_ms: 1_700_000_500,
             recorded_at_height: 123,
             archived_at_height: None,
@@ -512,6 +519,7 @@ mod tests {
             "asset_id",
             "history",
             "archived_at_height",
+            "rejection_reason",
             "certificate_id_hex",
             "certificate_expires_at_ms",
             "policy_expires_at_ms",
@@ -529,6 +537,7 @@ mod tests {
 
         assert!(decoded.asset_id.is_none());
         assert!(decoded.archived_at_height.is_none());
+        assert!(decoded.rejection_reason.is_none());
         assert!(decoded.certificate_id_hex.is_none());
         assert!(decoded.certificate_expires_at_ms.is_none());
         assert!(decoded.policy_expires_at_ms.is_none());

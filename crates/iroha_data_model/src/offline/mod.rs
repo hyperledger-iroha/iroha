@@ -509,6 +509,32 @@ impl OfflineToOnlineTransfer {
         &self.balance_proof
     }
 
+    /// Access optional per-certificate commitment proofs for multi-allowance bundles.
+    #[must_use]
+    pub fn balance_proofs(&self) -> Option<&[OfflineCertificateBalanceProof]> {
+        self.balance_proofs.as_deref()
+    }
+
+    /// Resolve the commitment proof that corresponds to `certificate_id`.
+    ///
+    /// Falls back to the legacy `balance_proof` field when no explicit map is
+    /// attached and the bundle is single-certificate.
+    #[must_use]
+    pub fn balance_proof_for_certificate(
+        &self,
+        certificate_id: Hash,
+    ) -> Option<&OfflineBalanceProof> {
+        if let Some(mapped) = self.balance_proofs.as_ref() {
+            return mapped
+                .iter()
+                .find(|entry| entry.sender_certificate_id == certificate_id)
+                .map(|entry| &entry.balance_proof);
+        }
+        self.primary_certificate_id()
+            .filter(|id| *id == certificate_id)
+            .map(|_| &self.balance_proof)
+    }
+
     /// Borrow the aggregate proof envelope if the bundle carries one.
     #[must_use]
     pub fn aggregate_proof(&self) -> Option<&AggregateProofEnvelope> {
@@ -1744,6 +1770,30 @@ mod model {
         }
     }
 
+    /// Per-certificate commitment delta proof used by multi-allowance bundles.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineCertificateBalanceProof {
+        /// Certificate backing the grouped receipt set.
+        pub sender_certificate_id: Hash,
+        /// Commitment delta proof for this certificate group.
+        pub balance_proof: OfflineBalanceProof,
+    }
+
+    impl OfflineCertificateBalanceProof {
+        /// Construct a per-certificate balance proof entry.
+        #[must_use]
+        pub fn new(sender_certificate_id: Hash, balance_proof: OfflineBalanceProof) -> Self {
+            Self {
+                sender_certificate_id,
+                balance_proof,
+            }
+        }
+    }
+
     /// FASTPQ HKDF domain used for Poseidon witness blindings.
     pub const OFFLINE_FASTPQ_HKDF_DOMAIN: &[u8; 23] = b"iroha.offline.fastpq.v1";
 
@@ -1904,6 +1954,9 @@ mod model {
         pub receipts: Vec<OfflineSpendReceipt>,
         /// Commitment delta justifying the deposited amount.
         pub balance_proof: OfflineBalanceProof,
+        /// Optional per-certificate balance proofs for multi-allowance bundles.
+        #[norito(default)]
+        pub balance_proofs: Option<Vec<OfflineCertificateBalanceProof>>,
         /// Optional aggregate proof bundle covering receipt sums/counters/replay logs.
         #[norito(default)]
         pub aggregate_proof: Option<AggregateProofEnvelope>,
@@ -1935,6 +1988,34 @@ mod model {
                 deposit_account,
                 receipts,
                 balance_proof,
+                balance_proofs: None,
+                aggregate_proof,
+                attachments,
+                platform_snapshot,
+            }
+        }
+
+        /// Construct an offline-to-online transfer bundle with explicit per-certificate proofs.
+        #[allow(clippy::too_many_arguments)]
+        #[must_use]
+        pub fn new_with_balance_proofs(
+            bundle_id: Hash,
+            receiver: AccountId,
+            deposit_account: AccountId,
+            receipts: Vec<OfflineSpendReceipt>,
+            balance_proof: OfflineBalanceProof,
+            balance_proofs: Vec<OfflineCertificateBalanceProof>,
+            aggregate_proof: Option<AggregateProofEnvelope>,
+            attachments: Option<ProofAttachmentList>,
+            platform_snapshot: Option<OfflinePlatformTokenSnapshot>,
+        ) -> Self {
+            Self {
+                bundle_id,
+                receiver,
+                deposit_account,
+                receipts,
+                balance_proof,
+                balance_proofs: Some(balance_proofs),
                 aggregate_proof,
                 attachments,
                 platform_snapshot,
@@ -1952,6 +2033,8 @@ mod model {
     pub enum OfflineTransferStatus {
         /// Bundle has been fully verified and applied against the allowance but is still within the hot-retention window.
         Settled,
+        /// Bundle was accepted for processing but rejected during settlement validation.
+        Rejected,
         /// Bundle has satisfied the configured retention policy and may be moved to cold storage.
         Archived,
     }
@@ -2050,6 +2133,7 @@ mod model {
         pub const fn as_label(self) -> &'static str {
             match self {
                 Self::Settled => "settled",
+                Self::Rejected => "rejected",
                 Self::Archived => "archived",
             }
         }
@@ -2061,6 +2145,7 @@ mod model {
         fn from_str(value: &str) -> Result<Self, Self::Err> {
             match value {
                 "settled" => Ok(Self::Settled),
+                "rejected" => Ok(Self::Rejected),
                 "archived" => Ok(Self::Archived),
                 _ => Err(()),
             }
@@ -2306,6 +2391,9 @@ mod model {
         pub controller: AccountId,
         /// Current lifecycle status enforced by validators.
         pub status: OfflineTransferStatus,
+        /// Stable rejection code when status is `rejected`.
+        #[norito(default)]
+        pub rejection_reason: Option<String>,
         /// Unix timestamp (ms) when the bundle settled on-ledger.
         pub recorded_at_ms: u64,
         /// Block height when the bundle was recorded.
@@ -2331,6 +2419,22 @@ mod model {
         fn ordered_receipts(&self) -> Result<Vec<&OfflineSpendReceipt>, OfflineProofRequestError> {
             ensure_single_counter_scope(&self.receipts)?;
             Ok(canonical_receipts(&self.receipts))
+        }
+
+        fn proof_request_certificate_id(&self) -> Result<Hash, OfflineProofRequestError> {
+            let first = self
+                .receipts
+                .first()
+                .ok_or(OfflineProofRequestError::MissingReceipts)?;
+            let certificate_id = first.sender_certificate_id;
+            if self
+                .receipts
+                .iter()
+                .any(|receipt| receipt.sender_certificate_id != certificate_id)
+            {
+                return Err(OfflineProofRequestError::MixedCertificates);
+            }
+            Ok(certificate_id)
         }
 
         /// Determine the inferred counter checkpoint for this bundle.
@@ -2363,9 +2467,7 @@ mod model {
         ) -> Result<OfflineProofRequestHeader, OfflineProofRequestError> {
             ensure_single_counter_scope(&self.receipts)?;
             let receipts_root = compute_receipts_root(&self.receipts)?;
-            let certificate_id = self
-                .primary_certificate_id()
-                .ok_or(OfflineProofRequestError::MissingCertificate)?;
+            let certificate_id = self.proof_request_certificate_id()?;
             Ok(OfflineProofRequestHeader {
                 version: OFFLINE_PROOF_REQUEST_VERSION_V1,
                 bundle_id: self.bundle_id,
@@ -2384,7 +2486,9 @@ mod model {
         ) -> Result<OfflineProofRequestSum, OfflineProofRequestError> {
             let header = self.to_proof_request_header()?;
             let certificate_id = header.certificate_id;
-            let balance_proof = &self.balance_proof;
+            let balance_proof = self
+                .balance_proof_for_certificate(certificate_id)
+                .ok_or(OfflineProofRequestError::MissingBalanceProof)?;
             let receipts = self.ordered_receipts()?;
             let receipt_amounts: Vec<_> = receipts
                 .iter()
@@ -2450,6 +2554,64 @@ mod model {
                 replay_log_tail,
                 tx_ids,
             })
+        }
+
+        /// Build per-certificate FASTPQ sum witness payloads for multi-allowance bundles.
+        ///
+        /// Requests are returned in deterministic order by `certificate_id`.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`OfflineProofRequestError`] if receipts are inconsistent or balance proofs are missing.
+        pub fn to_grouped_proof_request_sums(
+            &self,
+        ) -> Result<Vec<OfflineProofRequestSum>, OfflineProofRequestError> {
+            if self.receipts.is_empty() {
+                return Err(OfflineProofRequestError::MissingReceipts);
+            }
+
+            let mut by_certificate: BTreeMap<Hash, Vec<OfflineSpendReceipt>> = BTreeMap::new();
+            for receipt in &self.receipts {
+                by_certificate
+                    .entry(receipt.sender_certificate_id)
+                    .or_default()
+                    .push(receipt.clone());
+            }
+
+            let mut requests = Vec::with_capacity(by_certificate.len());
+            for (certificate_id, certificate_receipts) in by_certificate {
+                ensure_single_counter_scope(&certificate_receipts)?;
+                let receipts_root = compute_receipts_root(&certificate_receipts)?;
+                let balance_proof = self
+                    .balance_proof_for_certificate(certificate_id)
+                    .ok_or(OfflineProofRequestError::MissingBalanceProof)?;
+                let ordered = canonical_receipts(&certificate_receipts);
+                let receipt_amounts: Vec<_> =
+                    ordered.iter().map(|receipt| receipt.amount.clone()).collect();
+                let blinding_seeds = ordered
+                    .iter()
+                    .map(|receipt| {
+                        OfflineProofBlindingSeed::derive(
+                            certificate_id,
+                            receipt.platform_proof.counter(),
+                        )
+                    })
+                    .collect();
+                requests.push(OfflineProofRequestSum {
+                    header: OfflineProofRequestHeader {
+                        version: OFFLINE_PROOF_REQUEST_VERSION_V1,
+                        bundle_id: self.bundle_id,
+                        certificate_id,
+                        receipts_root,
+                    },
+                    initial_commitment: balance_proof.initial_commitment.clone(),
+                    resulting_commitment: balance_proof.resulting_commitment.clone(),
+                    claimed_delta: balance_proof.claimed_delta.clone(),
+                    receipt_amounts,
+                    blinding_seeds,
+                });
+            }
+            Ok(requests)
         }
     }
 
@@ -2563,6 +2725,19 @@ mod model {
                 .to_proof_request_replay(replay_log_head, replay_log_tail)
         }
 
+        /// Build per-certificate FASTPQ sum witness payloads for multi-allowance bundles.
+        ///
+        /// Requests are returned in deterministic order by `certificate_id`.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`OfflineProofRequestError`] if receipts are inconsistent or balance proofs are missing.
+        pub fn to_grouped_proof_request_sums(
+            &self,
+        ) -> Result<Vec<OfflineProofRequestSum>, OfflineProofRequestError> {
+            self.transfer.to_grouped_proof_request_sums()
+        }
+
         /// Record a lifecycle transition and timestamp for auditing purposes.
         pub fn push_history_entry(
             &mut self,
@@ -2599,6 +2774,12 @@ mod model {
         /// Receipts failed to reference a shared certificate.
         #[error("offline transfer missing sender certificate id")]
         MissingCertificate,
+        /// Receipts reference multiple certificates and cannot derive a single proof header.
+        #[error("offline transfer mixes sender certificates")]
+        MixedCertificates,
+        /// No balance proof was found for the selected certificate.
+        #[error("offline transfer missing balance proof for sender certificate id")]
+        MissingBalanceProof,
         /// The first receipt counter cannot produce a checkpoint.
         #[error("first receipt counter is zero; provide an explicit checkpoint")]
         InvalidCounterSequence,
@@ -2626,10 +2807,11 @@ mod model {
 
         #[allow(unused_imports)]
         use super::{
-            OfflineBalanceProof, OfflineProofRequestError, OfflineProofRequestKind,
-            OfflineToOnlineTransfer, OfflineTransferRecord, OfflineTransferRejectionReason,
-            OfflineTransferStatus, OfflineVerdictRevocation, OfflineVerdictRevocationBundle,
-            OfflineVerdictRevocationReason, OfflineWalletCertificate, OfflineWalletPolicy,
+            OfflineBalanceProof, OfflineCertificateBalanceProof, OfflineProofRequestError,
+            OfflineProofRequestKind, OfflineToOnlineTransfer, OfflineTransferRecord,
+            OfflineTransferRejectionReason, OfflineTransferStatus, OfflineVerdictRevocation,
+            OfflineVerdictRevocationBundle, OfflineVerdictRevocationReason,
+            OfflineWalletCertificate, OfflineWalletPolicy,
         };
         use crate::{AccountId, Metadata};
 
@@ -2637,6 +2819,7 @@ mod model {
         fn status_label_roundtrip() {
             for status in [
                 OfflineTransferStatus::Settled,
+                OfflineTransferStatus::Rejected,
                 OfflineTransferStatus::Archived,
             ] {
                 let encoded = status.as_label();
@@ -3440,6 +3623,7 @@ mod tests {
             deposit_account: receipt.to.clone(),
             receipts: vec![receipt],
             balance_proof,
+            balance_proofs: None,
             aggregate_proof: None,
             attachments: None,
             platform_snapshot: None,
@@ -3450,6 +3634,7 @@ mod tests {
             transfer,
             controller: sample_account(0xA1, "sbp"),
             status: OfflineTransferStatus::Settled,
+            rejection_reason: None,
             recorded_at_ms: 1,
             recorded_at_height: 1,
             archived_at_height: None,
@@ -3494,11 +3679,77 @@ mod tests {
                 claimed_delta: Numeric::new(0, 0),
                 zk_proof: None,
             },
+            balance_proofs: None,
             aggregate_proof: None,
             attachments: None,
             platform_snapshot: None,
         };
         assert_eq!(transfer.counter_checkpoint_hint().unwrap(), 7);
+    }
+
+    #[test]
+    fn proof_request_header_rejects_mixed_certificates() {
+        let mut receipt_a = sample_receipt_with_counter(8);
+        receipt_a.sender_certificate_id = Hash::new(b"cert-a");
+        let mut receipt_b = sample_receipt_with_counter(9);
+        receipt_b.sender_certificate_id = Hash::new(b"cert-b");
+        let transfer = OfflineToOnlineTransfer {
+            bundle_id: Hash::new(b"bundle-mixed-cert"),
+            receiver: receipt_a.to.clone(),
+            deposit_account: receipt_a.to.clone(),
+            receipts: vec![receipt_a, receipt_b],
+            balance_proof: OfflineBalanceProof {
+                initial_commitment: sample_commitment(0x22),
+                resulting_commitment: vec![0x44; 32],
+                claimed_delta: Numeric::new(200, 0),
+                zk_proof: None,
+            },
+            balance_proofs: None,
+            aggregate_proof: None,
+            attachments: None,
+            platform_snapshot: None,
+        };
+
+        assert!(matches!(
+            transfer.to_proof_request_header(),
+            Err(OfflineProofRequestError::MixedCertificates)
+        ));
+    }
+
+    #[test]
+    fn balance_proof_lookup_prefers_per_certificate_entries() {
+        let receipt = sample_receipt_with_counter(1);
+        let certificate_id = receipt.sender_certificate_id;
+        let mapped_proof = OfflineBalanceProof {
+            initial_commitment: sample_commitment(0x66),
+            resulting_commitment: vec![0x77; 32],
+            claimed_delta: Numeric::new(10, 0),
+            zk_proof: None,
+        };
+        let transfer = OfflineToOnlineTransfer {
+            bundle_id: Hash::new(b"bundle-proof-map"),
+            receiver: receipt.to.clone(),
+            deposit_account: receipt.to.clone(),
+            receipts: vec![receipt],
+            balance_proof: OfflineBalanceProof {
+                initial_commitment: sample_commitment(0x22),
+                resulting_commitment: vec![0x33; 32],
+                claimed_delta: Numeric::new(10, 0),
+                zk_proof: None,
+            },
+            balance_proofs: Some(vec![OfflineCertificateBalanceProof::new(
+                certificate_id,
+                mapped_proof.clone(),
+            )]),
+            aggregate_proof: None,
+            attachments: None,
+            platform_snapshot: None,
+        };
+
+        let resolved = transfer
+            .balance_proof_for_certificate(certificate_id)
+            .expect("mapped proof");
+        assert_eq!(resolved, &mapped_proof);
     }
 
     #[test]
@@ -3623,6 +3874,7 @@ mod tests {
                 claimed_delta: Numeric::new(250, 0),
                 zk_proof: Some(vec![0xDE, 0xAD, 0xBE, 0xEF]),
             },
+            balance_proofs: None,
             aggregate_proof: None,
             attachments: None,
             platform_snapshot: Some(OfflinePlatformTokenSnapshot {
@@ -3975,6 +4227,7 @@ mod receipt_challenge_tests {
             deposit_account: controller,
             receipts: vec![sample_receipt()],
             balance_proof,
+            balance_proofs: None,
             aggregate_proof: Some(aggregate.clone()),
             attachments: None,
             platform_snapshot: None,

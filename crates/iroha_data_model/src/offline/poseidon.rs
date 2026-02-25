@@ -22,6 +22,8 @@ const FIELD_MODULUS_U128: u128 = FIELD_MODULUS as u128;
 
 /// Current version for aggregate proof envelopes.
 pub const AGGREGATE_PROOF_VERSION_V1: u16 = 1;
+/// Version for recursive transparent aggregate proof envelopes.
+pub const AGGREGATE_PROOF_VERSION_V2: u16 = 2;
 /// Metadata key recording the FASTPQ parameter set name.
 pub const AGGREGATE_PROOF_METADATA_PARAMETER_SET: &str = "fastpq.parameter_set";
 /// Metadata key recording the sum circuit identifier.
@@ -30,6 +32,17 @@ pub const AGGREGATE_PROOF_METADATA_SUM_CIRCUIT: &str = "fastpq.circuit.sum";
 pub const AGGREGATE_PROOF_METADATA_COUNTER_CIRCUIT: &str = "fastpq.circuit.counter";
 /// Metadata key recording the replay circuit identifier.
 pub const AGGREGATE_PROOF_METADATA_REPLAY_CIRCUIT: &str = "fastpq.circuit.replay";
+/// Metadata key recording the aggregate backend for recursive v2 proofs.
+pub const AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_BACKEND: &str = "offline.aggregate.backend";
+/// Metadata key recording the aggregate recursive circuit identifier.
+pub const AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_CIRCUIT_ID: &str =
+    "offline.aggregate.circuit_id";
+/// Metadata key recording canonical aggregate public inputs (base64-encoded).
+pub const AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_PUBLIC_INPUTS_B64: &str =
+    "offline.aggregate.public_inputs_b64";
+/// Metadata key recording recursive fold depth for aggregate v2 proofs.
+pub const AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_RECURSION_DEPTH: &str =
+    "offline.aggregate.recursion_depth";
 /// Version of the offline FASTPQ aggregate proof payloads.
 pub const OFFLINE_FASTPQ_PROOF_VERSION_V1: u16 = 1;
 /// Domain tag for deterministic FASTPQ sum proofs.

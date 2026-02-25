@@ -2,6 +2,8 @@
 
 use super::prelude::*;
 use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+#[cfg(feature = "zk-stark")]
+use crate::zk_stark::verify_stark_fri_envelope;
 mod aggregate_proof;
 mod balance_proof;
 use std::{
@@ -36,7 +38,11 @@ use iroha_data_model::{
     metadata::Metadata,
     name::Name,
     offline::{
-        AGGREGATE_PROOF_VERSION_V1, AndroidHmsSafetyDetectMetadata, AndroidIntegrityMetadata,
+        AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_BACKEND,
+        AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_CIRCUIT_ID,
+        AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_PUBLIC_INPUTS_B64,
+        AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_RECURSION_DEPTH, AGGREGATE_PROOF_VERSION_V1,
+        AGGREGATE_PROOF_VERSION_V2, AndroidHmsSafetyDetectMetadata, AndroidIntegrityMetadata,
         AndroidIntegrityPolicy, AndroidMarkerKeyMetadata, AndroidPlayIntegrityMetadata,
         AndroidProvisionedMetadata, AndroidProvisionedProof, HmsSafetyDetectEvaluation,
         OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceRecord, OfflineBalanceProof,
@@ -46,8 +52,9 @@ use iroha_data_model::{
         OfflineTransferRejectionReason, OfflineTransferStatus, OfflineVerdictRevocation,
         OfflineVerdictSnapshot, OfflineWalletCertificate, PROVISIONED_COUNTER_PREFIX,
         PlayIntegrityAppVerdict, PlayIntegrityDeviceVerdict, PlayIntegrityEnvironment,
-        canonical_app_attest_key_id, chain_bound_receipt_hash, compute_receipts_root,
-        ensure_single_counter_scope, marker_series_from_public_key, receipts_are_canonical,
+        canonical_app_attest_key_id, canonical_receipts, chain_bound_receipt_hash,
+        compute_receipts_root, ensure_single_counter_scope, marker_series_from_public_key,
+        receipts_are_canonical,
     },
     query::{
         dsl::{CompoundPredicate, EvaluatePredicate},
@@ -143,6 +150,16 @@ const KM_ALGORITHM_EC: u32 = 3;
 const KM_EC_CURVE_P256: u32 = 1;
 const KM_ORIGIN_GENERATED: u32 = 0;
 const KM_VERIFIED_BOOT_STATE_VERIFIED: u32 = 0;
+
+#[cfg(feature = "zk-stark")]
+fn verify_recursive_stark_envelope(proof: &[u8]) -> bool {
+    verify_stark_fri_envelope(proof)
+}
+
+#[cfg(not(feature = "zk-stark"))]
+fn verify_recursive_stark_envelope(_proof: &[u8]) -> bool {
+    false
+}
 
 fn labeled_invariant(label: &str, message: impl Into<String>) -> InstructionExecutionError {
     let message = message.into();
@@ -673,6 +690,19 @@ pub mod isi {
         Ok(allowance_scale)
     }
 
+    fn offline_rejection_code_from_error(err: &InstructionExecutionError) -> Option<&str> {
+        let InstructionExecutionError::InvariantViolation(message) = err else {
+            return None;
+        };
+        let raw = message.strip_prefix(OFFLINE_REJECTION_REASON_PREFIX)?;
+        Some(raw.split_once(':').map_or(raw, |(code, _)| code))
+    }
+
+    fn normalize_offline_rejection_code(code: &str) -> Option<String> {
+        let reason = OfflineTransferRejectionReason::from_str(code).ok()?;
+        Some(rejection_code(reason).to_owned())
+    }
+
     impl Execute for RegisterOfflineAllowance {
         fn execute(
             self,
@@ -689,7 +719,63 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            submit_transfer(self, authority, state_transaction)
+            let transfer = self.transfer;
+            let transfer_for_rejected_row = transfer.clone();
+            match submit_transfer(
+                SubmitOfflineToOnlineTransfer { transfer },
+                authority,
+                state_transaction,
+            ) {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    let Some(raw_code) = offline_rejection_code_from_error(&err) else {
+                        return Err(err);
+                    };
+                    let Some(reason_code) = normalize_offline_rejection_code(raw_code) else {
+                        return Err(err);
+                    };
+                    if reason_code
+                        == rejection_code(OfflineTransferRejectionReason::DuplicateBundle)
+                    {
+                        return Err(err);
+                    }
+                    if state_transaction
+                        .world
+                        .offline_to_online_transfers
+                        .get(&transfer_for_rejected_row.bundle_id)
+                        .is_some()
+                    {
+                        return Err(err);
+                    }
+
+                    let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
+                    let recorded_at_height = state_transaction.block_height();
+                    let mut rejected_record = OfflineTransferRecord {
+                        controller: transfer_for_rejected_row
+                            .receipts
+                            .first()
+                            .map(|receipt| receipt.from.clone())
+                            .unwrap_or_else(|| authority.clone()),
+                        transfer: transfer_for_rejected_row,
+                        status: OfflineTransferStatus::Rejected,
+                        rejection_reason: Some(reason_code),
+                        recorded_at_ms,
+                        recorded_at_height,
+                        archived_at_height: None,
+                        history: Vec::new(),
+                        pos_verdict_snapshots: Vec::new(),
+                        verdict_snapshot: None,
+                        platform_snapshot: None,
+                    };
+                    rejected_record.push_history_entry(
+                        OfflineTransferStatus::Rejected,
+                        recorded_at_ms,
+                        None,
+                    );
+                    insert_transfer_record(state_transaction, rejected_record);
+                    Ok(())
+                }
+            }
         }
     }
 
@@ -860,7 +946,7 @@ pub mod isi {
             domain::Domain,
             offline::{
                 AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY,
-                OfflineVerdictRevocationReason,
+                OfflineCertificateBalanceProof, OfflineVerdictRevocationReason,
             },
             query::error::FindError,
         };
@@ -1606,6 +1692,7 @@ pub mod isi {
                     claimed_delta: Numeric::new(100, 0),
                     zk_proof: None,
                 },
+                balance_proofs: None,
                 aggregate_proof: None,
                 attachments: None,
                 platform_snapshot: Some(snapshot.clone()),
@@ -1614,6 +1701,7 @@ pub mod isi {
                 transfer,
                 controller: certificate.controller.clone(),
                 status: OfflineTransferStatus::Settled,
+                rejection_reason: None,
                 recorded_at_ms: 1,
                 recorded_at_height: 1,
                 archived_at_height: None,
@@ -1671,6 +1759,7 @@ pub mod isi {
                     claimed_delta: Numeric::new(100, 0),
                     zk_proof: None,
                 },
+                balance_proofs: None,
                 aggregate_proof: None,
                 attachments: None,
                 platform_snapshot: None,
@@ -1723,6 +1812,7 @@ pub mod isi {
                     claimed_delta: Numeric::new(150, 0),
                     zk_proof: None,
                 },
+                balance_proofs: None,
                 aggregate_proof: None,
                 attachments: None,
                 platform_snapshot: None,
@@ -1738,7 +1828,7 @@ pub mod isi {
                 refresh_at_ms: None,
             };
 
-            let err = super::ensure_receipt_targets(&transfer, &record)
+            let err = super::ensure_receipt_targets(&transfer.receipts, &transfer, &record)
                 .expect_err("receipt over max_tx_value should be rejected");
             let expected = format!(
                 "{OFFLINE_REJECTION_REASON_PREFIX}{}",
@@ -1809,7 +1899,7 @@ pub mod isi {
             let (transfer, record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
             let block_timestamp_ms = record.certificate.issued_at_ms + 1_000;
             let cfg = actual::Offline::default();
-            ensure_receipt_timestamps(&transfer, &record, block_timestamp_ms, &cfg)
+            ensure_receipt_timestamps(&transfer.receipts, &record, block_timestamp_ms, &cfg)
                 .expect("receipt timestamp should be valid");
         }
 
@@ -1819,8 +1909,9 @@ pub mod isi {
             let (transfer, record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
             let block_timestamp_ms = record.certificate.issued_at_ms + 1_000;
             let cfg = actual::Offline::default();
-            let err = ensure_receipt_timestamps(&transfer, &record, block_timestamp_ms, &cfg)
-                .expect_err("receipt timestamp should be rejected");
+            let err =
+                ensure_receipt_timestamps(&transfer.receipts, &record, block_timestamp_ms, &cfg)
+                    .expect_err("receipt timestamp should be rejected");
             let expected = format!(
                 "{OFFLINE_REJECTION_REASON_PREFIX}{}",
                 OfflineTransferRejectionReason::ReceiptTimestampInvalid.as_label()
@@ -1837,8 +1928,9 @@ pub mod isi {
                 max_receipt_age: Duration::from_millis(50),
                 ..Default::default()
             };
-            let err = ensure_receipt_timestamps(&transfer, &record, block_timestamp_ms, &cfg)
-                .expect_err("receipt should be expired");
+            let err =
+                ensure_receipt_timestamps(&transfer.receipts, &record, block_timestamp_ms, &cfg)
+                    .expect_err("receipt should be expired");
             let expected = format!(
                 "{OFFLINE_REJECTION_REASON_PREFIX}{}",
                 OfflineTransferRejectionReason::ReceiptExpired.as_label()
@@ -2397,6 +2489,76 @@ pub mod isi {
         }
 
         #[test]
+        fn submit_transfer_rejects_missing_per_certificate_balance_proof() {
+            let issued_at_ms = 1_700_000_100;
+            let (mut transfer, mut record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
+            record
+                .current_commitment
+                .clone_from(&record.certificate.allowance.commitment);
+            let primary_certificate_id = record.certificate.certificate_id();
+
+            let mut secondary_record = record.clone();
+            secondary_record.certificate.allowance.commitment = vec![0xAA; 32];
+            secondary_record.current_commitment =
+                secondary_record.certificate.allowance.commitment.clone();
+            let secondary_certificate_id = secondary_record.certificate.certificate_id();
+
+            let mut secondary_receipt = transfer.receipts[0].clone();
+            secondary_receipt.tx_id = Hash::new(b"receipt-ts-secondary");
+            secondary_receipt.invoice_id = "INV-TS-SECONDARY".into();
+            secondary_receipt.sender_certificate_id = secondary_certificate_id;
+            if let OfflinePlatformProof::AppleAppAttest(proof) =
+                &mut secondary_receipt.platform_proof
+            {
+                proof.counter = 2;
+            }
+            transfer.receipts.push(secondary_receipt);
+            transfer.balance_proofs = Some(vec![OfflineCertificateBalanceProof::new(
+                primary_certificate_id,
+                transfer.balance_proof.clone(),
+            )]);
+
+            let controller = record.certificate.controller.clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let account = Account::new(controller.clone()).build(&controller);
+            let definition_id = record.certificate.allowance.asset.definition().clone();
+            let asset_definition =
+                AssetDefinition::new(definition_id, NumericSpec::integer()).build(&controller);
+            let mut world = World::with([domain], [account], [asset_definition]);
+            world
+                .offline_allowances
+                .insert(primary_certificate_id, record);
+            world
+                .offline_allowances
+                .insert(secondary_certificate_id, secondary_record);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new(world, Arc::clone(&kura), query);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, issued_at_ms + 100, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let authority = transfer.receiver.clone();
+            let err = submit_transfer(
+                SubmitOfflineToOnlineTransfer { transfer },
+                &authority,
+                &mut transaction,
+            )
+            .expect_err("missing per-certificate proof should reject settlement");
+            let expected = format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}{}",
+                OfflineTransferRejectionReason::BalanceProofInvalid.as_label()
+            );
+            let rendered = err.to_string();
+            assert!(
+                rendered.contains(&expected)
+                    || rendered.contains("missing per-certificate balance proof"),
+                "unexpected error: {rendered}"
+            );
+        }
+
+        #[test]
         fn submit_transfer_rejects_duplicate_bundle_without_mutating_allowance() {
             let issued_at_ms = 1_700_000_100;
             let (transfer, mut record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
@@ -2419,6 +2581,7 @@ pub mod isi {
                     transfer: transfer.clone(),
                     controller: controller.clone(),
                     status: OfflineTransferStatus::Settled,
+                    rejection_reason: None,
                     recorded_at_ms: issued_at_ms,
                     recorded_at_height: 1,
                     archived_at_height: None,
@@ -2461,6 +2624,130 @@ pub mod isi {
                 Numeric::new(1_000, 0),
                 "remaining amount must not change on duplicate bundle rejection"
             );
+            assert_eq!(
+                transaction.world.offline_to_online_transfers.len(),
+                1,
+                "duplicate rejection must not append a second transfer record"
+            );
+        }
+
+        #[test]
+        fn execute_submit_transfer_persists_rejected_record_for_offline_rejection() {
+            let issued_at_ms = 1_700_000_100;
+            let (mut transfer, mut record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
+            record
+                .current_commitment
+                .clone_from(&record.certificate.allowance.commitment);
+            transfer.balance_proof.claimed_delta = Numeric::new(200, 0);
+
+            let controller = record.certificate.controller.clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let account = Account::new(controller.clone()).build(&controller);
+            let definition_id = record.certificate.allowance.asset.definition().clone();
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let mut world = World::with([domain], [account], [asset_definition]);
+            let certificate_id = record.certificate.certificate_id();
+            world.offline_allowances.insert(certificate_id, record);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new(world, Arc::clone(&kura), query);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, issued_at_ms + 100, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let authority = transfer.receiver.clone();
+            SubmitOfflineToOnlineTransfer {
+                transfer: transfer.clone(),
+            }
+            .execute(&authority, &mut transaction)
+            .expect("offline rejection should be persisted as rejected record");
+
+            let stored = transaction
+                .world
+                .offline_to_online_transfers
+                .get(&transfer.bundle_id)
+                .expect("rejected transfer row should be stored");
+            assert_eq!(stored.status, OfflineTransferStatus::Rejected);
+            assert_eq!(
+                stored.rejection_reason.as_deref(),
+                Some(OfflineTransferRejectionReason::DeltaMismatch.as_label())
+            );
+            assert_eq!(stored.history.len(), 1);
+            assert_eq!(stored.history[0].status, OfflineTransferStatus::Rejected);
+
+            let allowance = transaction
+                .world
+                .offline_allowances
+                .get(&certificate_id)
+                .expect("allowance should remain stored");
+            assert_eq!(
+                allowance.remaining_amount,
+                Numeric::new(1_000, 0),
+                "remaining amount must not change on rejected settlement"
+            );
+
+            let deposit_asset = AssetId::new(definition_id, transfer.deposit_account.clone());
+            assert!(
+                transaction.world.assets.get(&deposit_asset).is_none(),
+                "deposit account must not be credited on rejected settlement"
+            );
+        }
+
+        #[test]
+        fn execute_submit_transfer_preserves_duplicate_bundle_error() {
+            let issued_at_ms = 1_700_000_100;
+            let (transfer, mut record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
+            record
+                .current_commitment
+                .clone_from(&record.certificate.allowance.commitment);
+
+            let controller = record.certificate.controller.clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let account = Account::new(controller.clone()).build(&controller);
+            let definition_id = record.certificate.allowance.asset.definition().clone();
+            let asset_definition =
+                AssetDefinition::new(definition_id, NumericSpec::integer()).build(&controller);
+            let mut world = World::with([domain], [account], [asset_definition]);
+            let certificate_id = record.certificate.certificate_id();
+            world.offline_allowances.insert(certificate_id, record);
+            world.offline_to_online_transfers.insert(
+                transfer.bundle_id,
+                OfflineTransferRecord {
+                    transfer: transfer.clone(),
+                    controller: controller.clone(),
+                    status: OfflineTransferStatus::Settled,
+                    rejection_reason: None,
+                    recorded_at_ms: issued_at_ms,
+                    recorded_at_height: 1,
+                    archived_at_height: None,
+                    history: Vec::new(),
+                    pos_verdict_snapshots: Vec::new(),
+                    verdict_snapshot: None,
+                    platform_snapshot: None,
+                },
+            );
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new(world, Arc::clone(&kura), query);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, issued_at_ms + 100, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let authority = transfer.receiver.clone();
+            let err = SubmitOfflineToOnlineTransfer {
+                transfer: transfer.clone(),
+            }
+            .execute(&authority, &mut transaction)
+            .expect_err("duplicate bundle should remain a submit-time error");
+            let expected = format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}{}",
+                OfflineTransferRejectionReason::DuplicateBundle.as_label()
+            );
+            assert!(err.to_string().contains(&expected));
             assert_eq!(
                 transaction.world.offline_to_online_transfers.len(),
                 1,
@@ -2568,6 +2855,7 @@ pub mod isi {
                     claimed_delta: claimed_delta.clone(),
                     zk_proof: Some(zk_proof),
                 },
+                balance_proofs: None,
                 aggregate_proof: None,
                 attachments: None,
                 platform_snapshot: None,
@@ -3283,164 +3571,296 @@ pub mod isi {
         let block_timestamp_ms = state_transaction.block_unix_timestamp_ms();
         let block_height = state_transaction.block_height();
         let spec = state_transaction.numeric_spec_for(asset.definition())?;
-        let certificate_id = transfer
-            .receipts
-            .first()
-            .expect("non-empty receipts")
-            .sender_certificate_id;
-
-        if transfer
-            .receipts
-            .iter()
-            .any(|receipt| receipt.sender_certificate_id != certificate_id)
-        {
-            return Err(rejection_error(
-                OfflineTransferRejectionReason::MixedCertificates,
-                OfflineTransferRejectionPlatform::General,
-                "offline bundle mixes certificates from different wallets",
-            ));
-        }
-
-        if let Err(err) = ensure_single_counter_scope(&transfer.receipts) {
-            return Err(map_counter_scope_error(err));
-        }
-
-        let verdict_id = state_transaction
-            .world
-            .offline_allowances
-            .get(&certificate_id)
-            .ok_or_else(|| {
-                rejection_error(
-                    OfflineTransferRejectionReason::AllowanceNotRegistered,
-                    OfflineTransferRejectionPlatform::General,
-                    "offline allowance certificate not registered",
-                )
-            })?
-            .verdict_id;
-
-        if let Some(verdict_id) = verdict_id {
-            if state_transaction
-                .world
-                .offline_verdict_revocations
-                .get(&verdict_id)
-                .is_some()
-            {
-                return Err(rejection_error(
-                    OfflineTransferRejectionReason::VerdictExpired,
-                    OfflineTransferRejectionPlatform::General,
-                    "offline attestation verdict revoked; refresh allowance before reconciling",
-                ));
-            }
-        }
-
-        let record = state_transaction
-            .world
-            .offline_allowances
-            .get(&certificate_id)
-            .expect("allowance existence checked above");
         let receipt_count = u32::try_from(transfer.receipts.len()).map_err(|_| {
             InstructionExecutionError::InvariantViolation(
                 "receipt count exceeds supported range".into(),
             )
         })?;
 
-        enforce_certificate_window(record, block_timestamp_ms)?;
-        enforce_verdict_refresh_window(record, block_timestamp_ms)?;
-        let expected_scale = expected_scale_for_allowance(&record.certificate, spec)?;
-        let claimed_amount = aggregate_amount(&transfer.receipts, expected_scale)?;
-        if claimed_amount != transfer.balance_proof.claimed_delta().clone() {
+        let mut receipts_by_certificate: std::collections::BTreeMap<
+            Hash,
+            Vec<OfflineSpendReceipt>,
+        > = std::collections::BTreeMap::new();
+        for receipt in &transfer.receipts {
+            receipts_by_certificate
+                .entry(receipt.sender_certificate_id)
+                .or_default()
+                .push(receipt.clone());
+        }
+        let multi_certificate_bundle = receipts_by_certificate.len() > 1;
+
+        let explicit_balance_proofs = transfer
+            .balance_proofs
+            .as_ref()
+            .filter(|entries| !entries.is_empty());
+        if multi_certificate_bundle && explicit_balance_proofs.is_none() {
             return Err(rejection_error(
-                OfflineTransferRejectionReason::DeltaMismatch,
+                OfflineTransferRejectionReason::MixedCertificates,
                 OfflineTransferRejectionPlatform::General,
-                "claimed delta does not match sum of receipt amounts",
+                "offline bundle mixes certificates but has no per-certificate balance proofs",
             ));
         }
-        let integrity_metadata = android_integrity_metadata(&record.certificate.metadata).ok();
-        let submitted_platform_snapshot = validate_platform_snapshot(
-            transfer.platform_snapshot.as_ref(),
-            integrity_metadata.as_ref(),
-        )?;
-        let policy_label = integrity_metadata
-            .as_ref()
-            .map(AndroidIntegrityMetadata::policy_slug);
-        let platform_snapshot = submitted_platform_snapshot.clone().or_else(|| {
-            derive_platform_token_snapshot(&record.certificate, integrity_metadata.as_ref())
-        });
-        ensure_receipt_targets(&transfer, record)?;
-        ensure_receipt_timestamps(
-            &transfer,
-            record,
-            block_timestamp_ms,
-            &state_transaction.settlement.offline,
-        )?;
-        ensure_commitment_alignment(&transfer.balance_proof, record)?;
 
-        let mut staged_counters = record.counter_state.clone();
-        stage_receipt_counters(&mut staged_counters, &transfer.receipts)?;
-
-        let submitted_snapshot_ref = submitted_platform_snapshot.as_ref();
-        for receipt in &transfer.receipts {
-            verify_receipt_signature(receipt, &record.certificate)?;
-            let receipt_snapshot = validate_platform_snapshot(
-                receipt.platform_snapshot.as_ref(),
-                integrity_metadata.as_ref(),
-            )?;
-            let attestation_snapshot =
-                select_attestation_snapshot(receipt_snapshot.as_ref(), submitted_snapshot_ref);
-            verify_platform_proof(
-                receipt,
-                &record.certificate,
-                &state_transaction.chain_id,
-                block_timestamp_ms,
-                &state_transaction.settlement.offline,
-                attestation_snapshot,
-            )?;
+        let mut balance_proof_by_certificate: std::collections::BTreeMap<
+            Hash,
+            &OfflineBalanceProof,
+        > = std::collections::BTreeMap::new();
+        if let Some(entries) = explicit_balance_proofs {
+            for entry in entries {
+                if balance_proof_by_certificate
+                    .insert(entry.sender_certificate_id, &entry.balance_proof)
+                    .is_some()
+                {
+                    return Err(rejection_error(
+                        OfflineTransferRejectionReason::BalanceProofInvalid,
+                        OfflineTransferRejectionPlatform::General,
+                        "duplicate per-certificate balance proof entry",
+                    ));
+                }
+            }
+            for certificate_id in receipts_by_certificate.keys() {
+                if !balance_proof_by_certificate.contains_key(certificate_id) {
+                    return Err(rejection_error(
+                        OfflineTransferRejectionReason::BalanceProofInvalid,
+                        OfflineTransferRejectionPlatform::General,
+                        "missing per-certificate balance proof for receipt certificate",
+                    ));
+                }
+            }
+            for certificate_id in balance_proof_by_certificate.keys() {
+                if !receipts_by_certificate.contains_key(certificate_id) {
+                    return Err(rejection_error(
+                        OfflineTransferRejectionReason::BalanceProofInvalid,
+                        OfflineTransferRejectionPlatform::General,
+                        "per-certificate balance proof references unknown certificate",
+                    ));
+                }
+            }
+        } else {
+            let certificate_id = transfer
+                .receipts
+                .first()
+                .expect("non-empty receipts")
+                .sender_certificate_id;
+            balance_proof_by_certificate.insert(certificate_id, &transfer.balance_proof);
         }
 
-        verify_balance_proof(&VerificationInputs {
-            balance_proof: &transfer.balance_proof,
-            chain_id: &state_transaction.chain_id,
-            expected_scale,
-        })
-        .map_err(|err| {
-            rejection_error(
-                OfflineTransferRejectionReason::BalanceProofInvalid,
-                OfflineTransferRejectionPlatform::General,
-                err.to_string(),
-            )
-        })?;
+        if multi_certificate_bundle {
+            for certificate_receipts in receipts_by_certificate.values() {
+                if let Err(err) = ensure_single_counter_scope(certificate_receipts) {
+                    return Err(map_counter_scope_error(err));
+                }
+            }
+        } else if let Err(err) = ensure_single_counter_scope(&transfer.receipts) {
+            return Err(map_counter_scope_error(err));
+        }
 
         verify_aggregate_proof_envelope(
             &transfer,
             state_transaction.settlement.offline.proof_mode,
         )?;
 
-        if claimed_amount > record.remaining_amount {
-            return Err(rejection_error(
-                OfflineTransferRejectionReason::AllowanceDepleted,
-                OfflineTransferRejectionPlatform::General,
-                "offline allowance does not have enough remaining value",
+        let mut staged_updates: Vec<(Hash, Numeric, Vec<u8>, OfflineCounterState)> = Vec::new();
+        let mut certificates_by_id: std::collections::BTreeMap<Hash, OfflineWalletCertificate> =
+            std::collections::BTreeMap::new();
+        let mut policy_labels = BTreeSet::new();
+        let mut settled_platform_snapshot: Option<OfflinePlatformTokenSnapshot> = None;
+        let mut expected_controller: Option<AccountId> = None;
+        let mut claimed_amount = Numeric::zero();
+
+        for (certificate_id, certificate_receipts) in &receipts_by_certificate {
+            let record = state_transaction
+                .world
+                .offline_allowances
+                .get(certificate_id)
+                .ok_or_else(|| {
+                    rejection_error(
+                        OfflineTransferRejectionReason::AllowanceNotRegistered,
+                        OfflineTransferRejectionPlatform::General,
+                        "offline allowance certificate not registered",
+                    )
+                })?
+                .clone();
+
+            if let Some(expected) = expected_controller.as_ref() {
+                if &record.certificate.controller != expected {
+                    return Err(rejection_error(
+                        OfflineTransferRejectionReason::ReceiptSenderMismatch,
+                        OfflineTransferRejectionPlatform::General,
+                        "offline bundle mixes receipts from different controllers",
+                    ));
+                }
+            } else {
+                expected_controller = Some(record.certificate.controller.clone());
+            }
+
+            if let Some(verdict_id) = record.verdict_id {
+                if state_transaction
+                    .world
+                    .offline_verdict_revocations
+                    .get(&verdict_id)
+                    .is_some()
+                {
+                    return Err(rejection_error(
+                        OfflineTransferRejectionReason::VerdictExpired,
+                        OfflineTransferRejectionPlatform::General,
+                        "offline attestation verdict revoked; refresh allowance before reconciling",
+                    ));
+                }
+            }
+
+            enforce_certificate_window(&record, block_timestamp_ms)?;
+            enforce_verdict_refresh_window(&record, block_timestamp_ms)?;
+
+            let expected_scale = expected_scale_for_allowance(&record.certificate, spec)?;
+            let certificate_claimed_amount =
+                aggregate_amount(certificate_receipts, expected_scale)?;
+            let balance_proof = balance_proof_by_certificate
+                .get(certificate_id)
+                .ok_or_else(|| {
+                    rejection_error(
+                        OfflineTransferRejectionReason::BalanceProofInvalid,
+                        OfflineTransferRejectionPlatform::General,
+                        "missing balance proof for certificate",
+                    )
+                })?;
+            if certificate_claimed_amount != balance_proof.claimed_delta().clone() {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::DeltaMismatch,
+                    OfflineTransferRejectionPlatform::General,
+                    "claimed delta does not match sum of receipt amounts",
+                ));
+            }
+
+            let integrity_metadata = android_integrity_metadata(&record.certificate.metadata).ok();
+            if multi_certificate_bundle && transfer.platform_snapshot.is_some() {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::PlatformMetadataInvalid,
+                    OfflineTransferRejectionPlatform::General,
+                    "bundle-level platform snapshot is not supported for multi-certificate bundles",
+                ));
+            }
+            let submitted_platform_snapshot = validate_platform_snapshot(
+                if multi_certificate_bundle {
+                    None
+                } else {
+                    transfer.platform_snapshot.as_ref()
+                },
+                integrity_metadata.as_ref(),
+            )?;
+            if !multi_certificate_bundle {
+                settled_platform_snapshot = submitted_platform_snapshot.clone().or_else(|| {
+                    derive_platform_token_snapshot(&record.certificate, integrity_metadata.as_ref())
+                });
+            }
+            if let Some(policy) = integrity_metadata
+                .as_ref()
+                .map(AndroidIntegrityMetadata::policy_slug)
+            {
+                policy_labels.insert(policy);
+            }
+
+            ensure_receipt_targets(certificate_receipts, &transfer, &record)?;
+            ensure_receipt_timestamps(
+                certificate_receipts,
+                &record,
+                block_timestamp_ms,
+                &state_transaction.settlement.offline,
+            )?;
+            ensure_commitment_alignment(balance_proof, &record)?;
+
+            let mut staged_counters = record.counter_state.clone();
+            stage_receipt_counters(&mut staged_counters, certificate_receipts)?;
+
+            let submitted_snapshot_ref = submitted_platform_snapshot.as_ref();
+            for receipt in certificate_receipts {
+                verify_receipt_signature(receipt, &record.certificate)?;
+                let receipt_snapshot = validate_platform_snapshot(
+                    receipt.platform_snapshot.as_ref(),
+                    integrity_metadata.as_ref(),
+                )?;
+                let attestation_snapshot =
+                    select_attestation_snapshot(receipt_snapshot.as_ref(), submitted_snapshot_ref);
+                verify_platform_proof(
+                    receipt,
+                    &record.certificate,
+                    &state_transaction.chain_id,
+                    block_timestamp_ms,
+                    &state_transaction.settlement.offline,
+                    attestation_snapshot,
+                )?;
+            }
+
+            verify_balance_proof(&VerificationInputs {
+                balance_proof,
+                chain_id: &state_transaction.chain_id,
+                expected_scale,
+            })
+            .map_err(|err| {
+                rejection_error(
+                    OfflineTransferRejectionReason::BalanceProofInvalid,
+                    OfflineTransferRejectionPlatform::General,
+                    err.to_string(),
+                )
+            })?;
+
+            if certificate_claimed_amount > record.remaining_amount {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::AllowanceDepleted,
+                    OfflineTransferRejectionPlatform::General,
+                    "offline allowance does not have enough remaining value",
+                ));
+            }
+
+            claimed_amount = claimed_amount
+                .checked_add(certificate_claimed_amount.clone())
+                .ok_or(MathError::Overflow)?;
+            staged_updates.push((
+                *certificate_id,
+                certificate_claimed_amount,
+                balance_proof.resulting_commitment.clone(),
+                staged_counters,
             ));
+            certificates_by_id.insert(*certificate_id, record.certificate.clone());
         }
 
-        let pos_verdict_snapshots =
-            iroha_data_model::offline::OfflineTransferRecord::collect_pos_verdict_snapshots(
-                &transfer,
-                &record.certificate,
-            );
+        let primary_certificate_id = transfer
+            .receipts
+            .first()
+            .expect("non-empty receipts")
+            .sender_certificate_id;
+        let primary_certificate = certificates_by_id
+            .get(&primary_certificate_id)
+            .expect("certificate presence checked while staging updates");
+        let pos_verdict_snapshots: Vec<_> = transfer
+            .receipts
+            .iter()
+            .filter_map(|receipt| {
+                certificates_by_id
+                    .get(&receipt.sender_certificate_id)
+                    .map(|certificate| {
+                        let mut snapshot = OfflineVerdictSnapshot::from_certificate(certificate);
+                        snapshot.certificate_id = receipt.sender_certificate_id;
+                        snapshot
+                    })
+            })
+            .collect();
+
         let mut audit_record = OfflineTransferRecord {
             transfer: transfer.clone(),
-            controller: record.certificate.controller.clone(),
+            controller: expected_controller
+                .expect("controller presence checked while staging updates"),
             status: OfflineTransferStatus::Settled,
+            rejection_reason: None,
             recorded_at_ms: block_timestamp_ms,
             recorded_at_height: block_height,
             archived_at_height: None,
             history: Vec::new(),
             pos_verdict_snapshots,
             verdict_snapshot: Some(OfflineVerdictSnapshot::from_certificate(
-                &record.certificate,
+                primary_certificate,
             )),
-            platform_snapshot,
+            platform_snapshot: settled_platform_snapshot,
         };
         let history_snapshot = audit_record.verdict_snapshot.clone();
         audit_record.push_history_entry(
@@ -3456,21 +3876,21 @@ pub mod isi {
             &claimed_amount,
         )?;
 
+        for (certificate_id, certificate_claimed_amount, resulting_commitment, staged_counters) in
+            staged_updates
         {
             let record = state_transaction
                 .world
                 .offline_allowances
                 .get_mut(&certificate_id)
-                .expect("allowance existence checked above");
-            debug_assert!(claimed_amount <= record.remaining_amount);
+                .expect("allowance existence checked while staging updates");
+            debug_assert!(certificate_claimed_amount <= record.remaining_amount);
             record.remaining_amount = record
                 .remaining_amount
                 .clone()
-                .checked_sub(claimed_amount.clone())
+                .checked_sub(certificate_claimed_amount)
                 .expect("claimed amount is bounded by remaining_amount");
-            record
-                .current_commitment
-                .clone_from(&transfer.balance_proof.resulting_commitment);
+            record.current_commitment.clone_from(&resulting_commitment);
             merge_counter_state(&mut record.counter_state, &staged_counters);
         }
 
@@ -3482,7 +3902,7 @@ pub mod isi {
             receipt_count,
         );
         record_transfer_metrics(&audit_record, &claimed_amount);
-        if let Some(policy) = policy_label {
+        for policy in policy_labels {
             metrics::global_or_default().record_offline_attestation_policy(policy);
         }
         apply_transfer_retention(state_transaction);
@@ -3645,6 +4065,146 @@ pub mod isi {
         Ok(())
     }
 
+    fn aggregate_v2_public_inputs_digest(
+        transfer: &OfflineToOnlineTransfer,
+        receipts_root: &iroha_data_model::offline::PoseidonDigest,
+    ) -> Result<[u8; 32], String> {
+        let mut hasher = Sha256::new();
+        hasher.update(b"iroha.offline.aggregate.v2.public_inputs");
+        hasher.update(transfer.bundle_id.as_ref());
+        hasher.update(receipts_root.as_bytes());
+
+        let claimed_delta = transfer
+            .balance_proof
+            .claimed_delta
+            .try_mantissa_u128()
+            .ok_or_else(|| "claimed delta out of range".to_string())?;
+        hasher.update(claimed_delta.to_le_bytes());
+        hasher.update(transfer.balance_proof.claimed_delta.scale().to_be_bytes());
+        hasher.update(
+            u64::try_from(transfer.receipts.len())
+                .map_err(|_| "receipt count out of range".to_string())?
+                .to_le_bytes(),
+        );
+
+        for receipt in canonical_receipts(&transfer.receipts) {
+            hasher.update(receipt.sender_certificate_id.as_ref());
+            hasher.update(receipt.tx_id.as_ref());
+            hasher.update(receipt.platform_proof.counter().to_be_bytes());
+            let amount = receipt
+                .amount
+                .try_mantissa_u128()
+                .ok_or_else(|| "receipt amount out of range".to_string())?;
+            hasher.update(amount.to_le_bytes());
+            hasher.update(receipt.amount.scale().to_be_bytes());
+        }
+
+        let digest = hasher.finalize();
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest);
+        Ok(out)
+    }
+
+    fn verify_aggregate_proof_envelope_v2(
+        transfer: &OfflineToOnlineTransfer,
+        envelope: &iroha_data_model::offline::AggregateProofEnvelope,
+        receipts_root: &iroha_data_model::offline::PoseidonDigest,
+    ) -> Result<(), Error> {
+        let platform = OfflineTransferRejectionPlatform::General;
+        let backend = metadata_string(
+            &envelope.metadata,
+            AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_BACKEND,
+            platform,
+        )?;
+        if backend != "stark/fri-v1/poseidon2-goldilocks-v1" {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::AggregateProofHashError,
+                platform,
+                format!("unsupported aggregate v2 backend `{backend}`"),
+            ));
+        }
+
+        let _circuit_id = metadata_string(
+            &envelope.metadata,
+            AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_CIRCUIT_ID,
+            platform,
+        )?;
+        let public_inputs_b64 = metadata_string(
+            &envelope.metadata,
+            AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_PUBLIC_INPUTS_B64,
+            platform,
+        )?;
+        let recursion_depth_raw = metadata_string(
+            &envelope.metadata,
+            AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_RECURSION_DEPTH,
+            platform,
+        )?;
+        let recursion_depth = recursion_depth_raw.parse::<u32>().map_err(|_| {
+            rejection_error(
+                OfflineTransferRejectionReason::AggregateProofHashError,
+                platform,
+                "aggregate v2 recursion depth metadata is invalid",
+            )
+        })?;
+        if recursion_depth == 0 {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::AggregateProofHashError,
+                platform,
+                "aggregate v2 recursion depth must be greater than zero",
+            ));
+        }
+
+        let expected_inputs = aggregate_v2_public_inputs_digest(transfer, receipts_root).map_err(|err| {
+            rejection_error(
+                OfflineTransferRejectionReason::AggregateProofHashError,
+                platform,
+                format!("failed to derive aggregate v2 public inputs: {err}"),
+            )
+        })?;
+        let provided_inputs = BASE64_STANDARD
+            .decode(public_inputs_b64.as_bytes())
+            .map_err(|_| {
+                rejection_error(
+                    OfflineTransferRejectionReason::AggregateProofHashError,
+                    platform,
+                    "aggregate v2 public inputs are not valid base64",
+                )
+            })?;
+        if provided_inputs != expected_inputs {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::AggregateProofHashError,
+                platform,
+                "aggregate v2 public inputs do not match bundle contents",
+            ));
+        }
+
+        let proof = envelope.proof_sum.as_deref().ok_or_else(|| {
+            rejection_error(
+                OfflineTransferRejectionReason::AggregateProofMissing,
+                platform,
+                "aggregate v2 proof_sum is required",
+            )
+        })?;
+        if proof.is_empty() || !verify_recursive_stark_envelope(proof) {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::AggregateProofHashError,
+                platform,
+                "aggregate v2 recursive STARK proof is invalid",
+            ));
+        }
+
+        if envelope.proof_counter.as_ref().is_some_and(|bytes| !bytes.is_empty())
+            || envelope.proof_replay.as_ref().is_some_and(|bytes| !bytes.is_empty())
+        {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::AggregateProofHashError,
+                platform,
+                "aggregate v2 uses proof_sum only; proof_counter/proof_replay must be empty",
+            ));
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(crate) fn verify_aggregate_proof_envelope(
         transfer: &OfflineToOnlineTransfer,
@@ -3661,15 +4221,19 @@ pub mod isi {
             return Ok(());
         };
 
-        if envelope.version != AGGREGATE_PROOF_VERSION_V1 {
-            return Err(rejection_error(
-                OfflineTransferRejectionReason::AggregateProofVersionUnsupported,
-                OfflineTransferRejectionPlatform::General,
-                format!(
-                    "aggregate proof version {} is not supported",
-                    envelope.version
-                ),
-            ));
+        match envelope.version {
+            AGGREGATE_PROOF_VERSION_V1 => {}
+            AGGREGATE_PROOF_VERSION_V2 => {}
+            _ => {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::AggregateProofVersionUnsupported,
+                    OfflineTransferRejectionPlatform::General,
+                    format!(
+                        "aggregate proof version {} is not supported",
+                        envelope.version
+                    ),
+                ))
+            }
         }
 
         if matches!(proof_mode, OfflineProofMode::Required) {
@@ -3706,6 +4270,10 @@ pub mod isi {
                 OfflineTransferRejectionPlatform::General,
                 "aggregate proof receipts_root does not match transfer receipts",
             ));
+        }
+
+        if envelope.version == AGGREGATE_PROOF_VERSION_V2 {
+            return verify_aggregate_proof_envelope_v2(transfer, envelope, &receipts_root);
         }
 
         if let Some(proof_sum) = envelope.proof_sum.as_deref() {
@@ -3765,10 +4333,11 @@ pub mod isi {
     }
 
     fn ensure_receipt_targets(
+        receipts: &[OfflineSpendReceipt],
         transfer: &OfflineToOnlineTransfer,
         record: &OfflineAllowanceRecord,
     ) -> Result<(), Error> {
-        for receipt in &transfer.receipts {
+        for receipt in receipts {
             if receipt.to != transfer.receiver {
                 return Err(rejection_error(
                     OfflineTransferRejectionReason::ReceiptReceiverMismatch,
@@ -3823,7 +4392,7 @@ pub mod isi {
     }
 
     fn ensure_receipt_timestamps(
-        transfer: &OfflineToOnlineTransfer,
+        receipts: &[OfflineSpendReceipt],
         record: &OfflineAllowanceRecord,
         block_timestamp_ms: u64,
         settlement_cfg: &actual::Offline,
@@ -3833,7 +4402,7 @@ pub mod isi {
             .certificate
             .expires_at_ms
             .min(record.certificate.policy.expires_at_ms);
-        for receipt in &transfer.receipts {
+        for receipt in receipts {
             let issued_at_ms = receipt.issued_at_ms;
             if issued_at_ms < record.certificate.issued_at_ms {
                 return Err(rejection_error(
@@ -4112,18 +4681,26 @@ pub mod isi {
         claimed_amount: Numeric,
         receipt_count: u32,
     ) {
+        let asset_definition = record
+            .transfer
+            .receipts
+            .first()
+            .map(|receipt| receipt.asset.definition().clone())
+            .unwrap_or_else(|| {
+                record
+                    .transfer
+                    .balance_proof
+                    .initial_commitment
+                    .asset
+                    .definition()
+                    .clone()
+            });
         let payload = OfflineTransferSettled {
             bundle_id: record.transfer.bundle_id,
             controller: record.controller.clone(),
             receiver: record.transfer.receiver.clone(),
             deposit_account: record.transfer.deposit_account.clone(),
-            asset_definition: record
-                .transfer
-                .balance_proof
-                .initial_commitment
-                .asset
-                .definition()
-                .clone(),
+            asset_definition,
             amount: claimed_amount,
             receipt_count,
             recorded_at_ms: record.recorded_at_ms,
@@ -9157,6 +9734,7 @@ mod aggregate_proof_tests {
             deposit_account: certificate.controller.clone(),
             receipts,
             balance_proof,
+            balance_proofs: None,
             aggregate_proof: Some(aggregate_proof),
             attachments: None,
             platform_snapshot: None,
