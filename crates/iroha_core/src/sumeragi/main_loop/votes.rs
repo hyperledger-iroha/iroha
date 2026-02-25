@@ -1116,6 +1116,44 @@ impl Actor {
         force_fetch: bool,
         observe_sidecar_mismatch: bool,
     ) -> bool {
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if highest.height <= committed_height {
+            match self.committed_block_hash_for_height(highest.height) {
+                Some(committed_hash) if committed_hash != highest.subject_block_hash => {
+                    self.clear_missing_block_request(
+                        &highest.subject_block_hash,
+                        MissingBlockClearReason::Obsolete,
+                    );
+                    self.clear_sidecar_mismatch_for_height(highest.height);
+                    debug!(
+                        height = highest.height,
+                        view = highest.view,
+                        committed_height,
+                        committed_hash = %committed_hash,
+                        highest_hash = %highest.subject_block_hash,
+                        source,
+                        "suppressing highest QC missing-block fetch for committed-height hash conflict"
+                    );
+                    return false;
+                }
+                None => {
+                    self.clear_missing_block_request(
+                        &highest.subject_block_hash,
+                        MissingBlockClearReason::Obsolete,
+                    );
+                    debug!(
+                        height = highest.height,
+                        view = highest.view,
+                        committed_height,
+                        highest_hash = %highest.subject_block_hash,
+                        source,
+                        "suppressing highest QC missing-block fetch: committed height absent locally"
+                    );
+                    return false;
+                }
+                _ => {}
+            }
+        }
         let payload_available =
             self.block_payload_available_for_progress(highest.subject_block_hash);
         let local_known = self
@@ -1225,6 +1263,14 @@ impl Actor {
             }
         }
         if roster.is_empty() {
+            let trusted = self.trusted_topology();
+            if !trusted.is_empty() {
+                roster = trusted;
+                signers.clear();
+                roster_source = "trusted topology fallback";
+            }
+        }
+        if roster.is_empty() {
             debug!(
                 height = highest.height,
                 view = highest.view,
@@ -1252,7 +1298,12 @@ impl Actor {
         );
         let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
         let now = Instant::now();
-        let decision = plan_missing_block_fetch(
+        let fetch_mode = if self.sidecar_quarantined_for_height(highest.height) {
+            MissingBlockFetchMode::AggressiveTopology
+        } else {
+            MissingBlockFetchMode::Default
+        };
+        let decision = plan_missing_block_fetch_with_mode(
             &mut self.pending.missing_block_requests,
             highest.subject_block_hash,
             highest.height,
@@ -1265,6 +1316,7 @@ impl Actor {
             retry_window,
             None,
             signer_fallback_attempts,
+            fetch_mode,
         );
         let dwell = self
             .pending
@@ -1937,14 +1989,19 @@ impl Actor {
         if self.block_known_locally(vote.block_hash) {
             return;
         }
-        let roster = self.effective_commit_topology();
+        let mut roster = self.effective_commit_topology();
+        let mut roster_source = "commit topology";
+        if roster.is_empty() {
+            roster = self.trusted_topology();
+            roster_source = "trusted topology fallback";
+        }
         if roster.is_empty() {
             debug!(
                 height = vote.height,
                 view = vote.view,
                 phase = ?vote.phase,
                 block_hash = %vote.block_hash,
-                "skipping missing-block fetch: empty commit topology"
+                "skipping missing-block fetch: no roster available"
             );
             return;
         }
@@ -2003,9 +2060,10 @@ impl Actor {
                     block = ?vote.block_hash,
                     targets = ?targets,
                     target_kind = target_kind.label(),
+                    roster_source,
                     retry_window_ms = retry_window.as_millis(),
                     dwell_ms,
-                    "requested missing block payload after empty commit topology"
+                    "requested missing block payload after roster fallback"
                 );
             }
             MissingBlockFetchDecision::NoTargets => {
@@ -2017,7 +2075,8 @@ impl Actor {
                     retry_window_ms = retry_window.as_millis(),
                     dwell_ms,
                     targets = targets_len,
-                    "unable to request missing block payload after empty commit topology: no peers available"
+                    roster_source,
+                    "unable to request missing block payload after roster fallback: no peers available"
                 );
             }
             MissingBlockFetchDecision::Backoff => {
@@ -2029,7 +2088,8 @@ impl Actor {
                     retry_window_ms = retry_window.as_millis(),
                     dwell_ms,
                     targets = targets_len,
-                    "skipping missing-block fetch after empty commit topology during backoff"
+                    roster_source,
+                    "skipping missing-block fetch after roster fallback during backoff"
                 );
             }
         }

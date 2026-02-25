@@ -390,6 +390,9 @@ static MESSAGE_HANDLING_TOTALS: OnceLock<Mutex<BTreeMap<ConsensusMessageHandling
 static MISSING_BLOCK_FETCH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static MISSING_BLOCK_FETCH_LAST_TARGETS: AtomicU64 = AtomicU64::new(0);
 static MISSING_BLOCK_FETCH_LAST_DWELL_MS: AtomicU64 = AtomicU64::new(0);
+static MISSING_REQUEST_PRUNED_STALE_HEIGHT: AtomicU64 = AtomicU64::new(0);
+static PENDING_QUEUE_EVICTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static MISSING_QC_TRIGGER_SUPPRESSED_STALE: AtomicU64 = AtomicU64::new(0);
 static QC_MISSING_PAYLOAD_AGGRESSIVE_FETCH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_SYNC_DROP_INVALID_SIGNATURES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_SYNC_QC_REPLACED_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -3448,6 +3451,12 @@ pub struct StatusSnapshot {
     pub missing_block_fetch_last_targets: u64,
     /// Dwell time in milliseconds observed before the most recent missing-block fetch attempt.
     pub missing_block_fetch_last_dwell_ms: u64,
+    /// Total stale missing-block requests pruned after local head advanced beyond margin.
+    pub missing_request_pruned_stale_height: u64,
+    /// Total deterministic evictions from bounded pending queues.
+    pub pending_queue_evictions_total: u64,
+    /// Total stale-height missing-QC triggers suppressed instead of rotating view.
+    pub missing_qc_trigger_suppressed_stale: u64,
     /// Total QC-missing payload fetches escalated to topology-wide aggressive mode.
     pub qc_missing_payload_aggressive_fetch_total: u64,
     /// Data-availability gate snapshot and counters.
@@ -4377,6 +4386,11 @@ pub fn snapshot() -> StatusSnapshot {
         missing_block_fetch_total: MISSING_BLOCK_FETCH_TOTAL.load(Ordering::Relaxed),
         missing_block_fetch_last_targets: MISSING_BLOCK_FETCH_LAST_TARGETS.load(Ordering::Relaxed),
         missing_block_fetch_last_dwell_ms: MISSING_BLOCK_FETCH_LAST_DWELL_MS
+            .load(Ordering::Relaxed),
+        missing_request_pruned_stale_height: MISSING_REQUEST_PRUNED_STALE_HEIGHT
+            .load(Ordering::Relaxed),
+        pending_queue_evictions_total: PENDING_QUEUE_EVICTIONS_TOTAL.load(Ordering::Relaxed),
+        missing_qc_trigger_suppressed_stale: MISSING_QC_TRIGGER_SUPPRESSED_STALE
             .load(Ordering::Relaxed),
         qc_missing_payload_aggressive_fetch_total: QC_MISSING_PAYLOAD_AGGRESSIVE_FETCH_TOTAL
             .load(Ordering::Relaxed),
@@ -5362,11 +5376,37 @@ pub fn record_missing_block_fetch(targets: usize, dwell_ms: u64) {
     MISSING_BLOCK_FETCH_LAST_DWELL_MS.store(dwell_ms, Ordering::Relaxed);
 }
 
+/// Increment counter when stale missing requests are pruned by committed-height margin.
+pub fn inc_missing_request_pruned_stale_height(count: u64) {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    if count > 0 {
+        MISSING_REQUEST_PRUNED_STALE_HEIGHT.fetch_add(count, Ordering::Relaxed);
+    }
+}
+
+/// Increment counter when bounded pending queues evict entries.
+pub fn inc_pending_queue_evictions_total(count: u64) {
+    if count > 0 {
+        PENDING_QUEUE_EVICTIONS_TOTAL.fetch_add(count, Ordering::Relaxed);
+    }
+}
+
+/// Increment counter when stale missing-QC triggers are suppressed.
+pub fn inc_missing_qc_trigger_suppressed_stale() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    MISSING_QC_TRIGGER_SUPPRESSED_STALE.fetch_add(1, Ordering::Relaxed);
+}
+
 #[cfg(test)]
 pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
     MISSING_BLOCK_FETCH_TOTAL.store(0, Ordering::Relaxed);
     MISSING_BLOCK_FETCH_LAST_TARGETS.store(0, Ordering::Relaxed);
     MISSING_BLOCK_FETCH_LAST_DWELL_MS.store(0, Ordering::Relaxed);
+    MISSING_REQUEST_PRUNED_STALE_HEIGHT.store(0, Ordering::Relaxed);
+    PENDING_QUEUE_EVICTIONS_TOTAL.store(0, Ordering::Relaxed);
+    MISSING_QC_TRIGGER_SUPPRESSED_STALE.store(0, Ordering::Relaxed);
     QC_MISSING_PAYLOAD_AGGRESSIVE_FETCH_TOTAL.store(0, Ordering::Relaxed);
     QC_DEFERRED_MISSING_PAYLOAD_TOTAL.store(0, Ordering::Relaxed);
     QC_DEFERRED_RESOLVED_TOTAL.store(0, Ordering::Relaxed);
@@ -8116,10 +8156,16 @@ mod tests {
         super::inc_consensus_no_roster_refresh_attempt();
         super::inc_consensus_no_roster_refresh_success();
         super::inc_blocksync_range_pull_candidate_exhausted();
+        super::inc_missing_request_pruned_stale_height(3);
+        super::inc_pending_queue_evictions_total(2);
+        super::inc_missing_qc_trigger_suppressed_stale();
         let snapshot = super::snapshot();
         assert_eq!(snapshot.missing_block_fetch_total, 1);
         assert_eq!(snapshot.missing_block_fetch_last_targets, 3);
         assert_eq!(snapshot.missing_block_fetch_last_dwell_ms, 42);
+        assert_eq!(snapshot.missing_request_pruned_stale_height, 3);
+        assert_eq!(snapshot.pending_queue_evictions_total, 2);
+        assert_eq!(snapshot.missing_qc_trigger_suppressed_stale, 1);
         assert_eq!(snapshot.qc_missing_payload_aggressive_fetch_total, 1);
         assert_eq!(snapshot.qc_deferred_missing_payload_total, 1);
         assert_eq!(snapshot.qc_deferred_resolved_total, 1);
