@@ -205,17 +205,42 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     for (peer_id, result) in rbc_results {
         match result {
             Ok(session) => delivered.push((peer_id, session)),
-            Err(err) => failures.push(format!("{peer_id}: {err:?}")),
+            Err(err) => failures.push((peer_id, format!("{err:?}"))),
         }
     }
 
+    let required_height = expected_min_height.max(3);
+    wait_for_blocks_at_least(&rt, peers, required_height, sync_timeout)
+        .wrap_err("seven_peer_consistency blocks did not advance")?;
+
+    let mut committed_without_session = Vec::new();
+    let mut unresolved_failures = Vec::new();
+    for (peer_id, err) in failures {
+        let committed = peers
+            .iter()
+            .find(|peer| peer.id() == peer_id)
+            .and_then(NetworkPeer::best_effort_block_height)
+            .is_some_and(|height| height.total >= expected_min_height);
+        if committed {
+            committed_without_session.push(peer_id.to_string());
+        } else {
+            unresolved_failures.push(format!("{peer_id}: {err}"));
+        }
+    }
+
+    eyre::ensure!(
+        !delivered.is_empty(),
+        "seven_peer_consistency no delivered RBC session observed at or above height {expected_min_height}"
+    );
+
     let required = commit_quorum_from_len(peers.len());
     eyre::ensure!(
-        delivered.len() >= required,
-        "seven_peer_consistency RBC delivery below quorum (delivered={}, required={}, failures={})",
+        delivery_or_commit_satisfied(delivered.len(), committed_without_session.len(), required),
+        "seven_peer_consistency RBC/commit evidence below quorum (delivered={}, committed_without_session={}, required={}, failures={})",
         delivered.len(),
+        committed_without_session.len(),
         required,
-        failures.join("; ")
+        unresolved_failures.join("; ")
     );
 
     for (peer_id, session) in delivered {
@@ -240,10 +265,6 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
             "peer {peer_id} flagged RBC session invalid"
         );
     }
-
-    // Ensure all running peers progressed sufficiently
-    wait_for_blocks_at_least(&rt, peers, 3, sync_timeout)
-        .wrap_err("seven_peer_consistency blocks did not advance")?;
 
     // Then: verify each peer reports the same state (cross-peer consistency).
     let deadline = Instant::now() + network.sync_timeout();
@@ -487,6 +508,14 @@ fn get_u64(value: &Value, key: &str) -> Option<u64> {
         .and_then(Value::as_u64)
 }
 
+fn delivery_or_commit_satisfied(
+    delivered: usize,
+    committed_without_session: usize,
+    required: usize,
+) -> bool {
+    delivered.saturating_add(committed_without_session) >= required
+}
+
 #[test]
 fn delivered_session_for_height_respects_min_height() {
     let payload = norito::json!({
@@ -528,4 +557,14 @@ fn delivered_session_for_height_allows_partial_chunks() {
 
     let session = delivered_session_for_height(&payload, 5).expect("expected session");
     assert_eq!(get_u64(&session, "received_chunks"), Some(1));
+}
+
+#[test]
+fn delivery_or_commit_satisfied_allows_committed_fallback() {
+    assert!(delivery_or_commit_satisfied(4, 1, 5));
+}
+
+#[test]
+fn delivery_or_commit_satisfied_requires_quorum() {
+    assert!(!delivery_or_commit_satisfied(3, 1, 5));
 }

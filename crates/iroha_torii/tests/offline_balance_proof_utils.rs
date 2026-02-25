@@ -4,8 +4,8 @@
 
 use iroha_core::smartcontracts::isi::offline::{build_balance_proof, compute_commitment};
 use iroha_data_model::{
-    ChainId,
     offline::{OfflineAllowanceCommitment, OfflineBalanceProof},
+    ChainId,
 };
 use iroha_primitives::numeric::Numeric;
 
@@ -25,14 +25,11 @@ pub fn build_balance_proof_for_allowance(
     resulting_blinding: [u8; 32],
 ) -> OfflineBalanceProof {
     let expected_scale = allowance.amount.scale();
-    let initial_commitment =
-        compute_commitment(&allowance.amount, expected_scale, &initial_blinding)
-            .expect("initial commitment");
-    let resulting_value = allowance
-        .amount
-        .clone()
-        .checked_add(claimed_delta.clone())
-        .expect("resulting value");
+    // Offline balance commitments track consumed value progression, not allowance cap.
+    let initial_value = Numeric::new(0u64, expected_scale);
+    let initial_commitment = compute_commitment(&initial_value, expected_scale, &initial_blinding)
+        .expect("initial commitment");
+    let resulting_value = claimed_delta.clone();
     let resulting_commitment =
         compute_commitment(&resulting_value, expected_scale, &resulting_blinding)
             .expect("resulting commitment");

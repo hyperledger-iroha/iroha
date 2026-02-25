@@ -200,6 +200,27 @@ public final class OfflineWallet {
         return response
     }
 
+    /// Reprovisions an existing allowance by rotating the Pedersen commitment while
+    /// preserving the current allowance amount and policy.
+    @discardableResult
+    public func reprovisionAllowance(certificateIdHex: String,
+                                     currentCertificate: OfflineWalletCertificate,
+                                     newCommitment: Data,
+                                     authority: String,
+                                     privateKey: String,
+                                     recordVerdict: Bool = true,
+                                     recordedAt timestampMs: UInt64? = nil) async throws -> ToriiOfflineTopUpResponse {
+        let response = try await toriiClient.reprovisionOfflineAllowance(certificateIdHex: certificateIdHex,
+                                                                         currentCertificate: currentCertificate,
+                                                                         newCommitment: newCommitment,
+                                                                         authority: authority,
+                                                                         privateKey: privateKey)
+        if recordVerdict {
+            try recordVerdictMetadata(from: response.certificate, recordedAt: timestampMs)
+        }
+        return response
+    }
+
     public func fetchTransfers(params: ToriiOfflineListParams? = nil) async throws -> ToriiOfflineTransferList {
         try await toriiClient.listOfflineTransfers(params: params)
     }

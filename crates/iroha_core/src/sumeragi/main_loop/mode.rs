@@ -180,7 +180,8 @@ impl Actor {
         self.subsystems.da_rbc.rbc.deliver_deferral.clear();
         self.subsystems.da_rbc.rbc.outbound_chunks.clear();
         self.subsystems.da_rbc.rbc.outbound_cursor = None;
-        self.subsystems.propose.proposal_cache = ProposalCache::new(PROPOSAL_CACHE_LIMIT);
+        self.subsystems.propose.proposal_cache =
+            ProposalCache::new(self.recovery_pending_proposal_cap());
         self.subsystems.propose.proposals_seen.clear();
         self.qc_cache.clear();
         self.vote_log.clear();

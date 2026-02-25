@@ -5801,6 +5801,30 @@ pub struct SumeragiRecovery {
         default = "defaults::sumeragi::RANGE_PULL_ESCALATION_AFTER_HASH_MISSES"
     )]
     pub range_pull_escalation_after_hash_misses: u32,
+    /// Height margin used to prune stale missing-block requests after head advances.
+    #[config(
+        env = "SUMERAGI_RECOVERY_MISSING_REQUEST_STALE_HEIGHT_MARGIN",
+        default = "defaults::sumeragi::RECOVERY_MISSING_REQUEST_STALE_HEIGHT_MARGIN"
+    )]
+    pub missing_request_stale_height_margin: u64,
+    /// Maximum deferred block-sync updates retained in memory.
+    #[config(
+        env = "SUMERAGI_RECOVERY_PENDING_BLOCK_SYNC_CAP",
+        default = "defaults::sumeragi::RECOVERY_PENDING_BLOCK_SYNC_CAP"
+    )]
+    pub pending_block_sync_cap: usize,
+    /// Maximum cached proposal entries retained in memory.
+    #[config(
+        env = "SUMERAGI_RECOVERY_PENDING_PROPOSAL_CAP",
+        default = "defaults::sumeragi::RECOVERY_PENDING_PROPOSAL_CAP"
+    )]
+    pub pending_proposal_cap: usize,
+    /// Missing-block fetch attempts before switching to aggressive topology fanout.
+    #[config(
+        env = "SUMERAGI_RECOVERY_MISSING_FETCH_AGGRESSIVE_AFTER_ATTEMPTS",
+        default = "defaults::sumeragi::RECOVERY_MISSING_FETCH_AGGRESSIVE_AFTER_ATTEMPTS"
+    )]
+    pub missing_fetch_aggressive_after_attempts: u32,
 }
 
 /// User-level configuration container for deterministic transport fanout.
@@ -6845,6 +6869,35 @@ impl Sumeragi {
         } else {
             true
         };
+        let pending_block_sync_cap_ok = if recovery.pending_block_sync_cap == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.recovery.pending_block_sync_cap must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
+        let pending_proposal_cap_ok = if recovery.pending_proposal_cap == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.recovery.pending_proposal_cap must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
+        let missing_fetch_aggressive_after_attempts_ok = if recovery
+            .missing_fetch_aggressive_after_attempts
+            == 0
+        {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.recovery.missing_fetch_aggressive_after_attempts must be greater than zero",
+                ));
+            false
+        } else {
+            true
+        };
         let fanout_threshold_ok = if fanout.large_set_threshold == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
@@ -6969,6 +7022,9 @@ impl Sumeragi {
             && sidecar_mismatch_retry_cap_ok
             && sidecar_mismatch_ttl_ok
             && range_pull_escalation_after_hash_misses_ok
+            && pending_block_sync_cap_ok
+            && pending_proposal_cap_ok
+            && missing_fetch_aggressive_after_attempts_ok
             && fanout_threshold_ok
             && fanout_lookback_ok
             && membership_mismatch_threshold_ok
@@ -7166,6 +7222,12 @@ impl Sumeragi {
                     recovery.sidecar_mismatch_ttl_ms,
                 ),
                 range_pull_escalation_after_hash_misses: recovery_hash_miss_cap_before_range_pull,
+                missing_request_stale_height_margin: recovery.missing_request_stale_height_margin,
+                pending_block_sync_cap: recovery.pending_block_sync_cap.max(1),
+                pending_proposal_cap: recovery.pending_proposal_cap.max(1),
+                missing_fetch_aggressive_after_attempts: recovery
+                    .missing_fetch_aggressive_after_attempts
+                    .max(1),
             },
             fanout: actual::SumeragiFanout {
                 large_set_threshold: fanout.large_set_threshold,

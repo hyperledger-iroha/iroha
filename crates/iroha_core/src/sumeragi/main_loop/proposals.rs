@@ -7,6 +7,7 @@ use iroha_data_model::block::{BlockHeader, BlockPayload, SignedBlock};
 use iroha_data_model::transaction::signed::{SignedTransaction, TransactionEntrypoint};
 use norito::codec::Encode as _;
 
+use crate::sumeragi::status;
 use crate::sumeragi::{consensus::Proposal, message::ProposalHint};
 
 pub(super) struct ProposalCache {
@@ -67,9 +68,11 @@ impl ProposalCache {
     }
 
     fn evict_if_needed(&mut self) {
+        let mut evicted = 0u64;
         while self.hints.len() > self.limit {
             if let Some(first_key) = self.hints.keys().next().copied() {
                 self.hints.remove(&first_key);
+                evicted = evicted.saturating_add(1);
             } else {
                 break;
             }
@@ -77,9 +80,13 @@ impl ProposalCache {
         while self.proposals.len() > self.limit {
             if let Some(first_key) = self.proposals.keys().next().copied() {
                 self.proposals.remove(&first_key);
+                evicted = evicted.saturating_add(1);
             } else {
                 break;
             }
+        }
+        if evicted > 0 {
+            status::inc_pending_queue_evictions_total(evicted);
         }
     }
 

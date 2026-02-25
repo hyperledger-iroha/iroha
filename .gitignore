@@ -154,6 +154,7 @@ target-codex-run*/
 /tmp*
 tmp/*
 *.tmp
+_apalache-out*
 
 # Root-level scratch artifacts from ad-hoc experiments or local builds
 /localnet-*/

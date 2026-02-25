@@ -231,6 +231,15 @@ extension OfflineBalanceProof {
     }
 }
 
+extension OfflineCertificateBalanceProof {
+    func toriiJSON() throws -> ToriiJSONValue {
+        .object([
+            "sender_certificate_id": try OfflineToriiEncoding.hashLiteralValue(senderCertificateId),
+            "balance_proof": try balanceProof.toriiJSON(),
+        ])
+    }
+}
+
 extension OfflinePoseidonDigest {
     func toriiJSON() throws -> ToriiJSONValue {
         _ = try OfflineNorito.encodePoseidonDigest(bytes)
@@ -274,6 +283,7 @@ extension OfflineToOnlineTransfer {
             "deposit_account": .string(depositAccount),
             "receipts": .array(try receipts.map { try $0.toriiJSON() }),
             "balance_proof": try balanceProof.toriiJSON(),
+            "balance_proofs": .array(try (balanceProofs ?? []).map { try $0.toriiJSON() }),
             "aggregate_proof": aggregateValue,
             "attachments": try attachments.map { try $0.toriiJSON() } ?? .null,
             "platform_snapshot": platformSnapshot.map { $0.toriiJSON() } ?? .null,

@@ -3916,6 +3916,14 @@ pub struct SumeragiRecovery {
     pub sidecar_mismatch_ttl: Duration,
     /// Hash-miss threshold before escalating dependency recovery to range pull.
     pub range_pull_escalation_after_hash_misses: u32,
+    /// Height margin used to prune stale missing-block requests once head advances.
+    pub missing_request_stale_height_margin: u64,
+    /// Maximum deferred block-sync updates retained in memory.
+    pub pending_block_sync_cap: usize,
+    /// Maximum cached proposal entries retained in memory.
+    pub pending_proposal_cap: usize,
+    /// Missing-block fetch attempts before switching to aggressive topology fanout.
+    pub missing_fetch_aggressive_after_attempts: u32,
 }
 
 /// Deterministic transport fanout configuration for large validator sets.
