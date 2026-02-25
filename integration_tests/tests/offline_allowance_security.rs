@@ -156,24 +156,9 @@ async fn register_offline_allowance_rejects_missing_escrow_binding() -> Result<(
 #[tokio::test]
 async fn register_topup_expire_then_reclaim_restores_controller_balance() -> Result<()> {
     init_instruction_registry();
-    let now_ms = now_millis();
     let definition_id: AssetDefinitionId = "offsecreclaime2e#wonderland".parse()?;
     let initial_balance = Numeric::new(100, 0);
     let allowance_amount = Numeric::new(50, 0);
-    let mut certificate = signed_certificate_for(definition_id.clone(), now_ms, ALICE_ID.clone());
-    certificate.allowance.amount = allowance_amount.clone();
-    certificate.policy.max_balance = allowance_amount.clone();
-    certificate.policy.max_tx_value = allowance_amount.clone();
-    certificate.expires_at_ms = now_ms + 1_500;
-    certificate.policy.expires_at_ms = certificate.expires_at_ms;
-    certificate.operator_signature = Signature::new(
-        ALICE_KEYPAIR.private_key(),
-        &certificate
-            .operator_signing_bytes()
-            .expect("operator signing bytes"),
-    );
-    let certificate_id = certificate.certificate_id();
-    let expires_at_ms = certificate.expires_at_ms;
     let controller_asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
 
     let builder = NetworkBuilder::new()
@@ -209,6 +194,23 @@ async fn register_topup_expire_then_reclaim_restores_controller_balance() -> Res
         .value()
         .clone();
     assert_eq!(initial, initial_balance);
+
+    // Build the certificate after the network is ready so startup delays don't consume its TTL.
+    let now_ms = now_millis();
+    let mut certificate = signed_certificate_for(definition_id.clone(), now_ms, ALICE_ID.clone());
+    certificate.allowance.amount = allowance_amount.clone();
+    certificate.policy.max_balance = allowance_amount.clone();
+    certificate.policy.max_tx_value = allowance_amount.clone();
+    certificate.expires_at_ms = now_ms + 15_000;
+    certificate.policy.expires_at_ms = certificate.expires_at_ms;
+    certificate.operator_signature = Signature::new(
+        ALICE_KEYPAIR.private_key(),
+        &certificate
+            .operator_signing_bytes()
+            .expect("operator signing bytes"),
+    );
+    let certificate_id = certificate.certificate_id();
+    let expires_at_ms = certificate.expires_at_ms;
 
     client.submit_blocking(RegisterOfflineAllowance { certificate })?;
     network.ensure_blocks(2).await?;

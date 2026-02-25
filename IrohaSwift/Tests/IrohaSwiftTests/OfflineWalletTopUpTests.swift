@@ -226,6 +226,68 @@ final class OfflineWalletTopUpTests: XCTestCase {
         XCTAssertTrue(queue.isEmpty)
     }
 
+    func testReprovisionAllowanceSkipsVerdictRecordingWhenDisabled() async throws {
+        let existing = try makeCertificate()
+        let renewed = OfflineWalletCertificate(
+            controller: existing.controller,
+            operatorId: existing.operatorId,
+            allowance: OfflineAllowanceCommitment(
+                assetId: existing.allowance.assetId,
+                amount: existing.allowance.amount,
+                commitment: Data(repeating: 0x55, count: 32)
+            ),
+            spendPublicKey: existing.spendPublicKey,
+            attestationReport: existing.attestationReport,
+            issuedAtMs: existing.issuedAtMs,
+            expiresAtMs: existing.expiresAtMs,
+            policy: existing.policy,
+            operatorSignature: Data(repeating: 0xEE, count: 64),
+            metadata: existing.metadata,
+            verdictId: existing.verdictId,
+            attestationNonce: existing.attestationNonce,
+            refreshAtMs: existing.refreshAtMs
+        )
+        let renewedCertificateIdHex = try renewed.certificateIdHex().lowercased()
+        let issuePayload = try makeIssuePayload(certificate: renewed)
+        let renewPayload = try makeRegisterPayload(certificateIdHex: renewedCertificateIdHex)
+
+        var queue: [ExpectedRequest] = [
+            ExpectedRequest(method: "POST",
+                            path: "/v1/offline/certificates/deadbeef/renew/issue",
+                            responseBody: issuePayload),
+            ExpectedRequest(method: "POST",
+                            path: "/v1/offline/allowances/deadbeef/renew",
+                            responseBody: renewPayload)
+        ]
+
+        OfflineWalletTopUpStubURLProtocol.handler = { request in
+            guard !queue.isEmpty else {
+                throw URLError(.badServerResponse)
+            }
+            let expected = queue.removeFirst()
+            XCTAssertEqual(request.httpMethod, expected.method)
+            XCTAssertEqual(request.url?.path, expected.path)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, expected.responseBody)
+        }
+
+        let wallet = try makeWallet()
+        _ = try await wallet.reprovisionAllowance(
+            certificateIdHex: "deadbeef",
+            currentCertificate: existing,
+            newCommitment: Data(repeating: 0x55, count: 32),
+            authority: existing.controller,
+            privateKey: "ed0120deadbeef",
+            recordVerdict: false
+        )
+        XCTAssertNil(wallet.verdictMetadata(for: renewedCertificateIdHex))
+        XCTAssertTrue(queue.isEmpty)
+    }
+
     // MARK: - Helpers
 
     private struct ExpectedRequest {
