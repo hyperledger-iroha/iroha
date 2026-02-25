@@ -150,6 +150,7 @@ pub struct ValidatorElectionOutcome {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub rejection_reason: Option<String>,
     /// Tie-break scores for auditability.
+    #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub tie_break: Vec<ValidatorTieBreak>,
 }
