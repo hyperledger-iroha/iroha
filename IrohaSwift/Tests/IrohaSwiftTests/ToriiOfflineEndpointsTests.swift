@@ -661,6 +661,105 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         }
     }
 
+    func testOfflineReprovisionCompletionAPI() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let assetId = "rose#wonderland#\(accountId)"
+        let existingCertificate = OfflineWalletCertificate(
+            controller: accountId,
+            operatorId: accountId,
+            allowance: OfflineAllowanceCommitment(
+                assetId: assetId,
+                amount: "45.00",
+                commitment: Data(repeating: 0x11, count: 32)
+            ),
+            spendPublicKey: "ed0120cafebabe",
+            attestationReport: Data([0x01, 0x02, 0x03]),
+            issuedAtMs: 1_700_000_000_000,
+            expiresAtMs: 1_800_000_000_000,
+            policy: OfflineWalletPolicy(maxBalance: "100.00", maxTxValue: "25.00", expiresAtMs: 1_800_000_000_000),
+            operatorSignature: Data(repeating: 0xCD, count: 64)
+        )
+
+        let newCommitment = Data(repeating: 0x6B, count: 32)
+        let renewedCertificateIdHex = "feedbead"
+        let renewedPayloadObject: [String: Any] = [
+            "controller": existingCertificate.controller,
+            "operator": existingCertificate.operatorId,
+            "allowance": [
+                "asset": existingCertificate.allowance.assetId,
+                "amount": existingCertificate.allowance.amount,
+                "commitment": newCommitment.map(Int.init)
+            ],
+            "spend_public_key": existingCertificate.spendPublicKey,
+            "attestation_report": existingCertificate.attestationReport.map(Int.init),
+            "issued_at_ms": existingCertificate.issuedAtMs,
+            "expires_at_ms": existingCertificate.expiresAtMs,
+            "policy": [
+                "max_balance": existingCertificate.policy.maxBalance,
+                "max_tx_value": existingCertificate.policy.maxTxValue,
+                "expires_at_ms": existingCertificate.policy.expiresAtMs
+            ],
+            "operator_signature": "AB",
+            "metadata": [:],
+            "verdict_id_hex": NSNull(),
+            "attestation_nonce_hex": NSNull(),
+            "refresh_at_ms": NSNull()
+        ]
+        let issuePayload = try JSONSerialization.data(
+            withJSONObject: [
+                "certificate_id_hex": renewedCertificateIdHex,
+                "certificate": renewedPayloadObject
+            ],
+            options: [.sortedKeys]
+        )
+        let renewPayload = try JSONSerialization.data(
+            withJSONObject: ["certificate_id_hex": renewedCertificateIdHex],
+            options: [.sortedKeys]
+        )
+
+        var queue: [ExpectedRequest] = [
+            ExpectedRequest(method: "POST",
+                            path: "/v1/offline/certificates/deadbeef/renew/issue",
+                            responseBody: issuePayload,
+                            assertBody: nil),
+            ExpectedRequest(method: "POST",
+                            path: "/v1/offline/allowances/deadbeef/renew",
+                            responseBody: renewPayload,
+                            assertBody: nil)
+        ]
+
+        OfflineStubURLProtocol.handler = { request in
+            guard !queue.isEmpty else {
+                throw URLError(.badServerResponse)
+            }
+            let expected = queue.removeFirst()
+            XCTAssertEqual(request.httpMethod, expected.method)
+            XCTAssertEqual(request.url?.path, expected.path)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, expected.responseBody)
+        }
+
+        let client = makeClient()
+        let result = try await withCheckedThrowingContinuation { continuation in
+            _ = client.reprovisionOfflineAllowance(
+                certificateIdHex: "deadbeef",
+                currentCertificate: existingCertificate,
+                newCommitment: newCommitment,
+                authority: accountId,
+                privateKey: "ed0120cafebabe"
+            ) { completion in
+                continuation.resume(with: completion)
+            }
+        }
+        XCTAssertEqual(result.certificate.certificateIdHex.lowercased(), renewedCertificateIdHex)
+        XCTAssertEqual(result.registration.certificateIdHex.lowercased(), renewedCertificateIdHex)
+        XCTAssertTrue(queue.isEmpty)
+    }
+
     func testGetSettlementStatusReturnsSettledWhenSettlementRecordExists() async throws {
         let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
         let assetId = "rose#wonderland#\(accountId)"

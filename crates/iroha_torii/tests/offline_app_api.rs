@@ -7,11 +7,11 @@ mod offline_balance_proof_utils;
 use std::{str::FromStr, sync::Arc};
 
 use axum::{
+    Router,
     body::Body,
     http::{Request, StatusCode},
-    Router,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
@@ -24,24 +24,24 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
+    ChainId,
     account::{Account, AccountId},
     asset::{AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
     domain::Domain,
     isi::{
-        offline::{RegisterOfflineAllowance, SubmitOfflineToOnlineTransfer},
         Mint,
+        offline::{RegisterOfflineAllowance, SubmitOfflineToOnlineTransfer},
     },
     metadata::Metadata,
     offline::{
-        compute_receipts_root, AppleAppAttestProof, OfflineAllowanceCommitment,
+        AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineAllowanceCommitment,
         OfflinePlatformProof, OfflineSpendReceipt, OfflineToOnlineTransfer,
-        OfflineWalletCertificate, OfflineWalletPolicy, OFFLINE_ASSET_ENABLED_METADATA_KEY,
+        OfflineWalletCertificate, OfflineWalletPolicy, compute_receipts_root,
     },
-    ChainId,
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec};
-use iroha_torii::{test_utils, MaybeTelemetry, OnlinePeersProvider, Torii};
+use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use nonzero_ext::nonzero;
 use norito::json::{self, Value};
 use offline_balance_proof_utils::{build_balance_proof_for_allowance, scalar_bytes};
@@ -71,8 +71,17 @@ fn build_harness() -> Harness {
     let query = LiveQueryStore::start_test();
     let fixtures = build_fixtures();
     let world = world_from_fixtures(&fixtures);
-    let mut state =
-        State::new_with_chain(world, Arc::clone(&kura), query, ChainId::from("test-chain"));
+    let chain_id = ChainId::from("test-chain");
+    #[cfg(feature = "telemetry")]
+    let mut state = State::new_with_chain(
+        world,
+        Arc::clone(&kura),
+        query,
+        chain_id.clone(),
+        iroha_core::telemetry::StateTelemetry::default(),
+    );
+    #[cfg(not(feature = "telemetry"))]
+    let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
     state.settlement.offline.skip_platform_attestation = true;
     state.settlement.offline.proof_mode =
         iroha_config::parameters::actual::OfflineProofMode::Optional;
@@ -85,7 +94,7 @@ fn build_harness() -> Harness {
     drop(peers_tx);
 
     let torii = Torii::new_with_handle(
-        ChainId::from("test-chain"),
+        chain_id,
         kiso,
         cfg.torii.clone(),
         queue,
