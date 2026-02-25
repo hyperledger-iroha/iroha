@@ -318,6 +318,7 @@ fn build_receipt_fixtures(chain_id: &ChainId) -> ReceiptFixtures {
         deposit_account: operator.clone(),
         receipts: vec![receipt_one, receipt_two],
         balance_proof,
+        balance_proofs: None,
         aggregate_proof: None,
         attachments: None,
         platform_snapshot: None,

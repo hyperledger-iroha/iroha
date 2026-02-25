@@ -8368,7 +8368,13 @@ fn openapi_schemas() -> Map {
                 },
                 "status": {
                     "type": "string",
+                    "enum": ["settled", "rejected", "archived"],
                     "description": "Lifecycle status enforced for the bundle."
+                },
+                "rejection_reason": {
+                    "type": "string",
+                    "description": "Stable rejection code when `status` is `rejected`.",
+                    "nullable": true
                 },
                 "recorded_at_ms": {
                     "type": "integer",
@@ -8520,6 +8526,7 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "status": {
                     "type": "string",
+                    "enum": ["settled", "rejected", "archived"],
                     "description": "Status that became active during this transition."
                 },
                 "transitioned_at_ms": {

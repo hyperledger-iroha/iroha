@@ -35034,6 +35034,7 @@ fn transfer_record_string_field(record: &OfflineTransferRecord, field: &str) -> 
             .first()
             .map(|receipt| receipt.asset.to_string()),
         "status" => Some(record.status.as_label().into()),
+        "rejection_reason" => record.rejection_reason.clone(),
         "certificate_id_hex" => transfer_certificate_id_hex(record),
         "verdict_id_hex" => transfer_verdict_hex(record),
         "attestation_nonce_hex" => transfer_attestation_nonce_hex(record),
@@ -35144,6 +35145,7 @@ fn transfer_item_string_field(item: &OfflineTransferSummary, field: &str) -> Opt
         "deposit_account_id" => Some(item.deposit_account.to_string()),
         "asset_id" => item.asset_id.clone(),
         "status" => Some(item.status.as_label().into()),
+        "rejection_reason" => item.rejection_reason.clone(),
         "certificate_id_hex" => item.certificate_id_hex.clone(),
         "verdict_id_hex" => item.verdict_id_hex.clone(),
         "attestation_nonce_hex" => item.attestation_nonce_hex.clone(),
@@ -38029,6 +38031,7 @@ fn offline_transfer_filter_object(expr: &FilterExpr, record: &OfflineTransferRec
                 | "receiver_id"
                 | "deposit_account_id"
                 | "status"
+                | "rejection_reason"
                 | "asset_id"
                 | "certificate_id_hex"
                 | "verdict_id_hex"
@@ -38149,6 +38152,7 @@ fn offline_transfer_filter_projection(expr: &FilterExpr, item: &OfflineTransferS
                 | "receiver_id"
                 | "deposit_account_id"
                 | "status"
+                | "rejection_reason"
                 | "asset_id"
                 | "certificate_id_hex"
                 | "verdict_id_hex"
@@ -38222,6 +38226,9 @@ fn offline_transfer_item_to_json(
         Value::from(item.total_amount.to_string()),
     );
     map.insert("status".into(), Value::from(item.status.as_label()));
+    if let Some(reason) = &item.rejection_reason {
+        map.insert("rejection_reason".into(), Value::from(reason.clone()));
+    }
     map.insert("recorded_at_ms".into(), Value::from(item.recorded_at_ms));
     map.insert(
         "recorded_at_height".into(),
@@ -38270,11 +38277,16 @@ fn offline_transfer_item_to_json(
         let snapshot_value = verdict_snapshot_to_json(snapshot)?;
         map.insert("verdict_snapshot".into(), snapshot_value);
     }
-    let transfer_json = norito::json::to_value(&item.transfer).map_err(|err| {
+    let mut transfer_json = norito::json::to_value(&item.transfer).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             err.to_string(),
         ))
     })?;
+    if let Some(reason) = &item.rejection_reason {
+        if let Value::Object(ref mut transfer_object) = transfer_json {
+            transfer_object.insert("rejection_reason".into(), Value::from(reason.clone()));
+        }
+    }
     map.insert("transfer".into(), transfer_json);
     Ok(Value::Object(map))
 }
@@ -39207,6 +39219,16 @@ pub async fn handle_post_v1_offline_settlements_submit(
     use iroha_data_model::{isi::offline, prelude as dm};
 
     let bundle_id_hex = hex::encode(req.transfer.bundle_id.as_ref());
+    if state
+        .world_view()
+        .offline_to_online_transfers()
+        .get(&req.transfer.bundle_id)
+        .is_some()
+    {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}duplicate_bundle:offline transfer bundle already submitted"
+        )));
+    }
     let isi = offline::SubmitOfflineToOnlineTransfer {
         transfer: req.transfer,
     };
@@ -39428,6 +39450,7 @@ fn validate_offline_transfers_filter_adapter(expr: &FilterExpr) -> Result<()> {
         "receiver_id",
         "deposit_account_id",
         "status",
+        "rejection_reason",
         "asset_id",
         "certificate_id_hex",
         "verdict_id_hex",
@@ -42041,6 +42064,16 @@ mod adapter_filter_tests {
         validate_offline_transfers_filter_adapter(&expr).unwrap();
     }
 
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn offline_transfer_filter_validator_accepts_rejection_reason() {
+        let expr = FilterExpr::Eq(
+            FieldPath("rejection_reason".into()),
+            Value::from("allowance_exceeded"),
+        );
+        validate_offline_transfers_filter_adapter(&expr).unwrap();
+    }
+
     #[cfg(all(test, feature = "app_api"))]
     fn sample_allowance_record() -> OfflineAllowanceRecord {
         use iroha_crypto::{PublicKey, Signature};
@@ -42493,6 +42526,17 @@ mod adapter_filter_tests {
         assert!(offline_transfer_filter_object(&platform_expr, &record));
         let item = OfflineTransferSummary::from(record.clone());
         assert!(offline_transfer_filter_projection(&platform_expr, &item));
+
+        let mut rejected = record;
+        rejected.status = OfflineTransferStatus::Rejected;
+        rejected.rejection_reason = Some("allowance_exceeded".into());
+        let rejection_expr = FilterExpr::Eq(
+            FieldPath("rejection_reason".into()),
+            Value::from("allowance_exceeded"),
+        );
+        assert!(offline_transfer_filter_object(&rejection_expr, &rejected));
+        let item = OfflineTransferSummary::from(rejected);
+        assert!(offline_transfer_filter_projection(&rejection_expr, &item));
     }
 
     #[cfg(feature = "app_api")]
@@ -42539,6 +42583,37 @@ mod adapter_filter_tests {
         let object = value.as_object().expect("json object");
         assert!(object.get("platform_policy").is_none());
         assert!(object.get("platform_token_snapshot").is_none());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn offline_transfer_item_json_injects_rejection_reason_for_sdk_compatibility() {
+        let mut record = sample_transfer_record();
+        record.status = OfflineTransferStatus::Rejected;
+        record.rejection_reason = Some("allowance_exceeded".into());
+
+        let item = OfflineTransferSummary::from(record);
+        let value =
+            offline_transfer_item_to_json(&item, AddressFormatPreference::Ih58).expect("json");
+        let object = value.as_object().expect("json object");
+        assert_eq!(
+            object
+                .get("rejection_reason")
+                .and_then(Value::as_str)
+                .expect("top-level reason"),
+            "allowance_exceeded"
+        );
+        let transfer = object
+            .get("transfer")
+            .and_then(Value::as_object)
+            .expect("transfer object");
+        assert_eq!(
+            transfer
+                .get("rejection_reason")
+                .and_then(Value::as_str)
+                .expect("transfer-level reason"),
+            "allowance_exceeded"
+        );
     }
 
     #[cfg(feature = "app_api")]
@@ -42921,6 +42996,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
             claimed_delta: Numeric::new(250, 0),
             zk_proof: Some(sample_proof),
         },
+        balance_proofs: None,
         aggregate_proof,
         attachments: None,
         platform_snapshot: None,
@@ -42930,6 +43006,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
         transfer,
         controller,
         status: OfflineTransferStatus::Settled,
+        rejection_reason: None,
         recorded_at_ms: 1_805_000_000_000,
         recorded_at_height: 123,
         archived_at_height: Some(150),

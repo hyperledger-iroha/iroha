@@ -1773,8 +1773,18 @@
             "nullable": true,
             "type": "integer"
           },
+          "rejection_reason": {
+            "description": "Stable rejection code when `status` is `rejected`.",
+            "nullable": true,
+            "type": "string"
+          },
           "status": {
             "description": "Lifecycle status enforced for the bundle.",
+            "enum": [
+              "settled",
+              "rejected",
+              "archived"
+            ],
             "type": "string"
           },
           "status_transitions": {
@@ -1845,6 +1855,11 @@
         "properties": {
           "status": {
             "description": "Status that became active during this transition.",
+            "enum": [
+              "settled",
+              "rejected",
+              "archived"
+            ],
             "type": "string"
           },
           "transitioned_at_ms": {
@@ -5327,6 +5342,70 @@
         ]
       }
     },
+    "/v1/explorer/asset-definitions/{definition_id}/econometrics": {
+      "get": {
+        "description": "Fetch econometrics aggregates (velocity/issuance windows) for an asset definition.",
+        "parameters": [
+          {
+            "description": "Asset definition identifier.",
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch asset definition econometrics (explorer).",
+        "tags": [
+          "Explorer"
+        ]
+      }
+    },
+    "/v1/explorer/asset-definitions/{definition_id}/snapshot": {
+      "get": {
+        "description": "Fetch econometrics snapshot (holders + distribution metrics) for an asset definition.",
+        "parameters": [
+          {
+            "description": "Asset definition identifier.",
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch asset definition snapshot (explorer).",
+        "tags": [
+          "Explorer"
+        ]
+      }
+    },
     "/v1/explorer/assets": {
       "get": {
         "description": "List assets for explorer usage (supports pagination and optional owned_by/definition/asset_id filtering).",
@@ -5458,6 +5537,27 @@
           }
         },
         "summary": "List blocks (explorer).",
+        "tags": [
+          "Explorer"
+        ]
+      }
+    },
+    "/v1/explorer/blocks/stream": {
+      "get": {
+        "description": "Stream block updates via SSE.",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Event stream."
+          }
+        },
+        "summary": "Stream blocks (explorer).",
         "tags": [
           "Explorer"
         ]
@@ -6481,6 +6581,27 @@
         ]
       }
     },
+    "/v1/gov/stream": {
+      "get": {
+        "description": "Stream governance update notifications via SSE.",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Event stream."
+          }
+        },
+        "summary": "Stream governance updates.",
+        "tags": [
+          "Governance"
+        ]
+      }
+    },
     "/v1/gov/tally/{id}": {
       "get": {
         "description": "Fetch a tally snapshot by referendum id.",
@@ -6986,6 +7107,124 @@
         "summary": "Fetch execution state root for a block height.",
         "tags": [
           "Ledger"
+        ]
+      }
+    },
+    "/v1/mcp": {
+      "get": {
+        "description": "Returns server capabilities and tool count for the native MCP bridge.",
+        "operationId": "mcpCapabilities",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch MCP capabilities.",
+        "tags": [
+          "MCP"
+        ]
+      },
+      "post": {
+        "description": "Accepts JSON-RPC payloads for MCP tool discovery and invocation.",
+        "operationId": "mcpJsonRpc",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Execute MCP JSON-RPC request.",
+        "tags": [
+          "MCP"
+        ]
+      }
+    },
+    "/v1/nexus/dataspaces/accounts/{literal}/summary": {
+      "get": {
+        "description": "Resolves the supplied account literal (IH58 (preferred)/sora (second-best)/alias/public-key) and returns a joined view of UAID bindings, space-directory manifests, portfolio counters, and per-dataspace consensus commitments.",
+        "operationId": "nexusDataspacesAccountSummary",
+        "parameters": [
+          {
+            "description": "Account literal to resolve (IH58 (preferred)/sora (second-best)/alias/public-key).",
+            "in": "path",
+            "name": "literal",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Preferred address format (`ih58` or `compressed`).",
+            "in": "query",
+            "name": "address_format",
+            "required": false,
+            "schema": {
+              "enum": [
+                "ih58",
+                "compressed"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Dataspace summary retrieved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid account literal."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Account not found."
+          }
+        },
+        "summary": "Summarize dataspaces for an account literal.",
+        "tags": [
+          "Nexus"
         ]
       }
     },
@@ -13769,6 +14008,27 @@
         ]
       }
     },
+    "/v1/telemetry/live": {
+      "get": {
+        "description": "Stream peer and network telemetry updates via SSE.",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Event stream."
+          }
+        },
+        "summary": "Stream live telemetry updates.",
+        "tags": [
+          "System"
+        ]
+      }
+    },
     "/v1/telemetry/peers-info": {
       "get": {
         "description": "Return the latest peer telemetry snapshot.",
@@ -14044,6 +14304,99 @@
           }
         },
         "summary": "Fetch a ZK attachment.",
+        "tags": [
+          "ZK"
+        ]
+      }
+    },
+    "/v1/zk/ivm/prove": {
+      "post": {
+        "description": "Submit an IVM proved payload and return a job identifier for proof generation.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Prove IVM execution (job).",
+        "tags": [
+          "ZK"
+        ]
+      }
+    },
+    "/v1/zk/ivm/prove/{job_id}": {
+      "delete": {
+        "description": "Delete an IVM proof generation job entry.",
+        "parameters": [
+          {
+            "description": "Proof generation job identifier.",
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Delete an IVM prove job.",
+        "tags": [
+          "ZK"
+        ]
+      },
+      "get": {
+        "description": "Fetch the status of an IVM proof generation job.",
+        "parameters": [
+          {
+            "description": "Proof generation job identifier.",
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch an IVM prove job.",
         "tags": [
           "ZK"
         ]
@@ -14540,6 +14893,10 @@
     {
       "description": "Iroha Connect session and relay endpoints.",
       "name": "Connect"
+    },
+    {
+      "description": "Model Context Protocol endpoint for agent tool orchestration.",
+      "name": "MCP"
     },
     {
       "description": "Push notification device registration.",

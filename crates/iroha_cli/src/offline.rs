@@ -503,6 +503,7 @@ impl BundleEncoding {
 #[derive(Clone, Debug, ValueEnum, PartialEq, Eq)]
 pub enum TransferStatusArg {
     Settled,
+    Rejected,
     Archived,
 }
 
@@ -510,6 +511,7 @@ impl TransferStatusArg {
     const fn as_status(&self) -> OfflineTransferStatus {
         match self {
             Self::Settled => OfflineTransferStatus::Settled,
+            Self::Rejected => OfflineTransferStatus::Rejected,
             Self::Archived => OfflineTransferStatus::Archived,
         }
     }
@@ -1491,7 +1493,7 @@ mod bundle_inspect_tests {
         let resulting_blinding = scalar_bytes(2);
         let initial_commitment =
             compute_commitment(&allowance_amount, expected_scale, &initial_blinding)
-            .expect("initial commitment");
+                .expect("initial commitment");
         let allowance_commitment = OfflineAllowanceCommitment {
             asset: asset.clone(),
             amount: allowance_amount.clone(),
@@ -1507,7 +1509,10 @@ mod bundle_inspect_tests {
         let spend_keys = KeyPair::random();
         let operator_signature =
             Signature::new(operator_keys.private_key(), b"certificate payload");
-        let operator = AccountId::new(controller.domain().clone(), operator_keys.public_key().clone());
+        let operator = AccountId::new(
+            controller.domain().clone(),
+            operator_keys.public_key().clone(),
+        );
         let certificate = OfflineWalletCertificate {
             controller: controller.clone(),
             operator,
@@ -1586,6 +1591,7 @@ mod bundle_inspect_tests {
             deposit_account: deposit,
             receipts,
             balance_proof,
+            balance_proofs: None,
             aggregate_proof,
             attachments: None,
             platform_snapshot: None,
@@ -1714,6 +1720,7 @@ pub struct OfflineRejectionStatsItem {
 mod tests {
     use super::*;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use iroha::config::Config;
     use iroha::data_model::{
         asset::AssetDefinitionId,
         domain::DomainId,
@@ -1725,7 +1732,6 @@ mod tests {
         },
         prelude::AccountId,
     };
-    use iroha::config::Config;
     use iroha_crypto::{Hash, PublicKey, Signature};
     use iroha_i18n::{Bundle, Language, Localizer};
     use norito::json::Value;
@@ -1923,6 +1929,7 @@ mod tests {
                 claimed_delta: Numeric::new(50, 0),
                 zk_proof: None,
             },
+            balance_proofs: None,
             aggregate_proof: None,
             attachments: None,
             platform_snapshot: None,
@@ -1931,6 +1938,7 @@ mod tests {
             transfer,
             controller: certificate.controller.clone(),
             status: OfflineTransferStatus::Settled,
+            rejection_reason: None,
             recorded_at_ms: 1,
             recorded_at_height: 1,
             archived_at_height: None,
@@ -2030,6 +2038,10 @@ mod tests {
         assert_eq!(
             TransferStatusArg::Settled.as_status(),
             OfflineTransferStatus::Settled
+        );
+        assert_eq!(
+            TransferStatusArg::Rejected.as_status(),
+            OfflineTransferStatus::Rejected
         );
         assert_eq!(
             TransferStatusArg::Archived.as_status(),
