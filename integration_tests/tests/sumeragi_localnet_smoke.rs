@@ -22,7 +22,9 @@ use iroha::data_model::{
     name::Name,
     parameter::{BlockParameter, Parameter, SumeragiParameter, system::SumeragiNposParameters},
 };
+use iroha::nexus::verify_lane_relay_envelopes;
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use nonzero_ext::nonzero;
 use norito::json::{Map, Value};
 use rand::{RngCore, SeedableRng};
@@ -30,7 +32,7 @@ use rand_chacha::ChaCha8Rng;
 use reqwest::Client as HttpClient;
 use tempfile::tempdir;
 use tokio::{sync::Mutex, task, time::sleep};
-use toml::Value as TomlValue;
+use toml::{Table, Value as TomlValue};
 
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
@@ -78,6 +80,7 @@ const THROUGHPUT_NPOS_SLO_VIEW_CHANGE_RATE_MAX: f64 = 0.2;
 const THROUGHPUT_NPOS_SLO_BACKPRESSURE_RATE_MAX: f64 = 3.0;
 const THROUGHPUT_NPOS_SLO_QUEUE_SAT_FRAC_MAX: f64 = 0.3;
 const THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV: &str = "IROHA_THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_SECS";
+const FAIL_ON_SANDBOX_SKIP_ENV: &str = "IROHA_FAIL_ON_SANDBOX_SKIP";
 
 #[allow(unsafe_code)]
 fn set_env_var(key: &str, value: impl AsRef<std::ffi::OsStr>) {
@@ -121,6 +124,16 @@ fn queue_progress_timeout() -> Duration {
     let default_secs = SOAK_QUEUE_PROGRESS_TIMEOUT.as_secs();
     let secs = env_or_default(THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV, default_secs);
     Duration::from_secs(secs)
+}
+
+fn fail_on_sandbox_skip() -> bool {
+    let Ok(raw) = std::env::var(FAIL_ON_SANDBOX_SKIP_ENV) else {
+        return false;
+    };
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -345,6 +358,259 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
     )?
     .is_none()
     {
+        return Ok(());
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()> {
+    init_instruction_registry();
+    let _guard = LOCALNET_SMOKE_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
+
+    let mut lane_global = Table::new();
+    lane_global.insert("index".into(), TomlValue::Integer(0));
+    lane_global.insert("alias".into(), TomlValue::String("lane-global".to_owned()));
+    lane_global.insert("dataspace".into(), TomlValue::String("global".to_owned()));
+    lane_global.insert("visibility".into(), TomlValue::String("public".to_owned()));
+    lane_global.insert("metadata".into(), TomlValue::Table(Table::new()));
+
+    let mut lane_alice = Table::new();
+    lane_alice.insert("index".into(), TomlValue::Integer(1));
+    lane_alice.insert("alias".into(), TomlValue::String("lane-alice".to_owned()));
+    lane_alice.insert("dataspace".into(), TomlValue::String("ds1".to_owned()));
+    lane_alice.insert("visibility".into(), TomlValue::String("public".to_owned()));
+    lane_alice.insert("metadata".into(), TomlValue::Table(Table::new()));
+
+    let mut lane_bob = Table::new();
+    lane_bob.insert("index".into(), TomlValue::Integer(2));
+    lane_bob.insert("alias".into(), TomlValue::String("lane-bob".to_owned()));
+    lane_bob.insert("dataspace".into(), TomlValue::String("ds2".to_owned()));
+    lane_bob.insert("visibility".into(), TomlValue::String("public".to_owned()));
+    lane_bob.insert("metadata".into(), TomlValue::Table(Table::new()));
+
+    let mut ds_global = Table::new();
+    ds_global.insert("alias".into(), TomlValue::String("global".to_owned()));
+    ds_global.insert("id".into(), TomlValue::Integer(0));
+    ds_global.insert(
+        "description".into(),
+        TomlValue::String("default dataspace".to_owned()),
+    );
+    ds_global.insert("fault_tolerance".into(), TomlValue::Integer(1));
+
+    let mut ds1 = Table::new();
+    ds1.insert("alias".into(), TomlValue::String("ds1".to_owned()));
+    ds1.insert("id".into(), TomlValue::Integer(1));
+    ds1.insert(
+        "description".into(),
+        TomlValue::String("alice route dataspace".to_owned()),
+    );
+    ds1.insert("fault_tolerance".into(), TomlValue::Integer(1));
+
+    let mut ds2 = Table::new();
+    ds2.insert("alias".into(), TomlValue::String("ds2".to_owned()));
+    ds2.insert("id".into(), TomlValue::Integer(2));
+    ds2.insert(
+        "description".into(),
+        TomlValue::String("bob route dataspace".to_owned()),
+    );
+    ds2.insert("fault_tolerance".into(), TomlValue::Integer(1));
+
+    let mut matcher_alice = Table::new();
+    matcher_alice.insert("account".into(), TomlValue::String(ALICE_ID.to_string()));
+    let mut rule_alice = Table::new();
+    rule_alice.insert("lane".into(), TomlValue::Integer(1));
+    rule_alice.insert("dataspace".into(), TomlValue::String("ds1".to_owned()));
+    rule_alice.insert("matcher".into(), TomlValue::Table(matcher_alice));
+
+    let mut matcher_bob = Table::new();
+    matcher_bob.insert("account".into(), TomlValue::String(BOB_ID.to_string()));
+    let mut rule_bob = Table::new();
+    rule_bob.insert("lane".into(), TomlValue::Integer(2));
+    rule_bob.insert("dataspace".into(), TomlValue::String("ds2".to_owned()));
+    rule_bob.insert("matcher".into(), TomlValue::Table(matcher_bob));
+
+    let mut policy = Table::new();
+    policy.insert("default_lane".into(), TomlValue::Integer(0));
+    policy.insert(
+        "default_dataspace".into(),
+        TomlValue::String("global".to_owned()),
+    );
+    policy.insert(
+        "rules".into(),
+        TomlValue::Array(vec![
+            TomlValue::Table(rule_alice),
+            TomlValue::Table(rule_bob),
+        ]),
+    );
+
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_real_genesis_keypair()
+        .with_pipeline_time(SMOKE_PIPELINE_TIME)
+        .with_config_layer(move |layer| {
+            layer
+                .write(["sumeragi", "consensus_mode"], "npos")
+                .write(["nexus", "enabled"], true)
+                .write(["nexus", "lane_count"], 3_i64)
+                .write(
+                    ["nexus", "lane_catalog"],
+                    TomlValue::Array(vec![
+                        TomlValue::Table(lane_global.clone()),
+                        TomlValue::Table(lane_alice.clone()),
+                        TomlValue::Table(lane_bob.clone()),
+                    ]),
+                )
+                .write(
+                    ["nexus", "dataspace_catalog"],
+                    TomlValue::Array(vec![
+                        TomlValue::Table(ds_global.clone()),
+                        TomlValue::Table(ds1.clone()),
+                        TomlValue::Table(ds2.clone()),
+                    ]),
+                )
+                .write(
+                    ["nexus", "routing_policy"],
+                    TomlValue::Table(policy.clone()),
+                );
+        });
+
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(sumeragi_status_json_endpoint_decodes_to_wire_end_to_end),
+    )
+    .await?
+    else {
+        ensure!(
+            !fail_on_sandbox_skip(),
+            "sandbox denied localnet startup and {} is enabled",
+            FAIL_ON_SANDBOX_SKIP_ENV
+        );
+        return Ok(());
+    };
+
+    let result: Result<()> = async {
+        wait_for_status_responses(&network, Duration::from_secs(30)).await?;
+        let peer = network
+            .peers()
+            .first()
+            .cloned()
+            .ok_or_else(|| eyre!("network started without peers"))?;
+
+        let before_height = collect_statuses(&network, STATUS_POLL_TIMEOUT)
+            .await?
+            .iter()
+            .map(|status| status.blocks)
+            .min()
+            .unwrap_or_default();
+        let alice_client = peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+        let bob_client = peer.client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
+        alice_client
+            .submit::<InstructionBox>(
+                Log::new(Level::INFO, "cross-lane route probe alice".to_owned()).into(),
+            )
+            .wrap_err("submit cross-lane route probe from alice")?;
+        bob_client
+            .submit::<InstructionBox>(
+                Log::new(Level::INFO, "cross-lane route probe bob".to_owned()).into(),
+            )
+            .wrap_err("submit cross-lane route probe from bob")?;
+        wait_for_converged_height(
+            &network,
+            before_height.saturating_add(2),
+            Duration::from_secs(45),
+        )
+        .await?;
+
+        let relay_deadline = Instant::now() + Duration::from_secs(45);
+        let mut observed_cross_lane_relay = false;
+        while Instant::now() < relay_deadline {
+            let statuses = collect_sumeragi_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+            observed_cross_lane_relay = statuses.iter().any(|status| {
+                status.lane_relay_envelopes.iter().any(|relay| {
+                    relay.lane_id.as_u32() != 0 || relay.dataspace_id.as_u64() != 0
+                })
+            });
+            if observed_cross_lane_relay {
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        ensure!(
+            observed_cross_lane_relay,
+            "timed out waiting for cross-lane relay envelopes after routed submissions"
+        );
+
+        let url = format!(
+            "{}/v1/sumeragi/status",
+            peer.torii_url().trim_end_matches('/')
+        );
+        let response = HttpClient::new()
+            .get(url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .wrap_err("fetch sumeragi status endpoint as JSON")?;
+        let status = response.status();
+        ensure!(
+            status.is_success(),
+            "sumeragi status endpoint returned {status}"
+        );
+
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        ensure!(
+            content_type.starts_with("application/json"),
+            "expected JSON status payload, got content-type={content_type}"
+        );
+
+        let body = response
+            .bytes()
+            .await
+            .wrap_err("read sumeragi status JSON body")?;
+        let wire: SumeragiStatusWire = norito::json::from_slice(&body)
+            .wrap_err("decode sumeragi status JSON payload into SumeragiStatusWire")?;
+        ensure!(
+            !wire.mode_tag.is_empty(),
+            "decoded sumeragi status wire has empty mode_tag"
+        );
+        ensure!(
+            !wire.lane_relay_envelopes.is_empty(),
+            "expected non-empty lane_relay_envelopes after cross-lane routed submissions"
+        );
+        ensure!(
+            wire.lane_relay_envelopes.iter().any(|relay| {
+                relay.lane_id.as_u32() != 0 || relay.dataspace_id.as_u64() != 0
+            }),
+            "expected at least one non-default lane relay envelope after cross-lane routed submissions"
+        );
+        verify_lane_relay_envelopes(&wire.lane_relay_envelopes)
+            .wrap_err("lane relay envelope verification failed for JSON status payload")?;
+
+        network.shutdown().await;
+        Ok(())
+    }
+    .await;
+
+    if sandbox::handle_result(
+        result,
+        stringify!(sumeragi_status_json_endpoint_decodes_to_wire_end_to_end),
+    )?
+    .is_none()
+    {
+        ensure!(
+            !fail_on_sandbox_skip(),
+            "sandboxed skip surfaced in result handling and {} is enabled",
+            FAIL_ON_SANDBOX_SKIP_ENV
+        );
         return Ok(());
     }
     Ok(())
@@ -2386,6 +2652,36 @@ async fn queue_progress_timeout_reads_override() {
     set_env_var(THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV, "0");
     assert_eq!(queue_progress_timeout(), SOAK_QUEUE_PROGRESS_TIMEOUT);
     remove_env_var(THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV);
+}
+
+#[tokio::test]
+async fn fail_on_sandbox_skip_parses_truthy_values() {
+    let _guard = LOCALNET_SMOKE_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
+    set_env_var(FAIL_ON_SANDBOX_SKIP_ENV, "1");
+    assert!(fail_on_sandbox_skip());
+    set_env_var(FAIL_ON_SANDBOX_SKIP_ENV, "true");
+    assert!(fail_on_sandbox_skip());
+    set_env_var(FAIL_ON_SANDBOX_SKIP_ENV, "yes");
+    assert!(fail_on_sandbox_skip());
+    remove_env_var(FAIL_ON_SANDBOX_SKIP_ENV);
+}
+
+#[tokio::test]
+async fn fail_on_sandbox_skip_defaults_to_false() {
+    let _guard = LOCALNET_SMOKE_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
+    remove_env_var(FAIL_ON_SANDBOX_SKIP_ENV);
+    assert!(!fail_on_sandbox_skip());
+    set_env_var(FAIL_ON_SANDBOX_SKIP_ENV, "0");
+    assert!(!fail_on_sandbox_skip());
+    set_env_var(FAIL_ON_SANDBOX_SKIP_ENV, "off");
+    assert!(!fail_on_sandbox_skip());
+    remove_env_var(FAIL_ON_SANDBOX_SKIP_ENV);
 }
 
 #[test]

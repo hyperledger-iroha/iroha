@@ -208,6 +208,83 @@ fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
 
 #[test]
 #[allow(clippy::unnecessary_wraps)]
+fn cross_lane_builder_rejects_settlement_height_mismatch_at_construction() -> Result<()> {
+    let lane_id = LaneId::new(20);
+    let dataspace_id = DataSpaceId::new(12);
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(10).expect("height"),
+        None,
+        None,
+        None,
+        1_700_000_100_000,
+        0,
+    );
+    let settlement = LaneBlockCommitment {
+        block_height: 9,
+        lane_id,
+        dataspace_id,
+        tx_count: 1,
+        total_local_micro: 50,
+        total_xor_due_micro: 30,
+        total_xor_after_haircut_micro: 28,
+        total_xor_variance_micro: 2,
+        swap_metadata: None,
+        receipts: Vec::new(),
+    };
+
+    let err = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
+        .build()
+        .expect_err("settlement/header height mismatch should fail");
+    assert!(matches!(
+        err,
+        nexus::CrossLaneProofError::Relay(LaneRelayError::SettlementBlockHeightMismatch)
+    ));
+    Ok(())
+}
+
+#[test]
+#[allow(clippy::unnecessary_wraps)]
+fn cross_lane_builder_rejects_da_hash_mismatch_at_construction() -> Result<()> {
+    let lane_id = LaneId::new(21);
+    let dataspace_id = DataSpaceId::new(13);
+    let settlement = LaneBlockCommitment {
+        block_height: 11,
+        lane_id,
+        dataspace_id,
+        tx_count: 2,
+        total_local_micro: 60,
+        total_xor_due_micro: 40,
+        total_xor_after_haircut_micro: 36,
+        total_xor_variance_micro: 4,
+        swap_metadata: None,
+        receipts: Vec::new(),
+    };
+    let mut header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(11).expect("height"),
+        None,
+        None,
+        None,
+        1_700_000_110_000,
+        0,
+    );
+    let header_da_hash = HashOf::from_untyped_unchecked(Hash::new([0x31, 0x41, 0x59, 0x26]));
+    header.set_da_commitments_hash(Some(header_da_hash));
+    let mismatched_da_hash = Some(HashOf::from_untyped_unchecked(Hash::new([
+        0x27, 0x18, 0x28, 0x18,
+    ])));
+
+    let err = nexus::CrossLaneTransferBuilder::new(header, None, mismatched_da_hash, settlement)
+        .build()
+        .expect_err("da hash mismatch should fail");
+    assert!(matches!(
+        err,
+        nexus::CrossLaneProofError::Relay(LaneRelayError::DaCommitmentHashMismatch)
+    ));
+    Ok(())
+}
+
+#[test]
+#[allow(clippy::unnecessary_wraps)]
 fn duplicate_lane_relay_envelopes_are_rejected() -> Result<()> {
     let lane_id = LaneId::new(9);
     let dataspace_id = iroha_data_model::nexus::DataSpaceId::new(5);
@@ -481,6 +558,234 @@ fn lane_relay_quorum_requires_quorum_bitmap() {
     assert!(matches!(
         err,
         nexus::CrossLaneProofError::Relay(LaneRelayError::InsufficientQuorum { .. })
+    ));
+}
+
+#[test]
+fn lane_relay_quorum_accepts_exact_min_quorum() {
+    let lane_id = LaneId::new(19);
+    let dataspace_id = DataSpaceId::new(11);
+    let settlement = LaneBlockCommitment {
+        block_height: 9,
+        lane_id,
+        dataspace_id,
+        tx_count: 1,
+        total_local_micro: 12,
+        total_xor_due_micro: 8,
+        total_xor_after_haircut_micro: 7,
+        total_xor_variance_micro: 1,
+        swap_metadata: None,
+        receipts: Vec::new(),
+    };
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(9).expect("height"),
+        None,
+        None,
+        None,
+        1_700_000_065_000,
+        0,
+    );
+    let mut qc = sample_commit_qc(&header);
+    qc.aggregate.signers_bitmap = vec![0b0000_0111];
+    qc.aggregate.bls_aggregate_signature = vec![0x66; 48];
+    let proof = nexus::CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)
+        .build()
+        .expect("proof");
+    let quorum = nexus::LaneRelayQuorumContext::new(5, 3).expect("quorum context");
+
+    proof
+        .verify_with_quorum(quorum)
+        .expect("exact min quorum should pass");
+}
+
+#[test]
+fn lane_relay_quorum_rejects_signer_bitmap_length_mismatch() {
+    let lane_id = LaneId::new(18);
+    let dataspace_id = DataSpaceId::new(10);
+    let settlement = LaneBlockCommitment {
+        block_height: 8,
+        lane_id,
+        dataspace_id,
+        tx_count: 1,
+        total_local_micro: 11,
+        total_xor_due_micro: 7,
+        total_xor_after_haircut_micro: 6,
+        total_xor_variance_micro: 1,
+        swap_metadata: None,
+        receipts: Vec::new(),
+    };
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(8).expect("height"),
+        None,
+        None,
+        None,
+        1_700_000_070_000,
+        0,
+    );
+    let mut qc = sample_commit_qc(&header);
+    qc.aggregate.signers_bitmap = vec![0b0000_0011, 0b0000_0001];
+    qc.aggregate.bls_aggregate_signature = vec![0x55; 48];
+    let proof = nexus::CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)
+        .build()
+        .expect("proof");
+    let quorum = nexus::LaneRelayQuorumContext::new(4, 2).expect("quorum context");
+
+    let err = proof
+        .verify_with_quorum(quorum)
+        .expect_err("bitmap length mismatch should fail");
+    assert!(matches!(
+        err,
+        nexus::CrossLaneProofError::Relay(LaneRelayError::SignerBitmapLengthMismatch {
+            expected: 1,
+            actual: 2
+        })
+    ));
+}
+
+#[test]
+fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_height() {
+    let first = sample_relay_envelope();
+    let settlement = LaneBlockCommitment {
+        block_height: first.block_height,
+        lane_id: LaneId::new(first.lane_id.as_u32() + 1),
+        dataspace_id: DataSpaceId::new(first.dataspace_id.as_u64() + 1),
+        tx_count: 1,
+        total_local_micro: 9,
+        total_xor_due_micro: 5,
+        total_xor_after_haircut_micro: 4,
+        total_xor_variance_micro: 1,
+        swap_metadata: None,
+        receipts: Vec::new(),
+    };
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(first.block_height).expect("height"),
+        None,
+        None,
+        None,
+        1_700_000_080_000,
+        0,
+    );
+    let second = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
+        .build()
+        .expect("valid second envelope")
+        .envelope()
+        .clone();
+
+    nexus::verify_lane_relay_envelopes(&[first, second])
+        .expect("distinct lane tuples must not be treated as duplicates");
+}
+
+#[test]
+fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_dataspace_and_height() {
+    let first = sample_relay_envelope();
+    let settlement = LaneBlockCommitment {
+        block_height: first.block_height,
+        lane_id: LaneId::new(first.lane_id.as_u32() + 2),
+        dataspace_id: first.dataspace_id,
+        tx_count: 2,
+        total_local_micro: 16,
+        total_xor_due_micro: 9,
+        total_xor_after_haircut_micro: 8,
+        total_xor_variance_micro: 1,
+        swap_metadata: None,
+        receipts: Vec::new(),
+    };
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(first.block_height).expect("height"),
+        None,
+        None,
+        None,
+        1_700_000_082_000,
+        0,
+    );
+    let second = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
+        .build()
+        .expect("valid second envelope")
+        .envelope()
+        .clone();
+
+    nexus::verify_lane_relay_envelopes(&[first, second])
+        .expect("distinct lanes on same dataspace/height must not be duplicates");
+}
+
+#[test]
+fn verify_lane_relay_envelopes_allows_distinct_dataspaces_on_same_lane_and_height() {
+    let first = sample_relay_envelope();
+    let settlement = LaneBlockCommitment {
+        block_height: first.block_height,
+        lane_id: first.lane_id,
+        dataspace_id: DataSpaceId::new(first.dataspace_id.as_u64() + 1),
+        tx_count: 1,
+        total_local_micro: 13,
+        total_xor_due_micro: 8,
+        total_xor_after_haircut_micro: 7,
+        total_xor_variance_micro: 1,
+        swap_metadata: None,
+        receipts: Vec::new(),
+    };
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(first.block_height).expect("height"),
+        None,
+        None,
+        None,
+        1_700_000_085_000,
+        0,
+    );
+    let second = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
+        .build()
+        .expect("valid second envelope")
+        .envelope()
+        .clone();
+
+    nexus::verify_lane_relay_envelopes(&[first, second])
+        .expect("distinct dataspaces on the same lane/height must not be duplicates");
+}
+
+#[test]
+fn verify_lane_relay_envelopes_allows_same_lane_across_heights() {
+    let first = sample_relay_envelope();
+    let next_height = first.block_height + 1;
+    let settlement = LaneBlockCommitment {
+        block_height: next_height,
+        lane_id: first.lane_id,
+        dataspace_id: first.dataspace_id,
+        tx_count: 3,
+        total_local_micro: 14,
+        total_xor_due_micro: 9,
+        total_xor_after_haircut_micro: 8,
+        total_xor_variance_micro: 1,
+        swap_metadata: None,
+        receipts: Vec::new(),
+    };
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(next_height).expect("height"),
+        None,
+        None,
+        None,
+        1_700_000_090_000,
+        0,
+    );
+    let second = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
+        .build()
+        .expect("valid second envelope")
+        .envelope()
+        .clone();
+
+    nexus::verify_lane_relay_envelopes(&[first, second])
+        .expect("same lane should be accepted when block heights differ");
+}
+
+#[test]
+fn verify_lane_relay_envelopes_reports_relay_error_before_duplicate_tuple_check() {
+    let valid = sample_relay_envelope();
+    let mut tampered_duplicate = valid.clone();
+    tampered_duplicate.settlement_hash = HashOf::from_untyped_unchecked(Hash::new([0xDD; 4]));
+
+    let err = nexus::verify_lane_relay_envelopes(&[valid, tampered_duplicate])
+        .expect_err("invalid duplicate should fail relay verification first");
+    assert!(matches!(
+        err,
+        nexus::CrossLaneProofError::Relay(LaneRelayError::SettlementHashMismatch)
     ));
 }
 

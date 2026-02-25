@@ -401,3 +401,16 @@ jobs:
           cache-on-failure: "true"
       - name: Nexus cross-dataspace localnet proof
         run: bash ci/check_nexus_cross_dataspace_localnet.sh
+
+  nexus_cross_lane_proofs:
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: Nexus cross-lane proof filters
+        run: bash ci/check_nexus_cross_lane_proofs.sh
