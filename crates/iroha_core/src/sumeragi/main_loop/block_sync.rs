@@ -13,10 +13,14 @@ use super::message::FetchPendingBlockPriority;
 use super::*;
 
 impl Actor {
-    fn block_sync_qc_is_missing_context_error(err: &QcValidationError) -> bool {
+    pub(super) fn block_sync_qc_is_missing_context_error(err: &QcValidationError) -> bool {
         matches!(
             err,
-            QcValidationError::MissingVotes { .. } | QcValidationError::StakeSnapshotUnavailable
+            QcValidationError::MissingVotes { .. }
+                | QcValidationError::StakeSnapshotUnavailable
+                // Block-sync QC hints can arrive before sidecar/roster convergence. Treat
+                // aggregate mismatches as retryable to avoid churny drop/refetch loops.
+                | QcValidationError::AggregateMismatch
         )
     }
 

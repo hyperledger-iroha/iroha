@@ -107,6 +107,11 @@ fn retransmit_cooldown_multiplier(pressure_score: u8) -> u32 {
     }
 }
 
+pub(super) fn near_quorum_payload_timeout(rebroadcast_cooldown: Duration) -> Duration {
+    super::saturating_mul_duration(rebroadcast_cooldown, 2)
+        .clamp(Duration::from_millis(400), Duration::from_millis(2_000))
+}
+
 impl Actor {
     pub(super) fn reschedule_stale_pending_blocks(
         &mut self,
@@ -263,9 +268,6 @@ impl Actor {
                 ConsensusMode::Permissioned => fast_timeout_permissioned,
                 ConsensusMode::Npos => fast_timeout_npos,
             };
-            if pending_age < fast_timeout {
-                continue;
-            }
             let mut commit_roster =
                 self.roster_for_vote_with_mode(*hash, pending.height, pending.view, consensus_mode);
             if commit_roster.is_empty() {
@@ -338,15 +340,58 @@ impl Actor {
             let allow_da_fast_reschedule =
                 da_enabled && self.config.pacemaker.da_fast_reschedule && payload_available;
             let has_votes = vote_count > 0;
+            let near_commit_quorum = has_votes
+                && min_votes_for_commit > 0
+                && vote_count < min_votes_for_commit
+                && vote_count.saturating_add(1) >= min_votes_for_commit;
+            let rbc_key = (*hash, pending.height, pending.view);
+            let rbc_session_incomplete = da_enabled
+                && self
+                    .subsystems
+                    .da_rbc
+                    .rbc
+                    .sessions
+                    .get(&rbc_key)
+                    .is_some_and(|session| {
+                        if session.is_invalid() || session.delivered {
+                            return false;
+                        }
+                        let progress_started = session.total_chunks() != 0
+                            || session.received_chunks() != 0
+                            || !session.ready_signatures.is_empty()
+                            || self.subsystems.da_rbc.rbc.pending.contains_key(&rbc_key);
+                        if !progress_started {
+                            return false;
+                        }
+                        let missing_chunks = session.total_chunks() != 0
+                            && session.received_chunks() < session.total_chunks();
+                        let ready_quorum = session.ready_signatures.len()
+                            >= self.rbc_deliver_quorum(&commit_topology);
+                        missing_chunks || !ready_quorum
+                    });
+            let consensus_queue_backlog = Self::consensus_queue_backlog(queue_depths);
+            let near_quorum_queue_backlog =
+                self.consensus_queue_backlog_blocks_near_quorum_timeout(queue_depths);
+            let missing_local_data = da_enabled && !payload_available;
+            let near_quorum_timeout = near_quorum_payload_timeout(self.rebroadcast_cooldown());
+            let near_quorum_fast_timeout_allowed = near_commit_quorum
+                && missing_local_data
+                && !near_quorum_queue_backlog
+                && !rbc_session_incomplete;
             let fast_path_allowed = (!da_enabled || allow_da_fast_reschedule)
                 && !has_votes
                 && !has_qc
                 && !validation_inflight;
             let effective_quorum_timeout = if fast_path_allowed {
                 fast_timeout.min(quorum_timeout)
+            } else if near_quorum_fast_timeout_allowed {
+                near_quorum_timeout.min(quorum_timeout)
             } else {
                 quorum_timeout
             };
+            if pending_age < fast_timeout && !near_quorum_fast_timeout_allowed {
+                continue;
+            }
             if validation_inflight && !has_votes && !has_qc {
                 debug!(
                     height = pending.height,
@@ -370,7 +415,6 @@ impl Actor {
                 pending_age
             };
             if missing_quorum_stale(quorum_stall_age, effective_quorum_timeout, quorum_reached) {
-                let rbc_key = (*hash, pending.height, pending.view);
                 if queue_depths.vote_rx > 0 {
                     debug!(
                         height = pending.height,
@@ -383,23 +427,6 @@ impl Actor {
                     );
                     continue;
                 }
-                let rbc_session_incomplete = da_enabled
-                    && self
-                        .subsystems
-                        .da_rbc
-                        .rbc
-                        .sessions
-                        .get(&rbc_key)
-                        .is_some_and(|session| {
-                            if session.is_invalid() || session.delivered {
-                                return false;
-                            }
-                            let missing_chunks = session.total_chunks() != 0
-                                && session.received_chunks() < session.total_chunks();
-                            let ready_quorum = session.ready_signatures.len()
-                                >= self.rbc_deliver_quorum(&commit_topology);
-                            missing_chunks || !ready_quorum
-                        });
                 if rbc_session_incomplete && progress_stall_age < availability_timeout {
                     debug!(
                         height = pending.height,
@@ -412,14 +439,6 @@ impl Actor {
                     );
                     continue;
                 }
-                let near_commit_quorum = has_votes
-                    && min_votes_for_commit > 0
-                    && vote_count < min_votes_for_commit
-                    && vote_count.saturating_add(1) >= min_votes_for_commit;
-                let consensus_queue_backlog = queue_depths.rbc_chunk_rx > 0
-                    || queue_depths.block_payload_rx > 0
-                    || queue_depths.block_rx > 0
-                    || queue_depths.consensus_rx > 0;
                 let backlog_extension_active = consensus_queue_backlog || rbc_session_incomplete;
                 let near_quorum_recent_progress_grace =
                     super::saturating_mul_duration(self.rebroadcast_cooldown(), 4)
@@ -466,7 +485,7 @@ impl Actor {
                     continue;
                 }
                 if near_commit_quorum
-                    && !consensus_queue_backlog
+                    && !near_quorum_queue_backlog
                     && progress_stall_age < near_quorum_recent_progress_grace
                 {
                     debug!(
@@ -506,7 +525,7 @@ impl Actor {
                     continue;
                 }
                 if near_commit_quorum
-                    && consensus_queue_backlog
+                    && near_quorum_queue_backlog
                     && progress_stall_age < vote_backlog_deadline
                 {
                     debug!(
@@ -545,10 +564,10 @@ impl Actor {
                     );
                     continue;
                 }
-                let missing_local_data = da_enabled && !payload_available;
                 if (missing_local_data
                     || matches!(pending.last_gate, Some(GateReason::MissingLocalData)))
                     && progress_stall_age < availability_timeout
+                    && !near_quorum_fast_timeout_allowed
                 {
                     missing_data_backoff_skipped = missing_data_backoff_skipped.saturating_add(1);
                     continue;
@@ -1320,9 +1339,10 @@ struct RescheduleRebroadcast {
 #[cfg(test)]
 mod tests {
     use super::{
-        RETRANSMIT_RBC_BYTES_HARD, RETRANSMIT_RBC_BYTES_SOFT, retransmit_cooldown_multiplier,
-        retransmit_pressure_score, retransmit_target_limit,
+        RETRANSMIT_RBC_BYTES_HARD, RETRANSMIT_RBC_BYTES_SOFT, near_quorum_payload_timeout,
+        retransmit_cooldown_multiplier, retransmit_pressure_score, retransmit_target_limit,
     };
+    use std::time::Duration;
 
     #[test]
     fn retransmit_pressure_score_grows_with_queue_and_rbc_backlog() {
@@ -1346,5 +1366,21 @@ mod tests {
         assert_eq!(retransmit_cooldown_multiplier(2), 2);
         assert_eq!(retransmit_cooldown_multiplier(4), 3);
         assert_eq!(retransmit_cooldown_multiplier(6), 4);
+    }
+
+    #[test]
+    fn near_quorum_payload_timeout_clamps_to_expected_window() {
+        assert_eq!(
+            near_quorum_payload_timeout(Duration::from_millis(50)),
+            Duration::from_millis(400)
+        );
+        assert_eq!(
+            near_quorum_payload_timeout(Duration::from_millis(300)),
+            Duration::from_millis(600)
+        );
+        assert_eq!(
+            near_quorum_payload_timeout(Duration::from_millis(2_000)),
+            Duration::from_millis(2_000)
+        );
     }
 }
