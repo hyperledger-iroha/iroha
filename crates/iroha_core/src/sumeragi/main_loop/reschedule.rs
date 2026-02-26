@@ -1252,7 +1252,7 @@ impl Actor {
         }
     }
 
-    fn quorum_retransmit_targets_for_missing_votes(
+    pub(super) fn quorum_retransmit_targets_for_missing_votes(
         &self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
@@ -1270,7 +1270,9 @@ impl Actor {
             .filter(|peer| *peer != local_peer_id)
             .cloned()
             .collect();
-        let observed_signers: std::collections::BTreeSet<usize> = self
+        let observed_signers: std::collections::BTreeSet<
+            crate::sumeragi::consensus::ValidatorIndex,
+        > = self
             .vote_log
             .values()
             .filter(|vote| {
@@ -1279,15 +1281,37 @@ impl Actor {
                     && vote.height == height
                     && vote.view == view
             })
-            .filter_map(|vote| usize::try_from(vote.signer).ok())
+            .filter_map(|vote| {
+                crate::sumeragi::consensus::ValidatorIndex::try_from(vote.signer).ok()
+            })
             .collect();
+        let canonical_topology = super::network_topology::Topology::new(topology_peers.to_vec());
+        let (_consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let signature_topology =
+            super::topology_for_view(&canonical_topology, height, view, mode_tag, prf_seed);
+        let observed_signer_peers = match super::signer_peers_for_topology(
+            &observed_signers,
+            &signature_topology,
+        ) {
+            Ok(peers) => peers,
+            Err(err) => {
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    ?err,
+                    "failed to map observed vote signers for retransmit target selection; falling back to full fanout"
+                );
+                std::collections::BTreeSet::new()
+            }
+        };
 
         let mut missing_targets = Vec::new();
-        for (idx, peer) in topology_peers.iter().enumerate() {
+        for peer in topology_peers.iter() {
             if peer == local_peer_id {
                 continue;
             }
-            if !observed_signers.contains(&idx) {
+            if !observed_signer_peers.contains(peer) {
                 missing_targets.push(peer.clone());
             }
         }

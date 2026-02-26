@@ -91,7 +91,9 @@ fn validate_attestation(
     current_height: Option<u64>,
     expected_dataspace: Option<DataSpaceId>,
 ) -> Result<VerificationSummary> {
-    if let Some(expected) = expected_dataspace && attestation.scope.dataspace != expected {
+    if let Some(expected) = expected_dataspace
+        && attestation.scope.dataspace != expected
+    {
         return Err(eyre!(
             "attestation targets dataspace {} but {} was expected",
             attestation.scope.dataspace,

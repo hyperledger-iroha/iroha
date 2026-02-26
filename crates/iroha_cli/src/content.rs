@@ -201,9 +201,9 @@ fn default_content_config() -> actual::Content {
                 .unwrap_or_else(|| NonZeroU32::new(1).unwrap()),
             request_burst: NonZeroU32::new(defaults::content::REQUEST_BURST)
                 .unwrap_or_else(|| NonZeroU32::new(1).unwrap()),
-            max_egress_bytes_per_second: NonZeroU64::new(
-                u64::from(defaults::content::MAX_EGRESS_BYTES_PER_SECOND),
-            )
+            max_egress_bytes_per_second: NonZeroU64::new(u64::from(
+                defaults::content::MAX_EGRESS_BYTES_PER_SECOND,
+            ))
             .unwrap_or_else(|| NonZeroU64::new(1).unwrap()),
             egress_burst_bytes: NonZeroU64::new(defaults::content::EGRESS_BURST_BYTES)
                 .unwrap_or_else(|| NonZeroU64::new(1).unwrap()),

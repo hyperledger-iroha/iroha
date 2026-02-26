@@ -66,7 +66,7 @@ pub mod isi {
         },
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
-            ProposalKind,
+            ProposalKind, RuntimeUpgradeProposal,
         },
         isi::{
             bridge, consensus_keys, endorsement,
@@ -1671,6 +1671,182 @@ pub mod isi {
         }
     }
 
+    fn compute_runtime_upgrade_proposal_id(
+        manifest: &iroha_data_model::runtime::RuntimeUpgradeManifest,
+    ) -> Result<[u8; 32], Error> {
+        let canonical = manifest.canonical_bytes();
+        let manifest_len: u32 = canonical.len().try_into().map_err(|_| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "runtime upgrade manifest length exceeds 2^32 bytes".into(),
+            ))
+        })?;
+        let mut input = Vec::with_capacity(
+            b"iroha:gov:runtime-upgrade:proposal:v1|".len()
+                + core::mem::size_of::<u32>()
+                + canonical.len(),
+        );
+        input.extend_from_slice(b"iroha:gov:runtime-upgrade:proposal:v1|");
+        input.extend_from_slice(&manifest_len.to_le_bytes());
+        input.extend_from_slice(&canonical);
+        let digest = Blake2b512::digest(&input);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest[..32]);
+        Ok(out)
+    }
+
+    impl Execute for gov::ProposeRuntimeUpgradeProposal {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !has_permission(
+                &state_transaction.world,
+                authority,
+                "CanProposeContractDeployment",
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "not permitted: CanProposeContractDeployment".into(),
+                ));
+            }
+
+            if self.manifest.end_height <= self.manifest.start_height {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "runtime upgrade window must satisfy end_height > start_height".into(),
+                    ),
+                ));
+            }
+            validate_runtime_upgrade_provenance(&self.manifest, state_transaction)?;
+            ensure_runtime_upgrade_abi_version(&self.manifest, state_transaction)?;
+            validate_runtime_upgrade_surface(&self.manifest, state_transaction)?;
+            ensure_runtime_upgrade_no_overlap(&self.manifest, state_transaction)?;
+
+            let id = compute_runtime_upgrade_proposal_id(&self.manifest)?;
+            let rid = hex::encode(id);
+            let desired_mode = match self.mode {
+                Some(iroha_data_model::isi::governance::VotingMode::Plain) => {
+                    crate::state::GovernanceReferendumMode::Plain
+                }
+                _ => crate::state::GovernanceReferendumMode::Zk,
+            };
+
+            let h_now = state_transaction._curr_block.height().get();
+            let min_start = h_now.saturating_add(state_transaction.gov.min_enactment_delay);
+            let (start, end) = if let Some(win) = self.window {
+                if win.upper < win.lower {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "window.upper must be >= window.lower".into(),
+                        ),
+                    ));
+                }
+                if win.lower < min_start {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "window.lower below minimum enactment delay".into(),
+                        ),
+                    ));
+                }
+                (win.lower, win.upper)
+            } else {
+                let span = state_transaction.gov.window_span.max(1);
+                let end = min_start.saturating_add(span.saturating_sub(1));
+                (min_start, end)
+            };
+
+            if end < start {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "enactment window upper precedes lower".into(),
+                    ),
+                ));
+            }
+
+            let payload = RuntimeUpgradeProposal {
+                manifest: self.manifest.clone(),
+            };
+            let kind = ProposalKind::RuntimeUpgrade(payload.clone());
+            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+                let Some(existing_payload) = existing.as_runtime_upgrade() else {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                };
+                if existing_payload.manifest != payload.manifest {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                }
+                if let Some(ref_rec) = state_transaction.world.governance_referenda.get(&rid) {
+                    if ref_rec.h_start != start
+                        || ref_rec.h_end != end
+                        || ref_rec.mode != desired_mode
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "existing referendum parameters mismatch".into(),
+                        ));
+                    }
+                }
+                return Ok(());
+            }
+
+            if let Some(ref_rec) = state_transaction.world.governance_referenda.get(&rid) {
+                if ref_rec.h_start != start || ref_rec.h_end != end || ref_rec.mode != desired_mode
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "referendum already exists with different parameters".into(),
+                    ));
+                }
+            } else {
+                state_transaction.world.governance_referenda.insert(
+                    rid.clone(),
+                    crate::state::GovernanceReferendumRecord {
+                        h_start: start,
+                        h_end: end,
+                        status: crate::state::GovernanceReferendumStatus::Proposed,
+                        mode: desired_mode,
+                    },
+                );
+            }
+
+            let created_height = h_now;
+            let referendum_snapshot = state_transaction
+                .world
+                .governance_referenda
+                .get(&rid)
+                .copied();
+            let pipeline = crate::state::GovernancePipeline::seeded(
+                created_height,
+                referendum_snapshot.as_ref(),
+                &state_transaction.gov,
+            );
+            state_transaction.world.governance_proposals.insert(
+                id,
+                crate::state::GovernanceProposalRecord {
+                    proposer: authority.clone(),
+                    kind,
+                    created_height,
+                    status: crate::state::GovernanceProposalStatus::Proposed,
+                    pipeline,
+                },
+            );
+
+            let runtime_target = self.manifest.id();
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                        id,
+                        proposer: authority.clone(),
+                        namespace: "runtime-upgrade".to_string(),
+                        contract_id: hex::encode(runtime_target.0),
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
+
     fn parse_hex32_hint(raw: &str) -> Option<[u8; 32]> {
         let trimmed = raw.trim();
         let without_scheme = if let Some((scheme, rest)) = trimmed.split_once(':') {
@@ -3099,7 +3275,7 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         pid: [u8; 32],
         pid_hex: &str,
-    ) -> Result<(DeployContractProposal, bool), Error> {
+    ) -> Result<(crate::state::GovernanceProposalRecord, bool), Error> {
         let Some(prop) = state_transaction
             .world
             .governance_proposals
@@ -3115,12 +3291,6 @@ pub mod isi {
             );
         };
 
-        let payload = prop.as_deploy_contract().cloned().ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "unsupported governance proposal kind".into(),
-            )
-        })?;
-
         let already_enacted =
             matches!(prop.status, crate::state::GovernanceProposalStatus::Enacted);
         if !already_enacted
@@ -3134,7 +3304,7 @@ pub mod isi {
             ));
         }
 
-        Ok((payload, already_enacted))
+        Ok((prop, already_enacted))
     }
 
     fn parse_hex32(input: &str, what: &str) -> Result<[u8; 32], Error> {
@@ -3284,6 +3454,93 @@ pub mod isi {
         }
     }
 
+    fn enact_runtime_upgrade_proposal(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        payload: &RuntimeUpgradeProposal,
+        proposer: &AccountId,
+    ) -> Result<(), Error> {
+        let now_h = state_transaction._curr_block.height().get();
+        if now_h > payload.manifest.start_height {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "runtime upgrade start_height already passed before enactment".into(),
+            ));
+        }
+
+        let id = payload.manifest.id();
+        if let Some(existing) = state_transaction.world.runtime_upgrades.get(&id) {
+            if existing.manifest != payload.manifest {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "runtime upgrade id collision".into(),
+                ));
+            }
+            if matches!(
+                existing.status,
+                iroha_data_model::runtime::RuntimeUpgradeStatus::Canceled
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "runtime upgrade already canceled".into(),
+                ));
+            }
+            return Ok(());
+        }
+
+        validate_runtime_upgrade_provenance(&payload.manifest, state_transaction)?;
+        ensure_runtime_upgrade_abi_version(&payload.manifest, state_transaction)?;
+        validate_runtime_upgrade_surface(&payload.manifest, state_transaction)?;
+        ensure_runtime_upgrade_no_overlap(&payload.manifest, state_transaction)?;
+
+        let mut status = iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed;
+        if now_h == payload.manifest.start_height {
+            status = iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(now_h);
+        }
+        state_transaction.world.runtime_upgrades.insert(
+            id,
+            iroha_data_model::runtime::RuntimeUpgradeRecord {
+                manifest: payload.manifest.clone(),
+                status,
+                proposer: proposer.clone(),
+                created_height: now_h,
+            },
+        );
+        state_transaction.world.emit_events(Some(
+            iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeEvent::Proposed(
+                iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeProposed {
+                    id,
+                    abi_version: payload.manifest.abi_version,
+                    start_height: payload.manifest.start_height,
+                    end_height: payload.manifest.end_height,
+                },
+            ),
+        ));
+        #[cfg(feature = "telemetry")]
+        {
+            state_transaction
+                .telemetry
+                .inc_runtime_upgrade_event("proposed");
+        }
+        if matches!(
+            status,
+            iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(_)
+        ) {
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeEvent::Activated(
+                    iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeActivated {
+                        id,
+                        abi_version: payload.manifest.abi_version,
+                        at_height: now_h,
+                    },
+                ),
+            ));
+            #[cfg(feature = "telemetry")]
+            {
+                state_transaction
+                    .telemetry
+                    .inc_runtime_upgrade_event("activated");
+            }
+        }
+        Ok(())
+    }
+
     fn process_council_members(
         members: &[AccountId],
         epoch: u64,
@@ -3349,36 +3606,45 @@ pub mod isi {
 
             let pid = self.referendum_id;
             let pid_hex = hex::encode(pid);
-            let (payload, already_enacted) = load_proposal(state_transaction, pid, &pid_hex)?;
-            let (code_hash_b, abi_hash_b) = extract_hashes(&payload)?;
-            let key = iroha_crypto::Hash::prehashed(code_hash_b);
+            let (proposal, already_enacted) = load_proposal(state_transaction, pid, &pid_hex)?;
+            match &proposal.kind {
+                ProposalKind::DeployContract(payload) => {
+                    let payload = payload.clone();
+                    let (code_hash_b, abi_hash_b) = extract_hashes(&payload)?;
+                    let key = iroha_crypto::Hash::prehashed(code_hash_b);
 
-            let manifest_inserted = upsert_manifest(
-                state_transaction,
-                key,
-                abi_hash_b,
-                payload.manifest_provenance.as_ref(),
-            )?;
-            #[cfg(not(feature = "telemetry"))]
-            let _ = manifest_inserted;
+                    let manifest_inserted = upsert_manifest(
+                        state_transaction,
+                        key,
+                        abi_hash_b,
+                        payload.manifest_provenance.as_ref(),
+                    )?;
+                    #[cfg(not(feature = "telemetry"))]
+                    let _ = manifest_inserted;
+
+                    let instance_bound_new =
+                        bind_contract_instance(state_transaction, &payload, key)?;
+                    #[cfg(not(feature = "telemetry"))]
+                    let _ = instance_bound_new;
+
+                    #[cfg(feature = "telemetry")]
+                    record_enactment_telemetry(
+                        state_transaction,
+                        &payload,
+                        code_hash_b,
+                        abi_hash_b,
+                        manifest_inserted,
+                        instance_bound_new,
+                    );
+                }
+                ProposalKind::RuntimeUpgrade(payload) => {
+                    enact_runtime_upgrade_proposal(state_transaction, payload, &proposal.proposer)?;
+                }
+            }
 
             if !already_enacted {
                 mark_proposal_enacted(state_transaction, pid);
             }
-
-            let instance_bound_new = bind_contract_instance(state_transaction, &payload, key)?;
-            #[cfg(not(feature = "telemetry"))]
-            let _ = instance_bound_new;
-
-            #[cfg(feature = "telemetry")]
-            record_enactment_telemetry(
-                state_transaction,
-                &payload,
-                code_hash_b,
-                abi_hash_b,
-                manifest_inserted,
-                instance_bound_new,
-            );
 
             close_referendum_if_open(state_transaction, &pid_hex);
 
@@ -3862,6 +4128,7 @@ pub mod isi {
     struct ApprovalContext {
         rid: String,
         referendum: crate::state::GovernanceReferendumRecord,
+        proposal_kind: ProposalKind,
         bodies: iroha_data_model::governance::types::ParliamentBodies,
         roster: iroha_data_model::governance::types::ParliamentRoster,
         epoch: u64,
@@ -3873,7 +4140,7 @@ pub mod isi {
         req: &gov::ApproveGovernanceProposal,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<ApprovalContext, Error> {
-        let _proposal = state_transaction
+        let proposal = state_transaction
             .world
             .governance_proposals
             .get(&req.proposal_id)
@@ -3937,6 +4204,7 @@ pub mod isi {
         Ok(ApprovalContext {
             rid,
             referendum,
+            proposal_kind: proposal.kind,
             bodies,
             roster,
             epoch,
@@ -4013,15 +4281,36 @@ pub mod isi {
         Some((approvals_count, required, approvals))
     }
 
+    fn runtime_upgrade_open_gate_met(
+        approvals: &crate::state::GovernanceStageApprovals,
+        epoch: u64,
+    ) -> bool {
+        [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::FmaCommittee,
+        ]
+        .into_iter()
+        .all(|body| approvals.quorum_met(body, epoch))
+    }
+
     fn maybe_open_referendum(
         ctx: &ApprovalContext,
         approvals: &crate::state::GovernanceStageApprovals,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) {
-        let rules_ready = approvals.quorum_met(ParliamentBody::RulesCommittee, ctx.epoch);
-        let agenda_ready = approvals.quorum_met(ParliamentBody::AgendaCouncil, ctx.epoch);
-        if rules_ready
-            && agenda_ready
+        let open_gate_met = match &ctx.proposal_kind {
+            ProposalKind::DeployContract(_) => {
+                approvals.quorum_met(ParliamentBody::RulesCommittee, ctx.epoch)
+                    && approvals.quorum_met(ParliamentBody::AgendaCouncil, ctx.epoch)
+            }
+            ProposalKind::RuntimeUpgrade(_) => runtime_upgrade_open_gate_met(approvals, ctx.epoch),
+        };
+        if open_gate_met
             && ctx.referendum.status == crate::state::GovernanceReferendumStatus::Proposed
             && ctx.now_h >= ctx.referendum.h_start
             && ctx.now_h <= ctx.referendum.h_end

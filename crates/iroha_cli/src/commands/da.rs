@@ -7,8 +7,8 @@ use super::{
     },
     sorafs::FetchArgs,
 };
-use crate::{CliOutputFormat, Run, RunContext};
 use crate::cli_output::print_with_optional_text;
+use crate::{CliOutputFormat, Run, RunContext};
 use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
 #[cfg(test)]
 use blake3::hash as blake3_hash;
@@ -259,7 +259,9 @@ pub struct ProofPolicySnapshotArgs {}
 
 impl ProofPolicySnapshotArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let bundle = context.client_from_config().get_da_proof_policy_snapshot()?;
+        let bundle = context
+            .client_from_config()
+            .get_da_proof_policy_snapshot()?;
         let text = render_da_proof_policies_text("DA proof policy snapshot", &bundle);
         print_with_optional_text(context, Some(text), &bundle)
     }
@@ -338,7 +340,8 @@ pub struct CommitmentVerifyArgs {
 
 impl CommitmentVerifyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let proof = load_json_payload::<DaCommitmentProof>(&self.proof_json, "DA commitment proof")?;
+        let proof =
+            load_json_payload::<DaCommitmentProof>(&self.proof_json, "DA commitment proof")?;
         let response = context.client_from_config().verify_da_commitment(&proof)?;
         let text = render_da_verify_text(
             "DA commitment verification",
@@ -435,7 +438,8 @@ pub struct PinIntentVerifyArgs {
 
 impl PinIntentVerifyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let proof = load_json_payload::<DaPinIntentWithLocation>(&self.proof_json, "DA pin intent proof")?;
+        let proof =
+            load_json_payload::<DaPinIntentWithLocation>(&self.proof_json, "DA pin intent proof")?;
         let response = context.client_from_config().verify_da_pin_intent(&proof)?;
         let text = render_da_verify_text("DA pin intent verification", response.valid, None);
         print_with_optional_text(context, Some(text), &response)
@@ -1008,9 +1012,8 @@ impl RentLedgerArgs {
             .wrap_err("failed to resolve --payer-account")?;
         let treasury = crate::resolve_account_id(context, &self.treasury_account)
             .wrap_err("failed to resolve --treasury-account")?;
-        let protocol_reserve =
-            crate::resolve_account_id(context, &self.protocol_reserve_account)
-                .wrap_err("failed to resolve --protocol-reserve-account")?;
+        let protocol_reserve = crate::resolve_account_id(context, &self.protocol_reserve_account)
+            .wrap_err("failed to resolve --protocol-reserve-account")?;
         let provider = crate::resolve_account_id(context, &self.provider_account)
             .wrap_err("failed to resolve --provider-account")?;
         let pdp_bonus = crate::resolve_account_id(context, &self.pdp_bonus_account)
@@ -1291,14 +1294,16 @@ fn render_da_proof_policies_text(title: &str, bundle: &DaProofPolicyBundle) -> S
     let mut out = String::new();
     let _ = writeln!(out, "{title}");
     let _ = writeln!(out, "version: {}", bundle.version);
-    let _ = writeln!(out, "policy_hash: {}", hex::encode(bundle.policy_hash.as_ref()));
+    let _ = writeln!(
+        out,
+        "policy_hash: {}",
+        hex::encode(bundle.policy_hash.as_ref())
+    );
     let _ = writeln!(out, "policy_count: {}", bundle.policies.len());
     out
 }
 
-fn render_da_commitments_list_text(
-    response: &iroha::da::DaCommitmentListResponse,
-) -> String {
+fn render_da_commitments_list_text(response: &iroha::da::DaCommitmentListResponse) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "DA commitments");
     let _ = writeln!(out, "version: {}", response.policies.version);
@@ -1320,7 +1325,11 @@ fn render_da_commitment_prove_text(
     match response {
         Some(payload) => {
             let _ = writeln!(out, "found: true");
-            let _ = writeln!(out, "proof_scheme: {}", payload.proof.commitment.proof_scheme);
+            let _ = writeln!(
+                out,
+                "proof_scheme: {}",
+                payload.proof.commitment.proof_scheme
+            );
             let _ = writeln!(out, "bundle_len: {}", payload.proof.bundle_len);
         }
         None => {
@@ -1586,12 +1595,7 @@ fn render_proof_summary_text(inputs: &ProofSummaryInputs<'_>, proofs: &[ProofRep
     let _ = writeln!(out, "leaf_count: {}", inputs.leaf_total);
     let _ = writeln!(out, "sample_count: {}", inputs.sample_count);
     let _ = writeln!(out, "sample_seed: 0x{:016x}", inputs.sample_seed);
-    let _ = writeln!(
-        out,
-        "proofs: {} (verified {})",
-        proofs.len(),
-        verified
-    );
+    let _ = writeln!(out, "proofs: {} (verified {})", proofs.len(), verified);
     out
 }
 
@@ -1954,7 +1958,11 @@ mod tests {
     use iroha_torii_shared::da::sampling::{build_sampling_plan, sampling_plan_to_value};
     use norito::{json::JsonSerialize, to_bytes};
     use sorafs_manifest::deal::XorAmount;
-    use std::{fmt::Display, fs, path::{Path, PathBuf}};
+    use std::{
+        fmt::Display,
+        fs,
+        path::{Path, PathBuf},
+    };
     use tempfile::{NamedTempFile, tempdir};
     use url::Url;
 
@@ -2449,7 +2457,10 @@ mod tests {
             Some(3)
         );
         assert_eq!(
-            request.pagination.as_ref().map(|pagination| pagination.offset),
+            request
+                .pagination
+                .as_ref()
+                .map(|pagination| pagination.offset),
             Some(1)
         );
     }
@@ -2482,7 +2493,10 @@ mod tests {
         };
         let request = args.to_request().expect("request");
         assert_eq!(request.manifest_hash, Some(ManifestDigest::new([0x22; 32])));
-        assert_eq!(request.storage_ticket, Some(StorageTicketId::new([0x33; 32])));
+        assert_eq!(
+            request.storage_ticket,
+            Some(StorageTicketId::new([0x33; 32]))
+        );
         assert_eq!(request.alias.as_deref(), Some("demo/alias"));
         assert_eq!(request.lane_id, Some(4));
         assert_eq!(request.epoch, Some(8));
@@ -2495,7 +2509,10 @@ mod tests {
             Some(5)
         );
         assert_eq!(
-            request.pagination.as_ref().map(|pagination| pagination.offset),
+            request
+                .pagination
+                .as_ref()
+                .map(|pagination| pagination.offset),
             Some(2)
         );
     }

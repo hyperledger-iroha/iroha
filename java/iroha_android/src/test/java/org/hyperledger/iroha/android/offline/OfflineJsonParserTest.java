@@ -11,11 +11,14 @@ public final class OfflineJsonParserTest {
   public static void main(final String[] args) {
     parsesAllowancePayload();
     parsesTransferPayload();
+    parsesTransferDetailPayload();
     handlesOptionalAssetId();
     encodesTransferItem();
     extractsReceiptSummary();
     parsesRevocationPayload();
     parsesCertificateIssueResponse();
+    parsesSettlementSubmitResponse();
+    parsesBundleProofStatusResponse();
     serializesDraftOperator();
     rejectsFractionalTotals();
     rejectsFractionalOptionalTimestamp();
@@ -79,6 +82,10 @@ public final class OfflineJsonParserTest {
               "receipt_count": 2,
               "total_amount": "15",
               "claimed_delta": "15",
+              "status": "settled",
+              "recorded_at_ms": 1700000000000,
+              "recorded_at_height": 42,
+              "status_transitions": [{"status":"settled","transitioned_at_ms":1700000000000}],
               "platform_policy": "play_integrity",
               "platform_token_snapshot": {
                 "policy": "play_integrity",
@@ -100,11 +107,41 @@ public final class OfflineJsonParserTest {
     assert item.receiptCount() == 2 : "receipt count mismatch";
     assert "15".equals(item.totalAmount()) : "total amount mismatch";
     assert "15".equals(item.claimedDelta()) : "claimed delta mismatch";
+    assert "settled".equals(item.status()) : "status mismatch";
+    assert Long.valueOf(1_700_000_000_000L).equals(item.recordedAtMs()) : "recordedAtMs mismatch";
+    assert Long.valueOf(42L).equals(item.recordedAtHeight()) : "recordedAtHeight mismatch";
+    assert item.statusTransitionsJson() != null : "status transitions missing";
     assert "play_integrity".equals(item.platformPolicy()) : "platform policy mismatch";
     assert item.platformTokenSnapshot() != null : "snapshot missing";
     assert "token".equals(item.platformTokenSnapshot().attestationJwsB64())
         : "snapshot token mismatch";
     assert item.transferAsMap() != null : "transfer map missing";
+  }
+
+  private static void parsesTransferDetailPayload() {
+    final String json =
+        """
+        {
+          "bundle_id_hex": "deadbeef",
+          "receiver_id": "merchant@wonderland",
+          "receiver_display": "merchant@wonderland",
+          "deposit_account_id": "merchant@wonderland",
+          "deposit_account_display": "merchant@wonderland",
+          "asset_id": "usd#wonderland",
+          "receipt_count": 1,
+          "total_amount": "5",
+          "claimed_delta": "5",
+          "status": "archived",
+          "recorded_at_ms": 1700000000000,
+          "recorded_at_height": 100,
+          "transfer": {}
+        }
+        """;
+    final OfflineTransferList.OfflineTransferItem item =
+        OfflineJsonParser.parseTransferItem(json.getBytes(StandardCharsets.UTF_8));
+    assert "deadbeef".equals(item.bundleIdHex()) : "detail bundle id mismatch";
+    assert "archived".equals(item.status()) : "detail status mismatch";
+    assert Long.valueOf(100L).equals(item.recordedAtHeight()) : "detail height mismatch";
   }
 
   private static void handlesOptionalAssetId() {
@@ -274,6 +311,41 @@ public final class OfflineJsonParserTest {
     assert "ops@wonderland".equals(certificate.operator()) : "operator mismatch";
     assert "ops@wonderland".equals(certificate.toJsonMap().get("operator"))
         : "operator missing from JSON map";
+  }
+
+  private static void parsesSettlementSubmitResponse() {
+    final String json =
+        """
+        {
+          "bundle_id_hex": "deadbeef",
+          "transaction_hash_hex": "cafebabe"
+        }
+        """;
+    final OfflineSettlementSubmitResponse response =
+        OfflineJsonParser.parseSettlementSubmitResponse(json.getBytes(StandardCharsets.UTF_8));
+    assert "deadbeef".equals(response.bundleIdHex()) : "settlement bundle mismatch";
+    assert "cafebabe".equals(response.transactionHashHex()) : "settlement tx hash mismatch";
+  }
+
+  private static void parsesBundleProofStatusResponse() {
+    final String json =
+        """
+        {
+          "bundle_id_hex": "deadbeef",
+          "receipts_root_hex": "aa",
+          "aggregate_proof_root_hex": null,
+          "receipts_root_matches": null,
+          "proof_status": "missing",
+          "proof_summary": null
+        }
+        """;
+    final OfflineBundleProofStatus status =
+        OfflineJsonParser.parseBundleProofStatus(json.getBytes(StandardCharsets.UTF_8));
+    assert "deadbeef".equals(status.bundleIdHex()) : "proof bundle mismatch";
+    assert "missing".equals(status.proofStatus()) : "proof status mismatch";
+    assert status.aggregateProofRootHex() == null : "proof root should be null";
+    assert status.receiptsRootMatches() == null : "root match should be null";
+    assert status.proofSummary() == null : "proof summary should be null";
   }
 
   private static void serializesDraftOperator() {

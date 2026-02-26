@@ -1393,15 +1393,13 @@ mod tests {
         struct DistidGuard(String);
         impl Drop for DistidGuard {
             fn drop(&mut self) {
-                Sm2PublicKey::set_default_distid(self.0.clone())
-                    .expect("restore default distid");
+                Sm2PublicKey::set_default_distid(self.0.clone()).expect("restore default distid");
             }
         }
 
         let original = Sm2PublicKey::default_distid();
         let _guard = DistidGuard(original.clone());
-        Sm2PublicKey::set_default_distid("runtime-default-test")
-            .expect("override distid");
+        Sm2PublicKey::set_default_distid("runtime-default-test").expect("override distid");
 
         let parsed = super::parse_distid(None).expect("parse distid");
         assert_eq!(parsed, "runtime-default-test");

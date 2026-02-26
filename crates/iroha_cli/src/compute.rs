@@ -384,7 +384,9 @@ fn execute_entrypoint(
         response = None;
     }
 
-    if let Some(resp) = &response && resp.len() as u64 > call.max_response_bytes.get() {
+    if let Some(resp) = &response
+        && resp.len() as u64 > call.max_response_bytes.get()
+    {
         response = None;
     }
 

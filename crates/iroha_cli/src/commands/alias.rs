@@ -4,8 +4,8 @@
 //! input validation, forwarding requests to the alias Torii endpoints while
 //! handling not-yet-implemented responses gracefully.
 
-use crate::{Run, RunContext};
 use crate::cli_output::print_with_optional_text;
+use crate::{Run, RunContext};
 use eyre::{Result, eyre};
 use iroha::data_model::{alias::AliasIndex, name::Name};
 use iroha::{client::Client, http::Response, http::StatusCode};
@@ -106,10 +106,7 @@ where
         }
         StatusCode::NOT_IMPLEMENTED => Err(eyre!(
             "{}",
-            format_alias_error(
-                "alias VOPRF evaluation is not available",
-                &body
-            )
+            format_alias_error("alias VOPRF evaluation is not available", &body)
         )),
         status => Err(eyre!(
             "alias VOPRF evaluation failed with status {status}: {}",
@@ -215,10 +212,7 @@ fn render_voprf_evaluate_text(value: &norito::json::Value) -> String {
         {
             let _ = writeln!(out, "evaluated_element_hex: {evaluated}");
         }
-        if let Some(backend) = obj
-            .get("backend")
-            .and_then(norito::json::Value::as_str)
-        {
+        if let Some(backend) = obj.get("backend").and_then(norito::json::Value::as_str) {
             let _ = writeln!(out, "backend: {backend}");
         }
     }
@@ -240,11 +234,7 @@ fn render_alias_resolve_text(dto: &AliasResolveResponse) -> String {
 
 fn render_alias_resolve_index_text(dto: &AliasResolveIndexResponse) -> String {
     let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "alias index {} resolved to `{}`",
-        dto.index, dto.alias
-    );
+    let _ = writeln!(out, "alias index {} resolved to `{}`", dto.index, dto.alias);
     let _ = writeln!(out, "account_id: {}", dto.account_id);
     if let Some(source) = dto.source.as_deref() {
         let _ = writeln!(out, "source: {source}");
@@ -277,6 +267,7 @@ struct AliasErrorResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CliOutputFormat;
     use clap::Parser;
     use iroha::{
         config::{self, Config},
@@ -286,7 +277,6 @@ mod tests {
             prelude::{AccountId, ChainId},
         },
     };
-    use crate::CliOutputFormat;
     use norito::json::JsonSerialize;
     use std::fmt::Display;
     use url::Url;
@@ -529,8 +519,8 @@ mod tests {
 
     #[test]
     fn alias_error_prefers_json_message() {
-        let body = norito::json::to_vec(&norito::json!({ "error": "not ready" }))
-            .expect("encode error");
+        let body =
+            norito::json::to_vec(&norito::json!({ "error": "not ready" })).expect("encode error");
         let rendered = format_alias_error("fallback", &body);
         assert_eq!(rendered, "fallback: not ready");
     }

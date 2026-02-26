@@ -378,13 +378,11 @@ fn format_stake_summary(payload: &Value) -> Result<String> {
     entries.sort_by(|lhs, rhs| {
         let l_val = lhs.get("validator").and_then(Value::as_str).unwrap_or("");
         let r_val = rhs.get("validator").and_then(Value::as_str).unwrap_or("");
-        l_val
-            .cmp(r_val)
-            .then_with(|| {
-                let l_staker = lhs.get("staker").and_then(Value::as_str).unwrap_or("");
-                let r_staker = rhs.get("staker").and_then(Value::as_str).unwrap_or("");
-                l_staker.cmp(r_staker)
-            })
+        l_val.cmp(r_val).then_with(|| {
+            let l_staker = lhs.get("staker").and_then(Value::as_str).unwrap_or("");
+            let r_staker = rhs.get("staker").and_then(Value::as_str).unwrap_or("");
+            l_staker.cmp(r_staker)
+        })
     });
 
     let mut output = String::new();
@@ -481,23 +479,19 @@ fn validator_status_label(status: Option<&Value>) -> String {
             }
         }
         "Active" => "Active".to_string(),
-        "Jailed" => map
-            .get("reason")
-            .and_then(Value::as_str)
-            .map_or_else(|| "Jailed".to_string(), |reason| {
-                format!("Jailed({})", truncate_field(reason, 14))
-            }),
+        "Jailed" => map.get("reason").and_then(Value::as_str).map_or_else(
+            || "Jailed".to_string(),
+            |reason| format!("Jailed({})", truncate_field(reason, 14)),
+        ),
         "Exiting" => map
             .get("releases_at_ms")
             .and_then(Value::as_u64)
             .map_or_else(|| "Exiting".to_string(), |ts| format!("Exiting({ts})")),
         "Exited" => "Exited".to_string(),
-        "Slashed" => map
-            .get("slash_id")
-            .and_then(Value::as_str)
-            .map_or_else(|| "Slashed".to_string(), |id| {
-                format!("Slashed({})", truncate_field(id, 14))
-            }),
+        "Slashed" => map.get("slash_id").and_then(Value::as_str).map_or_else(
+            || "Slashed".to_string(),
+            |id| format!("Slashed({})", truncate_field(id, 14)),
+        ),
         other => other.to_string(),
     }
 }
@@ -716,7 +710,10 @@ mod tests {
             ("validator".into(), Value::from("alice@lane")),
             ("staker".into(), Value::from("bob@lane")),
             ("bonded".into(), Value::from("750")),
-            ("pending_unbonds".into(), Value::Array(vec![Value::Object(pending)])),
+            (
+                "pending_unbonds".into(),
+                Value::Array(vec![Value::Object(pending)]),
+            ),
         ]);
         let payload = Value::Object(Map::from_iter([
             ("lane_id".into(), Value::from(0u64)),

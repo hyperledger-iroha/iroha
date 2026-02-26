@@ -7928,11 +7928,15 @@ fn openapi_schemas() -> Map {
         "OfflineSettlementSubmitResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["bundle_id_hex"],
+            "required": ["bundle_id_hex", "transaction_hash_hex"],
             "properties": {
                 "bundle_id_hex": {
                     "type": "string",
                     "description": "Deterministic bundle identifier rendered as hex."
+                },
+                "transaction_hash_hex": {
+                    "type": "string",
+                    "description": "Canonical signed transaction hash rendered as hex."
                 }
             }
         }),

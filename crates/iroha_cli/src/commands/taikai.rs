@@ -7,8 +7,8 @@
 use super::da_common::{
     DaPublisher, metadata_map_to_extra, parse_blob_class, parse_fec_scheme, parse_storage_class,
 };
-use crate::{CliOutputFormat, Run, RunContext};
 use crate::cli_output::print_with_optional_text;
+use crate::{CliOutputFormat, Run, RunContext};
 use blake3::Hasher;
 use clap::ValueEnum;
 use eyre::{Result, WrapErr, eyre};
@@ -40,8 +40,8 @@ use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
     env,
-    fs::{self, File, OpenOptions},
     fmt::Write as _,
+    fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
@@ -680,12 +680,8 @@ impl Run for CekRotateArgs {
         if let Some(path) = &self.json_out {
             write_json_file(path, "cek rotation receipt", &receipt)?;
         }
-        let output = build_receipt_output_value(
-            "receipt",
-            &receipt,
-            &self.out,
-            self.json_out.as_deref(),
-        )?;
+        let output =
+            build_receipt_output_value("receipt", &receipt, &self.out, self.json_out.as_deref())?;
         let text = render_receipt_text(
             "Taikai CEK rotation receipt generated",
             "receipt_out",
@@ -778,8 +774,7 @@ impl Run for RptAttestArgs {
         if let Some(path) = &self.json_out {
             write_json_file(path, "replication proof token", &rpt)?;
         }
-        let output =
-            build_receipt_output_value("rpt", &rpt, &self.out, self.json_out.as_deref())?;
+        let output = build_receipt_output_value("rpt", &rpt, &self.out, self.json_out.as_deref())?;
         let text = render_receipt_text(
             "Taikai replication proof token generated",
             "rpt_out",
@@ -815,9 +810,8 @@ fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
 }
 
 fn write_norito_file<T: NoritoSerialize>(path: &Path, label: &str, value: &T) -> Result<()> {
-    let bytes = norito::to_bytes(value).wrap_err_with(|| {
-        format!("failed to encode {label} as canonical Norito framing")
-    })?;
+    let bytes = norito::to_bytes(value)
+        .wrap_err_with(|| format!("failed to encode {label} as canonical Norito framing"))?;
     fs::write(path, &bytes)
         .wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
 }
@@ -1783,7 +1777,10 @@ fn build_bundle_summary_value(summary: &BundleSummary) -> Value {
         Value::from(hex::encode(summary.chunk_root.as_bytes())),
     );
     map.insert("chunk_count".into(), Value::from(summary.chunk_count));
-    map.insert("car_out".into(), Value::from(path_to_string(&summary.car_out)));
+    map.insert(
+        "car_out".into(),
+        Value::from(path_to_string(&summary.car_out)),
+    );
     map.insert(
         "envelope_out".into(),
         Value::from(path_to_string(&summary.envelope_out)),
@@ -1842,7 +1839,11 @@ fn render_bundle_summary_text(summary: &BundleSummary) -> String {
         "car_digest (blake3-256 hex): {}",
         hex::encode(summary.car_pointer.car_digest.as_bytes())
     );
-    let _ = writeln!(out, "car_size_bytes: {}", summary.car_pointer.car_size_bytes);
+    let _ = writeln!(
+        out,
+        "car_size_bytes: {}",
+        summary.car_pointer.car_size_bytes
+    );
     let _ = writeln!(
         out,
         "chunk_root (blake3-256 hex): {}",
@@ -2029,7 +2030,10 @@ mod summary_tests {
         let map = value
             .as_object()
             .expect("bundle summary should be a JSON object");
-        assert_eq!(map.get("car_out").and_then(Value::as_str), Some("/tmp/out.car"));
+        assert_eq!(
+            map.get("car_out").and_then(Value::as_str),
+            Some("/tmp/out.car")
+        );
         assert_eq!(
             map.get("envelope_out").and_then(Value::as_str),
             Some("/tmp/out.to")
@@ -2179,8 +2183,7 @@ fn process_ingest_file(
         &config.key_pair,
         None,
     );
-    let request_bytes =
-        norito::to_bytes(&request).wrap_err("failed to encode DA request")?;
+    let request_bytes = norito::to_bytes(&request).wrap_err("failed to encode DA request")?;
     let request_json = norito::json::to_json_pretty(&request)
         .map_err(|err| eyre!("failed to render DA request JSON: {err}"))?;
     let da_paths = layout.allocate_da_paths(&outputs.slug);
