@@ -1086,6 +1086,15 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
     network.ensure_blocks(2).await?;
 
     let proof_id = proof_id_for_attachment(&attachment);
+    let ds1_submitter_payload = wait_for_proof_record_status(
+        &alice,
+        &proof_id,
+        ProofStatus::Verified,
+        "observe verified proof status from ds1 submitter",
+    )
+    .await?;
+    assert_payload_redacted(&ds1_submitter_payload, &marker, "ds1 submitter payload")?;
+
     let ds2_observer_payload = wait_for_proof_record_status(
         &bob,
         &proof_id,
@@ -1094,6 +1103,139 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
     )
     .await?;
     assert_payload_redacted(&ds2_observer_payload, &marker, "ds2 observer payload")?;
+
+    let nexus_observer_payload = wait_for_proof_record_status(
+        &nexus_observer,
+        &proof_id,
+        ProofStatus::Verified,
+        "observe verified proof status from nexus observer",
+    )
+    .await?;
+    assert_payload_redacted(&nexus_observer_payload, &marker, "nexus observer payload")?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak()
+-> Result<()> {
+    if !has_test_network_feature("zk-stark") {
+        eprintln!(
+            "skipping stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak: set TEST_NETWORK_IROHAD_FEATURES=zk-stark"
+        );
+        return Ok(());
+    }
+
+    let Some(network) = sandbox::start_network_async_or_skip(
+        localnet_builder(),
+        stringify!(stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    network.ensure_blocks(1).await?;
+
+    let alice = network.client();
+    let bob = network
+        .peer()
+        .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
+    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
+    let nexus_observer_id = AccountId::new(
+        ivm_domain,
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+    );
+    let nexus_observer = network.peer().client_for(
+        &nexus_observer_id,
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
+    );
+
+    let expected_validators = expected_lane_validators(&network);
+    wait_for_active_lane_validators(
+        &alice,
+        LaneId::new(NEXUS_LANE_INDEX),
+        &expected_validators,
+        "nexus lane validator activation",
+    )
+    .await?;
+    wait_for_active_lane_validators(
+        &alice,
+        LaneId::new(DS1_LANE_INDEX),
+        &expected_validators,
+        "ds1 lane validator activation",
+    )
+    .await?;
+    wait_for_active_lane_validators(
+        &alice,
+        LaneId::new(DS2_LANE_INDEX),
+        &expected_validators,
+        "ds2 lane validator activation",
+    )
+    .await?;
+
+    wait_for_route_probe_approval(
+        &alice,
+        InstructionBox::from(Log::new(Level::INFO, "route probe ds1".to_owned())),
+        LaneId::new(DS1_LANE_INDEX),
+        DataSpaceId::new(DS1_ID_U64),
+        "route probe ds1",
+    )
+    .await?;
+    wait_for_route_probe_approval(
+        &bob,
+        InstructionBox::from(Log::new(Level::INFO, "route probe ds2".to_owned())),
+        LaneId::new(DS2_LANE_INDEX),
+        DataSpaceId::new(DS2_ID_U64),
+        "route probe ds2",
+    )
+    .await?;
+
+    grant_manage_verifying_keys_permission(&alice).await?;
+
+    let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
+    let valid_vk_box = sample_stark_vk_box(CIRCUIT_ID_VALID, 4);
+    register_stark_vk(
+        &alice,
+        valid_vk_id.clone(),
+        valid_vk_box.clone(),
+        CIRCUIT_ID_VALID,
+        SCHEMA_VALID,
+    )
+    .await?;
+
+    let attachment =
+        build_stark_attachment(valid_vk_id, &valid_vk_box, CIRCUIT_ID_VALID, SCHEMA_VALID)?;
+    let marker = proof_marker(&attachment.proof.bytes);
+
+    wait_for_route_probe_approval(
+        &bob,
+        InstructionBox::from(VerifyProof::new(attachment.clone())),
+        LaneId::new(DS2_LANE_INDEX),
+        DataSpaceId::new(DS2_ID_U64),
+        "verifyproof submit ds2",
+    )
+    .await?;
+    network.ensure_blocks(2).await?;
+
+    let proof_id = proof_id_for_attachment(&attachment);
+    let ds2_submitter_payload = wait_for_proof_record_status(
+        &bob,
+        &proof_id,
+        ProofStatus::Verified,
+        "observe verified proof status from ds2 submitter",
+    )
+    .await?;
+    assert_payload_redacted(&ds2_submitter_payload, &marker, "ds2 submitter payload")?;
+
+    let ds1_observer_payload = wait_for_proof_record_status(
+        &alice,
+        &proof_id,
+        ProofStatus::Verified,
+        "observe verified proof status from ds1 observer",
+    )
+    .await?;
+    assert_payload_redacted(&ds1_observer_payload, &marker, "ds1 observer payload")?;
 
     let nexus_observer_payload = wait_for_proof_record_status(
         &nexus_observer,
@@ -1237,6 +1379,32 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
     )
     .await?;
 
+    let mut malformed_attachment = valid_attachment.clone();
+    malformed_attachment.proof.bytes.clear();
+
+    let _malformed_rejection_reason = wait_for_route_probe_rejection(
+        &alice,
+        InstructionBox::from(VerifyProof::new(malformed_attachment.clone())),
+        LaneId::new(DS1_LANE_INDEX),
+        DataSpaceId::new(DS1_ID_U64),
+        "verifyproof submit ds1 malformed proof",
+    )
+    .await?;
+
+    let malformed_proof_id = proof_id_for_attachment(&malformed_attachment);
+    wait_for_absent_proof_record(
+        &bob,
+        &malformed_proof_id,
+        "observe absent malformed proof record from ds2 observer",
+    )
+    .await?;
+    wait_for_absent_proof_record(
+        &nexus_observer,
+        &malformed_proof_id,
+        "observe absent malformed proof record from nexus observer",
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -1346,6 +1514,15 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
     network.ensure_blocks(2).await?;
 
     let proof_id = proof_id_for_attachment(&tampered_attachment);
+    let ds1_submitter_payload = wait_for_proof_record_status(
+        &alice,
+        &proof_id,
+        ProofStatus::Rejected,
+        "observe rejected proof status from ds1 submitter",
+    )
+    .await?;
+    assert_payload_redacted(&ds1_submitter_payload, &marker, "ds1 submitter payload")?;
+
     let ds2_observer_payload = wait_for_proof_record_status(
         &bob,
         &proof_id,
