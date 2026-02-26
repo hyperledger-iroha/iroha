@@ -536,8 +536,7 @@ struct DeriveOutcome {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct CouncilArgs {
-}
+pub struct CouncilArgs {}
 
 impl Run for CouncilArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -561,19 +560,18 @@ impl Run for CouncilArgs {
                         .collect()
                 });
         let member_count = members_list.len();
-        let alternates_list =
-            value
-                .get("alternates")
-                .and_then(|v| v.as_array())
-                .map_or_else(Vec::new, |arr| {
-                    arr.iter()
-                        .filter_map(|m| {
-                            m.get("account_id")
-                                .and_then(|v| v.as_str())
-                                .map(ToString::to_string)
-                        })
-                        .collect()
-                });
+        let alternates_list = value
+            .get("alternates")
+            .and_then(|v| v.as_array())
+            .map_or_else(Vec::new, |arr| {
+                arr.iter()
+                    .filter_map(|m| {
+                        m.get("account_id")
+                            .and_then(|v| v.as_str())
+                            .map(ToString::to_string)
+                    })
+                    .collect()
+            });
         let alternate_count = alternates_list.len();
         let members_joined = members_list.join(", ");
         let alternates_joined = alternates_list.join(", ");

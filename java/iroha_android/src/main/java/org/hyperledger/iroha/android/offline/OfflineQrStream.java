@@ -370,6 +370,18 @@ public final class OfflineQrStream {
       return payload != null;
     }
 
+    public int receivedChunks() {
+      return receivedChunks;
+    }
+
+    public int totalChunks() {
+      return totalChunks;
+    }
+
+    public int recoveredChunks() {
+      return recoveredChunks;
+    }
+
     public double progress() {
       if (totalChunks == 0) {
         return 0.0;

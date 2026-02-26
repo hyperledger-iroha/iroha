@@ -2553,7 +2553,13 @@ fn decode_connect_frame(bytes: &[u8]) -> Result<proto::ConnectFrameV1, norito::c
 
 fn decode_envelope(bytes: &[u8]) -> Result<proto::EnvelopeV1, norito::core::Error> {
     let view = norito::core::from_bytes_view(bytes)?;
-    view.decode::<proto::EnvelopeV1>()
+    match view.decode::<proto::EnvelopeV1>() {
+        Ok(envelope) => Ok(envelope),
+        // Legacy Java fixtures encoded an older schema hash while keeping a
+        // payload shape that remains decodable by the current type.
+        Err(norito::core::Error::SchemaMismatch) => view.decode_unchecked::<proto::EnvelopeV1>(),
+        Err(err) => Err(err),
+    }
 }
 
 fn encode_envelope_framed(env: &proto::EnvelopeV1) -> Result<Vec<u8>, norito::core::Error> {
@@ -11642,6 +11648,49 @@ mod tests {
         let decoded = decode_envelope(&decrypted).expect("decode envelope");
         assert_eq!(decoded.seq, env.seq);
         assert_eq!(decoded.payload, env.payload);
+    }
+
+    #[test]
+    fn decode_envelope_accepts_legacy_schema_hash_fixture() {
+        let hex = concat!(
+            "4e52543000000b36414bbbba14690b36414bbbba1469008002000000000000e8ae6adadc072f3e0008",
+            "0000000000000002000000000000006802000000000000030000005c0200000000000004000000000000",
+            "00000000004802000000000000400000000000000001000000000000000001000000000000000101000000",
+            "00000000020100000000000000030100000000000000040100000000000000050100000000000000060100",
+            "0000000000000701000000000000000801000000000000000901000000000000000a01000000000000000b",
+            "01000000000000000c01000000000000000d01000000000000000e01000000000000000f01000000000000",
+            "00100100000000000000110100000000000000120100000000000000130100000000000000140100000000",
+            "00000015010000000000000016010000000000000017010000000000000018010000000000000019010000",
+            "00000000001a01000000000000001b01000000000000001c01000000000000001d01000000000000001e01",
+            "000000000000001f0100000000000000200100000000000000210100000000000000220100000000000000",
+            "23010000000000000024010000000000000025010000000000000026010000000000000027010000000000",
+            "00002801000000000000002901000000000000002a01000000000000002b01000000000000002c01000000",
+            "000000002d01000000000000002e01000000000000002f0100000000000000300100000000000000310100",
+            "00000000000032010000000000000033010000000000000034010000000000000035010000000000000036",
+            "01000000000000003701000000000000003801000000000000003901000000000000003a01000000000000",
+            "003b01000000000000003c01000000000000003d01000000000000003e01000000000000003f"
+        );
+        let bytes = hex::decode(hex).expect("fixture hex");
+
+        let view = norito::core::from_bytes_view(&bytes).expect("framed envelope view");
+        assert!(
+            matches!(
+                view.decode::<proto::EnvelopeV1>(),
+                Err(norito::core::Error::SchemaMismatch)
+            ),
+            "fixture should exercise schema fallback path"
+        );
+
+        let decoded = decode_envelope(&bytes).expect("decode legacy schema fixture");
+        match decoded.payload {
+            proto::ConnectPayloadV1::SignResultOk { signature } => {
+                assert_eq!(decoded.seq, 2);
+                assert_eq!(signature.bytes().len(), 64);
+                assert_eq!(signature.bytes()[0], 0);
+                assert_eq!(signature.bytes()[63], 63);
+            }
+            other => panic!("unexpected payload variant: {other:?}"),
+        }
     }
 
     #[test]

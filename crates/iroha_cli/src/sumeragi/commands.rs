@@ -65,16 +65,13 @@ pub enum RbcCommand {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct StatusArgs {
-}
+pub struct StatusArgs {}
 
 #[derive(clap::Args, Debug)]
-pub struct LeaderArgs {
-}
+pub struct LeaderArgs {}
 
 #[derive(clap::Args, Debug)]
-pub struct ParamsArgs {
-}
+pub struct ParamsArgs {}
 
 #[derive(clap::Args, Debug)]
 pub struct EvidenceListArgs {
@@ -90,8 +87,7 @@ pub struct EvidenceListArgs {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct EvidenceCountArgs {
-}
+pub struct EvidenceCountArgs {}
 
 #[derive(clap::Args, Debug)]
 pub struct EvidenceSubmitArgs {
@@ -124,32 +120,25 @@ impl EvidenceKindArg {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct CollectorsArgs {
-}
+pub struct CollectorsArgs {}
 
 #[derive(clap::Args, Debug)]
-pub struct QcArgs {
-}
+pub struct QcArgs {}
 
 #[derive(clap::Args, Debug)]
-pub struct PacemakerArgs {
-}
+pub struct PacemakerArgs {}
 
 #[derive(clap::Args, Debug)]
-pub struct PhasesArgs {
-}
+pub struct PhasesArgs {}
 
 #[derive(clap::Args, Debug)]
-pub struct TelemetryArgs {
-}
+pub struct TelemetryArgs {}
 
 #[derive(clap::Args, Debug)]
-pub struct RbcStatusArgs {
-}
+pub struct RbcStatusArgs {}
 
 #[derive(clap::Args, Debug)]
-pub struct RbcSessionsArgs {
-}
+pub struct RbcSessionsArgs {}
 
 #[derive(clap::Args, Debug)]
 pub struct VrfPenaltiesArgs {

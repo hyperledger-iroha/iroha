@@ -31,7 +31,70 @@ public final class ConnectFrameCodec {
   private static final TypeAdapter<Long> UINT64 = NoritoAdapters.uint(64);
   private static final TypeAdapter<String> STRING = NoritoAdapters.stringAdapter();
   private static final TypeAdapter<Boolean> BOOL = NoritoAdapters.boolAdapter();
-  private static final TypeAdapter<byte[]> FIXED_BYTES_32 = NoritoAdapters.fixedBytes(32);
+  /**
+   * Rust-side `[u8; 32]` values are encoded in canonical AoS layout (32 elements, each prefixed with
+   * its element length). This adapter mirrors that exact representation.
+   */
+  private static final TypeAdapter<byte[]> FIXED_ARRAY_U8_32 =
+      new TypeAdapter<>() {
+        private static final int LENGTH = 32;
+
+        @Override
+        public void encode(final NoritoEncoder encoder, final byte[] value) {
+          if (value == null || value.length != LENGTH) {
+            throw new IllegalArgumentException(
+                "expected " + LENGTH + " bytes, found " + (value == null ? 0 : value.length));
+          }
+          if ((encoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
+            long offset = 0L;
+            for (int i = 0; i < LENGTH; i++) {
+              offset += 1L;
+              encoder.writeUInt(offset, 64);
+            }
+            encoder.writeBytes(value);
+            return;
+          }
+          final boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+          for (byte b : value) {
+            encoder.writeLength(1L, compactLen);
+            encoder.writeByte(b & 0xFF);
+          }
+        }
+
+        @Override
+        public byte[] decode(final NoritoDecoder decoder) {
+          final byte[] out = new byte[LENGTH];
+          if ((decoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
+            long previous = 0L;
+            for (int i = 0; i < LENGTH; i++) {
+              final long current = decoder.readUInt(64);
+              final long delta = current - previous;
+              if (delta != 1L) {
+                throw new IllegalArgumentException("Invalid packed [u8;32] offset delta: " + delta);
+              }
+              previous = current;
+            }
+            for (int i = 0; i < LENGTH; i++) {
+              out[i] = (byte) decoder.readByte();
+            }
+            return out;
+          }
+          final boolean compactLen = decoder.compactLenActive();
+          for (int i = 0; i < LENGTH; i++) {
+            final long elemLen = decoder.readLength(compactLen);
+            if (elemLen != 1L) {
+              throw new IllegalArgumentException("Invalid [u8;32] element length: " + elemLen);
+            }
+            out[i] = (byte) decoder.readByte();
+          }
+          return out;
+        }
+
+        @Override
+        public boolean isSelfDelimiting() {
+          return true;
+        }
+      };
   private static final TypeAdapter<byte[]> RAW_BYTES = NoritoAdapters.rawByteVecAdapter();
   private static final TypeAdapter<byte[]> BYTE_VECTOR = NoritoAdapters.byteVecAdapter();
   private static final TypeAdapter<Optional<byte[]>> OPTIONAL_PLACEHOLDER = NoritoAdapters.option(RAW_BYTES);
@@ -274,14 +337,49 @@ public final class ConnectFrameCodec {
       new TypeAdapter<>() {
         @Override
         public void encode(final NoritoEncoder encoder, final WalletSignature value) {
-          UINT8.encode(encoder, (long) value.algorithm);
-          BYTE_VECTOR.encode(encoder, value.signature);
+          // Rust `WalletSignatureV1` is a Norito struct with length-prefixed fields.
+          final byte[] algorithmField;
+          {
+            final NoritoEncoder child = encoder.childEncoder();
+            UINT32.encode(child, (long) value.algorithm);
+            algorithmField = child.toByteArray();
+          }
+          final byte[] signatureField;
+          {
+            final NoritoEncoder child = encoder.childEncoder();
+            BYTE_VECTOR.encode(child, value.signature);
+            signatureField = child.toByteArray();
+          }
+          final boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+          encoder.writeLength(algorithmField.length, compactLen);
+          encoder.writeBytes(algorithmField);
+          encoder.writeLength(signatureField.length, compactLen);
+          encoder.writeBytes(signatureField);
         }
 
         @Override
         public WalletSignature decode(final NoritoDecoder decoder) {
-          final int algorithm = UINT8.decode(decoder).intValue();
-          final byte[] signature = BYTE_VECTOR.decode(decoder);
+          final boolean compactLen = decoder.compactLenActive();
+
+          final long algorithmLength = decoder.readLength(compactLen);
+          final byte[] algorithmBytes = decoder.readBytes((int) algorithmLength);
+          final NoritoDecoder algorithmDecoder =
+              new NoritoDecoder(algorithmBytes, decoder.flags(), decoder.flagsHint());
+          final int algorithm = UINT32.decode(algorithmDecoder).intValue();
+          if (algorithmDecoder.remaining() != 0) {
+            throw new IllegalArgumentException(
+                "wallet_signature.algorithm trailing bytes: " + algorithmDecoder.remaining());
+          }
+
+          final long signatureLength = decoder.readLength(compactLen);
+          final byte[] signatureBytes = decoder.readBytes((int) signatureLength);
+          final NoritoDecoder signatureDecoder =
+              new NoritoDecoder(signatureBytes, decoder.flags(), decoder.flagsHint());
+          final byte[] signature = BYTE_VECTOR.decode(signatureDecoder);
+          if (signatureDecoder.remaining() != 0) {
+            throw new IllegalArgumentException(
+                "wallet_signature.signature trailing bytes: " + signatureDecoder.remaining());
+          }
           return new WalletSignature(algorithm, signature);
         }
       };
@@ -290,14 +388,49 @@ public final class ConnectFrameCodec {
       new TypeAdapter<>() {
         @Override
         public void encode(final NoritoEncoder encoder, final Ciphertext value) {
-          DIRECTION_ADAPTER.encode(encoder, value.direction);
-          RAW_BYTES.encode(encoder, value.aead);
+          // Rust `ConnectCiphertextV1` is a struct with per-field length prefixes.
+          final byte[] directionField;
+          {
+            final NoritoEncoder child = encoder.childEncoder();
+            DIRECTION_ADAPTER.encode(child, value.direction);
+            directionField = child.toByteArray();
+          }
+          final byte[] aeadField;
+          {
+            final NoritoEncoder child = encoder.childEncoder();
+            RAW_BYTES.encode(child, value.aead);
+            aeadField = child.toByteArray();
+          }
+          final boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+          encoder.writeLength(directionField.length, compactLen);
+          encoder.writeBytes(directionField);
+          encoder.writeLength(aeadField.length, compactLen);
+          encoder.writeBytes(aeadField);
         }
 
         @Override
         public Ciphertext decode(final NoritoDecoder decoder) {
-          final ConnectDirection direction = DIRECTION_ADAPTER.decode(decoder);
-          final byte[] aead = RAW_BYTES.decode(decoder);
+          final boolean compactLen = decoder.compactLenActive();
+
+          final long directionLength = decoder.readLength(compactLen);
+          final byte[] directionBytes = decoder.readBytes((int) directionLength);
+          final NoritoDecoder directionDecoder =
+              new NoritoDecoder(directionBytes, decoder.flags(), decoder.flagsHint());
+          final ConnectDirection direction = DIRECTION_ADAPTER.decode(directionDecoder);
+          if (directionDecoder.remaining() != 0) {
+            throw new IllegalArgumentException(
+                "ciphertext.direction trailing bytes: " + directionDecoder.remaining());
+          }
+
+          final long aeadLength = decoder.readLength(compactLen);
+          final byte[] aeadBytes = decoder.readBytes((int) aeadLength);
+          final NoritoDecoder aeadDecoder =
+              new NoritoDecoder(aeadBytes, decoder.flags(), decoder.flagsHint());
+          final byte[] aead = RAW_BYTES.decode(aeadDecoder);
+          if (aeadDecoder.remaining() != 0) {
+            throw new IllegalArgumentException(
+                "ciphertext.aead trailing bytes: " + aeadDecoder.remaining());
+          }
           return new Ciphertext(direction, aead);
         }
       };
@@ -306,7 +439,7 @@ public final class ConnectFrameCodec {
     Objects.requireNonNull(rawFrame, "rawFrame");
     final Cursor frameCursor = new Cursor(rawFrame);
 
-    final byte[] sid = decodeLengthPrefixedField(frameCursor, FIXED_BYTES_32, "sid");
+    final byte[] sid = decodeLengthPrefixedField(frameCursor, FIXED_ARRAY_U8_32, "sid");
     final ConnectDirection direction =
         decodeLengthPrefixedField(frameCursor, DIRECTION_ADAPTER, "direction");
     final long sequence = decodeLengthPrefixedField(frameCursor, UINT64, "sequence");
@@ -358,7 +491,7 @@ public final class ConnectFrameCodec {
     if (accountId == null || accountId.trim().isEmpty()) {
       throw new ConnectProtocolException("accountId must not be blank");
     }
-    final byte[] walletPkField = encodeField(walletPublicKey, FIXED_BYTES_32, "wallet_pk");
+    final byte[] walletPkField = encodeField(walletPublicKey, FIXED_ARRAY_U8_32, "wallet_pk");
     final byte[] accountField = encodeField(accountId, STRING, "account_id");
     final byte[] permissionsField = encodeField(Optional.empty(), OPTIONAL_PLACEHOLDER, "permissions");
     final byte[] proofField = encodeField(Optional.empty(), OPTIONAL_PLACEHOLDER, "proof");
@@ -417,7 +550,7 @@ public final class ConnectFrameCodec {
       final byte[] controlBody)
       throws ConnectProtocolException {
     final Cursor cursor = new Cursor(controlBody);
-    final byte[] appPk = decodeLengthPrefixedField(cursor, FIXED_BYTES_32, "open.app_pk");
+    final byte[] appPk = decodeLengthPrefixedField(cursor, FIXED_ARRAY_U8_32, "open.app_pk");
     skipLengthPrefixedField(cursor, "open.app_meta");
     final Constraints constraints = decodeLengthPrefixedField(cursor, CONSTRAINTS_ADAPTER, "open.constraints");
     skipLengthPrefixedField(cursor, "open.permissions");
@@ -466,7 +599,7 @@ public final class ConnectFrameCodec {
       final long sequence,
       final byte[] kindPayload)
       throws ConnectProtocolException {
-    final byte[] sidField = encodeField(sessionId, FIXED_BYTES_32, "sid");
+    final byte[] sidField = encodeField(sessionId, FIXED_ARRAY_U8_32, "sid");
     final byte[] directionField = encodeField(direction, DIRECTION_ADAPTER, "direction");
     final byte[] sequenceField = encodeField(sequence, UINT64, "sequence");
 

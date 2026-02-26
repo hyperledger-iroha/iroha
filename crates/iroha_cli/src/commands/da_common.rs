@@ -13,7 +13,10 @@ use iroha_data_model::{
     da::{
         ingest::DaIngestReceipt,
         manifest::DaManifestV1,
-        types::{BlobClass, ExtraMetadata, FecScheme, MetadataEncryption, MetadataEntry, MetadataVisibility},
+        types::{
+            BlobClass, ExtraMetadata, FecScheme, MetadataEncryption, MetadataEntry,
+            MetadataVisibility,
+        },
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -176,8 +179,10 @@ impl DaManifestFetcher {
         ticket_hex: &str,
         block_hash_hex: Option<&str>,
     ) -> Result<DaManifestFetchBundle> {
-        let suffix = block_hash_hex
-            .map_or_else(|| ticket_hex.to_owned(), |hash| format!("{ticket_hex}?block_hash={hash}"));
+        let suffix = block_hash_hex.map_or_else(
+            || ticket_hex.to_owned(),
+            |hash| format!("{ticket_hex}?block_hash={hash}"),
+        );
         let url = self
             .endpoint
             .join(&suffix)
@@ -451,7 +456,9 @@ mod tests {
                     idx,
                     u64::from(idx) * 1024,
                     1024,
-                    BlobDigest::new([u8::try_from(idx).expect("chunk index fits in digest byte"); 32]),
+                    BlobDigest::new(
+                        [u8::try_from(idx).expect("chunk index fits in digest byte"); 32],
+                    ),
                     if idx % 2 == 0 {
                         ChunkRole::Data
                     } else {

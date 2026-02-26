@@ -726,7 +726,7 @@ pub(crate) struct ExplorerInstructionsPage {
 }
 
 pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstructionKind {
-    let wire_id = IsiInstruction::id(&**instruction);
+    let wire_id = instruction_wire_id(instruction);
     match wire_id {
         id if id == RegisterBox::WIRE_ID => ExplorerInstructionKind::Register,
         id if id == UnregisterBox::WIRE_ID => ExplorerInstructionKind::Unregister,
@@ -795,6 +795,25 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
     }
 }
 
+fn instruction_wire_id(instruction: &InstructionBox) -> &str {
+    IsiInstruction::id(&**instruction)
+}
+
+fn instruction_variant_from_wire_id(wire_id: &str) -> &str {
+    wire_id.rsplit("::").next().unwrap_or(wire_id)
+}
+
+fn instruction_display_kind(instruction: &InstructionBox, kind: ExplorerInstructionKind) -> String {
+    if kind != ExplorerInstructionKind::Custom {
+        return kind.as_str().to_string();
+    }
+    let variant = instruction_variant_from_wire_id(instruction_wire_id(instruction));
+    if variant.eq_ignore_ascii_case("CustomInstruction") || variant.trim().is_empty() {
+        return ExplorerInstructionKind::Custom.as_str().to_string();
+    }
+    variant.to_string()
+}
+
 pub(crate) fn instruction_dto_with_kind(
     tx: &SignedTransaction,
     block_height: u64,
@@ -807,7 +826,7 @@ pub(crate) fn instruction_dto_with_kind(
     ExplorerInstructionDto {
         authority: address_format.display_literal(tx.authority()),
         created_at: duration_to_rfc3339(tx.creation_time()),
-        kind: kind.as_str().to_string(),
+        kind: instruction_display_kind(instruction, kind),
         r#box: instruction_box_dto(instruction, kind),
         transaction_hash: tx.hash_as_entrypoint().to_string(),
         transaction_status: transaction_status_label(result).to_string(),
@@ -840,7 +859,7 @@ fn instruction_json_payload(instruction: &InstructionBox, kind: ExplorerInstruct
     );
     map.insert(
         "wire_id".to_string(),
-        Value::String(IsiInstruction::id(&**instruction).to_string()),
+        Value::String(instruction_wire_id(instruction).to_string()),
     );
     map.insert(
         "encoded".to_string(),
@@ -876,7 +895,7 @@ fn fallback_instruction_payload(instruction: &InstructionBox) -> Value {
     let mut object = Map::new();
     object.insert(
         "wire_id".to_string(),
-        Value::String(IsiInstruction::id(&**instruction).to_string()),
+        Value::String(instruction_wire_id(instruction).to_string()),
     );
     object.insert(
         "encoded".to_string(),
@@ -886,7 +905,10 @@ fn fallback_instruction_payload(instruction: &InstructionBox) -> Value {
 }
 
 fn fallback_structured_payload(instruction: &InstructionBox) -> Value {
-    instruction_variant_value("Unknown", fallback_instruction_payload(instruction))
+    instruction_variant_value(
+        instruction_variant_from_wire_id(instruction_wire_id(instruction)),
+        fallback_instruction_payload(instruction),
+    )
 }
 
 fn register_payload(instruction: &InstructionBox) -> Option<Value> {
@@ -1881,6 +1903,67 @@ mod tests {
             instruction_kind(&transfer_box),
             ExplorerInstructionKind::Transfer
         );
+    }
+
+    #[test]
+    fn fallback_structured_payload_uses_wire_variant_for_unmapped_isi() {
+        let instruction: InstructionBox = iroha_data_model::isi::AddSignatory::new(
+            ALICE_ID.clone(),
+            ALICE_KEYPAIR.public_key().clone(),
+        )
+        .into();
+        let kind = instruction_kind(&instruction);
+        assert_eq!(kind, ExplorerInstructionKind::Custom);
+
+        let dto = instruction_box_dto(&instruction, kind);
+        match dto.json {
+            Value::Object(mut map) => {
+                let payload = map.remove("payload").expect("payload");
+                assert_eq!(
+                    payload
+                        .get("variant")
+                        .and_then(Value::as_str)
+                        .expect("variant"),
+                    "AddSignatory"
+                );
+                assert!(
+                    payload
+                        .get("value")
+                        .and_then(|value| value.get("wire_id"))
+                        .and_then(Value::as_str)
+                        .expect("wire_id")
+                        .contains("AddSignatory")
+                );
+            }
+            _ => panic!("instruction payload should be a structured object"),
+        }
+    }
+
+    #[test]
+    fn instruction_dto_uses_wire_variant_for_unmapped_isi_kind() {
+        let instruction: InstructionBox = iroha_data_model::isi::AddSignatory::new(
+            ALICE_ID.clone(),
+            ALICE_KEYPAIR.public_key().clone(),
+        )
+        .into();
+        let kind = instruction_kind(&instruction);
+        assert_eq!(kind, ExplorerInstructionKind::Custom);
+
+        let chain: ChainId = "test-chain".parse().expect("chain id");
+        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
+            .with_instructions(core::iter::once(instruction.clone()))
+            .sign(ALICE_KEYPAIR.private_key());
+        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let dto = instruction_dto_with_kind(
+            &tx,
+            7,
+            &result,
+            &instruction,
+            kind,
+            0,
+            AddressFormatPreference::Ih58,
+        );
+        assert_eq!(dto.kind, "AddSignatory");
     }
 
     #[test]

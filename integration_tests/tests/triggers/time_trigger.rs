@@ -145,6 +145,10 @@ fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
     best_indices[offset]
 }
 
+fn counts_meet_expected(counts: &[u64], expected: u64) -> bool {
+    counts.iter().copied().all(|count| count >= expected)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
 async fn time_trigger_scenarios() -> Result<()> {
@@ -523,34 +527,45 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
             blocks_to_drive,
         )
         .await?;
-
-        for account_id in accounts {
-            let start_pattern = "nft_number_";
-            let end_pattern = format!("_for_{}${}", account_id.signatory(), account_id.domain());
-            let account_id_clone = account_id.clone();
-            let count: u64 = spawn_blocking({
-                let client = test_client.clone();
-                move || {
-                    client.query(FindNfts::new()).execute_all().map(|nfts| {
-                        nfts.into_iter()
-                            .filter(|nft| nft.owned_by() == &account_id_clone)
-                            .filter(|nft| {
-                                let s = nft.id().to_string();
-                                s.starts_with(start_pattern) && s.ends_with(&end_pattern)
+        let poll_delay = std::cmp::max(
+            Duration::from_millis(200),
+            trigger_period.checked_div(2).unwrap_or(trigger_period),
+        );
+        timeout(network.sync_timeout(), async {
+            loop {
+                let mut counts = Vec::with_capacity(accounts.len());
+                for account_id in &accounts {
+                    let start_pattern = "nft_number_";
+                    let end_pattern =
+                        format!("_for_{}${}", account_id.signatory(), account_id.domain());
+                    let account_id_clone = account_id.clone();
+                    let count: u64 = spawn_blocking({
+                        let client = test_client.clone();
+                        move || {
+                            client.query(FindNfts::new()).execute_all().map(|nfts| {
+                                nfts.into_iter()
+                                    .filter(|nft| nft.owned_by() == &account_id_clone)
+                                    .filter(|nft| {
+                                        let s = nft.id().to_string();
+                                        s.starts_with(start_pattern) && s.ends_with(&end_pattern)
+                                    })
+                                    .count()
                             })
-                            .count()
+                        }
                     })
+                    .await??
+                    .try_into()
+                    .expect("`usize` should always fit in `u64`");
+                    counts.push(count);
                 }
-            })
-            .await??
-            .try_into()
-            .expect("`usize` should always fit in `u64`");
-
-            assert!(
-                count >= expected_count,
-                "{account_id} has {count} NFTs, but at least {expected_count} expected",
-            );
-        }
+                if counts_meet_expected(&counts, expected_count) {
+                    break Ok::<(), eyre::Report>(());
+                }
+                sleep(poll_delay).await;
+            }
+        })
+        .await
+        .wrap_err("mint_nft_for_every_user_every_1_sec poll timed out")??;
 
         Ok(())
     })
@@ -565,7 +580,7 @@ async fn submit_sample_isi_on_every_block_commit(
     timeout: Duration,
     times: usize,
 ) -> Result<()> {
-    let mut target_height = network
+    let initial_height = network
         .peers()
         .iter()
         .filter_map(|peer| peer.best_effort_block_height())
@@ -577,18 +592,18 @@ async fn submit_sample_isi_on_every_block_commit(
         let sample_isi = SetKeyValue::account(
             account_id.clone(),
             "key".parse::<Name>()?,
-            Json::new("value"),
+            Json::new(format!("value_{idx}")),
         );
         // Submit without waiting for tx confirmation to avoid queue-timeout flakiness.
         let submit_client = leader_client_for_submit(network, test_client).await;
         let context = "time_trigger sample ISI".to_string();
         spawn_blocking(move || submit_client.submit(sample_isi).wrap_err(context)).await??;
-        target_height = target_height.saturating_add(1);
-        network
-            .ensure_blocks_with(|height| height.total >= target_height)
-            .await?;
         println!("submitted sample ISI {}/{}", idx + 1, times);
     }
+    // Ensure at least one additional block committed after submissions were sent.
+    network
+        .ensure_blocks_with(|height| height.total >= initial_height.saturating_add(1))
+        .await?;
 
     Ok(())
 }
@@ -596,7 +611,8 @@ async fn submit_sample_isi_on_every_block_commit(
 #[cfg(test)]
 mod timeout_tests {
     use super::{
-        effective_status_timeout, min_connected_peers_for_submit, pick_fallback_submit_peer_index,
+        counts_meet_expected, effective_status_timeout, min_connected_peers_for_submit,
+        pick_fallback_submit_peer_index,
     };
     use std::time::Duration;
 
@@ -628,5 +644,11 @@ mod timeout_tests {
     #[test]
     fn fallback_submit_peer_index_defaults_to_zero_when_empty() {
         assert_eq!(pick_fallback_submit_peer_index(&[], 42), 0);
+    }
+
+    #[test]
+    fn counts_meet_expected_requires_each_account_to_reach_target() {
+        assert!(counts_meet_expected(&[3, 4, 3], 3));
+        assert!(!counts_meet_expected(&[3, 2, 3], 3));
     }
 }

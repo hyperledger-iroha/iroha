@@ -156,22 +156,20 @@ fn missing_genesis_file_fails() {
 fn genesis_norito_bytes_roundtrip_network() -> Result<()> {
     init_instruction_registry();
 
-    let builder = NetworkBuilder::new().with_min_peers(4).with_genesis_block(
-        |_topology, topology_entries| {
-            load_raw_genesis_transaction()
-                .into_builder()
-                .next_transaction()
-                .set_topology(topology_entries)
-                .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-                .expect("build genesis block")
-        },
-    );
+    let builder = NetworkBuilder::new().with_min_peers(4);
     let Some((network, rt)) = sandbox::build_network_blocking_or_skip(
         builder,
         stringify!(genesis_norito_bytes_roundtrip_network),
     ) else {
         return Ok(());
     };
+
+    let genesis = network.genesis();
+    let framed = genesis.0.encode_wire().map_err(|err| eyre!(err))?;
+    let deframed = iroha::data_model::block::deframe_versioned_signed_block_bytes(&framed)
+        .map_err(|err| eyre!(err))?;
+    assert_eq!(deframed.bytes.as_ref(), framed.as_slice());
+    assert_eq!(deframed.bare_versioned.as_ref().first().copied(), Some(1));
 
     let sync_timeout = network.sync_timeout();
     let roundtrip_result: Result<()> = rt.block_on(async {

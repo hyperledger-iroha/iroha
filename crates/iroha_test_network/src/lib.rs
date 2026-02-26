@@ -2534,10 +2534,13 @@ impl Network {
         let consensus_handshake_meta = consensus_handshake_parameter(&self.consensus_profile);
 
         if let Some(cached_genesis) = self.cached_genesis.get() {
-            if genesis_contains_any_consensus_handshake(cached_genesis)
-                || genesis_has_consensus_handshake(cached_genesis, &consensus_handshake_meta)
-            {
+            if genesis_has_consensus_handshake(cached_genesis, &consensus_handshake_meta) {
                 return cached_genesis.clone();
+            }
+            if genesis_contains_any_consensus_handshake(cached_genesis) {
+                debug!(
+                    "custom genesis consensus_handshake_meta mismatches builder profile; appending canonical consensus parameter overrides"
+                );
             }
 
             // Preserve custom genesis blocks by augmenting them with the consensus metadata that
@@ -11153,6 +11156,46 @@ exit 0
         assert!(
             genesis_has_consensus_handshake(&produced, &expected_handshake),
             "network genesis must include consensus handshake metadata so peers can start"
+        );
+    }
+
+    #[test]
+    fn with_genesis_block_respects_npos_consensus_mode() {
+        init_instruction_registry();
+
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_config_layer(|layer| {
+                    layer.write(["sumeragi", "consensus_mode"], "npos");
+                })
+                .without_npos_genesis_bootstrap()
+                .with_genesis_block(|topology, topology_entries| {
+                    genesis_factory_with_post_topology(
+                        Vec::new(),
+                        Vec::new(),
+                        topology,
+                        topology_entries,
+                    )
+                }),
+        );
+
+        let profile = network.consensus_bootstrap_profile();
+        assert_eq!(
+            profile.mode_tag, NPOS_TAG,
+            "custom genesis should preserve requested NPoS consensus mode",
+        );
+
+        let produced = network.genesis();
+        let payload = consensus_handshake_payload(&produced)
+            .expect("custom genesis should include consensus handshake metadata");
+        let JsonValue::Object(map) = payload else {
+            panic!("handshake metadata must be encoded as JSON object");
+        };
+        assert_eq!(
+            map.get("mode").and_then(JsonValue::as_str),
+            Some("Npos"),
+            "custom genesis handshake metadata should advertise NPoS mode",
         );
     }
 
