@@ -227,21 +227,26 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     assert_matches!(status.blocks_non_empty, 1 | 2 | 3);
 
     // Re-register the peer and wait for the roster to reflect the change.
-    let register_peer = RegisterPeerWithPop::new(
+    let re_register_timeout = sync_timeout.saturating_add(da_commit_timeout);
+    let register_peer: InstructionBox = RegisterPeerWithPop::new(
         removed_peer.id(),
         removed_peer
             .bls_pop()
             .expect("network peer should have BLS PoP")
             .to_vec(),
-    );
-    let mut client = leader_peer(randomized_peers.iter().copied()).client();
-    client.transaction_status_timeout = submit_timeout;
-    client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
-    submit_instruction_or_warn(client.clone(), register_peer, context).await?;
-    let re_register_timeout = sync_timeout.saturating_add(da_commit_timeout);
-    wait_for_block_height(randomized_peers.iter().copied(), 3, re_register_timeout).await?;
+    )
+    .into();
     if sandbox::handle_result(
-        wait_for_peer_roster(&roster_client, n_peers, sync_timeout).await,
+        submit_instruction_until_peer_roster(
+            randomized_peers.iter().copied(),
+            &roster_client,
+            register_peer,
+            n_peers,
+            context,
+            submit_timeout,
+            re_register_timeout,
+        )
+        .await,
         context,
     )?
     .is_none()
@@ -250,11 +255,12 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     }
     let expected_connected = expected_connected_peers(n_peers);
 
-    // The removed peer disconnects on unregister, so assert only on the active roster.
+    // Re-registration is verified via roster propagation above, so keep the final
+    // block expectation at the post-unregister baseline.
     if sandbox::handle_result(
         assert_peers_status(
             randomized_peers.iter().copied(),
-            3,
+            2,
             expected_connected,
             sync_timeout,
         )
@@ -469,6 +475,73 @@ async fn submit_instruction_or_warn(
     let context = context.to_string();
     spawn_blocking(move || client.submit(instruction).wrap_err(context)).await??;
     Ok(())
+}
+
+async fn submit_instruction_until_peer_roster(
+    peers: impl IntoIterator<Item = &'_ NetworkPeer>,
+    roster_client: &iroha::client::Client,
+    instruction: InstructionBox,
+    expected_roster: usize,
+    context: &str,
+    submit_timeout: Duration,
+    timeout: Duration,
+) -> Result<()> {
+    let peers: Vec<_> = peers.into_iter().collect();
+    let deadline = Instant::now() + timeout;
+    let mut last_submit_err: Option<String> = None;
+    let mut last_roster_err: Option<String> = None;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(eyre!(
+                "timed out waiting for peer roster size {expected_roster}; last_submit_err={last_submit_err:?}; last_roster_err={last_roster_err:?}"
+            ));
+        }
+
+        let tx_timeout = submit_timeout.min(remaining);
+        let mut client = leader_peer(peers.iter().copied()).client();
+        client.transaction_status_timeout = tx_timeout;
+        client.transaction_ttl = Some(tx_timeout.saturating_add(Duration::from_secs(120)));
+        match submit_instruction_or_warn(client, instruction.clone(), context).await {
+            Ok(()) => {}
+            Err(err) if is_submit_timeout_error(&err) || is_register_duplicate_error(&err) => {
+                last_submit_err = Some(err.to_string());
+            }
+            Err(err) => return Err(err),
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(eyre!(
+                "timed out waiting for peer roster size {expected_roster}; last_submit_err={last_submit_err:?}; last_roster_err={last_roster_err:?}"
+            ));
+        }
+        let probe_timeout = remaining.min(Duration::from_secs(10));
+        match wait_for_peer_roster(roster_client, expected_roster, probe_timeout).await {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                last_roster_err = Some(err.to_string());
+                sleep(Duration::from_millis(200)).await;
+            }
+        }
+    }
+}
+
+fn is_submit_timeout_error(err: &eyre::Report) -> bool {
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("queued for too long")
+            || message.contains("operation timed out")
+            || message.contains("timed out")
+    })
+}
+
+fn is_register_duplicate_error(err: &eyre::Report) -> bool {
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("RepetitionError") || message.contains("Repetition of")
+    })
 }
 
 fn expected_connected_peers(roster_len: usize) -> u64 {
