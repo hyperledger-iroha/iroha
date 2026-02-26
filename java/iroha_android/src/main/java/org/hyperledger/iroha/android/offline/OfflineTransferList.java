@@ -37,6 +37,10 @@ public final class OfflineTransferList {
     private final long receiptCount;
     private final String totalAmount;
     private final String claimedDelta;
+    private final String status;
+    private final Long recordedAtMs;
+    private final Long recordedAtHeight;
+    private final String statusTransitionsJson;
     private final String platformPolicy;
     private final PlatformTokenSnapshot platformTokenSnapshot;
     private final String transferJson;
@@ -54,6 +58,42 @@ public final class OfflineTransferList {
         final String platformPolicy,
         final PlatformTokenSnapshot platformTokenSnapshot,
         final String transferJson) {
+      this(
+          bundleIdHex,
+          receiverId,
+          receiverDisplay,
+          depositAccountId,
+          depositAccountDisplay,
+          assetId,
+          receiptCount,
+          totalAmount,
+          claimedDelta,
+          null,
+          null,
+          null,
+          null,
+          platformPolicy,
+          platformTokenSnapshot,
+          transferJson);
+    }
+
+    public OfflineTransferItem(
+        final String bundleIdHex,
+        final String receiverId,
+        final String receiverDisplay,
+        final String depositAccountId,
+        final String depositAccountDisplay,
+        final String assetId,
+        final long receiptCount,
+        final String totalAmount,
+        final String claimedDelta,
+        final String status,
+        final Long recordedAtMs,
+        final Long recordedAtHeight,
+        final String statusTransitionsJson,
+        final String platformPolicy,
+        final PlatformTokenSnapshot platformTokenSnapshot,
+        final String transferJson) {
       this.bundleIdHex = Objects.requireNonNull(bundleIdHex, "bundleIdHex");
       this.receiverId = Objects.requireNonNull(receiverId, "receiverId");
       this.receiverDisplay = Objects.requireNonNull(receiverDisplay, "receiverDisplay");
@@ -64,6 +104,10 @@ public final class OfflineTransferList {
       this.receiptCount = receiptCount;
       this.totalAmount = Objects.requireNonNull(totalAmount, "totalAmount");
       this.claimedDelta = Objects.requireNonNull(claimedDelta, "claimedDelta");
+      this.status = status;
+      this.recordedAtMs = recordedAtMs;
+      this.recordedAtHeight = recordedAtHeight;
+      this.statusTransitionsJson = statusTransitionsJson;
       this.platformPolicy = platformPolicy;
       this.platformTokenSnapshot = platformTokenSnapshot;
       this.transferJson = transferJson;
@@ -105,6 +149,22 @@ public final class OfflineTransferList {
       return claimedDelta;
     }
 
+    public String status() {
+      return status;
+    }
+
+    public Long recordedAtMs() {
+      return recordedAtMs;
+    }
+
+    public Long recordedAtHeight() {
+      return recordedAtHeight;
+    }
+
+    public String statusTransitionsJson() {
+      return statusTransitionsJson;
+    }
+
     public String platformPolicy() {
       return platformPolicy;
     }
@@ -137,6 +197,18 @@ public final class OfflineTransferList {
       json.put("receipt_count", receiptCount);
       json.put("total_amount", totalAmount);
       json.put("claimed_delta", claimedDelta);
+      if (status != null) {
+        json.put("status", status);
+      }
+      if (recordedAtMs != null) {
+        json.put("recorded_at_ms", recordedAtMs);
+      }
+      if (recordedAtHeight != null) {
+        json.put("recorded_at_height", recordedAtHeight);
+      }
+      if (statusTransitionsJson != null && !statusTransitionsJson.isBlank()) {
+        json.put("status_transitions", JsonParser.parse(statusTransitionsJson));
+      }
       if (platformPolicy != null) {
         json.put("platform_policy", platformPolicy);
       }

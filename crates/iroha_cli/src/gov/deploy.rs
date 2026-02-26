@@ -247,8 +247,7 @@ impl Run for ProtectedApplyArgs {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct ProtectedGetArgs {
-}
+pub struct ProtectedGetArgs {}
 
 impl Run for ProtectedGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {

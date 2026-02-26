@@ -145,8 +145,7 @@ fn decode_wire_receipt(payload: &[u8]) -> Result<OfflineSpendReceipt> {
 
     let certificate: OfflineWalletCertificate =
         decode_bare(certificate_field, "receipt.sender_certificate")?;
-    let sender_signature: Signature =
-        decode_bare(signature_field, "receipt.sender_signature")?;
+    let sender_signature: Signature = decode_bare(signature_field, "receipt.sender_signature")?;
     let sender_certificate_id = certificate.certificate_id();
 
     Ok(OfflineSpendReceipt {
@@ -176,8 +175,8 @@ fn decode_wire_receipts(payload: &[u8]) -> Result<Vec<OfflineSpendReceipt>> {
     for index in 0..count {
         let len = read_u64_le(payload, offset, "transfer.receipts.item_len")?;
         offset += 8;
-        let len: usize =
-            usize::try_from(len).map_err(|_| eyre!("transfer.receipts[{index}] length overflow"))?;
+        let len: usize = usize::try_from(len)
+            .map_err(|_| eyre!("transfer.receipts[{index}] length overflow"))?;
         if offset + len > payload.len() {
             bail!(
                 "transfer.receipts[{index}]: length {} exceeds payload size {}",
@@ -216,10 +215,7 @@ fn decode_wire_transfer(payload: &[u8]) -> Result<OfflineToOnlineTransfer> {
                 &fields[5],
                 "transfer.balance_proofs",
             )?,
-            decode_bare::<Option<AggregateProofEnvelope>>(
-                &fields[6],
-                "transfer.aggregate_proof",
-            )?,
+            decode_bare::<Option<AggregateProofEnvelope>>(&fields[6], "transfer.aggregate_proof")?,
             decode_bare::<Option<ProofAttachmentList>>(&fields[7], "transfer.attachments")?,
             decode_bare::<Option<OfflinePlatformTokenSnapshot>>(
                 &fields[8],
@@ -229,10 +225,7 @@ fn decode_wire_transfer(payload: &[u8]) -> Result<OfflineToOnlineTransfer> {
     } else {
         (
             None,
-            decode_bare::<Option<AggregateProofEnvelope>>(
-                &fields[5],
-                "transfer.aggregate_proof",
-            )?,
+            decode_bare::<Option<AggregateProofEnvelope>>(&fields[5], "transfer.aggregate_proof")?,
             decode_bare::<Option<ProofAttachmentList>>(&fields[6], "transfer.attachments")?,
             decode_bare::<Option<OfflinePlatformTokenSnapshot>>(
                 &fields[7],
@@ -260,12 +253,13 @@ fn main() -> Result<()> {
         .wrap_err_with(|| format!("failed to read {}", args.input.display()))?;
     let frame = parse_input(&raw)?;
     let payload = parse_frame_payload(&frame)?;
-    let transfer = decode_wire_transfer(payload).wrap_err("failed to decode wire bundle payload")?;
+    let transfer =
+        decode_wire_transfer(payload).wrap_err("failed to decode wire bundle payload")?;
 
     let _encoded_bundle_id_payload: Vec<u8> = transfer.bundle_id.encode();
 
-    let json = norito::json::to_json_pretty(&transfer)
-        .wrap_err("failed to encode transfer as JSON")?;
+    let json =
+        norito::json::to_json_pretty(&transfer).wrap_err("failed to encode transfer as JSON")?;
     fs::write(&args.output, format!("{}\n", json))
         .wrap_err_with(|| format!("failed to write {}", args.output.display()))?;
 

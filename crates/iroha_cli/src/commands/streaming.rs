@@ -7,9 +7,9 @@ use iroha_crypto::streaming::kyber_public_fingerprint_with_suite;
 use soranet_pq::{MlKemSuite, SuiteParseError};
 use std::fmt::Write as _;
 
-use crate::{Run, RunContext};
 use crate::cli_output::print_with_optional_text;
 use crate::json_macros::JsonSerialize;
+use crate::{Run, RunContext};
 
 #[derive(Subcommand, Debug)]
 pub enum Command {

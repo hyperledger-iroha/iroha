@@ -16,6 +16,7 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.PlatformHttpTransportExecutor;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceList;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceRegisterResponse;
+import org.hyperledger.iroha.android.offline.OfflineBundleProofStatus;
 import org.hyperledger.iroha.android.offline.OfflineCertificateIssueResponse;
 import org.hyperledger.iroha.android.offline.OfflineJsonParser;
 import org.hyperledger.iroha.android.offline.OfflineListParams;
@@ -23,6 +24,7 @@ import org.hyperledger.iroha.android.offline.OfflineQueryEnvelope;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestParams;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestResult;
 import org.hyperledger.iroha.android.offline.OfflineRevocationList;
+import org.hyperledger.iroha.android.offline.OfflineSettlementSubmitResponse;
 import org.hyperledger.iroha.android.offline.OfflineSummaryList;
 import org.hyperledger.iroha.android.offline.OfflineTopUpResponse;
 import org.hyperledger.iroha.android.offline.OfflineToriiException;
@@ -41,6 +43,7 @@ public final class OfflineToriiClient {
 
   private static final String ALLOWANCES_PATH = "/v1/offline/allowances";
   private static final String TRANSFERS_PATH = "/v1/offline/transfers";
+  private static final String SETTLEMENTS_PATH = "/v1/offline/settlements";
   private static final String SUMMARIES_PATH = "/v1/offline/summaries";
   private static final String REVOCATIONS_PATH = "/v1/offline/revocations";
   private static final String ALLOWANCES_QUERY_PATH = "/v1/offline/allowances/query";
@@ -48,6 +51,7 @@ public final class OfflineToriiClient {
   private static final String SUMMARIES_QUERY_PATH = "/v1/offline/summaries/query";
   private static final String REVOCATIONS_QUERY_PATH = "/v1/offline/revocations/query";
   private static final String TRANSFER_PROOF_PATH = "/v1/offline/transfers/proof";
+  private static final String BUNDLE_PROOF_STATUS_PATH = "/v1/offline/bundle/proof_status";
   private static final String CERTIFICATE_ISSUE_PATH = "/v1/offline/certificates/issue";
   private static final String CERTIFICATE_RENEW_ISSUE_PATH = "/v1/offline/certificates";
 
@@ -108,6 +112,47 @@ public final class OfflineToriiClient {
   public CompletableFuture<OfflineRevocationList> queryRevocations(
       final OfflineQueryEnvelope envelope) {
     return executeQuery(REVOCATIONS_QUERY_PATH, envelope, OfflineJsonParser::parseRevocations);
+  }
+
+  /** Submit an offline settlement bundle for on-ledger settlement. */
+  public CompletableFuture<OfflineSettlementSubmitResponse> submitSettlement(
+      final Map<String, Object> transferPayload, final String authority, final String privateKeyHex) {
+    Objects.requireNonNull(transferPayload, "transferPayload");
+    Objects.requireNonNull(authority, "authority");
+    Objects.requireNonNull(privateKeyHex, "privateKeyHex");
+    final Map<String, Object> body = new LinkedHashMap<>();
+    body.put("authority", authority);
+    body.put("private_key", privateKeyHex);
+    body.put("transfer", transferPayload);
+    final TransportRequest request =
+        buildPostRequest(SETTLEMENTS_PATH, JsonEncoder.encode(body).getBytes(StandardCharsets.UTF_8));
+    notifyRequest(request);
+    return executeHttpRequest(request, OfflineJsonParser::parseSettlementSubmitResponse);
+  }
+
+  /** Fetch one offline settlement bundle detail (alias for offline transfer detail). */
+  public CompletableFuture<OfflineTransferList.OfflineTransferItem> getSettlement(
+      final String bundleIdHex) {
+    Objects.requireNonNull(bundleIdHex, "bundleIdHex");
+    final String path = SETTLEMENTS_PATH + "/" + urlEncode(bundleIdHex.trim());
+    return executeGet(path, OfflineJsonParser::parseTransferItem);
+  }
+
+  /** Fetch one offline transfer bundle detail. */
+  public CompletableFuture<OfflineTransferList.OfflineTransferItem> getTransfer(
+      final String bundleIdHex) {
+    Objects.requireNonNull(bundleIdHex, "bundleIdHex");
+    final String path = TRANSFERS_PATH + "/" + urlEncode(bundleIdHex.trim());
+    return executeGet(path, OfflineJsonParser::parseTransferItem);
+  }
+
+  /** Fetch proof integrity status for an offline bundle. */
+  public CompletableFuture<OfflineBundleProofStatus> getBundleProofStatus(final String bundleIdHex) {
+    Objects.requireNonNull(bundleIdHex, "bundleIdHex");
+    final Map<String, String> query = Map.of("bundle_id_hex", bundleIdHex.trim());
+    final TransportRequest request = buildGetRequest(BUNDLE_PROOF_STATUS_PATH, query);
+    notifyRequest(request);
+    return executeHttpRequest(request, OfflineJsonParser::parseBundleProofStatus);
   }
 
   /**
@@ -278,8 +323,18 @@ public final class OfflineToriiClient {
     return executeHttpRequest(request, parser);
   }
 
+  private <T> CompletableFuture<T> executeGet(final String path, final ResponseParser<T> parser) {
+    final TransportRequest request = buildGetRequest(path, Map.of());
+    notifyRequest(request);
+    return executeHttpRequest(request, parser);
+  }
+
   private TransportRequest buildGetRequest(final String path, final OfflineListParams params) {
     final Map<String, String> query = params != null ? params.toQueryParameters() : Map.of();
+    return buildGetRequest(path, query);
+  }
+
+  private TransportRequest buildGetRequest(final String path, final Map<String, String> query) {
     final URI target = appendQuery(resolvePath(path), query);
     final TransportRequest.Builder builder =
         TransportRequest.builder()

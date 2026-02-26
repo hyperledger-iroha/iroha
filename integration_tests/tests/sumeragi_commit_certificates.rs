@@ -262,9 +262,15 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
             .start_checked(config_layers.iter().cloned(), None)
             .await
             .wrap_err("restart high-stake peer")?;
-        let status = wait_for_non_empty_blocks(&client, baseline + 1, COMMIT_CERT_TIMEOUT)
-            .await?
-            .ok_or_else(|| eyre!("timed out waiting for stake quorum to commit"))?;
+        client.submit_blocking(Log::new(
+            Level::INFO,
+            "npos stake quorum recovered".to_string(),
+        ))?;
+        let status = client.get_status()?;
+        ensure!(
+            status.blocks_non_empty >= baseline.saturating_add(1),
+            "timed out waiting for stake quorum to commit"
+        );
         let expected_height = status.blocks;
 
         let http = reqwest::Client::new();

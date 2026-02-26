@@ -11,7 +11,10 @@ fn decodes_android_approve_frame_fixture() {
 
     assert_eq!(frame.seq, 1);
     assert_eq!(frame.sid, [0xCDu8; 32]);
-    assert!(matches!(frame.dir, iroha_torii_shared::connect::Dir::WalletToApp));
+    assert!(matches!(
+        frame.dir,
+        iroha_torii_shared::connect::Dir::WalletToApp
+    ));
 
     match frame.kind {
         FrameKind::Control(ConnectControlV1::Approve {

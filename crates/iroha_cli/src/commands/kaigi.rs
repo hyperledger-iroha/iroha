@@ -2,8 +2,8 @@
 //!
 //! These subcommands build Kaigi ISIs and submit them through the CLI runtime.
 
-use crate::{Run, RunContext};
 use crate::cli_output::print_with_optional_text;
+use crate::{Run, RunContext};
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr};
 use iroha::data_model::{
@@ -100,8 +100,8 @@ pub struct CreateArgs {
 impl Run for CreateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
-        let host =
-            crate::resolve_account_id(context, &self.host).wrap_err("failed to resolve host account")?;
+        let host = crate::resolve_account_id(context, &self.host)
+            .wrap_err("failed to resolve host account")?;
         let mut template = NewKaigi::with_defaults(call_id, host.clone());
         template.title = self.title;
         template.description = self.description;
@@ -603,8 +603,8 @@ pub struct ReportRelayHealthArgs {
 impl Run for ReportRelayHealthArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
-        let relay_id =
-            crate::resolve_account_id(context, &self.relay).wrap_err("failed to resolve relay account")?;
+        let relay_id = crate::resolve_account_id(context, &self.relay)
+            .wrap_err("failed to resolve relay account")?;
         let status: KaigiRelayHealthStatus = self.status.into();
 
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(

@@ -132,8 +132,8 @@ impl Run for DeployArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
         // Parse authority and key
-        let authority =
-            crate::resolve_account_id(context, &self.authority).wrap_err("failed to resolve --authority")?;
+        let authority = crate::resolve_account_id(context, &self.authority)
+            .wrap_err("failed to resolve --authority")?;
         let private_key: iroha_crypto::PrivateKey =
             self.private_key.parse().wrap_err("invalid --private-key")?;
         // Obtain base64 code
@@ -178,8 +178,8 @@ pub struct DeployActivateArgs {
 
 impl Run for DeployActivateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let authority =
-            crate::resolve_account_id(context, &self.authority).wrap_err("failed to resolve --authority")?;
+        let authority = crate::resolve_account_id(context, &self.authority)
+            .wrap_err("failed to resolve --authority")?;
         let cfg_authority = context.config().account.clone();
         if authority != cfg_authority {
             return Err(eyre!(
@@ -424,7 +424,10 @@ mod tests {
         let has_gas_limit = metadata_keys
             .iter()
             .any(|value| value.as_str() == Some("gas_limit"));
-        assert!(has_gas_limit, "metadata_keys missing gas_limit: {metadata_keys:?}");
+        assert!(
+            has_gas_limit,
+            "metadata_keys missing gas_limit: {metadata_keys:?}"
+        );
     }
 
     struct TestContext {
@@ -443,8 +446,8 @@ mod tests {
                 basic_auth: None,
                 torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),
                 torii_api_version: iroha::config::default_torii_api_version(),
-                torii_api_min_proof_version:
-                    iroha::config::DEFAULT_TORII_API_MIN_PROOF_VERSION.to_string(),
+                torii_api_min_proof_version: iroha::config::DEFAULT_TORII_API_MIN_PROOF_VERSION
+                    .to_string(),
                 torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
                 transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
                 transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
@@ -528,8 +531,8 @@ pub struct SimulateArgs {
 
 impl Run for SimulateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let authority =
-            crate::resolve_account_id(context, &self.authority).wrap_err("failed to resolve --authority")?;
+        let authority = crate::resolve_account_id(context, &self.authority)
+            .wrap_err("failed to resolve --authority")?;
         let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
         let code = load_code_bytes(self.code_file.clone(), self.code_b64.clone())?;
         let summary = program_summary_from_bytes(&code)?;
