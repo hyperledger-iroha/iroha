@@ -7,10 +7,29 @@ public final class ConnectEnvelopeCodecTest {
   private ConnectEnvelopeCodecTest() {}
 
   public static void main(final String[] args) throws Exception {
+    decodeLiveSignRequestRawFixture();
     encodeAndDecodeSignResultOkEnvelope();
     decodeSignRequestRawEnvelope();
     encryptedRoundTripForSignResultErr();
     System.out.println("[IrohaAndroid] ConnectEnvelopeCodecTest passed.");
+  }
+
+  private static void decodeLiveSignRequestRawFixture() throws Exception {
+    final String hex =
+        "4e5254300000f35017c774558f19f35017c774558f19006c00000000000000a7d18c206f893dcf00"
+            + "0800000000000000020000000000000054000000000000000100000018000000000000001000000000000000"
+            + "46495f50524f504f53414c5f5349474e28000000000000002000000000000000"
+            + "e08e634b9557a3e16c52fb9a45662e0ad0c4f79ba8a6e4a0a9b46165a8a7f293";
+    final byte[] framed = decodeHex(hex);
+    final ConnectEnvelopeCodec.DecodedEnvelope decoded = ConnectEnvelopeCodec.decodeEnvelope(framed);
+
+    assert decoded.sequence() == 2L : "live fixture sequence mismatch";
+    assert decoded.payload().kind() == ConnectEnvelopeCodec.PayloadKind.SIGN_REQUEST_RAW
+        : "live fixture payload kind mismatch";
+    final ConnectEnvelopeCodec.SignRequestRawPayload payload =
+        (ConnectEnvelopeCodec.SignRequestRawPayload) decoded.payload();
+    assert "FI_PROPOSAL_SIGN".equals(payload.domainTag()) : "live fixture domain tag mismatch";
+    assert payload.bytes().length == 32 : "live fixture sign bytes length mismatch";
   }
 
   private static void encodeAndDecodeSignResultOkEnvelope() throws Exception {
@@ -79,5 +98,17 @@ public final class ConnectEnvelopeCodecTest {
         (ConnectEnvelopeCodec.SignResultErrPayload) decodedEnvelope.payload();
     assert "USER_DENIED".equals(payload.code()) : "error code mismatch";
     assert "Rejected by test".equals(payload.message()) : "error message mismatch";
+  }
+
+  private static byte[] decodeHex(final String hex) {
+    if ((hex.length() & 1) != 0) {
+      throw new IllegalArgumentException("hex length must be even");
+    }
+    final byte[] out = new byte[hex.length() / 2];
+    for (int i = 0; i < out.length; i++) {
+      final int index = i * 2;
+      out[i] = (byte) Integer.parseInt(hex.substring(index, index + 2), 16);
+    }
+    return out;
   }
 }

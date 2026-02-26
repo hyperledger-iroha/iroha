@@ -4,8 +4,8 @@
 //! operators can register and inspect names during the N0 closed beta without
 //! crafting raw JSON payloads.
 
-use crate::{Run, RunContext};
 use crate::cli_output::print_with_optional_text;
+use crate::{Run, RunContext};
 use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
@@ -328,9 +328,7 @@ impl PaymentOptions {
         })?;
         let settlement_tx = parse_json_literal(settlement_literal);
         let payer = match &self.payer {
-            Some(literal) => {
-                resolve(literal).wrap_err("invalid payment payer account id")?
-            }
+            Some(literal) => resolve(literal).wrap_err("invalid payment payer account id")?,
             None => default_payer.clone(),
         };
         let signature_literal = self.signature.as_ref().ok_or_else(|| {
@@ -396,8 +394,7 @@ impl TransferArgs {
         &self,
         resolve: &dyn Fn(&str) -> Result<AccountId>,
     ) -> Result<TransferNameRequestV1> {
-        let new_owner =
-            resolve(&self.new_owner).wrap_err("invalid new owner account id")?;
+        let new_owner = resolve(&self.new_owner).wrap_err("invalid new owner account id")?;
         let governance =
             load_json_file::<GovernanceHookV1>(&self.governance_json).wrap_err_with(|| {
                 format!(
@@ -554,8 +551,12 @@ impl Run for GetPolicyArgs {
             }
         }
 
-        let output =
-            build_policy_output_value(&policy, catalog_entry, catalog_version, catalog_error.as_deref())?;
+        let output = build_policy_output_value(
+            &policy,
+            catalog_entry,
+            catalog_version,
+            catalog_error.as_deref(),
+        )?;
         let text = render_policy_summary_text(
             &policy,
             catalog_entry,
@@ -590,10 +591,7 @@ fn build_policy_output_value(
                 json::to_value(entry).wrap_err("failed to serialize suffix catalog entry")?;
             map.insert("catalog_entry".into(), entry_value);
             map.insert("catalog_present".into(), Value::from(true));
-            map.insert(
-                "catalog_match".into(),
-                Value::from(catalog_error.is_none()),
-            );
+            map.insert("catalog_match".into(), Value::from(catalog_error.is_none()));
         }
         None => {
             map.insert("catalog_entry".into(), Value::Null);
@@ -646,11 +644,7 @@ fn render_policy_summary_text(
             }
         }
         None => {
-            let _ = writeln!(
-                out,
-                "catalog: missing (version {})",
-                catalog_version
-            );
+            let _ = writeln!(out, "catalog: missing (version {})", catalog_version);
         }
     }
     out
@@ -906,9 +900,8 @@ impl SuffixCatalogEntry {
                 "suffix differs (catalog `{catalog_suffix}`, policy `{policy_suffix}`)"
             ));
         }
-        let expected_steward = resolve(self.steward_account.trim()).wrap_err_with(|| {
-            format!("invalid steward account `{}`", self.steward_account)
-        })?;
+        let expected_steward = resolve(self.steward_account.trim())
+            .wrap_err_with(|| format!("invalid steward account `{}`", self.steward_account))?;
         if policy.steward != expected_steward {
             mismatches.push(format!(
                 "steward differs (catalog `{expected_steward}`, policy `{}`)",
@@ -959,14 +952,13 @@ impl SuffixCatalogEntry {
                 self.referral_cap_bps, policy.referral_cap_bps
             ));
         }
-        let expected_fund_splitter = resolve(self.fund_splitter_account.trim()).wrap_err_with(
-            || {
+        let expected_fund_splitter =
+            resolve(self.fund_splitter_account.trim()).wrap_err_with(|| {
                 format!(
                     "invalid fund_splitter_account `{}`",
                     self.fund_splitter_account
                 )
-            },
-        )?;
+            })?;
         if policy.fund_splitter_account != expected_fund_splitter {
             mismatches.push(format!(
                 "fund_splitter_account differs (catalog `{expected_fund_splitter}`, policy `{}`)",
@@ -1254,8 +1246,8 @@ fn parse_json_literal(raw: &str) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::sns::fixtures;
     use iroha::data_model::sns::ControllerType;
+    use iroha_data_model::sns::fixtures;
     use iroha_test_samples::ALICE_ID;
     use tempfile::NamedTempFile;
 
@@ -1376,8 +1368,8 @@ mod tests {
     fn build_policy_output_value_includes_catalog() {
         let policy = fixtures::default_policy();
         let entry = sample_catalog_entry();
-        let value = build_policy_output_value(&policy, Some(&entry), 7, None)
-            .expect("policy output");
+        let value =
+            build_policy_output_value(&policy, Some(&entry), 7, None).expect("policy output");
         let obj = value.as_object().expect("policy output object");
         assert_eq!(obj.get("catalog_version").and_then(Value::as_u64), Some(7));
         assert_eq!(
@@ -1400,13 +1392,8 @@ mod tests {
     fn build_policy_output_value_records_error() {
         let policy = fixtures::default_policy();
         let entry = sample_catalog_entry();
-        let value = build_policy_output_value(
-            &policy,
-            Some(&entry),
-            7,
-            Some("mismatch details"),
-        )
-        .expect("policy output");
+        let value = build_policy_output_value(&policy, Some(&entry), 7, Some("mismatch details"))
+            .expect("policy output");
         let obj = value.as_object().expect("policy output object");
         assert_eq!(
             obj.get("catalog_match").and_then(Value::as_bool),

@@ -268,7 +268,10 @@ impl WitnessArgs {
             ("old_root_hex", json_value(&Self::hex(&inputs.old_root))?),
             ("new_root_hex", json_value(&Self::hex(&inputs.new_root))?),
             ("perm_root_hex", json_value(&Self::hex(&inputs.perm_root))?),
-            ("tx_set_hash_hex", json_value(&Self::hex(&inputs.tx_set_hash))?),
+            (
+                "tx_set_hash_hex",
+                json_value(&Self::hex(&inputs.tx_set_hash))?,
+            ),
         ])
     }
 

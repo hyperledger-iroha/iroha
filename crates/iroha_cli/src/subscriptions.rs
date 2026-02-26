@@ -53,7 +53,11 @@ impl Run for PlanCommand {
     }
 }
 
-fn resolve_account_id_arg<C: RunContext>(context: &C, literal: &str, flag: &str) -> Result<AccountId> {
+fn resolve_account_id_arg<C: RunContext>(
+    context: &C,
+    literal: &str,
+    flag: &str,
+) -> Result<AccountId> {
     crate::resolve_account_id(context, literal)
         .wrap_err_with(|| format!("failed to resolve {flag}"))
 }
@@ -127,8 +131,9 @@ pub struct PlanListArgs {
 impl Run for PlanListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let provider = resolve_optional_account_id(context, self.provider.as_deref(), "--provider")?
-            .map(|account| account.to_string());
+        let provider =
+            resolve_optional_account_id(context, self.provider.as_deref(), "--provider")?
+                .map(|account| account.to_string());
         let params = self.to_params(provider);
         let response = client.list_subscription_plans(&params)?;
         context.print_data(&response)
@@ -302,7 +307,11 @@ impl Run for SubscriptionListArgs {
 }
 
 impl SubscriptionListArgs {
-    fn to_params(&self, owned_by: Option<String>, provider: Option<String>) -> SubscriptionListParams {
+    fn to_params(
+        &self,
+        owned_by: Option<String>,
+        provider: Option<String>,
+    ) -> SubscriptionListParams {
         SubscriptionListParams {
             owned_by,
             provider,
@@ -411,8 +420,7 @@ fn load_plan<C: RunContext>(
     path: Option<&PathBuf>,
 ) -> Result<iroha::data_model::subscription::SubscriptionPlan> {
     if let Some(path) = path {
-        let payload =
-            fs::read_to_string(path).wrap_err("failed to read subscription plan JSON")?;
+        let payload = fs::read_to_string(path).wrap_err("failed to read subscription plan JSON")?;
         crate::parse_json(&payload)
     } else {
         crate::parse_json_stdin(context)
@@ -426,20 +434,18 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use iroha::{
-        data_model::{
-            account::AccountId,
-            asset::AssetDefinitionId,
-            name::Name,
-            nft::NftId,
-            prelude::ExposedPrivateKey,
-            subscription::{
-                SubscriptionBillFor, SubscriptionBilling, SubscriptionCadence,
-                SubscriptionFixedPeriodCadence, SubscriptionFixedPricing, SubscriptionPlan,
-                SubscriptionPricing,
-            },
-            trigger::TriggerId,
+    use iroha::data_model::{
+        account::AccountId,
+        asset::AssetDefinitionId,
+        name::Name,
+        nft::NftId,
+        prelude::ExposedPrivateKey,
+        subscription::{
+            SubscriptionBillFor, SubscriptionBilling, SubscriptionCadence,
+            SubscriptionFixedPeriodCadence, SubscriptionFixedPricing, SubscriptionPlan,
+            SubscriptionPricing,
         },
+        trigger::TriggerId,
     };
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
     use iroha_primitives::numeric::Numeric;
@@ -527,7 +533,9 @@ mod tests {
             plan_json: None,
         };
 
-        let request = args.to_request(provider.clone(), plan.clone()).expect("request");
+        let request = args
+            .to_request(provider.clone(), plan.clone())
+            .expect("request");
         assert_eq!(request.authority, provider);
         assert_eq!(request.plan_id, plan_id);
         assert_eq!(request.plan, plan);

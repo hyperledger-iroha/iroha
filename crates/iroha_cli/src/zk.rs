@@ -995,7 +995,8 @@ impl Run for IvmProveArgs {
 
         let started = std::time::Instant::now();
         let poll = std::time::Duration::from_millis(self.poll_interval_ms.max(10));
-        let timeout = (self.timeout_secs > 0).then(|| std::time::Duration::from_secs(self.timeout_secs));
+        let timeout =
+            (self.timeout_secs > 0).then(|| std::time::Duration::from_secs(self.timeout_secs));
 
         loop {
             if let Some(timeout) = timeout
@@ -1074,7 +1075,11 @@ impl Run for IvmDerivePkArgs {
                 eyre::eyre!("failed to derive proving key bytes from verifying key bytes: {err}")
             })?;
         std::fs::write(&self.out, &pk)?;
-        context.println(format!("Wrote {} bytes to {}", pk.len(), self.out.display()))?;
+        context.println(format!(
+            "Wrote {} bytes to {}",
+            pk.len(),
+            self.out.display()
+        ))?;
         Ok(())
     }
 }
@@ -1556,7 +1561,7 @@ impl Run for ShieldArgs {
                 None => {
                     return Err(eyre::eyre!(
                         "encrypted payload requires ephemeral_pubkey, nonce_hex, and ciphertext_b64 or an encoded envelope file"
-                    ))
+                    ));
                 }
             }
         };
@@ -1778,8 +1783,7 @@ impl Run for UnshieldArgs {
     fn run<C: RunContext>(self, context: &mut C) -> eyre::Result<()> {
         use iroha::data_model::prelude::{AccountId, AssetDefinitionId, InstructionBox};
         let asset: AssetDefinitionId = self.asset.parse()?;
-        let to =
-            crate::resolve_account_id(context, &self.to).wrap_err("failed to resolve --to")?;
+        let to = crate::resolve_account_id(context, &self.to).wrap_err("failed to resolve --to")?;
         let inputs = parse_inputs_csv(&self.inputs)?;
         let proof_json_str = std::fs::read_to_string(&self.proof_json)?;
         let v: norito::json::Value = norito::json::from_str(&proof_json_str)?;

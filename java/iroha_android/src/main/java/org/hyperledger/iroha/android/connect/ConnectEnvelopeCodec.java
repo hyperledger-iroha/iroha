@@ -11,7 +11,7 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 /** Norito codec for encrypted Connect envelopes used by wallet-role flows. */
 public final class ConnectEnvelopeCodec {
 
-  private static final String ENVELOPE_SCHEMA_PATH = "iroha.connect.EnvelopeV1";
+  private static final String ENVELOPE_SCHEMA_PATH = "iroha_torii_shared::connect::EnvelopeV1";
   private static final int CONNECT_LAYOUT_FLAGS = 0;
 
   private static final int PAYLOAD_CONTROL = 0;
@@ -24,7 +24,6 @@ public final class ConnectEnvelopeCodec {
   private static final int CONTROL_CLOSE = 0;
   private static final int CONTROL_REJECT = 1;
 
-  private static final TypeAdapter<Long> UINT8 = NoritoAdapters.uint(8);
   private static final TypeAdapter<Long> UINT16 = NoritoAdapters.uint(16);
   private static final TypeAdapter<Long> UINT32 = NoritoAdapters.uint(32);
   private static final TypeAdapter<Long> UINT64 = NoritoAdapters.uint(64);
@@ -360,17 +359,17 @@ public final class ConnectEnvelopeCodec {
         public void encode(final NoritoEncoder encoder, final EnvelopePayload value) {
           if (value instanceof ControlClosePayload close) {
             UINT32.encode(encoder, (long) CONTROL_CLOSE);
-            ROLE_ADAPTER.encode(encoder, close.role);
-            UINT16.encode(encoder, (long) close.code);
-            STRING.encode(encoder, close.reason);
-            BOOL.encode(encoder, close.retryable);
+            writeField(encoder, ROLE_ADAPTER, close.role);
+            writeField(encoder, UINT16, (long) close.code);
+            writeField(encoder, STRING, close.reason);
+            writeField(encoder, BOOL, close.retryable);
             return;
           }
           if (value instanceof ControlRejectPayload reject) {
             UINT32.encode(encoder, (long) CONTROL_REJECT);
-            UINT16.encode(encoder, (long) reject.code);
-            STRING.encode(encoder, reject.codeId);
-            STRING.encode(encoder, reject.reason);
+            writeField(encoder, UINT16, (long) reject.code);
+            writeField(encoder, STRING, reject.codeId);
+            writeField(encoder, STRING, reject.reason);
             return;
           }
           throw new IllegalArgumentException("Unsupported control payload: " + value.getClass().getName());
@@ -380,16 +379,17 @@ public final class ConnectEnvelopeCodec {
         public EnvelopePayload decode(final NoritoDecoder decoder) {
           final int tag = UINT32.decode(decoder).intValue();
           if (tag == CONTROL_CLOSE) {
-            final ConnectFrameCodec.ConnectRole role = ROLE_ADAPTER.decode(decoder);
-            final int code = UINT16.decode(decoder).intValue();
-            final String reason = STRING.decode(decoder);
-            final boolean retryable = BOOL.decode(decoder);
+            final ConnectFrameCodec.ConnectRole role =
+                decodeField(decoder, ROLE_ADAPTER, "control.close.role");
+            final int code = decodeField(decoder, UINT16, "control.close.code").intValue();
+            final String reason = decodeField(decoder, STRING, "control.close.reason");
+            final boolean retryable = decodeField(decoder, BOOL, "control.close.retryable");
             return new ControlClosePayload(role, code, reason, retryable);
           }
           if (tag == CONTROL_REJECT) {
-            final int code = UINT16.decode(decoder).intValue();
-            final String codeId = STRING.decode(decoder);
-            final String reason = STRING.decode(decoder);
+            final int code = decodeField(decoder, UINT16, "control.reject.code").intValue();
+            final String codeId = decodeField(decoder, STRING, "control.reject.code_id");
+            final String reason = decodeField(decoder, STRING, "control.reject.reason");
             return new ControlRejectPayload(code, codeId, reason);
           }
           return new UnknownPayload(tag);
@@ -402,73 +402,74 @@ public final class ConnectEnvelopeCodec {
         public void encode(final NoritoEncoder encoder, final EnvelopePayload value) {
           if (value instanceof ControlClosePayload || value instanceof ControlRejectPayload) {
             UINT32.encode(encoder, (long) PAYLOAD_CONTROL);
-            CONTROL_AFTER_KEY_ADAPTER.encode(encoder, value);
-            return;
-          }
-          if (value instanceof SignRequestRawPayload raw) {
+            writeField(encoder, CONTROL_AFTER_KEY_ADAPTER, value);
+          } else if (value instanceof SignRequestRawPayload raw) {
             UINT32.encode(encoder, (long) PAYLOAD_SIGN_REQUEST_RAW);
-            STRING.encode(encoder, raw.domainTag);
-            RAW_BYTES.encode(encoder, raw.bytes);
-            return;
-          }
-          if (value instanceof SignRequestTxPayload tx) {
+            writeField(encoder, STRING, raw.domainTag);
+            writeField(encoder, RAW_BYTES, raw.bytes);
+          } else if (value instanceof SignRequestTxPayload tx) {
             UINT32.encode(encoder, (long) PAYLOAD_SIGN_REQUEST_TX);
-            RAW_BYTES.encode(encoder, tx.txBytes);
-            return;
-          }
-          if (value instanceof SignResultOkPayload ok) {
+            writeField(encoder, RAW_BYTES, tx.txBytes);
+          } else if (value instanceof SignResultOkPayload ok) {
             UINT32.encode(encoder, (long) PAYLOAD_SIGN_RESULT_OK);
-            WALLET_SIGNATURE_ADAPTER.encode(
-                encoder, new WalletSignature(algorithmTag(ok.algorithm), ok.signature));
-            return;
-          }
-          if (value instanceof SignResultErrPayload err) {
+            writeField(
+                encoder,
+                WALLET_SIGNATURE_ADAPTER,
+                new WalletSignature(algorithmTag(ok.algorithm), ok.signature));
+          } else if (value instanceof SignResultErrPayload err) {
             UINT32.encode(encoder, (long) PAYLOAD_SIGN_RESULT_ERR);
-            STRING.encode(encoder, err.code);
-            STRING.encode(encoder, err.message);
-            return;
-          }
-          if (value instanceof DisplayRequestPayload display) {
+            writeField(encoder, STRING, err.code);
+            writeField(encoder, STRING, err.message);
+          } else if (value instanceof DisplayRequestPayload display) {
             UINT32.encode(encoder, (long) PAYLOAD_DISPLAY_REQUEST);
-            STRING.encode(encoder, display.title);
-            STRING.encode(encoder, display.body);
-            return;
+            writeField(encoder, STRING, display.title);
+            writeField(encoder, STRING, display.body);
+          } else {
+            throw new IllegalArgumentException(
+                "Unsupported envelope payload: " + value.getClass().getName());
           }
-          throw new IllegalArgumentException("Unsupported envelope payload: " + value.getClass().getName());
         }
 
         @Override
         public EnvelopePayload decode(final NoritoDecoder decoder) {
           final int tag = UINT32.decode(decoder).intValue();
+
+          final EnvelopePayload payload;
           if (tag == PAYLOAD_CONTROL) {
-            return CONTROL_AFTER_KEY_ADAPTER.decode(decoder);
+            payload = decodeField(decoder, CONTROL_AFTER_KEY_ADAPTER, "payload.control");
+          } else if (tag == PAYLOAD_SIGN_REQUEST_RAW) {
+            final String domainTag =
+                decodeField(decoder, STRING, "payload.sign_request_raw.domain_tag");
+            final byte[] bytes =
+                decodeField(decoder, RAW_BYTES, "payload.sign_request_raw.bytes");
+            payload = new SignRequestRawPayload(domainTag, bytes);
+          } else if (tag == PAYLOAD_SIGN_REQUEST_TX) {
+            final byte[] txBytes =
+                decodeField(decoder, RAW_BYTES, "payload.sign_request_tx.tx_bytes");
+            payload = new SignRequestTxPayload(txBytes);
+          } else if (tag == PAYLOAD_SIGN_RESULT_OK) {
+            final WalletSignature signature =
+                decodeField(decoder, WALLET_SIGNATURE_ADAPTER, "payload.sign_result_ok.signature");
+            payload =
+                new SignResultOkPayload(
+                    algorithmName(signature.algorithm),
+                    signature.signature);
+          } else if (tag == PAYLOAD_SIGN_RESULT_ERR) {
+            final String code = decodeField(decoder, STRING, "payload.sign_result_err.code");
+            final String message =
+                decodeField(decoder, STRING, "payload.sign_result_err.message");
+            payload = new SignResultErrPayload(code, message);
+          } else if (tag == PAYLOAD_DISPLAY_REQUEST) {
+            final String title =
+                decodeField(decoder, STRING, "payload.display_request.title");
+            final String body =
+                decodeField(decoder, STRING, "payload.display_request.body");
+            payload = new DisplayRequestPayload(title, body);
+          } else {
+            decoder.readBytes(decoder.remaining());
+            return new UnknownPayload(tag);
           }
-          if (tag == PAYLOAD_SIGN_REQUEST_RAW) {
-            final String domainTag = STRING.decode(decoder);
-            final byte[] bytes = RAW_BYTES.decode(decoder);
-            return new SignRequestRawPayload(domainTag, bytes);
-          }
-          if (tag == PAYLOAD_SIGN_REQUEST_TX) {
-            final byte[] txBytes = RAW_BYTES.decode(decoder);
-            return new SignRequestTxPayload(txBytes);
-          }
-          if (tag == PAYLOAD_SIGN_RESULT_OK) {
-            final WalletSignature signature = WALLET_SIGNATURE_ADAPTER.decode(decoder);
-            return new SignResultOkPayload(
-                algorithmName(signature.algorithm),
-                signature.signature);
-          }
-          if (tag == PAYLOAD_SIGN_RESULT_ERR) {
-            final String code = STRING.decode(decoder);
-            final String message = STRING.decode(decoder);
-            return new SignResultErrPayload(code, message);
-          }
-          if (tag == PAYLOAD_DISPLAY_REQUEST) {
-            final String title = STRING.decode(decoder);
-            final String body = STRING.decode(decoder);
-            return new DisplayRequestPayload(title, body);
-          }
-          return new UnknownPayload(tag);
+          return payload;
         }
       };
 
@@ -476,14 +477,14 @@ public final class ConnectEnvelopeCodec {
       new TypeAdapter<>() {
         @Override
         public void encode(final NoritoEncoder encoder, final EnvelopeValue value) {
-          UINT64.encode(encoder, value.sequence);
-          PAYLOAD_ADAPTER.encode(encoder, value.payload);
+          writeField(encoder, UINT64, value.sequence);
+          writeField(encoder, PAYLOAD_ADAPTER, value.payload);
         }
 
         @Override
         public EnvelopeValue decode(final NoritoDecoder decoder) {
-          final long sequence = UINT64.decode(decoder);
-          final EnvelopePayload payload = PAYLOAD_ADAPTER.decode(decoder);
+          final long sequence = decodeField(decoder, UINT64, "envelope.seq");
+          final EnvelopePayload payload = decodeField(decoder, PAYLOAD_ADAPTER, "envelope.payload");
           return new EnvelopeValue(sequence, payload);
         }
       };
@@ -495,8 +496,126 @@ public final class ConnectEnvelopeCodec {
       final EnvelopeValue decoded = NoritoCodec.decode(framedEnvelope, ENVELOPE_ADAPTER, null);
       return new DecodedEnvelope(decoded.sequence, decoded.payload);
     } catch (final RuntimeException ex) {
+      final DecodedEnvelope compatDecoded = tryDecodeEnvelopeCompat(framedEnvelope);
+      if (compatDecoded != null) {
+        return compatDecoded;
+      }
       throw new ConnectProtocolException("Failed to decode Connect envelope", ex);
     }
+  }
+
+  private static DecodedEnvelope tryDecodeEnvelopeCompat(final byte[] framedEnvelope) {
+    try {
+      final NoritoCodec.ArchiveView archive = NoritoCodec.fromBytesView(framedEnvelope, null);
+      final NoritoDecoder decoder =
+          new NoritoDecoder(archive.asBytes(), archive.flags(), archive.flagsHint());
+
+      final boolean compactLen = decoder.compactLenActive();
+      final long seqFieldLen = decoder.readLength(compactLen);
+      if (seqFieldLen <= 0 || seqFieldLen > Integer.MAX_VALUE || seqFieldLen > decoder.remaining()) {
+        return null;
+      }
+      final byte[] seqFieldBytes = decoder.readBytes((int) seqFieldLen);
+      final NoritoDecoder seqDecoder =
+          new NoritoDecoder(seqFieldBytes, archive.flags(), archive.flagsHint());
+      final long sequence = UINT64.decode(seqDecoder);
+      if (seqDecoder.remaining() != 0) {
+        return null;
+      }
+
+      final long payloadFieldLen = decoder.readLength(compactLen);
+      if (payloadFieldLen <= 0 || payloadFieldLen > Integer.MAX_VALUE || payloadFieldLen > decoder.remaining()) {
+        return null;
+      }
+      final byte[] payloadFieldBytes = decoder.readBytes((int) payloadFieldLen);
+      if (decoder.remaining() != 0) {
+        return null;
+      }
+
+      final EnvelopePayload payload =
+          decodeCompatPayload(payloadFieldBytes, archive.flags(), archive.flagsHint());
+      if (payload == null) {
+        return null;
+      }
+      return new DecodedEnvelope(sequence, payload);
+    } catch (final RuntimeException ex) {
+      return null;
+    }
+  }
+
+  private static EnvelopePayload decodeCompatPayload(
+      final byte[] payloadFieldBytes, final int flags, final int flagsHint) {
+    final NoritoDecoder payloadDecoder = new NoritoDecoder(payloadFieldBytes, flags, flagsHint);
+    final int tag = UINT32.decode(payloadDecoder).intValue();
+    final boolean compactLen = payloadDecoder.compactLenActive();
+    final long bodyLength = payloadDecoder.readLength(compactLen);
+    if (bodyLength < 0 || bodyLength > Integer.MAX_VALUE || bodyLength > payloadDecoder.remaining()) {
+      return null;
+    }
+    final byte[] bodyBytes = payloadDecoder.readBytes((int) bodyLength);
+    if (payloadDecoder.remaining() != 0) {
+      return null;
+    }
+
+    final NoritoDecoder bodyDecoder = new NoritoDecoder(bodyBytes, flags, flagsHint);
+    final EnvelopePayload payload;
+    if (tag == PAYLOAD_CONTROL) {
+      payload = CONTROL_AFTER_KEY_ADAPTER.decode(bodyDecoder);
+      if (bodyDecoder.remaining() != 0) {
+        return null;
+      }
+      return payload;
+    }
+    if (tag == PAYLOAD_SIGN_REQUEST_RAW) {
+      final String domainTag = decodeField(bodyDecoder, STRING, "payload.sign_request_raw.domain_tag");
+      final byte[] bytes = decodeField(bodyDecoder, RAW_BYTES, "payload.sign_request_raw.bytes");
+      if (bodyDecoder.remaining() != 0) {
+        return null;
+      }
+      return new SignRequestRawPayload(domainTag, bytes);
+    }
+    if (tag == PAYLOAD_SIGN_REQUEST_TX) {
+      final byte[] txBytes = decodeRawBytesOrBody(bodyBytes, flags, flagsHint);
+      return new SignRequestTxPayload(txBytes);
+    }
+    if (tag == PAYLOAD_SIGN_RESULT_OK) {
+      final WalletSignature signature = WALLET_SIGNATURE_ADAPTER.decode(bodyDecoder);
+      if (bodyDecoder.remaining() != 0) {
+        return null;
+      }
+      return new SignResultOkPayload(algorithmName(signature.algorithm), signature.signature);
+    }
+    if (tag == PAYLOAD_SIGN_RESULT_ERR) {
+      final String code = decodeField(bodyDecoder, STRING, "payload.sign_result_err.code");
+      final String message = decodeField(bodyDecoder, STRING, "payload.sign_result_err.message");
+      if (bodyDecoder.remaining() != 0) {
+        return null;
+      }
+      return new SignResultErrPayload(code, message);
+    }
+    if (tag == PAYLOAD_DISPLAY_REQUEST) {
+      final String title = decodeField(bodyDecoder, STRING, "payload.display_request.title");
+      final String body = decodeField(bodyDecoder, STRING, "payload.display_request.body");
+      if (bodyDecoder.remaining() != 0) {
+        return null;
+      }
+      return new DisplayRequestPayload(title, body);
+    }
+    return null;
+  }
+
+  private static byte[] decodeRawBytesOrBody(
+      final byte[] bodyBytes, final int flags, final int flagsHint) {
+    try {
+      final NoritoDecoder bodyDecoder = new NoritoDecoder(bodyBytes, flags, flagsHint);
+      final byte[] decoded = RAW_BYTES.decode(bodyDecoder);
+      if (bodyDecoder.remaining() == 0) {
+        return decoded;
+      }
+    } catch (final RuntimeException ignored) {
+      // Fallback to raw body bytes below.
+    }
+    return bodyBytes.clone();
   }
 
   public static byte[] encodeSignResultOkEnvelope(
@@ -553,6 +672,33 @@ public final class ConnectEnvelopeCodec {
     } catch (final RuntimeException ex) {
       throw new ConnectProtocolException("Failed to encode Connect envelope", ex);
     }
+  }
+
+  private static <T> void writeField(
+      final NoritoEncoder encoder, final TypeAdapter<T> adapter, final T value) {
+    final NoritoEncoder child = encoder.childEncoder();
+    adapter.encode(child, value);
+    final byte[] fieldBytes = child.toByteArray();
+    final boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+    encoder.writeLength(fieldBytes.length, compactLen);
+    encoder.writeBytes(fieldBytes);
+  }
+
+  private static <T> T decodeField(
+      final NoritoDecoder decoder, final TypeAdapter<T> adapter, final String fieldName) {
+    final boolean compactLen = decoder.compactLenActive();
+    final long fieldLength = decoder.readLength(compactLen);
+    if (fieldLength < 0 || fieldLength > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(fieldName + " field too large: " + fieldLength);
+    }
+    final byte[] fieldBytes = decoder.readBytes((int) fieldLength);
+    final NoritoDecoder child = new NoritoDecoder(fieldBytes, decoder.flags(), decoder.flagsHint());
+    final T value = adapter.decode(child);
+    if (child.remaining() != 0) {
+      throw new IllegalArgumentException(
+          fieldName + " trailing bytes: " + child.remaining());
+    }
+    return value;
   }
 
   private static int algorithmTag(final String algorithm) {

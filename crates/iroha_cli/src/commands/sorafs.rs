@@ -18,8 +18,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::{CliOutputFormat, Run, RunContext};
 use crate::cli_output::print_with_optional_text;
+use crate::{CliOutputFormat, Run, RunContext};
 use base64::{
     Engine,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
@@ -60,7 +60,6 @@ use norito::{
 };
 use rand::{CryptoRng, RngCore, SeedableRng, rngs::StdRng};
 use reqwest::blocking::Client as BlockingHttpClient;
-use tiny_keccak::{Hasher as _, Sha3};
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarWriteStats, CarWriter, ChunkStore, FilePlan, PorMerkleTree,
     fetch_plan::{chunk_fetch_specs_from_json, chunk_fetch_specs_to_json, parse_digest_hex},
@@ -68,6 +67,11 @@ use sorafs_car::{
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::chunker_registry;
 use sorafs_manifest::deal::{MICRO_XOR_PER_XOR, XorAmount};
+use sorafs_manifest::repair::{
+    REPAIR_ESCALATION_APPROVAL_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
+    REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairEscalationApprovalV1, RepairSlashProposalV1,
+    RepairTicketId, RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
+};
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
     StorageClass as ManifestStorageClass,
@@ -80,11 +84,6 @@ use sorafs_manifest::{
     },
     provider_admission::ProviderAdmissionEnvelopeV1,
     provider_advert::{CapabilityType, ProviderCapabilityRangeV1},
-};
-use sorafs_manifest::repair::{
-    REPAIR_ESCALATION_APPROVAL_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
-    REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairEscalationApprovalV1, RepairSlashProposalV1,
-    RepairTicketId, RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, PolicyOverride, TransportPolicy, WriteModeHint,
@@ -102,6 +101,7 @@ use sorafs_orchestrator::{
 };
 use soranet_pq::MlDsaSuite;
 use time::{Duration as TimeDelta, OffsetDateTime, format_description::well_known::Rfc3339};
+use tiny_keccak::{Hasher as _, Sha3};
 use tokio::runtime::Runtime;
 
 use iroha_data_model::{
@@ -847,16 +847,12 @@ impl RepairEscalateArgs {
             let approve_votes = self.approve_votes.ok_or_else(|| {
                 eyre!("--approve-votes is required when supplying an approval summary")
             })?;
-            let approved_at = self
-                .approved_at
-                .as_deref()
-                .ok_or_else(|| eyre!("--approved-at is required when supplying an approval summary"))?;
-            let finalized_at = self
-                .finalized_at
-                .as_deref()
-                .ok_or_else(|| {
-                    eyre!("--finalized-at is required when supplying an approval summary")
-                })?;
+            let approved_at = self.approved_at.as_deref().ok_or_else(|| {
+                eyre!("--approved-at is required when supplying an approval summary")
+            })?;
+            let finalized_at = self.finalized_at.as_deref().ok_or_else(|| {
+                eyre!("--finalized-at is required when supplying an approval summary")
+            })?;
             let approved_at_unix = parse_timestamp_value(approved_at, "approved-at")?;
             let finalized_at_unix = parse_timestamp_value(finalized_at, "finalized-at")?;
             Some(RepairEscalationApprovalV1 {
@@ -881,9 +877,9 @@ impl RepairEscalateArgs {
             rationale: self.rationale.clone(),
             approval,
         };
-        proposal.validate().map_err(|err| {
-            eyre!("invalid repair slash proposal payload: {err}")
-        })?;
+        proposal
+            .validate()
+            .map_err(|err| eyre!("invalid repair slash proposal payload: {err}"))?;
         let client = context.client_from_config();
         let response = submit(&client, &proposal)?;
         render_json_response(context, response)
@@ -1084,9 +1080,8 @@ fn load_gc_manifest_entries(data_dir: &Path) -> Result<Vec<GcManifestEntry>> {
         }
         let manifest_id = dir_entry.file_name().to_string_lossy().to_string();
         let manifest_path = dir_entry.path().join(SORAFS_MANIFEST_FILE);
-        let manifest_bytes = fs::read(&manifest_path).wrap_err_with(|| {
-            format!("failed to read manifest `{}`", manifest_path.display())
-        })?;
+        let manifest_bytes = fs::read(&manifest_path)
+            .wrap_err_with(|| format!("failed to read manifest `{}`", manifest_path.display()))?;
         let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes)
             .wrap_err_with(|| format!("failed to decode `{}`", manifest_path.display()))?;
         let digest = manifest
@@ -1353,8 +1348,8 @@ impl GarReceiptArgs {
         let expires_at = parse_optional_timestamp(self.expires_at.as_deref(), "expires-at")?;
         let policy_digest =
             parse_optional_hex_array::<32>(self.policy_digest_hex.as_deref(), "--policy-digest")?;
-        let operator =
-            crate::resolve_account_id(context, &self.operator).wrap_err("failed to resolve --operator")?;
+        let operator = crate::resolve_account_id(context, &self.operator)
+            .wrap_err("failed to resolve --operator")?;
         let action = self
             .action
             .to_enforcement_action(self.custom_action_slug.as_deref())?;
@@ -2930,8 +2925,7 @@ pub struct IncentivesOpenDisputeArgs {
 impl Run for IncentivesOpenDisputeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let instruction = read_reward_instruction(&self.instruction)?;
-        let treasury =
-            parse_account_id_str(context, &self.treasury_account, "--treasury-account")?;
+        let treasury = parse_account_id_str(context, &self.treasury_account, "--treasury-account")?;
         let submitted_by = parse_account_id_str(context, &self.submitted_by, "--submitted-by")?;
         let requested_amount = parse_numeric_str(&self.requested_amount, "--requested-amount")?;
         let submitted_at = self.submitted_at.unwrap_or_else(unix_now);
@@ -3584,8 +3578,9 @@ pub struct IncentivesServiceAuditArgs {
 impl Run for IncentivesServiceAuditArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let state = load_incentives_state(&self.state)?;
-        let config =
-            load_daemon_config(&self.config, &|literal| crate::resolve_account_id(context, literal))?;
+        let config = load_daemon_config(&self.config, &|literal| {
+            crate::resolve_account_id(context, literal)
+        })?;
         let (audit_bond_enabled, audit_budget_enabled) = audit_scope_flags(&self.scopes);
 
         let mut summary = IncentivesAuditSummary::default();
@@ -3640,8 +3635,9 @@ impl Run for IncentivesServiceShadowRunArgs {
             &state_for_run,
             self.allow_missing_budget_approval,
         )?;
-        let config =
-            load_daemon_config(&self.config, &|literal| crate::resolve_account_id(context, literal))?;
+        let config = load_daemon_config(&self.config, &|literal| {
+            crate::resolve_account_id(context, literal)
+        })?;
         let expected_budget =
             match require_budget_approval_id(state.reward_config.budget_approval_id.as_ref()) {
                 Ok(id) => Some(id),
@@ -3757,8 +3753,9 @@ pub struct IncentivesServiceDaemonArgs {
 
 impl Run for IncentivesServiceDaemonArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let config =
-            load_daemon_config(&self.config, &|literal| crate::resolve_account_id(context, literal))?;
+        let config = load_daemon_config(&self.config, &|literal| {
+            crate::resolve_account_id(context, literal)
+        })?;
 
         if let Some(dir) = &self.instruction_out_dir {
             fs::create_dir_all(dir).wrap_err_with(|| {
@@ -5649,8 +5646,8 @@ fn parse_domain_hints(value: &Value) -> Result<Vec<DomainId>> {
 }
 
 fn parse_incentives_state_snapshot(bytes: &[u8]) -> Result<IncentivesStateSnapshot> {
-    let value: Value = norito::json::from_slice(bytes)
-        .wrap_err("failed to parse incentives state JSON")?;
+    let value: Value =
+        norito::json::from_slice(bytes).wrap_err("failed to parse incentives state JSON")?;
     let domain_hints = parse_domain_hints(&value)?;
     let _guard = install_domain_selector_resolver(&domain_hints);
     norito::json::from_value(value).wrap_err("failed to parse incentives state JSON")
@@ -6372,9 +6369,9 @@ fn build_repair_worker_signature(
         idempotency_key: idempotency_key.to_string(),
         action,
     };
-    payload.validate().map_err(|err| {
-        eyre!("invalid repair worker signature payload: {err}")
-    })?;
+    payload
+        .validate()
+        .map_err(|err| eyre!("invalid repair worker signature payload: {err}"))?;
     let signature = SignatureOf::new(config.key_pair.private_key(), &payload);
     Ok((worker_id, signature))
 }
@@ -8181,14 +8178,14 @@ impl Run for ToolkitPackArgs {
 
         let mut metadata: Vec<(String, String)> = Vec::new();
         let hybrid_recipient = if produce_hybrid_envelope {
-            let x25519_hex = hybrid_recipient_x25519
-                .as_deref()
-                .ok_or_else(|| eyre!("hybrid manifest envelopes require --hybrid-recipient-x25519"))?;
-            let kyber_hex = hybrid_recipient_kyber
-                .as_deref()
-                .ok_or_else(|| eyre!("hybrid manifest envelopes require --hybrid-recipient-kyber"))?;
-            let x25519_bytes = decode(x25519_hex)
-                .wrap_err("invalid hex for --hybrid-recipient-x25519")?;
+            let x25519_hex = hybrid_recipient_x25519.as_deref().ok_or_else(|| {
+                eyre!("hybrid manifest envelopes require --hybrid-recipient-x25519")
+            })?;
+            let kyber_hex = hybrid_recipient_kyber.as_deref().ok_or_else(|| {
+                eyre!("hybrid manifest envelopes require --hybrid-recipient-kyber")
+            })?;
+            let x25519_bytes =
+                decode(x25519_hex).wrap_err("invalid hex for --hybrid-recipient-x25519")?;
             let kyber_bytes =
                 decode(kyber_hex).wrap_err("invalid hex for --hybrid-recipient-kyber")?;
             ensure_metadata_entry(&mut metadata, "manifest.requires_envelope", "true");
@@ -8223,7 +8220,9 @@ impl Run for ToolkitPackArgs {
 
         let manifest = builder.build().wrap_err("failed to build manifest")?;
         let manifest_bytes = manifest.encode().wrap_err("failed to encode manifest")?;
-        let manifest_digest = manifest.digest().wrap_err("failed to compute manifest digest")?;
+        let manifest_digest = manifest
+            .digest()
+            .wrap_err("failed to compute manifest digest")?;
         let manifest_filename = manifest_out.as_ref().and_then(|path| {
             path.file_name()
                 .map(|name| name.to_string_lossy().into_owned())
@@ -8252,9 +8251,8 @@ impl Run for ToolkitPackArgs {
 
         if let Some(path) = manifest_out.as_ref() {
             ensure_parent_dir(path)?;
-            fs::write(path, &manifest_bytes).wrap_err_with(|| {
-                format!("failed to write manifest to `{}`", path.display())
-            })?;
+            fs::write(path, &manifest_bytes)
+                .wrap_err_with(|| format!("failed to write manifest to `{}`", path.display()))?;
         }
 
         if let Some(hybrid) = hybrid_output.as_ref() {
@@ -8369,8 +8367,8 @@ struct PackReportContext<'a> {
 }
 
 fn build_pack_plan(input: &Path, profile: ChunkProfile) -> Result<(CarBuildPlan, Vec<u8>)> {
-    let metadata = fs::metadata(input)
-        .wrap_err_with(|| format!("failed to access `{}`", input.display()))?;
+    let metadata =
+        fs::metadata(input).wrap_err_with(|| format!("failed to access `{}`", input.display()))?;
     if metadata.is_dir() {
         CarBuildPlan::from_directory_with_profile(input, profile)
             .map_err(|err| eyre!("car planning failed: {err}"))
@@ -8446,8 +8444,7 @@ fn build_hybrid_manifest_aad(
     aad.extend_from_slice(&chunk_digest_sha3);
     if let Some(name) = manifest_filename {
         let name_bytes = name.as_bytes();
-        let name_len = u32::try_from(name_bytes.len())
-            .expect("manifest filename length fits u32");
+        let name_len = u32::try_from(name_bytes.len()).expect("manifest filename length fits u32");
         aad.extend_from_slice(&name_len.to_be_bytes());
         aad.extend_from_slice(name_bytes);
     }
@@ -10458,7 +10455,10 @@ const PERMANENT_NEEDS_REFERENCE: bool =
     defaults::sorafs::gateway::denylist::REQUIRE_GOVERNANCE_REFERENCE;
 
 impl GatewayDenylistRecord {
-    fn validate(&self, resolve: &dyn Fn(&str) -> Result<AccountId>) -> Result<GatewayRecordValidation> {
+    fn validate(
+        &self,
+        resolve: &dyn Fn(&str) -> Result<AccountId>,
+    ) -> Result<GatewayRecordValidation> {
         ensure_optional_non_empty(self.jurisdiction.as_deref(), "jurisdiction")?;
         ensure_optional_non_empty(self.reason.as_deref(), "reason")?;
         ensure_optional_non_empty(self.alias.as_deref(), "alias")?;
@@ -11999,12 +11999,14 @@ fn extract_ledger_projection(value: &Value) -> Result<LedgerProjectionAmounts> {
 }
 
 fn parse_optional_micro_amount(map: &Map, key: &str) -> Result<Option<XorAmount>> {
-    map.get(key)
-        .map_or_else(|| Ok(None), |value| {
+    map.get(key).map_or_else(
+        || Ok(None),
+        |value| {
             value_to_micro(value, key)
                 .map(XorAmount::from_micro)
                 .map(Some)
-        })
+        },
+    )
 }
 
 fn value_to_micro(value: &Value, key: &str) -> Result<u128> {
@@ -12704,10 +12706,7 @@ mod tests {
         let file = NamedTempFile::new().expect("temp file");
         fs::write(file.path(), bytes).expect("write ledger export");
         let err = read_ledger_export(file.path()).expect_err("schema mismatch should fail");
-        let messages = err
-            .chain()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
+        let messages = err.chain().map(ToString::to_string).collect::<Vec<_>>();
         let combined = messages.join("\n");
         assert!(
             combined.contains("schema mismatch"),
@@ -13660,23 +13659,10 @@ mod tests {
             200,
             20,
         );
-        write_gc_manifest(
-            dir.path(),
-            "gamma",
-            0,
-            ManifestStorageClass::Cold,
-            300,
-            30,
-        );
+        write_gc_manifest(dir.path(), "gamma", 0, ManifestStorageClass::Cold, 300, 30);
 
-        let report = build_gc_report(
-            "inspect",
-            Some(dir.path()),
-            Some("@1500"),
-            Some(100),
-            false,
-        )
-        .expect("report");
+        let report = build_gc_report("inspect", Some(dir.path()), Some("@1500"), Some(100), false)
+            .expect("report");
 
         assert_eq!(report.mode, "inspect");
         assert_eq!(report.total_manifests, 3);
@@ -13725,14 +13711,8 @@ mod tests {
             20,
         );
 
-        let report = build_gc_report(
-            "dry_run",
-            Some(dir.path()),
-            Some("@1500"),
-            Some(100),
-            true,
-        )
-        .expect("report");
+        let report = build_gc_report("dry_run", Some(dir.path()), Some("@1500"), Some(100), true)
+            .expect("report");
 
         assert_eq!(report.mode, "dry_run");
         assert_eq!(report.total_manifests, 2);
@@ -13745,14 +13725,7 @@ mod tests {
     #[test]
     fn gc_inspect_command_prints_json_report() {
         let dir = TempDir::new().expect("temp dir");
-        write_gc_manifest(
-            dir.path(),
-            "alpha",
-            0,
-            ManifestStorageClass::Hot,
-            50,
-            5,
-        );
+        write_gc_manifest(dir.path(), "alpha", 0, ManifestStorageClass::Hot, 50, 5);
         let args = GcInspectArgs {
             data_dir: Some(dir.path().to_path_buf()),
             now: Some("@1500".to_string()),
@@ -13760,9 +13733,7 @@ mod tests {
         };
         let mut ctx = TestContext::new();
 
-        GcCommand::Inspect(args)
-            .run(&mut ctx)
-            .expect("inspect run");
+        GcCommand::Inspect(args).run(&mut ctx).expect("inspect run");
 
         let output = ctx.outputs().last().expect("output");
         let json: Value = norito::json::from_str(output).expect("json");
@@ -13782,14 +13753,7 @@ mod tests {
             10,
             1,
         );
-        write_gc_manifest(
-            dir.path(),
-            "beta",
-            2_000,
-            ManifestStorageClass::Cold,
-            20,
-            2,
-        );
+        write_gc_manifest(dir.path(), "beta", 2_000, ManifestStorageClass::Cold, 20, 2);
         let args = GcDryRunArgs {
             data_dir: Some(dir.path().to_path_buf()),
             now: Some("@1500".to_string()),
@@ -13824,9 +13788,18 @@ mod tests {
 
     #[test]
     fn gc_storage_class_labels_match_expected_values() {
-        assert_eq!(manifest_storage_class_label(ManifestStorageClass::Hot), "hot");
-        assert_eq!(manifest_storage_class_label(ManifestStorageClass::Warm), "warm");
-        assert_eq!(manifest_storage_class_label(ManifestStorageClass::Cold), "cold");
+        assert_eq!(
+            manifest_storage_class_label(ManifestStorageClass::Hot),
+            "hot"
+        );
+        assert_eq!(
+            manifest_storage_class_label(ManifestStorageClass::Warm),
+            "warm"
+        );
+        assert_eq!(
+            manifest_storage_class_label(ManifestStorageClass::Cold),
+            "cold"
+        );
     }
 
     #[test]
@@ -14001,20 +13974,16 @@ mod tests {
         args.run(&mut ctx).expect("pack");
 
         let manifest_bytes = fs::read(&manifest_path).expect("read manifest");
-        let manifest: ManifestV1 =
-            decode_from_bytes(&manifest_bytes).expect("decode manifest");
+        let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("decode manifest");
         assert_eq!(manifest.content_length, 13);
         let car_size = fs::metadata(&car_path).expect("car metadata").len();
         assert_eq!(manifest.car_size, car_size);
 
         let report_bytes = fs::read(&json_path).expect("read report");
-        let report: Value =
-            norito::json::from_slice(&report_bytes).expect("decode report");
+        let report: Value = norito::json::from_slice(&report_bytes).expect("decode report");
         let digest_hex = hex::encode(manifest.digest().expect("manifest digest").as_bytes());
         assert_eq!(
-            report
-                .get("manifest_digest_hex")
-                .and_then(Value::as_str),
+            report.get("manifest_digest_hex").and_then(Value::as_str),
             Some(digest_hex.as_str())
         );
     }
@@ -14037,8 +14006,7 @@ mod tests {
     fn chunk_digest_sha3_matches_manual_hash() {
         let payload = b"hello-world".to_vec();
         let plan =
-            CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT)
-                .expect("plan");
+            CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let computed = compute_chunk_digest_sha3(&plan.chunks);
 
         let mut hasher = Sha3::v256();

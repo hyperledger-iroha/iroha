@@ -2,6 +2,7 @@
 //! 4-peer SORA parliament lifecycle smoke: fund, bond citizenship, approve, vote, finalize, enact.
 
 #[path = "common/sora_runtime_governance.rs"]
+#[allow(dead_code)]
 mod sora_runtime_governance;
 
 use std::{
