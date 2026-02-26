@@ -5,6 +5,7 @@ mod autoscale_localnet;
 mod cbdc_rollout_bundle;
 mod cbdc_whitelist;
 mod cross_dataspace_localnet;
+mod cross_dataspace_zk_stark_localnet;
 mod cross_lane;
 mod global_commit;
 mod lane_registry;
