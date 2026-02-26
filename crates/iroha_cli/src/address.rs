@@ -442,11 +442,7 @@ fn normalize_no_local_selectors_message(i18n: &Localizer) -> String {
     i18n.t("warning.normalize_no_local_selectors")
 }
 
-fn normalize_skipped_address_message(
-    index: usize,
-    err: &eyre::Report,
-    i18n: &Localizer,
-) -> String {
+fn normalize_skipped_address_message(index: usize, err: &eyre::Report, i18n: &Localizer) -> String {
     let index_text = index.to_string();
     let error_text = err.to_string();
     i18n.t_with(
@@ -793,6 +789,9 @@ mod tests {
         let err = eyre::eyre!("bad input");
         let message = normalize_skipped_address_message(2, &err, &i18n);
         assert!(message.contains("index 2"), "unexpected message: {message}");
-        assert!(message.contains("bad input"), "unexpected message: {message}");
+        assert!(
+            message.contains("bad input"),
+            "unexpected message: {message}"
+        );
     }
 }

@@ -144,5 +144,4 @@ mod tests {
         let candidate = compute_proposal_id(ns, cid, &code, &abi);
         assert_eq!(candidate, expected);
     }
-
 }

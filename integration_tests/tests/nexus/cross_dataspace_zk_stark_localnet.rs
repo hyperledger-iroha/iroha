@@ -34,7 +34,7 @@ use iroha::{
             ProofAttachment, ProofId, ProofRecord, ProofStatus, VerifyingKeyBox, VerifyingKeyId,
             VerifyingKeyRecord,
         },
-        zk::BackendTag,
+        zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     },
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
@@ -776,6 +776,25 @@ fn parse_hex32(input: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
+fn tamper_stark_attachment_inner_envelope(attachment: &ProofAttachment) -> Result<ProofAttachment> {
+    let mut tampered = attachment.clone();
+    let mut open_verify: OpenVerifyEnvelope = norito::decode_from_bytes(&tampered.proof.bytes)?;
+    ensure!(
+        open_verify.backend == BackendTag::Stark,
+        "tamper helper expected STARK backend envelope"
+    );
+    let mut open: StarkFriOpenProofV1 = norito::decode_from_bytes(&open_verify.proof_bytes)?;
+    ensure!(
+        !open.envelope_bytes.is_empty(),
+        "tamper helper cannot mutate empty STARK inner envelope"
+    );
+    let pivot = open.envelope_bytes.len() / 2;
+    open.envelope_bytes[pivot] ^= 0x01;
+    open_verify.proof_bytes = norito::to_bytes(&open)?;
+    tampered.proof.bytes = norito::to_bytes(&open_verify)?;
+    Ok(tampered)
+}
+
 fn hex_char(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
@@ -925,26 +944,25 @@ async fn wait_for_proof_record_status(
     }
 }
 
-async fn wait_for_rejected_or_absent_proof_record(
+async fn wait_for_absent_proof_record(
     observer: &Client,
     proof_id: &ProofId,
     context: &str,
-) -> Result<Option<Vec<u8>>> {
+) -> Result<()> {
     let deadline = tokio::time::Instant::now() + STATUS_WAIT_TIMEOUT;
-    let mut last_status = None;
     let mut saw_not_found = false;
     let mut last_error = None;
 
     loop {
         match fetch_proof_record_payload(observer, proof_id).await {
-            Ok(Some((record, payload))) => {
-                if record.status == ProofStatus::Rejected {
-                    return Ok(Some(payload));
-                }
-                last_status = Some(record.status);
-            }
             Ok(None) => {
                 saw_not_found = true;
+            }
+            Ok(Some((record, _payload))) => {
+                return Err(eyre!(
+                    "{context}: expected proof record to stay absent, observed status {:?}",
+                    record.status
+                ));
             }
             Err(err) => {
                 last_error = Some(err.to_string());
@@ -952,23 +970,14 @@ async fn wait_for_rejected_or_absent_proof_record(
         }
 
         if tokio::time::Instant::now() >= deadline {
-            if saw_not_found && last_status.is_none() && last_error.is_none() {
-                return Ok(None);
+            if saw_not_found {
+                return Ok(());
             }
-
-            let status_suffix = last_status
-                .map(|status| format!("; last observed status: {status:?}"))
-                .unwrap_or_default();
             let error_suffix = last_error
                 .map(|err| format!("; last error: {err}"))
                 .unwrap_or_default();
-            let not_found_suffix = if saw_not_found {
-                "; observed 404 while polling"
-            } else {
-                ""
-            };
             return Err(eyre!(
-                "{context}: timed out waiting for rejected/absent proof record{status_suffix}{error_suffix}{not_found_suffix}"
+                "{context}: timed out waiting for proof record to remain absent{error_suffix}"
             ));
         }
         sleep(STATUS_POLL_INTERVAL).await;
@@ -1198,7 +1207,6 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
 
     let valid_attachment =
         build_stark_attachment(valid_vk_id, &valid_vk_box, CIRCUIT_ID_VALID, SCHEMA_VALID)?;
-    let marker = proof_marker(&valid_attachment.proof.bytes);
 
     let mismatched_attachment = ProofAttachment::new_ref(
         STARK_BACKEND.to_owned(),
@@ -1216,25 +1224,145 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
     .await?;
 
     let proof_id = proof_id_for_attachment(&mismatched_attachment);
-    let ds2_observer_payload = wait_for_rejected_or_absent_proof_record(
+    wait_for_absent_proof_record(
         &bob,
         &proof_id,
+        "observe absent proof record from ds2 observer",
+    )
+    .await?;
+    wait_for_absent_proof_record(
+        &nexus_observer,
+        &proof_id,
+        "observe absent proof record from nexus observer",
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_payload_leak()
+-> Result<()> {
+    if !has_test_network_feature("zk-stark") {
+        eprintln!(
+            "skipping stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_payload_leak: set TEST_NETWORK_IROHAD_FEATURES=zk-stark"
+        );
+        return Ok(());
+    }
+
+    let Some(network) = sandbox::start_network_async_or_skip(
+        localnet_builder(),
+        stringify!(
+            stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_payload_leak
+        ),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    network.ensure_blocks(1).await?;
+
+    let alice = network.client();
+    let bob = network
+        .peer()
+        .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
+    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
+    let nexus_observer_id = AccountId::new(
+        ivm_domain,
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+    );
+    let nexus_observer = network.peer().client_for(
+        &nexus_observer_id,
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
+    );
+
+    let expected_validators = expected_lane_validators(&network);
+    wait_for_active_lane_validators(
+        &alice,
+        LaneId::new(NEXUS_LANE_INDEX),
+        &expected_validators,
+        "nexus lane validator activation",
+    )
+    .await?;
+    wait_for_active_lane_validators(
+        &alice,
+        LaneId::new(DS1_LANE_INDEX),
+        &expected_validators,
+        "ds1 lane validator activation",
+    )
+    .await?;
+    wait_for_active_lane_validators(
+        &alice,
+        LaneId::new(DS2_LANE_INDEX),
+        &expected_validators,
+        "ds2 lane validator activation",
+    )
+    .await?;
+
+    wait_for_route_probe_approval(
+        &alice,
+        InstructionBox::from(Log::new(Level::INFO, "route probe ds1".to_owned())),
+        LaneId::new(DS1_LANE_INDEX),
+        DataSpaceId::new(DS1_ID_U64),
+        "route probe ds1",
+    )
+    .await?;
+    wait_for_route_probe_approval(
+        &bob,
+        InstructionBox::from(Log::new(Level::INFO, "route probe ds2".to_owned())),
+        LaneId::new(DS2_LANE_INDEX),
+        DataSpaceId::new(DS2_ID_U64),
+        "route probe ds2",
+    )
+    .await?;
+
+    grant_manage_verifying_keys_permission(&alice).await?;
+
+    let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
+    let valid_vk_box = sample_stark_vk_box(CIRCUIT_ID_VALID, 4);
+    register_stark_vk(
+        &alice,
+        valid_vk_id.clone(),
+        valid_vk_box.clone(),
+        CIRCUIT_ID_VALID,
+        SCHEMA_VALID,
+    )
+    .await?;
+
+    let valid_attachment =
+        build_stark_attachment(valid_vk_id, &valid_vk_box, CIRCUIT_ID_VALID, SCHEMA_VALID)?;
+    let tampered_attachment = tamper_stark_attachment_inner_envelope(&valid_attachment)?;
+    let marker = proof_marker(&tampered_attachment.proof.bytes);
+
+    wait_for_route_probe_approval(
+        &alice,
+        InstructionBox::from(VerifyProof::new(tampered_attachment.clone())),
+        LaneId::new(DS1_LANE_INDEX),
+        DataSpaceId::new(DS1_ID_U64),
+        "verifyproof submit ds1 tampered payload",
+    )
+    .await?;
+    network.ensure_blocks(2).await?;
+
+    let proof_id = proof_id_for_attachment(&tampered_attachment);
+    let ds2_observer_payload = wait_for_proof_record_status(
+        &bob,
+        &proof_id,
+        ProofStatus::Rejected,
         "observe rejected proof status from ds2 observer",
     )
     .await?;
-    if let Some(payload) = ds2_observer_payload {
-        assert_payload_redacted(&payload, &marker, "ds2 observer payload")?;
-    }
+    assert_payload_redacted(&ds2_observer_payload, &marker, "ds2 observer payload")?;
 
-    let nexus_observer_payload = wait_for_rejected_or_absent_proof_record(
+    let nexus_observer_payload = wait_for_proof_record_status(
         &nexus_observer,
         &proof_id,
+        ProofStatus::Rejected,
         "observe rejected proof status from nexus observer",
     )
     .await?;
-    if let Some(payload) = nexus_observer_payload {
-        assert_payload_redacted(&payload, &marker, "nexus observer payload")?;
-    }
+    assert_payload_redacted(&nexus_observer_payload, &marker, "nexus observer payload")?;
 
     Ok(())
 }

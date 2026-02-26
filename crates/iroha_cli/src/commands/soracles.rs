@@ -20,8 +20,8 @@ use norito::{
     json::{self, Value},
 };
 
-use crate::{Run, RunContext};
 use crate::cli_output::print_with_optional_text;
+use crate::{Run, RunContext};
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -518,10 +518,8 @@ fn load_feed_events(path: &Path) -> Result<Vec<FeedEventRecord>> {
         if let Value::Array(values) = value {
             let mut events = Vec::new();
             for entry in values {
-                let record =
-                    json::from_value::<FeedEventRecord>(entry).map_err(|err| {
-                        eyre!("failed to parse feed event from array entry: {err}")
-                    })?;
+                let record = json::from_value::<FeedEventRecord>(entry)
+                    .map_err(|err| eyre!("failed to parse feed event from array entry: {err}"))?;
                 events.push(record);
             }
             Ok(events)

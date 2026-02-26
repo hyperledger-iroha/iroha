@@ -24,6 +24,10 @@ public final class ConnectCrypto {
   private static final int KEY_LENGTH = 32;
   private static final int NONCE_LENGTH = 12;
   private static final int AEAD_TAG_BITS = 128;
+  private static final byte[] X25519_HKDF_SALT =
+      "iroha:x25519:hkdf:v1".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] X25519_HKDF_INFO =
+      "iroha:x25519:session-key".getBytes(StandardCharsets.UTF_8);
 
   private ConnectCrypto() {}
 
@@ -95,10 +99,19 @@ public final class ConnectCrypto {
     agreement.init(local);
     final byte[] shared = new byte[KEY_LENGTH];
     agreement.calculateAgreement(peer, shared, 0);
+    if (isAllZero(shared)) {
+      Arrays.fill(shared, (byte) 0);
+      throw new ConnectProtocolException(
+          "x25519 shared secret is all-zero (invalid public key)");
+    }
 
+    final byte[] sessionKey = hkdfExpand(shared, X25519_HKDF_SALT, X25519_HKDF_INFO);
     final byte[] salt = blake2b32("iroha-connect|salt|".getBytes(StandardCharsets.UTF_8), sessionId);
-    final byte[] appKey = hkdfExpand(shared, salt, "iroha-connect|k_app".getBytes(StandardCharsets.UTF_8));
-    final byte[] walletKey = hkdfExpand(shared, salt, "iroha-connect|k_wallet".getBytes(StandardCharsets.UTF_8));
+    final byte[] appKey =
+        hkdfExpand(sessionKey, salt, "iroha-connect|k_app".getBytes(StandardCharsets.UTF_8));
+    final byte[] walletKey =
+        hkdfExpand(sessionKey, salt, "iroha-connect|k_wallet".getBytes(StandardCharsets.UTF_8));
+    Arrays.fill(sessionKey, (byte) 0);
     Arrays.fill(shared, (byte) 0);
     return new DirectionKeys(appKey, walletKey);
   }
@@ -240,6 +253,15 @@ public final class ConnectCrypto {
     final byte[] out = new byte[KEY_LENGTH];
     digest.doFinal(out, 0);
     return out;
+  }
+
+  private static boolean isAllZero(final byte[] value) {
+    for (final byte b : value) {
+      if (b != 0) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static void requireLength(final byte[] value, final int expected, final String name)

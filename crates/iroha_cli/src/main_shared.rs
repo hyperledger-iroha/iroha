@@ -879,7 +879,7 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
         .run(&mut context)
         .into_report()
         .map_err(|report| {
-            let message = report.to_string();
+            let message = format!("{:#}", report.current_context());
             report.change_context(MainError::Command(message))
         })?;
 

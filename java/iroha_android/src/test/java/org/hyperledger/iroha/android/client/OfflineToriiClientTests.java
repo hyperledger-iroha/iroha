@@ -10,14 +10,17 @@ import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceCommitment;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceList;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceRegisterResponse;
+import org.hyperledger.iroha.android.offline.OfflineBundleProofStatus;
 import org.hyperledger.iroha.android.offline.OfflineCertificateIssueResponse;
 import org.hyperledger.iroha.android.offline.OfflineListParams;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestKind;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestParams;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestResult;
 import org.hyperledger.iroha.android.offline.OfflineQueryEnvelope;
+import org.hyperledger.iroha.android.offline.OfflineSettlementSubmitResponse;
 import org.hyperledger.iroha.android.offline.OfflineTopUpResponse;
 import org.hyperledger.iroha.android.offline.OfflineToriiException;
+import org.hyperledger.iroha.android.offline.OfflineTransferList;
 import org.hyperledger.iroha.android.offline.OfflineWalletCertificate;
 import org.hyperledger.iroha.android.offline.OfflineWalletCertificateDraft;
 import org.hyperledger.iroha.android.offline.OfflineWalletPolicy;
@@ -35,6 +38,9 @@ public final class OfflineToriiClientTests {
     queryEnvelopeFromParamsParsesJson();
     builderRejectsInvalidVerdictFilters();
     buildProofRequestPostsBody();
+    submitSettlementPostsBodyAndParsesResponse();
+    getSettlementFetchesDetail();
+    getBundleProofStatusParsesResponse();
     proofRequestBuilderValidation();
     issueCertificatePostsDraft();
     issueCertificateRenewalUsesPath();
@@ -219,6 +225,117 @@ public final class OfflineToriiClientTests {
         : "bundle id not in body";
     assert executor.lastBody.contains("\"counter_checkpoint\":4095")
         : "checkpoint missing";
+  }
+
+  private static void submitSettlementPostsBodyAndParsesResponse() {
+    final StubExecutor executor =
+        new StubExecutor(
+            200,
+            """
+            {
+              "bundle_id_hex": "deadbeef",
+              "transaction_hash_hex": "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe"
+            }
+            """);
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    final OfflineSettlementSubmitResponse response =
+        client
+            .submitSettlement(
+                Map.of("bundle_id", "deadbeef", "receipts", List.of()), "merchant@wonderland", "deadbeef")
+            .join();
+    assert "deadbeef".equals(response.bundleIdHex()) : "bundle id mismatch";
+    assert response.transactionHashHex().startsWith("cafebabe") : "tx hash mismatch";
+    assert "POST".equals(executor.lastRequest.method()) : "expected POST";
+    assert executor.lastRequest.uri().getPath().endsWith("/v1/offline/settlements")
+        : "settlement submit path mismatch";
+    assert executor.lastBody.contains("\"authority\":\"merchant@wonderland\"")
+        : "authority missing";
+    assert executor.lastBody.contains("\"private_key\":\"deadbeef\"") : "private key missing";
+    assert executor.lastBody.contains("\"transfer\"") : "transfer missing";
+  }
+
+  private static void getSettlementFetchesDetail() {
+    final StubExecutor executor =
+        new StubExecutor(
+            200,
+            """
+            {
+              "bundle_id_hex": "deadbeef",
+              "receiver_id": "merchant@wonderland",
+              "receiver_display": "merchant@wonderland",
+              "deposit_account_id": "merchant@wonderland",
+              "deposit_account_display": "merchant@wonderland",
+              "asset_id": "usd#wonderland",
+              "receipt_count": 1,
+              "total_amount": "5",
+              "claimed_delta": "5",
+              "status": "settled",
+              "recorded_at_ms": 1700000000000,
+              "recorded_at_height": 42,
+              "status_transitions": [
+                {"status":"settled","transitioned_at_ms":1700000000000}
+              ],
+              "transfer": {}
+            }
+            """);
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    final OfflineTransferList.OfflineTransferItem item = client.getSettlement("deadbeef").join();
+    assert "deadbeef".equals(item.bundleIdHex()) : "bundle id mismatch";
+    assert "settled".equals(item.status()) : "status mismatch";
+    assert Long.valueOf(1_700_000_000_000L).equals(item.recordedAtMs())
+        : "recordedAtMs mismatch";
+    assert Long.valueOf(42L).equals(item.recordedAtHeight()) : "recordedAtHeight mismatch";
+    assert item.statusTransitionsJson() != null && item.statusTransitionsJson().contains("settled")
+        : "status transitions missing";
+    assert "GET".equals(executor.lastRequest.method()) : "expected GET";
+    assert executor.lastRequest.uri().getPath().endsWith("/v1/offline/settlements/deadbeef")
+        : "settlement detail path mismatch";
+  }
+
+  private static void getBundleProofStatusParsesResponse() {
+    final StubExecutor executor =
+        new StubExecutor(
+            200,
+            """
+            {
+              "bundle_id_hex": "deadbeef",
+              "receipts_root_hex": "aa",
+              "aggregate_proof_root_hex": "aa",
+              "receipts_root_matches": true,
+              "proof_status": "match",
+              "proof_summary": {
+                "version": 1,
+                "proof_sum_bytes": 32,
+                "proof_counter_bytes": 64,
+                "proof_replay_bytes": 96,
+                "metadata_keys": ["alpha", "beta"]
+              }
+            }
+            """);
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    final OfflineBundleProofStatus status = client.getBundleProofStatus("deadbeef").join();
+    assert "deadbeef".equals(status.bundleIdHex()) : "bundle id mismatch";
+    assert "match".equals(status.proofStatus()) : "proof status mismatch";
+    assert Boolean.TRUE.equals(status.receiptsRootMatches()) : "root match mismatch";
+    assert status.proofSummary() != null : "proof summary missing";
+    assert status.proofSummary().version() == 1 : "version mismatch";
+    assert status.proofSummary().metadataKeys().size() == 2 : "metadata keys mismatch";
+    assert executor.lastRequest.uri().getPath().endsWith("/v1/offline/bundle/proof_status")
+        : "proof status path mismatch";
+    assert executor.lastRequest.uri().getQuery().contains("bundle_id_hex=deadbeef")
+        : "bundle_id_hex query missing";
   }
 
   private static void proofRequestBuilderValidation() {

@@ -360,7 +360,7 @@ async fn offline_allowances_issue_returns_certificate_id() {
 }
 
 #[tokio::test]
-async fn offline_settlements_submit_returns_bundle_id() {
+async fn offline_settlements_submit_returns_bundle_id_and_transaction_hash() {
     let harness = build_harness();
     let mut map = json::Map::new();
     map.insert(
@@ -401,6 +401,15 @@ async fn offline_settlements_submit_returns_bundle_id() {
     assert_eq!(
         json_body["bundle_id_hex"].as_str(),
         Some(expected_bundle.as_str())
+    );
+
+    let tx_hash = json_body["transaction_hash_hex"]
+        .as_str()
+        .expect("transaction_hash_hex");
+    assert_eq!(tx_hash.len(), 64, "expected 32-byte hash encoded as hex");
+    assert!(
+        tx_hash.chars().all(|c| c.is_ascii_hexdigit()),
+        "transaction_hash_hex must be lowercase/uppercase hex"
     );
 }
 

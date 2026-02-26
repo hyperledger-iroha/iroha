@@ -27580,6 +27580,8 @@ pub struct OfflineSettlementSubmitRequest {
 pub struct OfflineSettlementSubmitResponse {
     /// Canonical bundle identifier (hex, lowercase).
     pub bundle_id_hex: String,
+    /// Canonical signed transaction hash (hex, lowercase) for pipeline status polling.
+    pub transaction_hash_hex: String,
 }
 
 /// Request payload for POST `/v1/offline/spend-receipts`.
@@ -39235,6 +39237,7 @@ pub async fn handle_post_v1_offline_settlements_submit(
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority)
         .with_instructions([dm::InstructionBox::from(isi)])
         .sign(&req.private_key.0);
+    let transaction_hash_hex = tx.hash().to_string();
 
     handle_transaction_with_metrics(
         chain_id,
@@ -39246,7 +39249,10 @@ pub async fn handle_post_v1_offline_settlements_submit(
     )
     .await?;
 
-    json_response(&OfflineSettlementSubmitResponse { bundle_id_hex })
+    json_response(&OfflineSettlementSubmitResponse {
+        bundle_id_hex,
+        transaction_hash_hex,
+    })
 }
 
 /// POST /v1/offline/spend-receipts — validate receipts and return their Poseidon root.

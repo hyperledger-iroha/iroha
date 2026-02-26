@@ -6,11 +6,7 @@ use norito::json::JsonSerialize;
 use crate::{CliOutputFormat, RunContext};
 
 /// Emit JSON output or a text summary, depending on the CLI output format.
-pub fn print_with_optional_text<C, T>(
-    context: &mut C,
-    text: Option<String>,
-    json: &T,
-) -> Result<()>
+pub fn print_with_optional_text<C, T>(context: &mut C, text: Option<String>, json: &T) -> Result<()>
 where
     C: RunContext,
     T: JsonSerialize + ?Sized,
@@ -94,20 +90,21 @@ mod tests {
     fn print_with_optional_text_prefers_json_in_json_mode() {
         let mut ctx = TestContext::new(CliOutputFormat::Json);
         let payload = norito::json!({"ok": true});
-        print_with_optional_text(&mut ctx, Some("hello".into()), &payload)
-            .expect("emit");
+        print_with_optional_text(&mut ctx, Some("hello".into()), &payload).expect("emit");
         assert_eq!(ctx.printed.len(), 1);
         let value: norito::json::Value =
             norito::json::from_str(&ctx.printed[0]).expect("json output");
-        assert_eq!(value.get("ok").and_then(norito::json::Value::as_bool), Some(true));
+        assert_eq!(
+            value.get("ok").and_then(norito::json::Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]
     fn print_with_optional_text_uses_text_in_text_mode() {
         let mut ctx = TestContext::new(CliOutputFormat::Text);
         let payload = norito::json!({"ok": true});
-        print_with_optional_text(&mut ctx, Some("hello".into()), &payload)
-            .expect("emit");
+        print_with_optional_text(&mut ctx, Some("hello".into()), &payload).expect("emit");
         assert_eq!(ctx.printed, vec!["hello"]);
     }
 
@@ -119,6 +116,9 @@ mod tests {
         assert_eq!(ctx.printed.len(), 1);
         let value: norito::json::Value =
             norito::json::from_str(&ctx.printed[0]).expect("json output");
-        assert_eq!(value.get("ok").and_then(norito::json::Value::as_bool), Some(true));
+        assert_eq!(
+            value.get("ok").and_then(norito::json::Value::as_bool),
+            Some(true)
+        );
     }
 }

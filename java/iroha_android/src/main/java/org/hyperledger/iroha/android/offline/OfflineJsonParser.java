@@ -48,26 +48,15 @@ public final class OfflineJsonParser {
     final List<OfflineTransferList.OfflineTransferItem> parsed = new ArrayList<>(items.size());
     for (int i = 0; i < items.size(); i++) {
       final Map<String, Object> entry = expectObject(items.get(i), "items[" + i + "]");
-      parsed.add(
-          new OfflineTransferList.OfflineTransferItem(
-              asString(entry.get("bundle_id_hex"), "items[" + i + "].bundle_id_hex"),
-              asString(entry.get("receiver_id"), "items[" + i + "].receiver_id"),
-              asString(entry.get("receiver_display"), "items[" + i + "].receiver_display"),
-              asString(entry.get("deposit_account_id"), "items[" + i + "].deposit_account_id"),
-              asString(
-                  entry.get("deposit_account_display"),
-                  "items[" + i + "].deposit_account_display"),
-              asOptionalString(entry.get("asset_id")),
-              asLong(entry.get("receipt_count"), "items[" + i + "].receipt_count"),
-              asString(entry.get("total_amount"), "items[" + i + "].total_amount"),
-              asString(entry.get("claimed_delta"), "items[" + i + "].claimed_delta"),
-              asOptionalString(entry.get("platform_policy")),
-              asPlatformTokenSnapshot(
-                  entry.get("platform_token_snapshot"),
-                  "items[" + i + "].platform_token_snapshot"),
-              JsonEncoder.encode(entry.get("transfer"))));
+      parsed.add(parseTransferItemObject(entry, "items[" + i + "]"));
     }
     return new OfflineTransferList(parsed, total);
+  }
+
+  public static OfflineTransferList.OfflineTransferItem parseTransferItem(final byte[] payload) {
+    final Object root = parse(payload);
+    final Map<String, Object> object = expectObject(root, "root");
+    return parseTransferItemObject(object, "root");
   }
 
   public static OfflineSummaryList parseSummaries(final byte[] payload) {
@@ -132,6 +121,42 @@ public final class OfflineJsonParser {
     final Map<String, Object> object = expectObject(root, "root");
     final String certificateIdHex = asString(object.get("certificate_id_hex"), "certificate_id_hex");
     return new OfflineAllowanceRegisterResponse(certificateIdHex);
+  }
+
+  public static OfflineSettlementSubmitResponse parseSettlementSubmitResponse(final byte[] payload) {
+    final Object root = parse(payload);
+    final Map<String, Object> object = expectObject(root, "root");
+    final String bundleIdHex = asString(object.get("bundle_id_hex"), "bundle_id_hex");
+    final String txHashHex = asString(object.get("transaction_hash_hex"), "transaction_hash_hex");
+    return new OfflineSettlementSubmitResponse(bundleIdHex, txHashHex);
+  }
+
+  public static OfflineBundleProofStatus parseBundleProofStatus(final byte[] payload) {
+    final Object root = parse(payload);
+    final Map<String, Object> object = expectObject(root, "root");
+    final Object summaryNode = object.get("proof_summary");
+    final OfflineBundleProofStatus.ProofSummary summary;
+    if (summaryNode == null) {
+      summary = null;
+    } else {
+      final Map<String, Object> summaryObject = expectObject(summaryNode, "proof_summary");
+      summary =
+          new OfflineBundleProofStatus.ProofSummary(
+              (int) asLong(summaryObject.get("version"), "proof_summary.version"),
+              asOptionalLong(summaryObject.get("proof_sum_bytes"), "proof_summary.proof_sum_bytes"),
+              asOptionalLong(
+                  summaryObject.get("proof_counter_bytes"), "proof_summary.proof_counter_bytes"),
+              asOptionalLong(
+                  summaryObject.get("proof_replay_bytes"), "proof_summary.proof_replay_bytes"),
+              asStringList(summaryObject.get("metadata_keys"), "proof_summary.metadata_keys"));
+    }
+    return new OfflineBundleProofStatus(
+        asString(object.get("bundle_id_hex"), "bundle_id_hex"),
+        asString(object.get("receipts_root_hex"), "receipts_root_hex"),
+        asOptionalString(object.get("aggregate_proof_root_hex")),
+        asOptionalBoolean(object.get("receipts_root_matches"), "receipts_root_matches"),
+        asString(object.get("proof_status"), "proof_status"),
+        summary);
   }
 
   /** Returns a canonical JSON string for the provided payload (keys sorted). */
@@ -206,6 +231,25 @@ public final class OfflineJsonParser {
     return asLong(value, path);
   }
 
+  private static Boolean asOptionalBoolean(final Object value, final String path) {
+    if (value == null) {
+      return null;
+    }
+    if (!(value instanceof Boolean bool)) {
+      throw new IllegalStateException(path + " is not a boolean");
+    }
+    return bool;
+  }
+
+  private static List<String> asStringList(final Object value, final String path) {
+    final List<Object> items = asArray(value, path);
+    final List<String> result = new ArrayList<>(items.size());
+    for (int i = 0; i < items.size(); i++) {
+      result.add(asString(items.get(i), path + "[" + i + "]"));
+    }
+    return List.copyOf(result);
+  }
+
   private static Map<String, Long> asCounterMap(final Object value, final String path) {
     final Map<String, Object> counters = expectObject(value, path);
     final Map<String, Long> normalized = new LinkedHashMap<>();
@@ -214,6 +258,31 @@ public final class OfflineJsonParser {
       normalized.put(key, asLong(entry.getValue(), path + "." + key));
     }
     return Map.copyOf(normalized);
+  }
+
+  private static OfflineTransferList.OfflineTransferItem parseTransferItemObject(
+      final Map<String, Object> entry, final String path) {
+    final String statusTransitionsJson =
+        entry.containsKey("status_transitions") && entry.get("status_transitions") != null
+            ? JsonEncoder.encode(entry.get("status_transitions"))
+            : null;
+    return new OfflineTransferList.OfflineTransferItem(
+        asString(entry.get("bundle_id_hex"), path + ".bundle_id_hex"),
+        asString(entry.get("receiver_id"), path + ".receiver_id"),
+        asString(entry.get("receiver_display"), path + ".receiver_display"),
+        asString(entry.get("deposit_account_id"), path + ".deposit_account_id"),
+        asString(entry.get("deposit_account_display"), path + ".deposit_account_display"),
+        asOptionalString(entry.get("asset_id")),
+        asLong(entry.get("receipt_count"), path + ".receipt_count"),
+        asString(entry.get("total_amount"), path + ".total_amount"),
+        asString(entry.get("claimed_delta"), path + ".claimed_delta"),
+        asOptionalString(entry.get("status")),
+        asOptionalLong(entry.get("recorded_at_ms"), path + ".recorded_at_ms"),
+        asOptionalLong(entry.get("recorded_at_height"), path + ".recorded_at_height"),
+        statusTransitionsJson,
+        asOptionalString(entry.get("platform_policy")),
+        asPlatformTokenSnapshot(entry.get("platform_token_snapshot"), path + ".platform_token_snapshot"),
+        JsonEncoder.encode(entry.get("transfer")));
   }
 
   private static OfflineWalletCertificate parseCertificate(
