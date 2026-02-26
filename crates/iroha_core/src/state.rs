@@ -19533,7 +19533,8 @@ fn replay_remap_block_signature_indices_to_topology(
     use iroha_data_model::block::BlockSignature;
 
     let block_hash = block.hash();
-    let mut remapped: std::collections::BTreeSet<BlockSignature> = std::collections::BTreeSet::new();
+    let mut remapped: std::collections::BTreeSet<BlockSignature> =
+        std::collections::BTreeSet::new();
 
     for signature in block.signatures() {
         let is_eligible = |peer: &PeerId| {
@@ -19609,9 +19610,7 @@ fn replay_remap_block_signature_indices_to_topology(
     }
 
     block.replace_signatures(remapped).map_err(|_| {
-        crate::block::BlockValidationError::SignatureVerification(
-            SignatureVerificationError::Other,
-        )
+        crate::block::BlockValidationError::SignatureVerification(SignatureVerificationError::Other)
     })?;
     Ok(())
 }
@@ -19719,22 +19718,23 @@ pub fn replay_blocks_from_kura_range(
                 }
             }
         }
-        let validate = |candidate: SignedBlock,
-                        candidate_topology: &crate::sumeragi::network_topology::Topology| {
-            let mut voting_block: Option<crate::sumeragi::VotingBlock> = None;
-            ValidBlock::validate_keep_voting_block_for_replay(
-                candidate,
-                candidate_topology,
-                &state.chain_id.clone(),
-                &genesis_account,
-                &time_source,
-                state,
-                &mut voting_block,
-                false,
-                replay_skip_block_signatures,
-            )
-            .unpack(|_| {})
-        };
+        let validate =
+            |candidate: SignedBlock,
+             candidate_topology: &crate::sumeragi::network_topology::Topology| {
+                let mut voting_block: Option<crate::sumeragi::VotingBlock> = None;
+                ValidBlock::validate_keep_voting_block_for_replay(
+                    candidate,
+                    candidate_topology,
+                    &state.chain_id.clone(),
+                    &genesis_account,
+                    &time_source,
+                    state,
+                    &mut voting_block,
+                    false,
+                    replay_skip_block_signatures,
+                )
+                .unpack(|_| {})
+            };
         let mut validation_topology = block_topology;
         let mut validation = validate(signed_block.clone(), &validation_topology);
         let original_failed_block = validation
@@ -19799,9 +19799,9 @@ pub fn replay_blocks_from_kura_range(
                             if needs_remap {
                                 let mut remapped = match &attempt {
                                     Err((failed_rotated, _)) => (**failed_rotated).clone(),
-                                    Ok(_) => unreachable!(
-                                        "needs_remap derived from an error result"
-                                    ),
+                                    Ok(_) => {
+                                        unreachable!("needs_remap derived from an error result")
+                                    }
                                 };
                                 if replay_remap_block_signature_indices_to_topology(
                                     &mut remapped,
@@ -20445,7 +20445,8 @@ mod replay_validation_tests {
             let state_view = state.view();
             crate::sumeragi::prf_seed_for_height(&state_view, height)
         };
-        let mut expected_topology = crate::sumeragi::network_topology::Topology::new(fallback_peers);
+        let mut expected_topology =
+            crate::sumeragi::network_topology::Topology::new(fallback_peers);
         expected_topology.canonicalize_order();
         expected_topology.shuffle_prf(prf_seed, height);
         expected_topology.nth_rotation(view);
@@ -20515,7 +20516,10 @@ mod replay_validation_tests {
         )
         .expect("replay should recover via rotated signature topology");
         assert_eq!(replay_state.view().height(), 2);
-        assert_eq!(replay_state.view().latest_block_hash(), Some(signed_block2.hash()));
+        assert_eq!(
+            replay_state.view().latest_block_hash(),
+            Some(signed_block2.hash())
+        );
     }
 }
 
