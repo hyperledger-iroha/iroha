@@ -184,9 +184,8 @@ fn summarize_status(value: &Value) -> String {
         .and_then(|o| o.get("missing_local_data_total"))
         .and_then(norito::json::Value::as_u64)
         .unwrap_or(0);
-    let da_gate_summary = format!(
-        "{da_reason}(last={da_last_satisfied};missing={da_missing_local_data})"
-    );
+    let da_gate_summary =
+        format!("{da_reason}(last={da_last_satisfied};missing={da_missing_local_data})");
     let rbc_sessions = rbc
         .and_then(|o| o.get("sessions"))
         .and_then(norito::json::Value::as_u64)
@@ -371,7 +370,9 @@ fn summarize_params(value: &Value) -> String {
         .get("mode_activation_height")
         .and_then(norito::json::Value::as_u64)
         .unwrap_or(0);
-    format!("bt={bt}ms ct={ct}ms k={k} r={r} da_enabled={da_enabled} next_mode={mode} act_height={act}")
+    format!(
+        "bt={bt}ms ct={ct}ms k={k} r={r} da_enabled={da_enabled} next_mode={mode} act_height={act}"
+    )
 }
 
 fn summarize_collectors(value: &Value) -> String {

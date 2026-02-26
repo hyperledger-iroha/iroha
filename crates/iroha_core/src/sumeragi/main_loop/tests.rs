@@ -17235,6 +17235,96 @@ async fn npos_qc_uses_pending_activation_roster_for_stake_quorum() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn quorum_retransmit_targets_map_view_signers_to_canonical_peers() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let canonical_roster = actor.effective_commit_topology();
+    assert_eq!(canonical_roster.len(), 4, "test requires a 4-peer topology");
+    let topology = super::network_topology::Topology::new(canonical_roster.clone());
+    let local_peer = actor.common_config.peer.id().clone();
+    let height = u64::try_from(actor.state.committed_height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let epoch = actor.epoch_for_height(height);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+
+    let mut selected = None;
+    for view in 0..64_u64 {
+        let signature_topology =
+            super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+        for (canonical_idx, peer) in canonical_roster.iter().enumerate() {
+            if peer == &local_peer {
+                continue;
+            }
+            let signer_idx = signature_topology
+                .as_ref()
+                .iter()
+                .position(|candidate| candidate == peer)
+                .expect("canonical peer must exist in view-aligned topology");
+            if signer_idx != canonical_idx {
+                selected = Some((view, peer.clone(), signer_idx, signature_topology));
+                break;
+            }
+        }
+        if selected.is_some() {
+            break;
+        }
+    }
+    let (view, missing_peer, missing_signer_idx, signature_topology) = selected
+        .expect("test requires a view where signer indices differ from canonical roster indices");
+
+    for (signer_idx, _) in signature_topology.as_ref().iter().enumerate() {
+        if signer_idx == missing_signer_idx {
+            continue;
+        }
+        let signer = u32::try_from(signer_idx).expect("signer index fits u32");
+        actor.vote_log.insert(
+            (Phase::Commit, height, view, epoch, signer),
+            crate::sumeragi::consensus::Vote {
+                phase: Phase::Commit,
+                block_hash,
+                parent_state_root: zero_state_root(),
+                post_state_root: zero_state_root(),
+                height,
+                view,
+                epoch,
+                highest_qc: None,
+                signer,
+                bls_sig: Vec::new(),
+            },
+        );
+    }
+
+    let vote_count = signature_topology.as_ref().len().saturating_sub(1);
+    let min_votes_for_commit = topology.min_votes_for_commit();
+    assert!(
+        vote_count >= min_votes_for_commit,
+        "test expects numeric commit quorum without stake quorum"
+    );
+
+    let targets = actor.quorum_retransmit_targets_for_missing_votes(
+        block_hash,
+        height,
+        view,
+        &canonical_roster,
+        min_votes_for_commit,
+        vote_count,
+    );
+    assert_eq!(
+        targets,
+        vec![missing_peer.clone()],
+        "retransmit targets must include the canonical peer missing from the view-aligned signer set"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_vote_defers_until_roster_available() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;

@@ -4248,11 +4248,13 @@ pub mod isi {
             if envelope.proof_sum.as_ref().is_none_or(Vec::is_empty) {
                 missing.push("sum");
             }
-            if envelope.proof_counter.as_ref().is_none_or(Vec::is_empty) {
-                missing.push("counter");
-            }
-            if envelope.proof_replay.as_ref().is_none_or(Vec::is_empty) {
-                missing.push("replay");
+            if envelope.version == AGGREGATE_PROOF_VERSION_V1 {
+                if envelope.proof_counter.as_ref().is_none_or(Vec::is_empty) {
+                    missing.push("counter");
+                }
+                if envelope.proof_replay.as_ref().is_none_or(Vec::is_empty) {
+                    missing.push("replay");
+                }
             }
             if !missing.is_empty() {
                 return Err(rejection_error(
@@ -9341,7 +9343,11 @@ mod aggregate_proof_tests {
         asset::{AssetDefinitionId, AssetId},
         metadata::Metadata,
         offline::{
-            AGGREGATE_PROOF_VERSION_V1, AggregateProofEnvelope, AppleAppAttestProof,
+            AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_BACKEND,
+            AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_CIRCUIT_ID,
+            AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_PUBLIC_INPUTS_B64,
+            AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_RECURSION_DEPTH, AGGREGATE_PROOF_VERSION_V1,
+            AGGREGATE_PROOF_VERSION_V2, AggregateProofEnvelope, AppleAppAttestProof,
             OFFLINE_FASTPQ_COUNTER_PROOF_DOMAIN, OFFLINE_FASTPQ_HKDF_DOMAIN,
             OFFLINE_FASTPQ_PROOF_VERSION_V1, OFFLINE_FASTPQ_REPLAY_CHAIN_DOMAIN,
             OFFLINE_FASTPQ_REPLAY_PROOF_DOMAIN, OFFLINE_FASTPQ_SUM_NONCE_DOMAIN,
@@ -9548,6 +9554,38 @@ mod aggregate_proof_tests {
     }
 
     #[test]
+    fn aggregate_proof_v2_required_rejects_missing_sum_only() {
+        let mut transfer = sample_transfer_with_aggregate_proof_v2();
+        if let Some(envelope) = transfer.aggregate_proof.as_mut() {
+            envelope.proof_sum = None;
+        }
+        let err = verify_aggregate_proof_envelope(&transfer, OfflineProofMode::Required)
+            .expect_err("v2 missing sum must fail");
+        let message = err.to_string();
+        assert!(
+            message.contains("aggregate proofs missing: sum"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("counter") && !message.contains("replay"),
+            "v2 required mode should not require counter/replay: {message}"
+        );
+    }
+
+    #[test]
+    fn aggregate_proof_v2_required_skips_legacy_missing_checks() {
+        let transfer = sample_transfer_with_aggregate_proof_v2();
+        let err = verify_aggregate_proof_envelope(&transfer, OfflineProofMode::Required)
+            .expect_err("v2 placeholder payload must fail in v2 verification path");
+        let message = err.to_string();
+        assert!(
+            !message.contains("aggregate proofs missing: counter")
+                && !message.contains("aggregate proofs missing: replay"),
+            "v2 required mode should not require counter/replay: {message}"
+        );
+    }
+
+    #[test]
     fn aggregate_proof_optional_accepts_missing() {
         let mut transfer = sample_transfer_with_aggregate_proof();
         transfer.aggregate_proof = None;
@@ -9746,6 +9784,47 @@ mod aggregate_proof_tests {
             attachments: None,
             platform_snapshot: None,
         }
+    }
+
+    fn sample_transfer_with_aggregate_proof_v2() -> OfflineToOnlineTransfer {
+        let mut transfer = sample_transfer_with_aggregate_proof();
+        let public_inputs_b64 = BASE64_STANDARD.encode([0u8]);
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_BACKEND
+                .parse()
+                .expect("metadata key"),
+            "stark/fri-v1/poseidon2-goldilocks-v1",
+        );
+        metadata.insert(
+            AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_CIRCUIT_ID
+                .parse()
+                .expect("metadata key"),
+            "offline-merge-v1",
+        );
+        metadata.insert(
+            AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_PUBLIC_INPUTS_B64
+                .parse()
+                .expect("metadata key"),
+            public_inputs_b64.as_str(),
+        );
+        metadata.insert(
+            AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_RECURSION_DEPTH
+                .parse()
+                .expect("metadata key"),
+            "\"1\"",
+        );
+
+        if let Some(envelope) = transfer.aggregate_proof.as_mut() {
+            envelope.version = AGGREGATE_PROOF_VERSION_V2;
+            envelope.proof_sum = Some(vec![0u8]);
+            envelope.proof_counter = None;
+            envelope.proof_replay = None;
+            envelope.metadata = metadata;
+        }
+
+        transfer
     }
 
     fn test_account_id(domain: &str, seed: u8) -> AccountId {

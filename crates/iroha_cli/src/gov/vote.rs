@@ -591,15 +591,9 @@ mod tests {
     fn lock_hints_require_complete_triplet() {
         let mut map = json::Map::new();
         let owner = ALICE_ID.to_string();
-        map.insert(
-            "owner".to_string(),
-            json::Value::String(owner),
-        );
+        map.insert("owner".to_string(), json::Value::String(owner));
         assert!(ensure_lock_hints_complete(&map).is_err());
-        map.insert(
-            "amount".to_string(),
-            json::Value::String("10".to_string()),
-        );
+        map.insert("amount".to_string(), json::Value::String("10".to_string()));
         assert!(ensure_lock_hints_complete(&map).is_err());
         map.insert("duration_blocks".to_string(), json::Value::from(64u64));
         assert!(ensure_lock_hints_complete(&map).is_ok());
@@ -653,10 +647,7 @@ mod tests {
         let address_hex = owner.to_canonical_hex().expect("canonical hex");
         let noncanonical = format!("{address_hex}@{}", owner.domain());
         let mut map = json::Map::new();
-        map.insert(
-            "owner".to_string(),
-            json::Value::String(noncanonical),
-        );
+        map.insert("owner".to_string(), json::Value::String(noncanonical));
         let err = ensure_public_input_owner_canonical(&map).expect_err("noncanonical owner");
         assert!(err.to_string().contains("canonical account id form"));
     }
@@ -708,8 +699,7 @@ impl Run for LocksGetArgs {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct UnlockStatsArgs {
-}
+pub struct UnlockStatsArgs {}
 
 impl Run for UnlockStatsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {

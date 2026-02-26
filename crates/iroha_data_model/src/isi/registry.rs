@@ -156,6 +156,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     #[cfg(feature = "governance")]
     InstructionRegistry::register::<governance::ProposeDeployContract>,
     #[cfg(feature = "governance")]
+    InstructionRegistry::register::<governance::ProposeRuntimeUpgradeProposal>,
+    #[cfg(feature = "governance")]
     InstructionRegistry::register::<governance::CastZkBallot>,
     #[cfg(feature = "governance")]
     InstructionRegistry::register::<governance::CastPlainBallot>,
