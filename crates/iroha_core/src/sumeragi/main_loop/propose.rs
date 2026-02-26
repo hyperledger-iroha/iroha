@@ -89,6 +89,29 @@ fn cached_slot_timeout_hysteresis_remaining(
     (elapsed < hysteresis).then(|| hysteresis.saturating_sub(elapsed))
 }
 
+pub(super) fn cached_slot_effective_quorum_timeout(
+    quorum_timeout: Duration,
+    rebroadcast_cooldown: Duration,
+    precommit_votes_at_view: usize,
+    quorum: usize,
+    missing_local_data: bool,
+    consensus_queue_backlog: bool,
+    rbc_session_incomplete: bool,
+) -> Duration {
+    let near_commit_quorum = precommit_votes_at_view > 0
+        && precommit_votes_at_view < quorum
+        && precommit_votes_at_view.saturating_add(1) >= quorum;
+    let near_quorum_fast_timeout_allowed = near_commit_quorum
+        && missing_local_data
+        && !consensus_queue_backlog
+        && !rbc_session_incomplete;
+    if near_quorum_fast_timeout_allowed {
+        super::reschedule::near_quorum_payload_timeout(rebroadcast_cooldown).min(quorum_timeout)
+    } else {
+        quorum_timeout
+    }
+}
+
 fn trim_batch_for_size_cap<T, U>(
     tx_batch: &mut Vec<T>,
     routing_batch: &mut Vec<U>,
@@ -2317,16 +2340,6 @@ impl Actor {
                     && self.block_known_locally(vote.block_hash)
             })
             .count();
-        if precommit_votes_at_view > 0 {
-            debug!(
-                height,
-                view = view_idx,
-                precommit_votes = precommit_votes_at_view,
-                queue_len = pending_queue_len,
-                "deferring proposal: precommit votes already observed for this view"
-            );
-            return false;
-        }
 
         // Avoid rebuilding multiple proposals for the same (height, view) slot. Reassembly in the
         // same view causes double-voting and scatters QC collection; wait for the existing
@@ -2341,7 +2354,78 @@ impl Actor {
             // Rebroadcast cached proposals when the leader is still responsible for the slot so
             // peers that missed the initial messages can recover without forcing a view change.
             self.maybe_rebroadcast_cached_proposal(height, view_idx, pending_queue_len, now);
+            if precommit_votes_at_view > 0 {
+                debug!(
+                    height,
+                    view = view_idx,
+                    precommit_votes = precommit_votes_at_view,
+                    queue_len = pending_queue_len,
+                    "proposal already cached for this slot; precommit votes observed, deferring view change"
+                );
+                return false;
+            }
             let quorum_timeout = self.quorum_timeout(da_enabled);
+            let queue_depths = super::status::worker_queue_depth_snapshot();
+            let consensus_queue_backlog =
+                self.consensus_queue_backlog_blocks_near_quorum_timeout(queue_depths);
+            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+            let mut commit_roster = self.roster_for_live_vote_with_mode(height, consensus_mode);
+            if commit_roster.is_empty() {
+                commit_roster = self.effective_commit_topology();
+            }
+            let commit_topology = super::network_topology::Topology::new(commit_roster);
+            let mut missing_local_data = false;
+            let mut rbc_session_incomplete = false;
+            for pending in self.pending.pending_blocks.values().filter(|pending| {
+                !pending.aborted && pending.height == height && pending.view == view_idx
+            }) {
+                let payload_available = da_enabled
+                    && Self::payload_available_for_da(
+                        &self.subsystems.da_rbc.rbc.sessions,
+                        &self.subsystems.da_rbc.rbc.status_handle,
+                        pending,
+                    );
+                if !da_enabled || payload_available {
+                    continue;
+                }
+                missing_local_data = true;
+                let rbc_key = (pending.block.hash(), pending.height, pending.view);
+                rbc_session_incomplete |= self
+                    .subsystems
+                    .da_rbc
+                    .rbc
+                    .sessions
+                    .get(&rbc_key)
+                    .is_some_and(|session| {
+                        if session.is_invalid() || session.delivered {
+                            return false;
+                        }
+                        let progress_started = session.total_chunks() != 0
+                            || session.received_chunks() != 0
+                            || !session.ready_signatures.is_empty()
+                            || self.subsystems.da_rbc.rbc.pending.contains_key(&rbc_key);
+                        if !progress_started {
+                            return false;
+                        }
+                        let missing_chunks = session.total_chunks() != 0
+                            && session.received_chunks() < session.total_chunks();
+                        let ready_quorum = session.ready_signatures.len()
+                            >= self.rbc_deliver_quorum(&commit_topology);
+                        missing_chunks || !ready_quorum
+                    });
+                if rbc_session_incomplete {
+                    break;
+                }
+            }
+            let effective_quorum_timeout = cached_slot_effective_quorum_timeout(
+                quorum_timeout,
+                self.rebroadcast_cooldown(),
+                precommit_votes_at_view,
+                quorum,
+                missing_local_data,
+                consensus_queue_backlog,
+                rbc_session_incomplete,
+            );
             let cached_wait_age = self
                 .pending
                 .pending_blocks
@@ -2351,8 +2435,8 @@ impl Actor {
                 })
                 .map(|pending| pending.progress_age(now))
                 .max();
-            if quorum_timeout != Duration::ZERO
-                && cached_wait_age.is_some_and(|age| age >= quorum_timeout)
+            if effective_quorum_timeout != Duration::ZERO
+                && cached_wait_age.is_some_and(|age| age >= effective_quorum_timeout)
             {
                 let wait_age_ms = cached_wait_age.map(|age| age.as_millis()).unwrap_or(0);
                 let already_forced = self
@@ -2362,20 +2446,20 @@ impl Actor {
                     .is_some_and(|(forced_height, forced_view)| {
                         forced_height == height && forced_view > view_idx
                     });
-                let (consensus_mode, _, _) = self.consensus_context_for_height(height);
                 if already_forced {
                     debug!(
                         height,
                         view = view_idx,
                         queue_len = pending_queue_len,
                         wait_age_ms,
-                        quorum_timeout_ms = quorum_timeout.as_millis(),
+                        quorum_timeout_ms = effective_quorum_timeout.as_millis(),
+                        base_quorum_timeout_ms = quorum_timeout.as_millis(),
                         forced = ?self.subsystems.propose.forced_view_after_timeout,
                         "cached proposal slot stalled past quorum timeout; awaiting scheduled view change"
                     );
                 } else if let Some(wait_remaining) = cached_slot_timeout_hysteresis_remaining(
                     consensus_mode,
-                    quorum_timeout,
+                    effective_quorum_timeout,
                     self.subsystems.propose.last_cached_slot_timeout_trigger,
                     height,
                     view_idx,
@@ -2391,7 +2475,8 @@ impl Actor {
                         view = view_idx,
                         queue_len = pending_queue_len,
                         wait_age_ms,
-                        quorum_timeout_ms = quorum_timeout.as_millis(),
+                        quorum_timeout_ms = effective_quorum_timeout.as_millis(),
+                        base_quorum_timeout_ms = quorum_timeout.as_millis(),
                         hysteresis_wait_ms = wait_remaining.as_millis(),
                         timeout_streak = next_streak,
                         "cached proposal slot stalled past quorum timeout; waiting for NPoS timeout hysteresis"
@@ -2407,7 +2492,8 @@ impl Actor {
                         view = view_idx,
                         queue_len = pending_queue_len,
                         wait_age_ms,
-                        quorum_timeout_ms = quorum_timeout.as_millis(),
+                        quorum_timeout_ms = effective_quorum_timeout.as_millis(),
+                        base_quorum_timeout_ms = quorum_timeout.as_millis(),
                         timeout_streak,
                         "cached proposal slot stalled past quorum timeout; forcing view change"
                     );
@@ -2441,6 +2527,17 @@ impl Actor {
                     "proposal already cached for this slot; deferring reassembly"
                 );
             }
+            return false;
+        }
+
+        if precommit_votes_at_view > 0 {
+            debug!(
+                height,
+                view = view_idx,
+                precommit_votes = precommit_votes_at_view,
+                queue_len = pending_queue_len,
+                "deferring proposal: precommit votes already observed for this view"
+            );
             return false;
         }
 
