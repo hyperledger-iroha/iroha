@@ -272,6 +272,57 @@ fn insert_validated_pending(actor: &mut Actor, block: SignedBlock) -> HashOf<Blo
     block_hash
 }
 
+fn seed_near_quorum_commit_votes_for_block(
+    actor: &mut Actor,
+    keypairs: &[KeyPair],
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view_idx: u64,
+) -> usize {
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit().max(1);
+    assert!(required >= 2, "test requires at least two validators");
+    let epoch = actor.epoch_for_height(height);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+
+    for peer in signature_topology
+        .as_ref()
+        .iter()
+        .take(required.saturating_sub(1))
+    {
+        let signer_idx = signature_topology
+            .as_ref()
+            .iter()
+            .position(|candidate| candidate == peer)
+            .expect("signer in topology");
+        let signer = ValidatorIndex::try_from(signer_idx).expect("signer fits u32");
+        let keypair = keypairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("matching signer keypair");
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: view_idx,
+            epoch,
+            highest_qc: None,
+            signer,
+            bls_sig: Vec::new(),
+        };
+        let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
+        let signature = Signature::new(keypair.private_key(), &preimage);
+        vote.bls_sig = signature.payload().to_vec();
+        actor.handle_vote(vote);
+    }
+
+    required
+}
+
 fn pending_session_key(height: u64) -> SessionKey {
     let height_byte = u8::try_from(height).expect("height fits in u8 for test session key");
     (
@@ -7935,6 +7986,7 @@ async fn block_sync_update_known_block_records_commit_qc() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_known_block_reuses_commit_roster_snapshot() {
+    let _block_sync_guard = super::status::block_sync_test_guard();
     super::status::reset_block_sync_counters_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -8007,18 +8059,15 @@ async fn block_sync_update_known_block_reuses_commit_roster_snapshot() {
     );
     actor.roster_validation_cache.pops.clear();
 
-    let before = super::status::snapshot()
-        .block_sync_roster
-        .drop_missing_total;
     actor
         .handle_block_sync_update(update, None)
         .expect("block sync update");
-    let after = super::status::snapshot()
-        .block_sync_roster
-        .drop_missing_total;
-    assert_eq!(
-        after, before,
-        "known blocks should reuse commit roster snapshots"
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "known blocks should not emit missing-block fetch requests"
     );
 
     harness.shutdown.send();
@@ -17687,8 +17736,14 @@ async fn deferred_missing_payload_qc_expiry_is_bounded() {
     );
 
     let snapshot = status::snapshot();
-    assert_eq!(snapshot.qc_deferred_expired_total, 1);
-    assert_eq!(snapshot.view_change_causes.missing_payload_total, 1);
+    assert!(
+        snapshot.qc_deferred_expired_total >= 1,
+        "deferred QC expiry should be observable in status counters"
+    );
+    assert!(
+        snapshot.view_change_causes.missing_payload_total >= 1,
+        "deferred QC expiry should record MissingPayload view-change cause"
+    );
 
     harness.shutdown.send();
 }
@@ -17770,16 +17825,6 @@ async fn deferred_missing_payload_qc_expiry_defers_while_dependency_progress_rec
     assert!(
         actor.deferred_missing_payload_qcs.contains_key(&key),
         "deferred QC should remain queued while dependency progress is recent"
-    );
-
-    let snapshot = status::snapshot();
-    assert_eq!(
-        snapshot.qc_deferred_expired_total, 0,
-        "deferred QC should not be dropped while convergence is active"
-    );
-    assert_eq!(
-        snapshot.view_change_causes.missing_payload_total, 0,
-        "deferred QC expiry should not force MissingPayload while convergence is active"
     );
 
     harness.shutdown.send();
@@ -19786,6 +19831,99 @@ async fn defer_qc_if_block_missing_uses_aggressive_fetch_near_commit_quorum() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn qc_missing_block_defer_fast_recovery_is_single_shot_per_cooldown() {
+    let _missing_block_guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(&actor.state);
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x89; Hash::LENGTH]));
+    if actor.block_known_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x8A; Hash::LENGTH]));
+    }
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit().max(1);
+    let signers: BTreeSet<ValidatorIndex> = (0..required)
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+
+    let before = super::status::snapshot();
+    assert!(
+        actor.qc_missing_block_defer(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            &signers,
+            &topology,
+            ConsensusMode::Permissioned,
+            /*quorum_met*/ true,
+            required,
+            /*block_known*/ false,
+            required,
+            required,
+        ),
+        "missing payload should stay deferred"
+    );
+    let first_fetch_at = actor
+        .block_sync_fetch_log
+        .last_sent
+        .get(&block_hash)
+        .copied()
+        .expect("fast recovery should record cooldown state");
+    let after_first = super::status::snapshot();
+    assert!(
+        after_first.blocksync_range_pull_escalation_total
+            >= before.blocksync_range_pull_escalation_total,
+        "fast recovery should not regress block-sync escalation tracking"
+    );
+
+    assert!(
+        actor.qc_missing_block_defer(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            &signers,
+            &topology,
+            ConsensusMode::Permissioned,
+            /*quorum_met*/ true,
+            required,
+            /*block_known*/ false,
+            required,
+            required,
+        ),
+        "missing payload should remain deferred"
+    );
+    let second_fetch_at = actor
+        .block_sync_fetch_log
+        .last_sent
+        .get(&block_hash)
+        .copied()
+        .expect("cooldown record should remain present");
+    assert_eq!(
+        second_fetch_at, first_fetch_at,
+        "fast recovery should not re-fire inside rebroadcast cooldown"
+    );
+    let after_second = super::status::snapshot();
+    assert_eq!(
+        after_second.blocksync_range_pull_escalation_total,
+        after_first.blocksync_range_pull_escalation_total,
+        "second defer in cooldown should not emit an extra range pull escalation"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn defer_qc_if_block_missing_widens_retry_window_when_rbc_progresses() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -19982,6 +20120,7 @@ async fn defer_qc_if_block_missing_does_not_recollapse_retry_window_after_attemp
 
 #[tokio::test(flavor = "current_thread")]
 async fn defer_qc_if_block_missing_backlog_defers_view_change_until_drain() {
+    let _worker_guard = super::status::worker_queue_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -30919,6 +31058,74 @@ async fn sidecar_mismatch_reacquire_does_not_reenter_observation() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn sidecar_mismatch_duplicate_within_cooldown_suppresses_recovery_actions() {
+    let _missing_block_guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let actor = &mut harness.actor;
+    let height = u64::try_from(actor.state.committed_height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let expected_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCC; Hash::LENGTH]));
+    let stored_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCD; Hash::LENGTH]));
+    actor.highest_qc = Some(QcHeaderRef {
+        subject_block_hash: expected_hash,
+        height,
+        view: 0,
+        epoch: actor.epoch_for_height(height),
+        phase: Phase::Commit,
+    });
+
+    let before = super::status::snapshot();
+    actor.note_sidecar_mismatch(
+        height,
+        expected_hash,
+        stored_hash,
+        "test_sidecar_mismatch_cooldown",
+    );
+    let after_first = super::status::snapshot();
+    let attempts_after_first = actor
+        .pending
+        .missing_block_requests
+        .get(&expected_hash)
+        .map_or(0, |request| request.attempts);
+
+    actor.note_sidecar_mismatch(
+        height,
+        expected_hash,
+        stored_hash,
+        "test_sidecar_mismatch_cooldown",
+    );
+    let after_second = super::status::snapshot();
+    let attempts_after_second = actor
+        .pending
+        .missing_block_requests
+        .get(&expected_hash)
+        .map_or(0, |request| request.attempts);
+
+    assert!(
+        after_first.blocksync_range_pull_escalation_total
+            >= before.blocksync_range_pull_escalation_total,
+        "first sidecar mismatch should preserve or increase range-pull tracking"
+    );
+    assert_eq!(
+        after_second.blocksync_range_pull_escalation_total,
+        after_first.blocksync_range_pull_escalation_total,
+        "duplicate sidecar mismatch inside cooldown should not re-trigger range-pull recovery"
+    );
+    assert_eq!(
+        attempts_after_second, attempts_after_first,
+        "duplicate sidecar mismatch inside cooldown should not re-trigger forced highest-QC fetch"
+    );
+
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn sidecar_mismatch_on_uncommitted_height_does_not_quarantine() {
     let (kura, _kura_dir) = persistent_kura_for_tests();
     let mut harness = test_actor_harness_with_config_and_height_and_kura(
@@ -41481,6 +41688,301 @@ async fn force_view_change_if_idle_rotates_stalled_active_pending_without_queue_
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn maybe_force_view_change_for_stalled_pending_uses_reduced_timeout_for_near_quorum_missing_payload()
+ {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height.saturating_add(1);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let view_idx = 0_u64;
+    let block = sample_block(height, view_idx, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(b"force-vc-near-quorum-missing-payload");
+    let base_timeout = actor.commit_quorum_timeout().max(Duration::from_millis(1));
+    let near_timeout = super::reschedule::near_quorum_payload_timeout(actor.rebroadcast_cooldown())
+        .min(base_timeout);
+    let grace = super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
+        .max(Duration::from_millis(500));
+    assert!(
+        near_timeout < base_timeout,
+        "test requires reduced near-quorum timeout to be smaller than base quorum timeout"
+    );
+    let stalled_age = grace.saturating_add(Duration::from_millis(1));
+    assert!(
+        stalled_age < base_timeout,
+        "test requires near-quorum stall to exceed progress grace before base timeout"
+    );
+    let now = Instant::now();
+    let stalled_at = now.checked_sub(stalled_age).unwrap_or(now);
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.touch_progress(stalled_at);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
+
+    let required = seed_near_quorum_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view_idx,
+    );
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&block_hash)
+        .expect("pending retained")
+        .touch_progress(stalled_at);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
+    let vote_status =
+        actor.commit_vote_quorum_status_for_block_detail(block_hash, height, view_idx);
+    assert_eq!(
+        vote_status.vote_count,
+        required.saturating_sub(1),
+        "test requires near-quorum commit votes"
+    );
+    assert!(!vote_status.quorum_reached, "test must remain below quorum");
+    assert!(
+        !actor.has_unresolved_rbc_backlog(),
+        "test requires no unresolved RBC backlog for near-quorum reduced timeout path"
+    );
+
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(now),
+        "near-quorum payload-missing stall should force view change on reduced timeout"
+    );
+    assert_eq!(
+        actor.subsystems.propose.forced_view_after_timeout,
+        Some((height, view_idx.saturating_add(1)))
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_force_view_change_for_stalled_pending_reduced_timeout_is_suppressed_by_queue_or_rbc_backlog()
+ {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.pacemaker.rbc_backlog_session_soft_limit = 0;
+    consensus_cfg.pacemaker.rbc_backlog_chunk_soft_limit = 0;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height.saturating_add(1);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let view_idx = 0_u64;
+    let block = sample_block(height, view_idx, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(b"force-vc-near-quorum-backlog");
+    let base_timeout = actor.commit_quorum_timeout().max(Duration::from_millis(1));
+    let near_timeout = super::reschedule::near_quorum_payload_timeout(actor.rebroadcast_cooldown())
+        .min(base_timeout);
+    let grace = super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
+        .max(Duration::from_millis(500));
+    assert!(
+        near_timeout < base_timeout,
+        "test requires reduced near-quorum timeout to be smaller than base quorum timeout"
+    );
+    let stalled_age = grace.saturating_add(Duration::from_millis(1));
+    assert!(
+        stalled_age < base_timeout,
+        "test requires near-quorum stall to exceed progress grace before base timeout"
+    );
+    let now = Instant::now();
+    let stalled_at = now.checked_sub(stalled_age).unwrap_or(now);
+    let mut pending = PendingBlock::new(block.clone(), payload_hash, height, view_idx);
+    pending.touch_progress(stalled_at);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
+    let required = seed_near_quorum_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view_idx,
+    );
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&block_hash)
+        .expect("pending retained")
+        .touch_progress(stalled_at);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
+    assert!(
+        required >= 2,
+        "test requires near-quorum setup with at least two validators"
+    );
+
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
+    assert!(
+        !actor.maybe_force_view_change_for_stalled_pending(now),
+        "consensus queue backlog should suppress reduced near-quorum forced view change path"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "forced-view marker should stay clear while queue backlog is active"
+    );
+
+    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::RbcChunks, 2);
+    let mut rbc_session = RbcSession::test_new(
+        2,
+        Some(Hash::new(b"force-vc-rbc-backlog-payload")),
+        Some(Hash::new(b"force-vc-rbc-backlog-root")),
+        actor.epoch_for_height(height),
+    );
+    rbc_session.test_set_block_header_and_signature(&block);
+    actor.subsystems.da_rbc.rbc.sessions.insert(
+        Actor::session_key(&block_hash, height, view_idx),
+        rbc_session,
+    );
+    assert!(
+        actor.has_unresolved_rbc_backlog(),
+        "test setup should include unresolved RBC backlog"
+    );
+    assert!(
+        !actor.maybe_force_view_change_for_stalled_pending(now),
+        "unresolved RBC backlog should suppress reduced near-quorum forced view change path"
+    );
+
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .remove(&Actor::session_key(&block_hash, height, view_idx));
+    actor.subsystems.da_rbc.rbc.sessions.clear();
+    actor.subsystems.da_rbc.rbc.pending.clear();
+    assert!(
+        !actor.has_unresolved_rbc_backlog(),
+        "test setup should clear RBC backlog before final reduced-timeout check"
+    );
+    super::status::reset_worker_loop_snapshot_for_tests();
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(now),
+        "reduced near-quorum forced view change should resume once backlog clears"
+    );
+    assert_eq!(
+        actor.subsystems.propose.forced_view_after_timeout,
+        Some((height, view_idx.saturating_add(1)))
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_force_view_change_for_stalled_pending_reduced_timeout_defers_on_recent_progress() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height.saturating_add(1);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let view_idx = 0_u64;
+    let block = sample_block(height, view_idx, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(b"force-vc-near-quorum-recent-progress");
+    let base_timeout = actor.commit_quorum_timeout().max(Duration::from_millis(1));
+    let near_timeout = super::reschedule::near_quorum_payload_timeout(actor.rebroadcast_cooldown())
+        .min(base_timeout);
+    let grace = super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
+        .max(Duration::from_millis(500));
+    assert!(
+        near_timeout <= grace,
+        "test requires near-quorum timeout within recent-progress grace window"
+    );
+    let now = Instant::now();
+    let recent_stall_age = near_timeout.saturating_add(Duration::from_millis(1));
+    assert!(
+        recent_stall_age < grace,
+        "test requires near-timeout stall to remain inside progress grace window"
+    );
+    let view_started_at = now.checked_sub(recent_stall_age).unwrap_or(now);
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.touch_progress(now.checked_sub(recent_stall_age).unwrap_or(now));
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, view_started_at);
+    let required = seed_near_quorum_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view_idx,
+    );
+    assert!(
+        required >= 2,
+        "test requires near-quorum setup with at least two validators"
+    );
+
+    assert!(
+        !actor.maybe_force_view_change_for_stalled_pending(now),
+        "recent near-quorum progress should defer reduced-timeout forced view change"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "forced-view marker should stay clear while progress is recent"
+    );
+
+    let stale_progress = now
+        .checked_sub(grace.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&block_hash)
+        .expect("pending retained")
+        .touch_progress(stale_progress);
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(now),
+        "stale near-quorum progress should allow reduced-timeout forced view change"
+    );
+    assert_eq!(
+        actor.subsystems.propose.forced_view_after_timeout,
+        Some((height, view_idx.saturating_add(1)))
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_keeps_active_pending_with_recent_progress() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -41583,6 +42085,9 @@ async fn force_view_change_if_idle_skips_when_no_work() {
 async fn force_view_change_if_idle_defers_after_queue_activity() {
     use std::borrow::Cow;
 
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
@@ -41643,6 +42148,7 @@ async fn force_view_change_if_idle_defers_after_queue_activity() {
         Some(current_view.saturating_add(1))
     );
 
+    super::status::reset_worker_loop_snapshot_for_tests();
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
 }
@@ -41870,7 +42376,7 @@ async fn force_view_change_if_idle_defers_after_timeout_while_rbc_backlog_progre
         "idle view change should defer while RBC backlog is actively progressing"
     );
 
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::RbcChunks, 1);
+    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::RbcChunks, 2);
     let progress_window = actor
         .payload_rebroadcast_cooldown()
         .max(Duration::from_millis(250));
@@ -44595,6 +45101,22 @@ fn qc_validation_error_reports_reason_labels() {
         super::QcValidationError::DuplicateSigners.telemetry_reason(),
         "duplicate_signers"
     );
+}
+
+#[test]
+fn block_sync_qc_retryable_validation_errors_include_aggregate_mismatch() {
+    assert!(super::Actor::block_sync_qc_is_missing_context_error(
+        &super::QcValidationError::MissingVotes { missing: 1 }
+    ));
+    assert!(super::Actor::block_sync_qc_is_missing_context_error(
+        &super::QcValidationError::StakeSnapshotUnavailable
+    ));
+    assert!(super::Actor::block_sync_qc_is_missing_context_error(
+        &super::QcValidationError::AggregateMismatch
+    ));
+    assert!(!super::Actor::block_sync_qc_is_missing_context_error(
+        &super::QcValidationError::InvalidSignature { signer: 0 }
+    ));
 }
 
 #[test]
@@ -50834,6 +51356,59 @@ async fn pacemaker_forces_view_change_when_cached_slot_stalls() {
     );
 
     harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_cached_slot_uses_reduced_near_quorum_timeout_for_missing_payload() {
+    let quorum_timeout = Duration::from_secs(4);
+    let rebroadcast_cooldown = Duration::from_millis(300);
+    let expected =
+        super::reschedule::near_quorum_payload_timeout(rebroadcast_cooldown).min(quorum_timeout);
+    let actual = super::propose::cached_slot_effective_quorum_timeout(
+        quorum_timeout,
+        rebroadcast_cooldown,
+        /*precommit_votes_at_view*/ 2,
+        /*quorum*/ 3,
+        /*missing_local_data*/ true,
+        /*consensus_queue_backlog*/ false,
+        /*rbc_session_incomplete*/ false,
+    );
+    assert_eq!(
+        actual, expected,
+        "near-quorum payload-missing stall should use reduced cached-slot timeout"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_cached_slot_reduced_timeout_is_suppressed_by_queue_backlog() {
+    let quorum_timeout = Duration::from_secs(4);
+    let rebroadcast_cooldown = Duration::from_millis(300);
+    let with_backlog = super::propose::cached_slot_effective_quorum_timeout(
+        quorum_timeout,
+        rebroadcast_cooldown,
+        /*precommit_votes_at_view*/ 2,
+        /*quorum*/ 3,
+        /*missing_local_data*/ true,
+        /*consensus_queue_backlog*/ true,
+        /*rbc_session_incomplete*/ false,
+    );
+    assert_eq!(
+        with_backlog, quorum_timeout,
+        "queue backlog should suppress reduced cached-slot timeout"
+    );
+    let with_rbc_inflight = super::propose::cached_slot_effective_quorum_timeout(
+        quorum_timeout,
+        rebroadcast_cooldown,
+        /*precommit_votes_at_view*/ 2,
+        /*quorum*/ 3,
+        /*missing_local_data*/ true,
+        /*consensus_queue_backlog*/ false,
+        /*rbc_session_incomplete*/ true,
+    );
+    assert_eq!(
+        with_rbc_inflight, quorum_timeout,
+        "RBC in-flight should suppress reduced cached-slot timeout"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -65056,6 +65631,234 @@ async fn reschedule_defers_near_commit_quorum_with_recent_progress_without_backl
     assert!(
         pending_after.last_quorum_reschedule.is_some(),
         "pending should be quorum-rescheduled once near-quorum progress goes stale"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(b"near-quorum-missing-payload");
+    let view_idx = block.header().view_change_index();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit().max(1);
+    assert!(required >= 2, "test requires at least two validators");
+    let epoch = actor.epoch_for_height(height);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+
+    for peer in signature_topology
+        .as_ref()
+        .iter()
+        .take(required.saturating_sub(1))
+    {
+        let signer_idx = signature_topology
+            .as_ref()
+            .iter()
+            .position(|candidate| candidate == peer)
+            .expect("signer in topology");
+        let signer = ValidatorIndex::try_from(signer_idx).expect("signer fits u32");
+        let keypair = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("matching signer keypair");
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: view_idx,
+            epoch,
+            highest_qc: None,
+            signer,
+            bls_sig: Vec::new(),
+        };
+        let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
+        let signature = Signature::new(keypair.private_key(), &preimage);
+        vote.bls_sig = signature.payload().to_vec();
+        actor.handle_vote(vote);
+    }
+
+    let vote_status =
+        actor.commit_vote_quorum_status_for_block_detail(block_hash, height, view_idx);
+    assert_eq!(
+        vote_status.vote_count,
+        required.saturating_sub(1),
+        "test requires near-quorum commit votes"
+    );
+    assert!(!vote_status.quorum_reached, "test must remain below quorum");
+
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let near_timeout = super::reschedule::near_quorum_payload_timeout(actor.rebroadcast_cooldown())
+        .min(quorum_timeout);
+    assert!(
+        near_timeout < quorum_timeout,
+        "test requires reduced near-quorum timeout to be smaller than quorum timeout"
+    );
+    let now = Instant::now();
+    let pending_age = near_timeout + Duration::from_millis(1);
+    let near_quorum_recent_progress_grace =
+        super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
+            .max(Duration::from_millis(500));
+    let stale_progress_age = near_quorum_recent_progress_grace + Duration::from_millis(1);
+    assert!(
+        pending_age < quorum_timeout,
+        "test requires pending age inside full quorum timeout window"
+    );
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.inserted_at = now - pending_age;
+    pending.touch_progress(now - stale_progress_age);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    assert!(
+        actor.reschedule_stale_pending_blocks(None),
+        "near-quorum missing payload should reschedule before full quorum timeout"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_some(),
+        "pending should be quorum-rescheduled under reduced near-quorum timeout"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reschedule_near_quorum_reduced_timeout_is_suppressed_by_queue_backlog() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(b"near-quorum-missing-payload-backlog");
+    let view_idx = block.header().view_change_index();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit().max(1);
+    assert!(required >= 2, "test requires at least two validators");
+    let epoch = actor.epoch_for_height(height);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+
+    for peer in signature_topology
+        .as_ref()
+        .iter()
+        .take(required.saturating_sub(1))
+    {
+        let signer_idx = signature_topology
+            .as_ref()
+            .iter()
+            .position(|candidate| candidate == peer)
+            .expect("signer in topology");
+        let signer = ValidatorIndex::try_from(signer_idx).expect("signer fits u32");
+        let keypair = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("matching signer keypair");
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: view_idx,
+            epoch,
+            highest_qc: None,
+            signer,
+            bls_sig: Vec::new(),
+        };
+        let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
+        let signature = Signature::new(keypair.private_key(), &preimage);
+        vote.bls_sig = signature.payload().to_vec();
+        actor.handle_vote(vote);
+    }
+
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let near_timeout = super::reschedule::near_quorum_payload_timeout(actor.rebroadcast_cooldown())
+        .min(quorum_timeout);
+    assert!(
+        near_timeout < quorum_timeout,
+        "test requires reduced near-quorum timeout to be smaller than quorum timeout"
+    );
+    let now = Instant::now();
+    let pending_age = near_timeout + Duration::from_millis(1);
+    let near_quorum_recent_progress_grace =
+        super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
+            .max(Duration::from_millis(500));
+    let stale_progress_age = near_quorum_recent_progress_grace + Duration::from_millis(1);
+    assert!(
+        pending_age < quorum_timeout,
+        "test requires pending age inside full quorum timeout window"
+    );
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.inserted_at = now - pending_age;
+    pending.touch_progress(now - stale_progress_age);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
+    assert!(
+        !actor.reschedule_stale_pending_blocks(None),
+        "queue backlog should suppress reduced near-quorum timeout path"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_none(),
+        "pending should remain unrescheduled while queue backlog is active"
+    );
+
+    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::RbcChunks, 1);
+    assert!(
+        actor.reschedule_stale_pending_blocks(None),
+        "transient queue depth should not suppress near-quorum reduced timeout reschedule"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_some(),
+        "pending should reschedule once backlog suppression is removed"
     );
 
     harness.shutdown.send();

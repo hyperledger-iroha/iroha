@@ -1258,7 +1258,6 @@ impl IzanamiRunner {
         };
         await_worker_shutdown_with_timeout(load_handles, "load", shutdown_timeout).await;
         await_worker_shutdown_with_timeout(faulty_handles, "fault", shutdown_timeout).await;
-
         self.network.shutdown().await;
 
         let snapshot = metrics.snapshot();
@@ -2709,6 +2708,95 @@ mod tests {
 
         assert!(!is_shared_host_stable_recovery_run(&config));
         assert_eq!(recovery_profile_for(&config), baseline_recovery_profile());
+    }
+
+    #[test]
+    fn shared_host_recovery_profile_config_layer_writes_tuned_da_timeouts() -> Result<()> {
+        init_instruction_registry();
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1_200),
+            pipeline_time: None,
+            target_blocks: Some(1_200),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            seed: Some(27),
+            tps: 5.0,
+            max_inflight: 8,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            config.nexus.as_ref(),
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
+        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            make_network_builder(&config, genesis).build()
+        })) {
+            Ok(network) => network,
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
+                    .unwrap_or_default();
+                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
+                    return Ok(());
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
+
+        let layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
+        let lookup = |path: &[&str]| {
+            layers.iter().rev().find_map(|layer| {
+                let mut current = layer;
+                for (idx, key) in path.iter().enumerate() {
+                    let value = current.get(*key)?;
+                    if idx + 1 == path.len() {
+                        return value.as_integer();
+                    }
+                    current = value.as_table()?;
+                }
+                None
+            })
+        };
+
+        assert_eq!(
+            lookup(&["sumeragi", "advanced", "da", "quorum_timeout_multiplier"]),
+            Some(IZANAMI_SHARED_HOST_SOAK_DA_QUORUM_TIMEOUT_MULTIPLIER)
+        );
+        assert_eq!(
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "da",
+                "availability_timeout_multiplier"
+            ]),
+            Some(IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_MULTIPLIER)
+        );
+        assert_eq!(
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "da",
+                "availability_timeout_floor_ms"
+            ]),
+            Some(IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_FLOOR_MS)
+        );
+
+        Ok(())
     }
 
     #[test]

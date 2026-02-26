@@ -4610,6 +4610,42 @@ impl Actor {
         self.rbc_backlog_summary().has_backlog()
     }
 
+    fn has_near_quorum_rbc_backlog(&self, summary: RbcBacklogSummary) -> bool {
+        self.rbc_backlog_exceeds_pacemaker_soft_limits(summary)
+    }
+
+    fn consensus_queue_backlog(queue_depths: super::status::WorkerQueueDepthSnapshot) -> bool {
+        queue_depths.vote_rx > 0
+            || queue_depths.rbc_chunk_rx > 0
+            || queue_depths.block_payload_rx > 0
+            || queue_depths.block_rx > 0
+            || queue_depths.consensus_rx > 0
+    }
+
+    fn near_quorum_queue_depth_threshold(cap: usize) -> u64 {
+        let cap = cap.max(1);
+        let threshold =
+            cap.min(usize::try_from(NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR).unwrap_or(2));
+        u64::try_from(threshold).unwrap_or(NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR)
+    }
+
+    fn consensus_queue_backlog_blocks_near_quorum_timeout(
+        &self,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        let vote_threshold = Self::near_quorum_queue_depth_threshold(self.config.queues.votes);
+        let block_payload_threshold =
+            Self::near_quorum_queue_depth_threshold(self.config.queues.block_payload);
+        let rbc_chunk_threshold =
+            Self::near_quorum_queue_depth_threshold(self.config.queues.rbc_chunks);
+        let block_threshold = Self::near_quorum_queue_depth_threshold(self.config.queues.blocks);
+        queue_depths.vote_rx >= vote_threshold
+            || queue_depths.rbc_chunk_rx >= rbc_chunk_threshold
+            || queue_depths.block_payload_rx >= block_payload_threshold
+            || queue_depths.block_rx >= block_threshold
+            || queue_depths.consensus_rx >= NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR
+    }
+
     fn rbc_backlog_exceeds_pacemaker_soft_limits(&self, summary: RbcBacklogSummary) -> bool {
         if !summary.has_backlog() {
             return false;
@@ -4705,6 +4741,9 @@ const EMPTY_COMMIT_TOPOLOGY_RECOVERY_MAX_RETRIES: u32 = 3;
 const EMPTY_COMMIT_TOPOLOGY_RECOVERY_LOG_COOLDOWN: Duration = Duration::from_secs(5);
 const ROSTER_SIDECAR_MISMATCH_LOG_COOLDOWN: Duration = Duration::from_secs(5);
 const RANGE_PULL_DEDUP_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
+const QC_MISSING_PAYLOAD_RANGE_PULL_DEDUP_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
+const SIDECAR_MISMATCH_RECOVERY_ACTION_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
+const NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR: u64 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConsensusRecoveryState {
@@ -5141,7 +5180,10 @@ pub(super) struct Actor {
         BTreeMap<MissingBlockHeightRecoveryKey, MissingBlockHeightRecoveryBudget>,
     no_roster_fallback_recovery: BTreeMap<MissingBlockHeightRecoveryKey, NoRosterFallbackBudget>,
     sidecar_mismatch_recovery: BTreeMap<u64, SidecarMismatchRecoveryEntry>,
+    sidecar_mismatch_action_cooldowns:
+        BTreeMap<(u64, HashOf<BlockHeader>, HashOf<BlockHeader>, &'static str), Instant>,
     sidecar_observation_suppression_depth: u32,
+    qc_missing_payload_range_pull_cooldowns: BTreeMap<(u64, u64, HashOf<BlockHeader>), Instant>,
     range_pull_escalation_cooldowns: BTreeMap<(PeerId, u64, u64), Instant>,
     deferred_qcs: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     deferred_qc_roster_state: BTreeMap<QcVoteKey, DeferredRosterQcEntry>,
@@ -9960,7 +10002,9 @@ impl Actor {
             missing_block_height_recovery: BTreeMap::new(),
             no_roster_fallback_recovery: BTreeMap::new(),
             sidecar_mismatch_recovery: BTreeMap::new(),
+            sidecar_mismatch_action_cooldowns: BTreeMap::new(),
             sidecar_observation_suppression_depth: 0,
+            qc_missing_payload_range_pull_cooldowns: BTreeMap::new(),
             range_pull_escalation_cooldowns: BTreeMap::new(),
             deferred_qcs: BTreeMap::new(),
             deferred_qc_roster_state: BTreeMap::new(),
@@ -15315,6 +15359,8 @@ impl Actor {
         });
         self.range_pull_escalation_cooldowns
             .retain(|_, expires| now < *expires);
+        self.qc_missing_payload_range_pull_cooldowns
+            .retain(|_, expires| now < *expires);
         let sidecar_expiry = self
             .recovery_sidecar_mismatch_ttl()
             .max(Duration::from_millis(1))
@@ -15325,6 +15371,8 @@ impl Actor {
             }
             now.saturating_duration_since(entry.last_seen) <= sidecar_expiry
         });
+        self.sidecar_mismatch_action_cooldowns
+            .retain(|_, expires| now < *expires);
         self.no_roster_fallback_recovery.retain(|key, entry| {
             key.height > committed_height
                 && now.saturating_duration_since(entry.last_seen) <= ttl.saturating_mul(8)
@@ -15861,6 +15909,33 @@ impl Actor {
                 .range_pull_targets_for_height_tier(height, RangePullCandidateTier::TrustedPeers);
         }
         targets
+    }
+
+    fn allow_qc_missing_payload_range_pull(
+        &mut self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        now: Instant,
+        cooldown_hint: Duration,
+    ) -> bool {
+        let cooldown = cooldown_hint
+            .max(self.recovery_missing_block_height_ttl())
+            .max(QC_MISSING_PAYLOAD_RANGE_PULL_DEDUP_COOLDOWN_FLOOR);
+        self.qc_missing_payload_range_pull_cooldowns
+            .retain(|_, expires| now < *expires);
+        let key = (height, view, block_hash);
+        if self
+            .qc_missing_payload_range_pull_cooldowns
+            .get(&key)
+            .is_some_and(|deadline| now < *deadline)
+        {
+            return false;
+        }
+        let expires = now.checked_add(cooldown).unwrap_or(now);
+        self.qc_missing_payload_range_pull_cooldowns
+            .insert(key, expires);
+        true
     }
 
     fn request_range_pull_from_anchor_with_tier(
@@ -16678,6 +16753,36 @@ impl Actor {
             .map(|block| block.hash())
     }
 
+    const fn sidecar_mismatch_reason_group(reason: &'static str) -> &'static str {
+        reason
+    }
+
+    fn allow_sidecar_mismatch_recovery_action(
+        &mut self,
+        height: u64,
+        expected: HashOf<BlockHeader>,
+        stored: HashOf<BlockHeader>,
+        reason_group: &'static str,
+        now: Instant,
+    ) -> bool {
+        let cooldown = self
+            .rebroadcast_cooldown()
+            .max(SIDECAR_MISMATCH_RECOVERY_ACTION_COOLDOWN_FLOOR);
+        self.sidecar_mismatch_action_cooldowns
+            .retain(|_, expires| now < *expires);
+        let key = (height, expected, stored, reason_group);
+        if self
+            .sidecar_mismatch_action_cooldowns
+            .get(&key)
+            .is_some_and(|deadline| now < *deadline)
+        {
+            return false;
+        }
+        let expires = now.checked_add(cooldown).unwrap_or(now);
+        self.sidecar_mismatch_action_cooldowns.insert(key, expires);
+        true
+    }
+
     fn note_sidecar_mismatch(
         &mut self,
         height: u64,
@@ -16728,12 +16833,30 @@ impl Actor {
         }
 
         self.sidecar_mismatch_recovery.insert(height, entry);
-        let _ = self.request_range_pull_from_anchor(height, "sidecar_mismatch", now);
-        if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
-            // Keep sidecar mismatch recovery non-reentrant to avoid recursive overflow.
-            self.request_missing_block_for_highest_qc_force_skip_sidecar_observation(
-                highest,
-                "sidecar_mismatch",
+        let reason_group = Self::sidecar_mismatch_reason_group(reason);
+        let suppress_recovery_actions = !self.allow_sidecar_mismatch_recovery_action(
+            height,
+            expected,
+            stored,
+            reason_group,
+            now,
+        );
+        if !suppress_recovery_actions {
+            let _ = self.request_range_pull_from_anchor(height, "sidecar_mismatch", now);
+            if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
+                // Keep sidecar mismatch recovery non-reentrant to avoid recursive overflow.
+                self.request_missing_block_for_highest_qc_force_skip_sidecar_observation(
+                    highest,
+                    "sidecar_mismatch",
+                );
+            }
+        } else {
+            debug!(
+                height,
+                expected = %expected,
+                stored = %stored,
+                reason_group,
+                "suppressing duplicate sidecar mismatch recovery actions inside cooldown"
             );
         }
         warn!(
@@ -16743,6 +16866,8 @@ impl Actor {
             mismatches = entry.mismatch_count,
             quarantined = entry.quarantined,
             final_drop = entry.final_dropped,
+            reason_group,
+            recovery_actions_suppressed = suppress_recovery_actions,
             reason,
             "roster sidecar mismatch detected; fail-closed quarantine active"
         );
@@ -16750,6 +16875,8 @@ impl Actor {
 
     fn clear_sidecar_mismatch_for_height(&mut self, height: u64) {
         self.sidecar_mismatch_recovery.remove(&height);
+        self.sidecar_mismatch_action_cooldowns
+            .retain(|(entry_height, _, _, _), _| *entry_height != height);
     }
 
     fn retarget_missing_block_request_to_canonical_hash(
@@ -17667,13 +17794,74 @@ impl Actor {
     fn maybe_force_view_change_for_stalled_pending(&mut self, now: Instant) -> bool {
         let committed_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
-        let timeout = self
-            .commit_quorum_timeout()
-            .max(self.subsystems.propose.pacemaker.propose_interval)
-            .max(Duration::from_millis(1));
+        let base_timeout = self.commit_quorum_timeout().max(Duration::from_millis(1));
+        let near_quorum_timeout =
+            reschedule::near_quorum_payload_timeout(self.rebroadcast_cooldown()).min(base_timeout);
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        let consensus_queue_backlog = Self::consensus_queue_backlog(queue_depths);
+        let near_quorum_queue_backlog =
+            self.consensus_queue_backlog_blocks_near_quorum_timeout(queue_depths);
+        let rbc_backlog_summary = self.rbc_backlog_summary();
+        let unresolved_rbc_backlog = rbc_backlog_summary.has_backlog();
+        let near_quorum_rbc_backlog = self.has_near_quorum_rbc_backlog(rbc_backlog_summary);
+        let near_quorum_fast_timeout_gate_open =
+            !near_quorum_queue_backlog && !near_quorum_rbc_backlog;
+        let near_quorum_recent_progress_grace =
+            saturating_mul_duration(self.rebroadcast_cooldown(), 4).max(Duration::from_millis(500));
+        let da_enabled = self.runtime_da_enabled();
+        let pending_effective_timeout = |pending: &PendingBlock| {
+            let block_hash = pending.block.hash();
+            let (consensus_mode, _, _) = self.consensus_context_for_height(pending.height);
+            let mut commit_roster = self.roster_for_vote_with_mode(
+                block_hash,
+                pending.height,
+                pending.view,
+                consensus_mode,
+            );
+            if commit_roster.is_empty() {
+                commit_roster = self.roster_for_live_vote_with_mode(pending.height, consensus_mode);
+            }
+            if commit_roster.is_empty() {
+                commit_roster = self.effective_commit_topology();
+            }
+            let commit_topology = super::network_topology::Topology::new(commit_roster);
+            let min_votes_for_commit = commit_topology.min_votes_for_commit().max(1);
+            let vote_status = self.commit_vote_quorum_status_for_block_detail(
+                block_hash,
+                pending.height,
+                pending.view,
+            );
+            let near_commit_quorum = vote_status.vote_count > 0
+                && vote_status.vote_count < min_votes_for_commit
+                && vote_status.vote_count.saturating_add(1) >= min_votes_for_commit;
+            let payload_available = da_enabled
+                && Self::payload_available_for_da(
+                    &self.subsystems.da_rbc.rbc.sessions,
+                    &self.subsystems.da_rbc.rbc.status_handle,
+                    pending,
+                );
+            let missing_local_data = da_enabled && !payload_available;
+            let near_quorum_fast_timeout_allowed =
+                near_commit_quorum && missing_local_data && near_quorum_fast_timeout_gate_open;
+            let effective_timeout = if near_quorum_fast_timeout_allowed {
+                near_quorum_timeout
+            } else {
+                base_timeout
+            };
+            (
+                effective_timeout,
+                near_quorum_fast_timeout_allowed,
+                vote_status.vote_count,
+                min_votes_for_commit,
+                missing_local_data,
+            )
+        };
+
         let mut stalled_pending = 0usize;
         let mut max_pending_stall = Duration::ZERO;
         let mut stalled_height: Option<u64> = None;
+        let mut effective_timeout = base_timeout;
+        let mut near_quorum_stalled = false;
 
         for pending in self.pending.pending_blocks.values() {
             if pending.aborted
@@ -17686,14 +17874,37 @@ impl Actor {
             {
                 continue;
             }
+            let (
+                pending_timeout,
+                near_quorum_fast_timeout_allowed,
+                vote_count,
+                min_votes_for_commit,
+                missing_local_data,
+            ) = pending_effective_timeout(pending);
             let stall_age = pending.progress_age(now);
-            if stall_age < timeout {
+            if near_quorum_fast_timeout_allowed && stall_age < near_quorum_recent_progress_grace {
+                debug!(
+                    height = pending.height,
+                    view = pending.view,
+                    block = %pending.block.hash(),
+                    votes = vote_count,
+                    min_votes = min_votes_for_commit,
+                    missing_local_data,
+                    stall_age_ms = stall_age.as_millis(),
+                    grace_ms = near_quorum_recent_progress_grace.as_millis(),
+                    "deferring forced view change: near-quorum pending shows recent progress"
+                );
+                continue;
+            }
+            if stall_age < pending_timeout {
                 continue;
             }
             stalled_pending = stalled_pending.saturating_add(1);
             max_pending_stall = max_pending_stall.max(stall_age);
             stalled_height =
                 Some(stalled_height.map_or(pending.height, |current| current.min(pending.height)));
+            effective_timeout = effective_timeout.min(pending_timeout);
+            near_quorum_stalled |= near_quorum_fast_timeout_allowed;
         }
 
         let inflight_stall = self
@@ -17703,16 +17914,30 @@ impl Actor {
             .as_ref()
             .filter(|inflight| !inflight.pending.aborted)
             .map(|inflight| {
+                let (pending_timeout, near_quorum_fast_timeout_allowed, _, _, _) =
+                    pending_effective_timeout(&inflight.pending);
+                let stall_age = inflight.pending.progress_age(now);
+                let stalled = if near_quorum_fast_timeout_allowed {
+                    stall_age >= pending_timeout && stall_age >= near_quorum_recent_progress_grace
+                } else {
+                    stall_age >= pending_timeout
+                };
                 (
                     inflight.pending.height,
-                    inflight.pending.progress_age(now) >= timeout,
-                    inflight.pending.progress_age(now),
+                    stalled,
+                    stall_age,
+                    pending_timeout,
+                    near_quorum_fast_timeout_allowed,
                 )
             });
-        let inflight_stalled = inflight_stall.is_some_and(|(_, stalled, _)| stalled);
-        if let Some((height, true, stall_age)) = inflight_stall {
+        let inflight_stalled = inflight_stall.is_some_and(|(_, stalled, _, _, _)| stalled);
+        if let Some((height, true, stall_age, pending_timeout, near_quorum_fast_timeout_allowed)) =
+            inflight_stall
+        {
             stalled_height = Some(stalled_height.map_or(height, |current| current.min(height)));
             max_pending_stall = max_pending_stall.max(stall_age);
+            effective_timeout = effective_timeout.min(pending_timeout);
+            near_quorum_stalled |= near_quorum_fast_timeout_allowed;
         }
 
         if stalled_pending == 0 && !inflight_stalled {
@@ -17726,7 +17951,7 @@ impl Actor {
         let Some(view_age) = self.phase_tracker.view_age(height, now) else {
             return false;
         };
-        if view_age < timeout {
+        if view_age < effective_timeout {
             return false;
         }
         let view = self.phase_tracker.current_view(height).unwrap_or(0);
@@ -17747,7 +17972,14 @@ impl Actor {
             stalled_pending,
             inflight_stalled,
             view_age_ms = view_age.as_millis(),
-            timeout_ms = timeout.as_millis(),
+            timeout_ms = effective_timeout.as_millis(),
+            base_timeout_ms = base_timeout.as_millis(),
+            near_quorum_timeout_ms = near_quorum_timeout.as_millis(),
+            near_quorum_stalled,
+            consensus_queue_backlog,
+            near_quorum_queue_backlog,
+            unresolved_rbc_backlog,
+            near_quorum_rbc_backlog,
             max_pending_stall_ms = max_pending_stall.as_millis(),
             "active pending block stalled past quorum timeout; forcing deterministic view change"
         );

@@ -1,6 +1,171 @@
 # Status
 
-Last update: 2026-02-25
+Last update: 2026-02-26
+- Latest sync (2026-02-26 post-bottleneck-policy rerun, unchanged gate shape):
+  - Reran canonical gate envelope (`--allow-net --nexus --peers 4 --faulty 0 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`) after the near-quorum/backlog and aggregate-mismatch policy refinements.
+  - Pilot (`1200s`, `target-blocks=1200`):
+    - log: `/tmp/izanami_pilot_1200_gate_20260226T191033Z.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_8QiS6c`
+    - summary: `successes=2971 failures=1 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`
+    - persisted heights: `630/630/630/630` (spread `0`)
+    - churn counters (peer logs): payload-missing defer `8`, forced-VC stall `1` (6s-class `0`), fallback-anchor share `19`, no-proposal-cutoff `0`.
+  - Acceptance (`3600s`, `target-blocks=3600`):
+    - log: `/tmp/izanami_acceptance_3600_gate_20260226T191033Z.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_PYVD6w`
+    - summary: `successes=7473 failures=4 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`
+    - persisted heights: `1535/1535/1535/1535` (spread `0`)
+    - churn counters (peer logs): payload-missing defer `56`, forced-VC stall `1` (6s-class `1`), fallback-anchor share `48`, no-proposal-cutoff `0`.
+  - No `no block height progress ...` progress-timeout failure observed in either rerun.
+- Latest sync (2026-02-26 policy-only bottleneck follow-up: near-quorum backlog thresholding + block-sync aggregate-mismatch retry):
+  - Implemented the requested internal-only speedups without FSM/public-config changes:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs` + `reschedule.rs` + `propose.rs`: near-quorum reduced-timeout gating now treats transient queue blips as non-blocking (depth-thresholded queue backlog for near-quorum paths) and uses soft-limit RBC backlog checks in forced-VC pending-stall handling.
+    - `crates/iroha_core/src/sumeragi/main_loop/qc.rs`: fast missing-payload recovery in `qc_missing_block_defer(...)` now prioritizes payload/block fetch actions first (targeted missing-block request + range pull + escalation bookkeeping) before vote rebroadcast.
+    - `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`: `QcValidationError::AggregateMismatch` is now treated as retryable in block-sync QC validation (quarantine/replay path) instead of immediate final drop.
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`: updated near-quorum backlog suppression tests for threshold semantics and added `block_sync_qc_retryable_validation_errors_include_aggregate_mismatch`.
+  - Validation:
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core block_sync_qc_retryable_validation_errors_include_aggregate_mismatch -- --nocapture` (ok)
+    - `cargo test -p iroha_core maybe_force_view_change_for_stalled_pending_reduced_timeout_is_suppressed_by_queue_or_rbc_backlog -- --nocapture` (ok)
+    - `cargo test -p iroha_core reschedule_near_quorum_reduced_timeout_is_suppressed_by_queue_backlog -- --nocapture` (ok)
+    - `cargo test -p iroha_core reschedule_defers_near_commit_quorum_while_block_queue_backlogged -- --nocapture` (ok)
+    - `cargo test -p iroha_core qc_missing_block_defer_fast_recovery_is_single_shot_per_cooldown -- --nocapture` (ok)
+    - `cargo test -p iroha_core pacemaker_forces_view_change_when_cached_slot_stalls -- --nocapture` (ok)
+    - `cargo test -p iroha_core pacemaker_cached_slot_reduced_timeout_is_suppressed_by_queue_backlog -- --nocapture` (ok)
+- Latest sync (2026-02-26 gate A/B reruns after policy-only stall-time reduction patch, fixed `--tps 5 --max-inflight 8`):
+  - Reran unchanged-shape gates with canonical command envelope (`--allow-net --nexus --peers 4 --faulty 0 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`):
+    - pilot artifacts:
+      - log: `/tmp/izanami_pilot_1200_gate_20260226T145420Z.log`
+      - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_L8nEAl`
+      - result: `izanami run stopped before target blocks reached`; summary `successes=3073 failures=1 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`.
+    - acceptance artifacts:
+      - log: `/tmp/izanami_acceptance_3600_gate_20260226T162742Z.log`
+      - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_KJGDpZ`
+      - result: `izanami run stopped before target blocks reached`; summary `successes=7453 failures=3 izanami_ingress_failover_total=8 izanami_ingress_endpoint_unhealthy_total=1`.
+  - A/B vs latest 2026-02-26 recovery baseline (`pilot`: `/tmp/izanami_pilot_1200_gate_20260226T105101Z.log` + `.../irohad_test_network_tLZ5Yo`, `acceptance`: `/tmp/izanami_acceptance_3600_gate_20260226T111739Z.log` + `.../irohad_test_network_4pyRKc`):
+    - pilot:
+      - persisted strict height `652 -> 651` (`-1`), spread `1 -> 0`;
+      - `stake quorum observed but block payload missing; deferring QC aggregation` `6 -> 8`;
+      - `active pending block stalled past quorum timeout; forcing deterministic view change` `2 -> 1`;
+      - 6s-class forced-VC bucket (`timeout_ms: 6xxx`) remained `0 -> 0`;
+      - `Block hash not found; sharing from fallback anchor` `8 -> 9`;
+      - `no proposal observed before cutoff` `1 -> 0`.
+    - acceptance:
+      - persisted strict height `1555 -> 1537` (`-18`), spread `0 -> 1`;
+      - `stake quorum observed but block payload missing; deferring QC aggregation` `46 -> 52`;
+      - `active pending block stalled past quorum timeout; forcing deterministic view change` `2 -> 0`;
+      - 6s-class forced-VC bucket reduced `2 -> 0`;
+      - `Block hash not found; sharing from fallback anchor` `30 -> 31`;
+      - `no proposal observed before cutoff` remained `0 -> 0`.
+  - Regression checks:
+    - no `no block height progress for ...` progress-timeout failure in either rerun;
+    - no view-change storm increase (forced VC warnings fell in both runs);
+    - 6s-class timeout-bound forced-VC events reduced/held (`pilot 0`, `acceptance 2 -> 0`);
+    - fallback-anchor churn was flat-to-slightly-higher (`pilot +1`, `acceptance +1`) and payload-missing QC defer count increased.
+- Latest sync (2026-02-26 consensus stall-time reduction follow-up, policy-only, no FSM/state-topology changes):
+  - Implemented internal liveness refinements in the DA/commit recovery path:
+    - `crates/iroha_core/src/sumeragi/main_loop/qc.rs` + `crates/iroha_core/src/sumeragi/main_loop.rs`: deduplicated missing-payload range-pull recovery in `qc_missing_block_defer(...)` with cooldown key `(height, view, block_hash)` so repeated defer events do not self-churn.
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`: extended near-quorum reduced-timeout policy to `maybe_force_view_change_for_stalled_pending(...)` with the same suppression gates (queue backlog, unresolved RBC, recent progress grace), while keeping forced VC cause/path unchanged (`ViewChangeCause::QuorumTimeout`).
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`: sidecar mismatch recovery actions are now cooldown-deduped by `(height, expected_hash, stored_hash, reason_group)`; mismatch accounting and fail-closed/drop semantics remain unchanged.
+    - `crates/iroha_core/src/block_sync.rs`: unknown-prev fallback share now has per-peer/per-prev cooldown before repeated large fallback bursts; first-time correctness path unchanged.
+    - `crates/iroha_core/src/sumeragi/main_loop/propose.rs`: preserved cached-slot hotfix ordering so observed precommit votes for the same slot continue to prevent forced VC churn.
+    - `crates/iroha_core/src/sumeragi/main_loop/mode.rs`: cleared newly added cooldown maps on mode reset.
+  - Added/updated coverage in `crates/iroha_core/src/sumeragi/main_loop/tests.rs` and `crates/iroha_core/src/block_sync.rs`:
+    - near-quorum reduced-timeout forced-VC path (+ suppression by backlog/progress grace),
+    - sidecar mismatch duplicate-recovery suppression,
+    - unknown-prev cooldown suppression behavior,
+    - missing-payload QC fast-recovery single-shot cooldown behavior.
+  - Validation:
+    - `cargo test -p iroha_core main_loop -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok)
+    - `cargo fmt --all` (ok)
+- Latest sync (2026-02-26 hotfix for proposal-starvation regression after stall-timeout patch, fixed `--tps 5 --max-inflight 8`):
+  - Applied targeted rollback/narrowing:
+    - `crates/iroha_core/src/sumeragi/main_loop/propose.rs`: when a cached proposal exists for `(height, view)`, precommit-vote presence now short-circuits view-change forcing (`precommit_votes_at_view > 0` defers immediately), preventing cached-slot timeout churn from overriding in-flight vote convergence.
+    - `crates/izanami/src/chaos.rs`: restored shared-host DA multipliers to pre-regression values (`quorum_timeout_multiplier 2 -> 4`, `availability_timeout_multiplier 2 -> 3`).
+  - Validation:
+    - `cargo fmt --all` (ok)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok; 3 passed)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; 4 passed)
+    - `cargo test -p iroha_core --lib qc_missing_block_defer_fast_recovery_is_single_shot_per_cooldown -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib reschedule_uses_reduced_timeout_for_near_quorum_missing_payload -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib reschedule_near_quorum_reduced_timeout_is_suppressed_by_queue_backlog -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib pacemaker_cached_slot_uses_reduced_near_quorum_timeout_for_missing_payload -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib pacemaker_cached_slot_reduced_timeout_is_suppressed_by_queue_backlog -- --nocapture` (ok)
+  - Pilot rerun (`--duration 1200s --target-blocks 1200 --tps 5 --max-inflight 8 --workload-profile stable`) artifacts:
+    - log: `/tmp/izanami_pilot_1200_gate_20260226T105101Z.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_tLZ5Yo`
+  - Pilot result after hotfix: `izanami run stopped before target blocks reached`, summary `successes=3101 failures=1 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`; persisted per-peer heights `651/651/652/652` (strict/quorum candidates `651/651`).
+  - Pilot comparison:
+    - vs regression run (`/tmp/izanami_pilot_1200_gate_20260226T082333Z.log`): successes `954 -> 3101`, failures `66 -> 1`, ingress failover `238 -> 0`, unhealthy `100 -> 0`, strict/quorum candidates `77/295 -> 651/651`, and `cached proposal slot stalled` `51 -> 0`.
+    - vs baseline (`/tmp/izanami_pilot_1200_gate_20260226T040832Z.log`): restored and slightly improved pace (`633 -> 651` quorum candidate, `+18`).
+  - Acceptance rerun (`--duration 3600s --target-blocks 3600 --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`) artifacts:
+    - log: `/tmp/izanami_acceptance_3600_gate_20260226T111739Z.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_4pyRKc`
+  - Acceptance result after hotfix: no progress-timeout stall; run ended by duration target check (`stopped before target blocks reached`), summary `successes=7554 failures=12 izanami_ingress_failover_total=8 izanami_ingress_endpoint_unhealthy_total=2`; persisted per-peer heights `1554/1554/1554/1554`.
+  - Acceptance comparison:
+    - vs regression run (`/tmp/izanami_acceptance_3600_gate_20260226T085029Z.log`): recovered from progress-timeout at `508` to `1554`; successes `2387 -> 7554`; failures `30 -> 12`; ingress failover `160 -> 8`; unhealthy `121 -> 2`; peer `no proposal observed before cutoff` `179 -> 0`.
+    - vs baseline (`/tmp/izanami_acceptance_3600_gate_20260226T043457Z.log`): essentially restored baseline throughput/height (`1554` vs `1554/1555` snapshot-equivalent), with slightly higher failures (`12` vs `1`) and low non-zero ingress churn (`8/2` vs `0/0`).
+- Latest sync (2026-02-26 post-consensus-timeout patch gate reruns, fixed `--tps 5 --max-inflight 8`):
+  - Pilot gate rerun executed with unchanged shape (`--duration 1200s --target-blocks 1200 --tps 5 --max-inflight 8 --workload-profile stable`), artifacts:
+    - log: `/tmp/izanami_pilot_1200_gate_20260226T082333Z.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_riNQf3`
+  - Pilot outcome regressed sharply: `izanami run stopped before target blocks reached`; summary `successes=954 failures=66 izanami_ingress_failover_total=238 izanami_ingress_endpoint_unhealthy_total=100`.
+  - Pilot comparison vs baseline (`/tmp/izanami_pilot_1200_gate_20260226T040832Z.log`, network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_XKwAsf`):
+    - summary delta: successes `3023 -> 954` (`-68.44%`), failures `4 -> 66`, ingress failover `0 -> 238`, endpoint unhealthy `0 -> 100`;
+    - persisted tiered-state (previous snapshot per peer) indicates severe split (`295/296/77/296`, strict candidate `77`, quorum candidate `295`) versus baseline converged `633/633/633/633`;
+    - peer churn signature shifted to proposal starvation: `cached proposal slot stalled past quorum timeout` `0 -> 51`, `no proposal observed before cutoff` `2 -> 170`, while payload-missing QC deferrals dropped `6 -> 1`.
+  - Acceptance gate rerun executed with unchanged shape (`--duration 3600s --target-blocks 3600 --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`), artifacts:
+    - log: `/tmp/izanami_acceptance_3600_gate_20260226T085029Z.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_ajnB2Y`
+  - Acceptance outcome regressed to progress-timeout failure: `no block height progress for 600s (quorum min height 508, strict min 508, target 3600, tolerated_failures 1)`; summary `successes=2387 failures=30 izanami_ingress_failover_total=160 izanami_ingress_endpoint_unhealthy_total=121`.
+  - Acceptance comparison vs baseline (`/tmp/izanami_acceptance_3600_gate_20260226T043457Z.log`, network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_a4a4B0`):
+    - final height `1554 -> 508` (`-67.31%`), normalized pace `43.17% -> 14.11%` of target slope (`3600` blocks / `3600s`);
+    - summary delta: successes `7592 -> 2387` (`-68.56%`), failures `1 -> 30`, ingress failover `0 -> 160`, endpoint unhealthy `0 -> 121`;
+    - peer churn counts: payload-missing QC deferrals `37 -> 143`, commit-timeout reschedules `1 -> 20`, cached-slot stalls `1 -> 2`, `no proposal observed before cutoff` `0 -> 179`;
+    - timeout-boundary ages in the `6s..7s` bucket did drop (`2 -> 0`), but overall liveness/throughput regressed materially.
+- Latest sync (2026-02-26 consensus stall-budget removal for 1200s/3600s gates, fixed `--tps 5 --max-inflight 8`):
+  - Implemented internal-only consensus recovery tuning (no CLI/config schema changes):
+    - `crates/iroha_core/src/sumeragi/main_loop/qc.rs`: `qc_missing_block_defer(...)` now triggers cooldown-gated fast payload convergence (vote rebroadcast, payload rebroadcast when available, missing-block fetch, range-pull request) when commit quorum is observed but payload is missing.
+    - `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`: added near-quorum reduced timeout path with `near_quorum_payload_timeout = clamp(2 * rebroadcast_cooldown, 400ms..2000ms)` and enabled it only for payload-missing + near-commit-quorum + no backlog + no active RBC progress.
+    - `crates/iroha_core/src/sumeragi/main_loop/propose.rs`: cached proposal-slot stall now uses the same reduced near-quorum timeout gate under the same suppression rules; existing hysteresis/view-change cause tracking remains intact.
+    - `crates/iroha_core/src/sumeragi/main_loop/votes.rs`: highest-QC missing-block fetch is no longer suppressed solely because the committed-height hash is absent locally.
+    - `crates/izanami/src/chaos.rs`: shared-host DA multipliers tuned for balanced recovery (`quorum_timeout_multiplier 4 -> 2`, `availability_timeout_multiplier 3 -> 2`, floor unchanged at `2000ms`); baseline load-shape caps unchanged (`tps=5`, `max_inflight=8`, `pipeline_time_ms=900`).
+  - Added/updated regression coverage for near-quorum timeout computation, cached-slot timeout gating, payload-missing fast-recovery cooldown behavior, shared-host recovery profile config-layer wiring, and stabilized status-counter-sensitive tests to avoid cross-test contamination assumptions.
+  - Validation:
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core main_loop -- --nocapture` (ok; `1289 passed`, `0 failed`, `2 ignored`)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok)
+- Latest sync (2026-02-26 pilot + acceptance gate reruns, fixed `--tps 5 --max-inflight 8`):
+  - Executed pilot gate rerun (`--duration 1200s --target-blocks 1200 --tps 5 --max-inflight 8 --workload-profile stable`) with artifacts:
+    - log: `/tmp/izanami_pilot_1200_gate_20260226T040832Z.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_XKwAsf`
+  - Pilot outcome: failed at duration end with `izanami run stopped before target blocks reached`; final `quorum_min_height=633`, `strict_min_height=633`, max strict/quorum gap `2`, summary `successes=3023 failures=4 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`.
+  - Pilot delta vs previous scopefix artifact (`/tmp/izanami_pilot_1200_scopefix_20260225T205417.log`): height `650 -> 633` (`-17`, `-2.62%`), successes `3089 -> 3023`, failures `1 -> 4`, divergence `1 -> 2`, ingress failover/unhealthy unchanged at `0/0`.
+  - Executed acceptance gate rerun (`--duration 3600s --target-blocks 3600 --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`) with artifacts:
+    - log: `/tmp/izanami_acceptance_3600_gate_20260226T043457Z.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_a4a4B0`
+  - Acceptance outcome: failed at duration end with `izanami run stopped before target blocks reached`; final `quorum_min_height=1554`, `strict_min_height=1554`, max strict/quorum gap `1`, summary `successes=7592 failures=1 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`.
+  - Acceptance delta vs previous scopefix artifact (`/tmp/izanami_acceptance_3600_scopefix_20260225T212106.log`): height `1546 -> 1554` (`+8`, `+0.52%`), successes `7525 -> 7592`, failures `6 -> 1`, ingress failover/unhealthy `10/4 -> 0/0`, repeated-instruction rejections `4 -> 0`.
+  - Throughput/bottleneck metrics from acceptance progress samples: average `4.33` blocks per 10s window (required `10` for gate target), min/max `1/8`, low-throughput windows (`<=2` blocks/10s) `17/359`, resulting in `1554/3600` blocks (`43.17%` of target; shortfall `2046`, `56.83%`).
+- Latest sync (2026-02-25 plan implementation finalization, fixed `--tps 5 --max-inflight 8`):
+  - Finalized the `crates/izanami/src/chaos.rs` internal-only patch described in the recovery/throughput plan:
+    - `recovery_profile_for(...)` now selects shared-host recovery tuning for stable pilot+soak runs via `is_shared_host_stable_recovery_run(...)` (`nexus`, stable workload, `faulty_peers=0`, `peer_count>=4`, `duration>=1200s`);
+    - shared-host load-shape pinning remains soak-only (`is_shared_host_stable_soak(...)`, `duration>=3600s`);
+    - submit permit scope is limited to submit RPC/retry in `submit_plan(...)` (prechecks/query + post-failure sync run outside the semaphore);
+    - deterministic submit backlog bound is enforced at `max_inflight * IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER`.
+  - Kept shared-host baseline constants unchanged in this patch (`IZANAMI_SHARED_HOST_SOAK_TPS_CAP=5.0`, `IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_CAP=8`, `IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS=900`).
+  - Added regression coverage for config-layer DA timeout wiring on pilot-scale shared-host recovery selection: `shared_host_recovery_profile_config_layer_writes_tuned_da_timeouts`.
+  - Validation:
+    - `cargo fmt --all` (ok)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; 4 passed)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok; 3 passed)
+    - `cargo test -p izanami submission_ -- --nocapture` (ok; 8 passed)
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok; 1 passed)
+    - `bash ci/check_sumeragi_formal.sh` (environment failure: `apalache-mc` missing, Docker daemon unavailable)
 - Latest sync (2026-02-25 pilot + acceptance reruns, fixed `--tps 5 --max-inflight 8`):
   - Executed pilot gate rerun (`--duration 1200s --target-blocks 1200 --tps 5 --max-inflight 8 --workload-profile stable`) with artifacts:
     - log: `/tmp/izanami_pilot_1200_scopefix_20260225T205417.log`
