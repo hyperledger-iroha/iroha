@@ -2742,6 +2742,21 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::AccountId,
                     })
                 }
+                // Current trigger event payload as Json (data/by-call triggers).
+                "trigger_event" => {
+                    if !arg_typed.is_empty() {
+                        return Err(SemanticError {
+                            message: "trigger_event expects no arguments".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: vec![],
+                        },
+                        ty: Type::Json,
+                    })
+                }
                 "assert" => {
                     let ok = match arg_typed.len() {
                         1 => arg_typed[0].ty == Type::Bool,
@@ -5509,6 +5524,15 @@ mod tests {
     fn setvl_accepts_int() {
         let program = parse("fn f() { setvl(8); }").expect("parse setvl");
         analyze(&program).expect("setvl should accept int");
+    }
+
+    #[test]
+    fn trigger_event_accepts_no_args() {
+        let program = parse(
+            "fn f() { let ev = trigger_event(); let _kind = json_get_name(ev, name(\"kind\")); }",
+        )
+        .expect("parse trigger_event");
+        analyze(&program).expect("trigger_event should type-check");
     }
 
     #[test]

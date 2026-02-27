@@ -1548,6 +1548,7 @@ mod bundle_inspect_tests {
             platform_snapshot: None,
             sender_certificate_id: certificate.certificate_id(),
             sender_signature: Signature::new(spend_keys.private_key(), b"receipt payload"),
+            build_claim: None,
         };
 
         let receipts = vec![receipt];
@@ -1917,6 +1918,7 @@ mod tests {
             platform_snapshot: None,
             sender_certificate_id: certificate.certificate_id(),
             sender_signature: Signature::from_bytes(&[0; 64]),
+            build_claim: None,
         };
         let transfer = OfflineToOnlineTransfer {
             bundle_id: Hash::new(b"bundle"),

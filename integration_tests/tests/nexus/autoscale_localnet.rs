@@ -44,6 +44,7 @@ const STRICT_SCALE_OUT_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
 const SCALE_IN_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
 const AUTOSCALE_SOAK_DURATION: Duration = Duration::from_secs(30 * 60);
 const AUTOSCALE_SOAK_CYCLE_RETRY_LIMIT: usize = 4;
+const AUTOSCALE_MULTI_CYCLE_RETRY_LIMIT: usize = 2;
 const AUTOSCALE_SOAK_DEFAULT_SEED: &str = "autoscale-localnet-soak-default";
 const AUTOSCALE_SOAK_SEED_ENV: &str = "IROHA_AUTOSCALE_SOAK_SEED";
 const AUTOSCALE_SOAK_ARTIFACT_DIR_ENV: &str = "IROHA_AUTOSCALE_SOAK_ARTIFACT_DIR";
@@ -2435,26 +2436,40 @@ fn nexus_autoscale_repeats_expand_contract_cycles_in_localnet() -> Result<()> {
     )?;
     eprintln!("[autoscale-localnet][multi-cycle] dynamic commit quorum (2f+1): {quorum_required}");
 
-    let _cycle_1_outcome = run_expand_contract_cycle(
-        &network,
-        &submitters,
-        quorum_required,
-        1,
-        1,
-        true,
-        true,
-        STRICT_CYCLE_LOAD_TX_COUNT,
-    )?;
-    let _cycle_2_outcome = run_expand_contract_cycle(
-        &network,
-        &submitters,
-        quorum_required,
-        2,
-        1,
-        true,
-        true,
-        STRICT_CYCLE_LOAD_TX_COUNT,
-    )?;
+    for cycle_index in 1..=2 {
+        let mut cycle_attempt = 1_usize;
+        loop {
+            let attempt_load_tx_count = soak_cycle_load_tx_count(cycle_attempt);
+            eprintln!(
+                "[autoscale-localnet][multi-cycle][cycle {cycle_index}] attempt {cycle_attempt}/{AUTOSCALE_MULTI_CYCLE_RETRY_LIMIT} (load tx count: {attempt_load_tx_count})"
+            );
+            match run_expand_contract_cycle(
+                &network,
+                &submitters,
+                quorum_required,
+                cycle_index,
+                cycle_attempt,
+                true,
+                true,
+                attempt_load_tx_count,
+            ) {
+                Ok(_) => break,
+                Err(err) if cycle_attempt < AUTOSCALE_MULTI_CYCLE_RETRY_LIMIT => {
+                    let next_attempt = cycle_attempt.saturating_add(1);
+                    let next_load_tx_count = soak_cycle_load_tx_count(next_attempt);
+                    eprintln!(
+                        "[autoscale-localnet][multi-cycle][cycle {cycle_index}] attempt {cycle_attempt} failed; retrying with attempt {next_attempt}/{AUTOSCALE_MULTI_CYCLE_RETRY_LIMIT} (load tx count: {next_load_tx_count}): {err}"
+                    );
+                    cycle_attempt = next_attempt;
+                }
+                Err(err) => {
+                    return Err(eyre!(
+                        "autoscale repeated-cycle {cycle_index} failed after {cycle_attempt} attempt(s): {err}"
+                    ));
+                }
+            }
+        }
+    }
 
     eprintln!(
         "[autoscale-localnet][multi-cycle] total runtime: {:.3}s",

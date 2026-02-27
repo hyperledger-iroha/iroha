@@ -12486,6 +12486,7 @@ mod sorafs_tests {
             platform_snapshot: None,
             sender_certificate_id: certificate.certificate_id(),
             sender_signature: Signature::from_bytes(&[0xCD; 64]),
+            build_claim: None,
         };
 
         let native_bytes = receipt.signing_bytes().expect("native signing bytes");

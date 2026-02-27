@@ -257,6 +257,7 @@ Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
 - `nft_set_metadata(NftId*, Json*)`
 - `nft_burn_asset(NftId*)`
 - `authority() -> AccountId*`
+- `trigger_event() -> Json*` (current trigger-event payload; data/by-call trigger context)
 - `register_domain(DomainId*)`
 - `unregister_domain(DomainId*)`
 - `transfer_domain(AccountId*, DomainId*, AccountId*)`

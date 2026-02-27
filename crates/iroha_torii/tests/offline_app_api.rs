@@ -35,9 +35,12 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     offline::{
-        AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineAllowanceCommitment,
-        OfflinePlatformProof, OfflineSpendReceipt, OfflineToOnlineTransfer,
-        OfflineWalletCertificate, OfflineWalletPolicy, compute_receipts_root,
+        ANDROID_PROVISIONED_APP_ID_KEY, AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY,
+        OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY, OFFLINE_LINEAGE_EPOCH_KEY,
+        OFFLINE_LINEAGE_SCOPE_KEY, OfflineAllowanceCommitment, OfflineBuildClaim,
+        OfflineBuildClaimPlatform, OfflinePlatformProof, OfflineSpendReceipt,
+        OfflineToOnlineTransfer, OfflineWalletCertificate, OfflineWalletPolicy,
+        AndroidProvisionedProof, compute_receipts_root,
     },
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec};
@@ -63,6 +66,11 @@ struct Fixtures {
     receipt: OfflineSpendReceipt,
     transfer: OfflineToOnlineTransfer,
 }
+
+const IOS_TEAM_ID_KEY: &str = "ios.app_attest.team_id";
+const IOS_BUNDLE_ID_KEY: &str = "ios.app_attest.bundle_id";
+const IOS_ENVIRONMENT_KEY: &str = "ios.app_attest.environment";
+const ANDROID_PROVISIONED_DEVICE_ID_KEY: &str = "android.provisioned.device_id";
 
 fn build_harness() -> Harness {
     let cfg = test_utils::mk_minimal_root_cfg();
@@ -185,6 +193,8 @@ fn build_fixtures() -> Fixtures {
     let asset_definition =
         AssetDefinitionId::from_str("xor#merchants").expect("asset definition id");
     let allowance_asset = AssetId::new(asset_definition, controller.clone());
+    let lineage_scope = "merchants-main-wallet";
+    let ios_bundle_id = "com.example.merchants";
 
     let mut certificate = OfflineWalletCertificate {
         controller: controller.clone(),
@@ -209,6 +219,42 @@ fn build_fixtures() -> Fixtures {
         attestation_nonce: None,
         refresh_at_ms: None,
     };
+    certificate.metadata.insert(
+        OFFLINE_LINEAGE_SCOPE_KEY
+            .parse::<iroha_data_model::name::Name>()
+            .expect("lineage scope metadata key"),
+        lineage_scope,
+    );
+    certificate.metadata.insert(
+        OFFLINE_LINEAGE_EPOCH_KEY
+            .parse::<iroha_data_model::name::Name>()
+            .expect("lineage epoch metadata key"),
+        "1",
+    );
+    certificate.metadata.insert(
+        OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY
+            .parse::<iroha_data_model::name::Name>()
+            .expect("minimum build metadata key"),
+        "1",
+    );
+    certificate.metadata.insert(
+        IOS_TEAM_ID_KEY
+            .parse::<iroha_data_model::name::Name>()
+            .expect("ios team metadata key"),
+        "TEAM123456",
+    );
+    certificate.metadata.insert(
+        IOS_BUNDLE_ID_KEY
+            .parse::<iroha_data_model::name::Name>()
+            .expect("ios bundle metadata key"),
+        ios_bundle_id,
+    );
+    certificate.metadata.insert(
+        IOS_ENVIRONMENT_KEY
+            .parse::<iroha_data_model::name::Name>()
+            .expect("ios environment metadata key"),
+        "production",
+    );
     certificate.operator_signature = Signature::new(
         operator_keys.private_key(),
         &certificate
@@ -246,7 +292,26 @@ fn build_fixtures() -> Fixtures {
         platform_snapshot: None,
         sender_certificate_id: certificate.certificate_id(),
         sender_signature: Signature::from_bytes(&[0; 64]),
+        build_claim: None,
     };
+    let mut build_claim = OfflineBuildClaim {
+        claim_id: Hash::new(b"claim-1"),
+        platform: OfflineBuildClaimPlatform::Apple,
+        app_id: ios_bundle_id.to_owned(),
+        build_number: 1,
+        issued_at_ms: certificate.issued_at_ms,
+        expires_at_ms: certificate.expires_at_ms,
+        lineage_scope: lineage_scope.to_owned(),
+        nonce: receipt.tx_id,
+        operator_signature: Signature::from_bytes(&[0; 64]),
+    };
+    build_claim.operator_signature = Signature::new(
+        operator_keys.private_key(),
+        &build_claim
+            .signing_bytes()
+            .expect("build claim signing bytes"),
+    );
+    receipt.build_claim = Some(build_claim);
     receipt.sender_signature = Signature::new(
         spend_keys.private_key(),
         &receipt.signing_bytes().expect("receipt signing bytes"),
@@ -273,6 +338,77 @@ fn build_fixtures() -> Fixtures {
         receipt,
         transfer,
     }
+}
+
+fn build_android_provisioned_submission(
+    fixtures: &Fixtures,
+) -> (OfflineWalletCertificate, OfflineToOnlineTransfer) {
+    let app_id = "com.example.merchants.android";
+    let mut certificate = fixtures.certificate.clone();
+    certificate.metadata.insert(
+        ANDROID_PROVISIONED_APP_ID_KEY
+            .parse::<iroha_data_model::name::Name>()
+            .expect("android app id metadata key"),
+        app_id,
+    );
+    let operator_keys = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
+    certificate.operator_signature = Signature::new(
+        operator_keys.private_key(),
+        &certificate
+            .operator_signing_bytes()
+            .expect("certificate signing bytes"),
+    );
+
+    let mut receipt = fixtures.receipt.clone();
+    let mut device_manifest = Metadata::default();
+    device_manifest.insert(
+        ANDROID_PROVISIONED_DEVICE_ID_KEY
+            .parse::<iroha_data_model::name::Name>()
+            .expect("device id metadata key"),
+        "device-android-01",
+    );
+    receipt.platform_proof = OfflinePlatformProof::Provisioned(AndroidProvisionedProof {
+        manifest_schema: "offline_provisioning_v1".to_owned(),
+        manifest_version: Some(1),
+        manifest_issued_at_ms: receipt.issued_at_ms.saturating_sub(1),
+        challenge_hash: Hash::new(b"android-provisioned-challenge"),
+        counter: 1,
+        device_manifest,
+        inspector_signature: Signature::from_bytes(&[0; 64]),
+    });
+    receipt.sender_certificate_id = certificate.certificate_id();
+
+    let mut build_claim = OfflineBuildClaim {
+        claim_id: Hash::new(b"claim-android-provisioned"),
+        platform: OfflineBuildClaimPlatform::Android,
+        app_id: app_id.to_owned(),
+        build_number: 1,
+        issued_at_ms: receipt.issued_at_ms.saturating_sub(1),
+        expires_at_ms: receipt.issued_at_ms + 60_000,
+        lineage_scope: "merchants-main-wallet".to_owned(),
+        nonce: receipt.tx_id,
+        operator_signature: Signature::from_bytes(&[0; 64]),
+    };
+    build_claim.operator_signature = Signature::new(
+        operator_keys.private_key(),
+        &build_claim
+            .signing_bytes()
+            .expect("build claim signing bytes"),
+    );
+    receipt.build_claim = Some(build_claim);
+
+    let spend_keys = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
+    receipt.sender_signature = Signature::new(
+        spend_keys.private_key(),
+        &receipt.signing_bytes().expect("receipt signing bytes"),
+    );
+
+    let mut transfer = fixtures.transfer.clone();
+    transfer.bundle_id = Hash::new(b"bundle-android-provisioned");
+    transfer.receipts = vec![receipt];
+    transfer.balance_proof.claimed_delta = Numeric::new(100, 0);
+
+    (certificate, transfer)
 }
 
 #[tokio::test]
@@ -471,6 +607,128 @@ async fn offline_settlements_submit_persists_settled_record() {
     let mut tx = block.transaction();
     SubmitOfflineToOnlineTransfer {
         transfer: harness.fixtures.transfer.clone(),
+    }
+    .execute(&harness.fixtures.receiver, &mut tx)
+    .expect("materialize settled settlement row");
+    tx.apply();
+    block.commit().expect("commit settled settlement row");
+
+    let mut query_envelope = json::Map::new();
+    query_envelope.insert(
+        "filter".into(),
+        eq_filter("bundle_id_hex", Value::from(expected_bundle.clone())),
+    );
+    query_envelope.insert(
+        "sort".into(),
+        Value::Array(vec![Value::Object({
+            let mut map = json::Map::new();
+            map.insert("key".into(), Value::from("recorded_at_ms"));
+            map.insert("order".into(), Value::from("desc"));
+            map
+        })]),
+    );
+    query_envelope.insert(
+        "pagination".into(),
+        Value::Object({
+            let mut map = json::Map::new();
+            map.insert("limit".into(), Value::from(1u64));
+            map.insert("offset".into(), Value::from(0u64));
+            map
+        }),
+    );
+    query_envelope.insert("fetch_size".into(), Value::from(32u64));
+    let query_body = json::to_vec(&Value::Object(query_envelope)).expect("serialize envelope");
+
+    let query_resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/settlements/query")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(query_body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(query_resp.status(), StatusCode::OK);
+
+    let query_bytes = query_resp
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let query_json: Value = json::from_slice(&query_bytes).expect("json");
+    assert_eq!(query_json["total"].as_u64(), Some(1));
+    let item = &query_json["items"][0];
+    assert_eq!(
+        item["bundle_id_hex"].as_str(),
+        Some(expected_bundle.as_str())
+    );
+    assert_eq!(item["status"].as_str(), Some("settled"));
+    assert!(item["rejection_reason"].is_null());
+    assert!(item["transfer"]["rejection_reason"].is_null());
+}
+
+#[tokio::test]
+async fn offline_settlements_submit_persists_settled_record_for_android_build_claim() {
+    let harness = build_harness();
+    let (certificate, transfer) = build_android_provisioned_submission(&harness.fixtures);
+    seed_allowance(&harness.state, certificate);
+
+    let mut map = json::Map::new();
+    map.insert(
+        "authority".into(),
+        json::to_value(&harness.fixtures.receiver).expect("authority value"),
+    );
+    map.insert(
+        "private_key".into(),
+        Value::from(
+            iroha_crypto::ExposedPrivateKey(harness.fixtures.receiver_keys.private_key().clone())
+                .to_string(),
+        ),
+    );
+    map.insert(
+        "transfer".into(),
+        json::to_value(&transfer.clone()).expect("transfer value"),
+    );
+    let body = json::to_vec(&Value::Object(map)).expect("serialize request");
+
+    let submit_resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/settlements")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(submit_resp.status(), StatusCode::OK);
+
+    let submit_bytes = submit_resp
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let submit_json: Value = json::from_slice(&submit_bytes).expect("json");
+    let expected_bundle = hex::encode(transfer.bundle_id.as_ref());
+    assert_eq!(
+        submit_json["bundle_id_hex"].as_str(),
+        Some(expected_bundle.as_str())
+    );
+
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 1_700_000_200, 0);
+    let mut block = harness.state.block(header);
+    let mut tx = block.transaction();
+    SubmitOfflineToOnlineTransfer {
+        transfer: transfer.clone(),
     }
     .execute(&harness.fixtures.receiver, &mut tx)
     .expect("materialize settled settlement row");
