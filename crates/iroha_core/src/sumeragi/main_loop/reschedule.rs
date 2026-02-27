@@ -6,6 +6,7 @@ use super::*;
 
 const RETRANSMIT_RBC_BYTES_SOFT: u64 = 128 * 1024 * 1024;
 const RETRANSMIT_RBC_BYTES_HARD: u64 = 512 * 1024 * 1024;
+const NEAR_QUORUM_PREEMPTIVE_RECOVERY_PER_TICK: usize = 1;
 
 fn adaptive_quorum_reschedule_backoff(
     base_backoff: Duration,
@@ -204,9 +205,17 @@ impl Actor {
         let mut aborted_expired = Vec::new();
         let mut to_reschedule = Vec::new();
         let mut prevote_timeouts = Vec::new();
+        let mut near_quorum_recovery_candidates: Vec<(
+            super::rbc_store::SessionKey,
+            Duration,
+            Duration,
+            usize,
+            usize,
+        )> = Vec::new();
         let mut reschedule_backoff_skipped = 0usize;
         let mut missing_data_backoff_skipped = 0usize;
         let mut quorum_stall_escalations = 0usize;
+        let mut near_quorum_preemptive_escalations = 0usize;
         let mut stale_removed = 0usize;
         let mut aborted_removed = 0usize;
         for (hash, pending) in &self.pending.pending_blocks {
@@ -414,6 +423,23 @@ impl Actor {
             } else {
                 pending_age
             };
+            let near_quorum_recovery_window = near_quorum_timeout
+                .checked_div(2)
+                .unwrap_or(near_quorum_timeout)
+                .max(Duration::from_millis(200));
+            if near_commit_quorum
+                && missing_local_data
+                && !quorum_reached
+                && progress_stall_age >= near_quorum_recovery_window
+            {
+                near_quorum_recovery_candidates.push((
+                    rbc_key,
+                    progress_stall_age,
+                    near_quorum_recovery_window,
+                    vote_count,
+                    min_votes_for_commit,
+                ));
+            }
             if missing_quorum_stale(quorum_stall_age, effective_quorum_timeout, quorum_reached) {
                 if queue_depths.vote_rx > 0 {
                     debug!(
@@ -597,6 +623,69 @@ impl Actor {
                     stake_quorum_missing,
                     effective_reschedule_backoff,
                 ));
+            }
+        }
+
+        if !near_quorum_recovery_candidates.is_empty() {
+            let fetch_freshness_cap =
+                super::saturating_mul_duration(self.rebroadcast_cooldown(), 2)
+                    .max(Duration::from_millis(1));
+            for (key, progress_stall_age, recovery_window, vote_count, min_votes) in
+                near_quorum_recovery_candidates
+                    .into_iter()
+                    .take(NEAR_QUORUM_PREEMPTIVE_RECOVERY_PER_TICK)
+            {
+                if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
+                    budget_exhausted = true;
+                    break;
+                }
+                if self.pending.pending_blocks.get(&key.0).is_none() {
+                    continue;
+                }
+                if self
+                    .pending
+                    .missing_block_requests
+                    .get(&key.0)
+                    .is_some_and(|request| {
+                        if request.height != key.1 || request.view != key.2 {
+                            return false;
+                        }
+                        let request_age = now.saturating_duration_since(request.last_requested);
+                        let request_window = request.retry_window.max(Duration::from_millis(1));
+                        request_age < request_window.min(fetch_freshness_cap)
+                    })
+                {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        "suppressing duplicate pre-timeout near-quorum escalation while missing-block fetch is still fresh"
+                    );
+                    continue;
+                }
+                if self.should_skip_missing_block_recovery_escalation(key.0, key.1, key.2, now) {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        "suppressing duplicate pre-timeout near-quorum escalation while prior recovery is in-flight"
+                    );
+                    continue;
+                }
+                if self.maybe_escalate_missing_block_height_recovery(key.0, key.1, key.2, now) {
+                    near_quorum_preemptive_escalations =
+                        near_quorum_preemptive_escalations.saturating_add(1);
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        votes = vote_count,
+                        min_votes,
+                        progress_stall_age_ms = progress_stall_age.as_millis(),
+                        escalation_window_ms = recovery_window.as_millis(),
+                        "triggered pre-timeout near-quorum missing-payload recovery escalation"
+                    );
+                }
             }
         }
         let scan_done = Instant::now();
@@ -823,6 +912,7 @@ impl Actor {
                 backoff_skipped = reschedule_backoff_skipped,
                 missing_data_skipped = missing_data_backoff_skipped,
                 stall_escalations = quorum_stall_escalations,
+                near_quorum_preemptive_escalations,
                 budget_exhausted,
                 scan_ms = scan_cost.as_millis(),
                 total_ms = total_cost.as_millis(),

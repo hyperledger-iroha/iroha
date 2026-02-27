@@ -71,7 +71,7 @@ pub(super) struct RbcPlan {
 
 const RBC_PERSIST_WORK_QUEUE_CAP: usize = 8;
 const RBC_PERSIST_RESULT_QUEUE_CAP: usize = 8;
-const RBC_SEED_WORKER_THREADS: usize = 2;
+const RBC_SEED_WORKER_THREADS: usize = 4;
 const RBC_SEED_WORK_QUEUE_CAP: usize = 4 * RBC_SEED_WORKER_THREADS;
 const RBC_SEED_RESULT_QUEUE_CAP: usize = 4 * RBC_SEED_WORKER_THREADS;
 
