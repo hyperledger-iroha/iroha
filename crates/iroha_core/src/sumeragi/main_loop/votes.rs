@@ -1137,19 +1137,14 @@ impl Actor {
                     return false;
                 }
                 None => {
-                    self.clear_missing_block_request(
-                        &highest.subject_block_hash,
-                        MissingBlockClearReason::Obsolete,
-                    );
                     debug!(
                         height = highest.height,
                         view = highest.view,
                         committed_height,
                         highest_hash = %highest.subject_block_hash,
                         source,
-                        "suppressing highest QC missing-block fetch: committed height absent locally"
+                        "committed height hash absent locally; proceeding with highest QC fetch"
                     );
-                    return false;
                 }
                 _ => {}
             }

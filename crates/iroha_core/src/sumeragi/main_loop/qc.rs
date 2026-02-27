@@ -2295,7 +2295,7 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn qc_missing_block_defer(
+    pub(super) fn qc_missing_block_defer(
         &mut self,
         phase: crate::sumeragi::consensus::Phase,
         block_hash: HashOf<BlockHeader>,
@@ -2310,6 +2310,16 @@ impl Actor {
         voting_signers: usize,
         total_signers: usize,
     ) -> bool {
+        fn rebroadcast_targets_for_qc(
+            local_peer: &PeerId,
+            signers: &BTreeSet<ValidatorIndex>,
+            topology: &super::network_topology::Topology,
+        ) -> Vec<PeerId> {
+            let mut targets = Actor::build_fetch_targets(signers, topology);
+            targets.retain(|peer| peer != local_peer);
+            targets
+        }
+
         if !block_known && quorum_met {
             crate::sumeragi::status::inc_qc_quorum_without_qc();
             match consensus_mode {
@@ -2336,6 +2346,94 @@ impl Actor {
                         "stake quorum observed but block payload missing; deferring QC aggregation"
                     );
                 }
+            }
+
+            let now = Instant::now();
+            let cooldown = self.rebroadcast_cooldown();
+            if self.block_sync_fetch_log.allow(block_hash, now, cooldown) {
+                let local_peer = self.common_config.peer.id();
+                let targets = rebroadcast_targets_for_qc(local_peer, signers, signature_topology);
+                let mut payload_rebroadcasted = false;
+                if let Some(block) = self
+                    .pending
+                    .pending_blocks
+                    .get(&block_hash)
+                    .filter(|pending| !pending.aborted)
+                    .map(|pending| pending.block.clone())
+                {
+                    let payload_cooldown = self.payload_rebroadcast_cooldown();
+                    if !self.relay_backpressure_active(now, payload_cooldown)
+                        && self
+                            .payload_rebroadcast_log
+                            .allow(block_hash, now, payload_cooldown)
+                        && !targets.is_empty()
+                    {
+                        self.broadcast_block_created_for_block_sync(
+                            super::message::BlockCreated { block },
+                            &targets,
+                        );
+                        payload_rebroadcasted = true;
+                    }
+                }
+                let mut missing_block_requested = false;
+                if !targets.is_empty() {
+                    self.request_missing_block(
+                        block_hash,
+                        height,
+                        view,
+                        super::MissingBlockPriority::Consensus,
+                        &targets,
+                    );
+                    missing_block_requested = true;
+                    self.note_missing_block_height_attempt(
+                        block_hash,
+                        height,
+                        view,
+                        super::MissingBlockRecoveryStage::HashFetch,
+                        None,
+                        now,
+                    );
+                }
+                let range_pull_allowed = self
+                    .allow_qc_missing_payload_range_pull(height, view, block_hash, now, cooldown);
+                let block_sync_requested = if range_pull_allowed {
+                    self.request_range_pull_from_anchor(
+                        height,
+                        "qc_missing_payload_quorum_fast_recovery",
+                        now,
+                    )
+                } else {
+                    false
+                };
+                if block_sync_requested {
+                    self.note_missing_block_height_attempt(
+                        block_hash,
+                        height,
+                        view,
+                        super::MissingBlockRecoveryStage::RangePullFromAnchor,
+                        None,
+                        now,
+                    );
+                }
+                let range_pull_escalated = self
+                    .maybe_escalate_missing_block_height_recovery(block_hash, height, view, now);
+                let votes_rebroadcasted =
+                    self.rebroadcast_block_votes(phase, block_hash, height, view, true);
+                debug!(
+                    height,
+                    view,
+                    phase = ?phase,
+                    block = %block_hash,
+                    targets = targets.len(),
+                    votes_rebroadcasted,
+                    payload_rebroadcasted,
+                    missing_block_requested,
+                    block_sync_requested,
+                    range_pull_escalated,
+                    range_pull_allowed,
+                    cooldown_ms = cooldown.as_millis(),
+                    "triggered fast payload-missing recovery for quorum-reached QC deferral"
+                );
             }
         }
 

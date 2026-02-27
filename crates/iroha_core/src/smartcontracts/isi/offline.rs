@@ -58,7 +58,7 @@ use iroha_data_model::{
     },
     query::{
         dsl::{CompoundPredicate, EvaluatePredicate},
-        error::QueryExecutionFail,
+        error::{FindError, QueryExecutionFail},
         offline::prelude::{
             FindOfflineAllowanceByCertificateId, FindOfflineAllowances,
             FindOfflineCounterSummaries, FindOfflineToOnlineTransferById,
@@ -426,6 +426,88 @@ fn reserve_offline_allowance(
     state_transaction
         .world
         .deposit_numeric_asset(&escrow_asset, amount)
+}
+
+fn is_allowance_reserve_shortfall(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::Find(FindError::Asset(_)) | Error::Math(MathError::NotEnoughQuantity)
+    )
+}
+
+fn reserve_or_reallocate_allowance(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    certificate: &OfflineWalletCertificate,
+) -> Result<(), Error> {
+    let amount = &certificate.allowance.amount;
+    match reserve_offline_allowance(state_transaction, &certificate.allowance.asset, amount) {
+        Ok(()) => return Ok(()),
+        Err(err) if !is_allowance_reserve_shortfall(&err) => return Err(err),
+        Err(_) => {}
+    }
+
+    let mut candidates = state_transaction
+        .world
+        .offline_allowances
+        .iter()
+        .filter(|(_, record)| {
+            record.certificate.controller == certificate.controller
+                && record.certificate.allowance.asset == certificate.allowance.asset
+                && !record.remaining_amount.is_zero()
+        })
+        .map(|(certificate_id, record)| (*certificate_id, record.registered_at_ms))
+        .collect::<Vec<_>>();
+    candidates.sort_by(
+        |(left_id, left_registered_at), (right_id, right_registered_at)| {
+            right_registered_at
+                .cmp(left_registered_at)
+                .then_with(|| left_id.cmp(right_id))
+        },
+    );
+
+    let mut shortfall = amount.clone();
+    let mut reallocations = Vec::new();
+    for (certificate_id, _) in candidates {
+        if shortfall.is_zero() {
+            break;
+        }
+        let record = state_transaction
+            .world
+            .offline_allowances
+            .get(&certificate_id)
+            .expect("candidate certificate id must remain present");
+        let take = if record.remaining_amount > shortfall {
+            shortfall.clone()
+        } else {
+            record.remaining_amount.clone()
+        };
+        if take.is_zero() {
+            continue;
+        }
+        shortfall = shortfall
+            .checked_sub(take.clone())
+            .ok_or(MathError::NotEnoughQuantity)?;
+        reallocations.push((certificate_id, take));
+    }
+
+    if !shortfall.is_zero() {
+        reserve_offline_allowance(state_transaction, &certificate.allowance.asset, &shortfall)?;
+    }
+
+    for (certificate_id, take) in reallocations {
+        let record = state_transaction
+            .world
+            .offline_allowances
+            .get_mut(&certificate_id)
+            .expect("candidate certificate id must remain present");
+        record.remaining_amount = record
+            .remaining_amount
+            .clone()
+            .checked_sub(take)
+            .ok_or(MathError::NotEnoughQuantity)?;
+    }
+
+    Ok(())
 }
 
 fn ensure_uniform_asset(receipts: &[OfflineSpendReceipt]) -> Result<AssetId, Error> {
@@ -891,11 +973,7 @@ pub mod isi {
             ));
         }
 
-        reserve_offline_allowance(
-            state_transaction,
-            &certificate.allowance.asset,
-            &certificate.allowance.amount,
-        )?;
+        reserve_or_reallocate_allowance(state_transaction, &certificate)?;
         let record = OfflineAllowanceRecord {
             certificate: certificate.clone(),
             current_commitment: certificate.allowance.commitment.clone(),
@@ -3384,6 +3462,268 @@ pub mod isi {
                     .get(&certificate_id)
                     .is_some(),
                 "allowance record must remain when reclaim is rejected"
+            );
+        }
+
+        #[test]
+        fn register_allowance_reissue_reallocates_existing_allowance_without_new_balance() {
+            let now_ms = 1_700_000_500;
+            let mut previous_certificate = sample_certificate();
+            previous_certificate.allowance.amount = Numeric::new(50, 0);
+            previous_certificate.policy.max_balance = Numeric::new(50, 0);
+            previous_certificate.policy.max_tx_value = Numeric::new(50, 0);
+            previous_certificate.issued_at_ms = now_ms - 2_000;
+            previous_certificate.expires_at_ms = now_ms + 10_000;
+            previous_certificate.policy.expires_at_ms = previous_certificate.expires_at_ms;
+            let previous_id = previous_certificate.certificate_id();
+
+            let previous_record = OfflineAllowanceRecord {
+                certificate: previous_certificate.clone(),
+                current_commitment: previous_certificate.allowance.commitment.clone(),
+                registered_at_ms: now_ms - 1_500,
+                remaining_amount: Numeric::new(50, 0),
+                counter_state: OfflineCounterState::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
+
+            let mut reissued_certificate = sample_certificate();
+            reissued_certificate.allowance.amount = Numeric::new(50, 0);
+            reissued_certificate.policy.max_balance = Numeric::new(50, 0);
+            reissued_certificate.policy.max_tx_value = Numeric::new(50, 0);
+            reissued_certificate.allowance.commitment = vec![0xCD; 32];
+            reissued_certificate.issued_at_ms = now_ms - 10;
+            reissued_certificate.expires_at_ms = now_ms + 20_000;
+            reissued_certificate.policy.expires_at_ms = reissued_certificate.expires_at_ms;
+            let reissue_spend = KeyPair::from_seed(vec![0x88; 32], Algorithm::Ed25519);
+            reissued_certificate.spend_public_key = reissue_spend.public_key().clone();
+            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            reissued_certificate.operator_signature = Signature::new(
+                operator_keys.private_key(),
+                &reissued_certificate
+                    .operator_signing_bytes()
+                    .expect("certificate signing bytes"),
+            );
+            let reissued_id = reissued_certificate.certificate_id();
+
+            let controller = reissued_certificate.controller.clone();
+            let escrow = sample_account(0x02, "offline");
+            let definition_id = reissued_certificate.allowance.asset.definition().clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let escrow_asset = Asset::new(
+                AssetId::new(definition_id.clone(), escrow.clone()),
+                Numeric::new(50, 0),
+            );
+            let mut world = World::with_assets(
+                [domain],
+                [controller_account, escrow_account],
+                [asset_definition],
+                [escrow_asset],
+                [],
+            );
+            world
+                .offline_allowances
+                .insert(previous_id, previous_record);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow.clone());
+
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, now_ms, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            register_allowance(
+                RegisterOfflineAllowance {
+                    certificate: reissued_certificate,
+                },
+                &controller,
+                &mut transaction,
+            )
+            .expect("reissue register should reuse existing reserved amount");
+
+            let previous = transaction
+                .world
+                .offline_allowances
+                .get(&previous_id)
+                .expect("previous record must remain");
+            assert_eq!(
+                previous.remaining_amount,
+                Numeric::zero(),
+                "reissue should consume remaining amount from previous allowance",
+            );
+
+            let reissued = transaction
+                .world
+                .offline_allowances
+                .get(&reissued_id)
+                .expect("reissued allowance must be registered");
+            assert_eq!(reissued.remaining_amount, Numeric::new(50, 0));
+
+            let escrow_balance = transaction
+                .world
+                .assets
+                .get(&AssetId::new(definition_id.clone(), escrow))
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(
+                escrow_balance,
+                Numeric::new(50, 0),
+                "reissue should not require extra escrow funding",
+            );
+
+            let controller_balance = transaction
+                .world
+                .assets
+                .get(&AssetId::new(definition_id, controller))
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(
+                controller_balance,
+                Numeric::zero(),
+                "controller balance should stay unchanged when reissuing in-place",
+            );
+        }
+
+        #[test]
+        fn register_allowance_reissue_uses_existing_capacity_then_reserves_shortfall() {
+            let now_ms = 1_700_000_500;
+            let mut previous_certificate = sample_certificate();
+            previous_certificate.allowance.amount = Numeric::new(30, 0);
+            previous_certificate.policy.max_balance = Numeric::new(30, 0);
+            previous_certificate.policy.max_tx_value = Numeric::new(30, 0);
+            previous_certificate.issued_at_ms = now_ms - 2_000;
+            previous_certificate.expires_at_ms = now_ms + 10_000;
+            previous_certificate.policy.expires_at_ms = previous_certificate.expires_at_ms;
+            let previous_id = previous_certificate.certificate_id();
+
+            let previous_record = OfflineAllowanceRecord {
+                certificate: previous_certificate.clone(),
+                current_commitment: previous_certificate.allowance.commitment.clone(),
+                registered_at_ms: now_ms - 1_500,
+                remaining_amount: Numeric::new(30, 0),
+                counter_state: OfflineCounterState::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
+
+            let mut reissued_certificate = sample_certificate();
+            reissued_certificate.allowance.amount = Numeric::new(50, 0);
+            reissued_certificate.policy.max_balance = Numeric::new(50, 0);
+            reissued_certificate.policy.max_tx_value = Numeric::new(50, 0);
+            reissued_certificate.allowance.commitment = vec![0xEF; 32];
+            reissued_certificate.issued_at_ms = now_ms - 10;
+            reissued_certificate.expires_at_ms = now_ms + 20_000;
+            reissued_certificate.policy.expires_at_ms = reissued_certificate.expires_at_ms;
+            let reissue_spend = KeyPair::from_seed(vec![0x99; 32], Algorithm::Ed25519);
+            reissued_certificate.spend_public_key = reissue_spend.public_key().clone();
+            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            reissued_certificate.operator_signature = Signature::new(
+                operator_keys.private_key(),
+                &reissued_certificate
+                    .operator_signing_bytes()
+                    .expect("certificate signing bytes"),
+            );
+            let reissued_id = reissued_certificate.certificate_id();
+
+            let controller = reissued_certificate.controller.clone();
+            let escrow = sample_account(0x02, "offline");
+            let definition_id = reissued_certificate.allowance.asset.definition().clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let controller_asset = Asset::new(
+                AssetId::new(definition_id.clone(), controller.clone()),
+                Numeric::new(20, 0),
+            );
+            let escrow_asset = Asset::new(
+                AssetId::new(definition_id.clone(), escrow.clone()),
+                Numeric::new(30, 0),
+            );
+            let mut world = World::with_assets(
+                [domain],
+                [controller_account, escrow_account],
+                [asset_definition],
+                [controller_asset, escrow_asset],
+                [],
+            );
+            world
+                .offline_allowances
+                .insert(previous_id, previous_record);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow.clone());
+
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, now_ms, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            register_allowance(
+                RegisterOfflineAllowance {
+                    certificate: reissued_certificate,
+                },
+                &controller,
+                &mut transaction,
+            )
+            .expect("reissue register should reserve only the remaining shortfall");
+
+            let previous = transaction
+                .world
+                .offline_allowances
+                .get(&previous_id)
+                .expect("previous record must remain");
+            assert_eq!(previous.remaining_amount, Numeric::zero());
+
+            let reissued = transaction
+                .world
+                .offline_allowances
+                .get(&reissued_id)
+                .expect("reissued allowance must be registered");
+            assert_eq!(reissued.remaining_amount, Numeric::new(50, 0));
+
+            let escrow_balance = transaction
+                .world
+                .assets
+                .get(&AssetId::new(definition_id.clone(), escrow))
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(
+                escrow_balance,
+                Numeric::new(50, 0),
+                "escrow balance should reflect reused capacity plus reserved shortfall",
+            );
+
+            let controller_balance = transaction
+                .world
+                .assets
+                .get(&AssetId::new(definition_id, controller))
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(
+                controller_balance,
+                Numeric::zero(),
+                "controller should fund only the uncovered shortfall",
             );
         }
 
@@ -7156,6 +7496,25 @@ mod attestation {
         Ok(verifying_key)
     }
 
+    fn decode_app_attest_nonce_extension(
+        nonce_ext_der: &[u8],
+    ) -> Result<Vec<u8>, yasna::ASN1Error> {
+        // Apple production App Attest encodes the nonce as:
+        //   SEQUENCE { SEQUENCE { [0] EXPLICIT OCTET STRING { <nonce> } } }
+        // Keep legacy plain OCTET STRING support for backwards compatibility with older test
+        // fixtures and development certificates.
+        yasna::parse_der(nonce_ext_der, |reader| {
+            reader.read_sequence(|seq| {
+                seq.next().read_sequence(|inner| {
+                    inner
+                        .next()
+                        .read_tagged(yasna::Tag::context(0), |tag_reader| tag_reader.read_bytes())
+                })
+            })
+        })
+        .or_else(|_| yasna::parse_der(nonce_ext_der, |reader| reader.read_bytes()))
+    }
+
     fn verify_attestation_nonce(
         leaf_der: &[u8],
         auth_data: &[u8],
@@ -7185,13 +7544,11 @@ mod attestation {
                     "app attest leaf certificate missing nonce extension".into(),
                 )
             })?;
-        #[allow(clippy::redundant_closure_for_method_calls)]
-        let nonce_bytes =
-            yasna::parse_der(nonce_ext.value, |reader| reader.read_bytes()).map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("failed to decode app attest nonce extension: {err}").into(),
-                )
-            })?;
+        let nonce_bytes = decode_app_attest_nonce_extension(nonce_ext.value).map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!("failed to decode app attest nonce extension: {err}").into(),
+            )
+        })?;
         if nonce_bytes.as_slice() != expected {
             return Err(InstructionExecutionError::InvariantViolation(
                 "app attest nonce does not match transaction challenge".into(),
@@ -7766,6 +8123,12 @@ mod attestation {
         pub(super) const ANDROID_KEY_DESCRIPTION_OID: &[u64] = &[1, 3, 6, 1, 4, 1, 11129, 2, 1, 17];
         const TEST_CHAIN_ID: &str = "testnet";
 
+        #[derive(Clone, Copy)]
+        enum AppleNonceExtensionFormat {
+            ProductionDerSequence,
+            LegacyOctetString,
+        }
+
         fn sample_chain_id() -> ChainId {
             TEST_CHAIN_ID.parse().expect("chain id")
         }
@@ -7805,6 +8168,52 @@ mod attestation {
                 None,
             )
             .unwrap();
+        }
+
+        #[test]
+        fn app_attest_nonce_extension_fixture_der_decodes_both_formats() {
+            const EXPECTED_NONCE: [u8; 32] = [
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+                0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B,
+                0x1C, 0x1D, 0x1E, 0x1F,
+            ];
+            const PRODUCTION_DER: [u8; 40] = [
+                0x30, 0x26, 0x30, 0x24, 0xA0, 0x22, 0x04, 0x20, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
+                0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13,
+                0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+            ];
+            const LEGACY_DER: [u8; 34] = [
+                0x04, 0x20, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,
+                0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19,
+                0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+            ];
+
+            assert_eq!(
+                decode_app_attest_nonce_extension(&PRODUCTION_DER).expect("production DER decode"),
+                EXPECTED_NONCE,
+            );
+            assert_eq!(
+                decode_app_attest_nonce_extension(&LEGACY_DER).expect("legacy DER decode"),
+                EXPECTED_NONCE,
+            );
+        }
+
+        #[test]
+        fn apple_attestation_accepts_legacy_nonce_extension() {
+            let fixture = AppleFixture::new_with_nonce_extension(
+                AppleNonceExtensionFormat::LegacyOctetString,
+            );
+            let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
+            verify_platform_proof(
+                &fixture.receipt,
+                &fixture.certificate,
+                &chain_id,
+                fixture.certificate.issued_at_ms + 1_000,
+                &cfg,
+                None,
+            )
+            .expect("legacy nonce extension should stay supported");
         }
 
         #[test]
@@ -8495,6 +8904,10 @@ mod attestation {
 
         impl AppleFixture {
             fn new() -> Self {
+                Self::new_with_nonce_extension(AppleNonceExtensionFormat::ProductionDerSequence)
+            }
+
+            fn new_with_nonce_extension(nonce_extension: AppleNonceExtensionFormat) -> Self {
                 static CHAIN: LazyLock<TestChain> = LazyLock::new(TestChain::generate);
                 register_test_apple_root(CHAIN.root_der);
 
@@ -8516,6 +8929,7 @@ mod attestation {
                     &CHAIN.credential_id,
                     &CHAIN.rp_id_hash,
                     &challenge.client_data_hash,
+                    nonce_extension,
                 );
                 Self {
                     certificate,
@@ -8706,6 +9120,7 @@ mod attestation {
             credential_id: &[u8],
             rp_id_hash: &[u8; 32],
             client_data_hash: &[u8; 32],
+            nonce_extension: AppleNonceExtensionFormat,
         ) -> Vec<u8> {
             let mut auth_data = Vec::new();
             auth_data.extend_from_slice(rp_id_hash);
@@ -8722,9 +9137,26 @@ mod attestation {
             nonce_digest.update(&auth_data);
             nonce_digest.update(client_data_hash);
             let nonce = nonce_digest.finalize();
-            let nonce_der = yasna::construct_der(|writer| {
-                writer.write_bytes(&nonce);
-            });
+            let nonce_der = match nonce_extension {
+                AppleNonceExtensionFormat::ProductionDerSequence => {
+                    // Match Apple production App Attest nonce extension format:
+                    // SEQUENCE { SEQUENCE { [0] EXPLICIT OCTET STRING { <nonce> } } }
+                    yasna::construct_der(|writer| {
+                        writer.write_sequence(|seq| {
+                            seq.next().write_sequence(|inner| {
+                                inner
+                                    .next()
+                                    .write_tagged(yasna::Tag::context(0), |tag_writer| {
+                                        tag_writer.write_bytes(&nonce);
+                                    });
+                            });
+                        });
+                    })
+                }
+                AppleNonceExtensionFormat::LegacyOctetString => {
+                    yasna::construct_der(|writer| writer.write_bytes(&nonce))
+                }
+            };
 
             let mut params = CertificateParams::new(vec![]).expect("leaf params");
             params.distinguished_name = TestChain::dn("Leaf");
