@@ -2519,11 +2519,11 @@ mod measured_bytes_impls {
         governance::state::ParliamentTerm,
         state::{
             ElectionState, FrontierCheckpoint, GovernanceLockRecord, GovernanceLocksForReferendum,
-            GovernancePipeline, GovernanceProposalRecord, GovernanceProposalStatus,
-            GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
-            GovernanceSlashEntry, GovernanceSlashLedger, GovernanceStage, GovernanceStageApproval,
-            GovernanceStageApprovals, GovernanceStageFailure, GovernanceStageRecord, ZkAssetState,
-            ZkAssetVerifierBinding,
+            GovernanceParliamentSnapshot, GovernancePipeline, GovernanceProposalRecord,
+            GovernanceProposalStatus, GovernanceReferendumMode, GovernanceReferendumRecord,
+            GovernanceReferendumStatus, GovernanceSlashEntry, GovernanceSlashLedger,
+            GovernanceStage, GovernanceStageApproval, GovernanceStageApprovals,
+            GovernanceStageFailure, GovernanceStageRecord, ZkAssetState, ZkAssetVerifierBinding,
         },
     };
 
@@ -3413,6 +3413,17 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for GovernanceParliamentSnapshot {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<GovernanceParliamentSnapshot>();
+            total = total.saturating_add(self.selection_epoch.measured_bytes_extra());
+            total = total.saturating_add(self.beacon.measured_bytes_extra());
+            total = total.saturating_add(self.roster_root.measured_bytes_extra());
+            total = total.saturating_add(self.bodies.measured_bytes_extra());
+            total
+        }
+    }
+
     impl MeasuredBytes for GovernanceProposalRecord {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceProposalRecord>();
@@ -3421,6 +3432,7 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.created_height.measured_bytes_extra());
             total = total.saturating_add(self.status.measured_bytes_extra());
             total = total.saturating_add(self.pipeline.measured_bytes_extra());
+            total = total.saturating_add(self.parliament_snapshot.measured_bytes_extra());
             total
         }
     }

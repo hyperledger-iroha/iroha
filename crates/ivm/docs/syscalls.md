@@ -272,6 +272,11 @@ VRF
   - Verifies each item; on success returns a Norito-encoded vector of 32‑byte outputs (order preserved). On failure, returns `r10=0`, `r11` = error code, `r12` = index (0‑based) of the first failing item.
   - If the host is configured with a chain_id, all items must match it; otherwise batch fails with `r11=8 (chain_mismatch)` and `r12` set to the first offending index.
 
+- 0x7E VRF_EPOCH_SEED — Args: `r10=&NoritoBytes(VrfEpochSeedRequest{epoch:u64, fallback_to_latest:bool})` → Return: `r10=ptr (&NoritoBytes(VrfEpochSeedResponse{found:bool, epoch:u64, seed:[u8;32]}))`, `r11=status:u64` — Gas: G_vote_get
+  - Reads a world-snapshot VRF epoch seed for governance/sortition use in smart contracts.
+  - If `fallback_to_latest=true` and the requested epoch is missing, the host returns the latest known epoch seed.
+  - Status codes: `0=ok`, `1=type_mismatch`, `2=decode_error`, `3=oom`.
+
 Host gating & chain binding
 - When a host `chain_id` is configured, requests must match it. Otherwise:
   - Single: `r11=8 (chain_mismatch)` and `r10=0`.
@@ -383,6 +388,7 @@ but they must not change the host ABI.
 | 0x7B | JSON_GET_ACCOUNT_ID | - | - | - |
 | 0x7C | JSON_GET_NFT_ID | - | - | - |
 | 0x7D | JSON_GET_BLOB_HEX | - | - | - |
+| 0x7E | VRF_EPOCH_SEED | - | - | - |
 | 0x90 | SM3_HASH | - | - | - |
 | 0x91 | SM2_VERIFY | - | - | - |
 | 0x92 | SM4_GCM_SEAL | - | - | - |
@@ -418,6 +424,7 @@ but they must not change the host ABI.
 | 0xFE | COMMIT_OUTPUT | - | - | - |
 | 0xFF | GET_REGISTER_MERKLE_COMPACT | - | - | - |
 <!-- END GENERATED SYSCALLS -->
+
 
 
 

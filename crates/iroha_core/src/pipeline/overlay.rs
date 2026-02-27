@@ -671,6 +671,7 @@ where
             host.hydrate_axt_replay_ledger(state_ro);
             host.set_durable_state_snapshot_from_world(state_ro.world());
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
+            host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
             let snapshot = state_ro.axt_policy_snapshot();
             host = host.with_axt_policy_snapshot(&snapshot);
@@ -914,6 +915,7 @@ where
             host.hydrate_axt_replay_ledger(state_ro);
             host.set_durable_state_snapshot_from_world(state_ro.world());
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
+            host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
             let snapshot = state_ro.axt_policy_snapshot();
             host = host.with_axt_policy_snapshot(&snapshot);
@@ -4169,6 +4171,7 @@ where
     host.hydrate_axt_replay_ledger(state_ro);
     host.set_durable_state_snapshot_from_world(state_ro.world());
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
+    host.set_vrf_epoch_seeds_from_world(state_ro.world());
     host.set_query_state(state_ro);
     let snapshot = state_ro.axt_policy_snapshot();
     host = host.with_axt_policy_snapshot(&snapshot);
@@ -4636,6 +4639,7 @@ where
     host.hydrate_axt_replay_ledger(state_ro);
     host.set_durable_state_snapshot_from_world(state_ro.world());
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
+    host.set_vrf_epoch_seeds_from_world(state_ro.world());
     host.set_query_state(state_ro);
     let snapshot = state_ro.axt_policy_snapshot();
     host = host.with_axt_policy_snapshot(&snapshot);
