@@ -3165,6 +3165,22 @@ pub struct GovernanceProposalRecord {
     /// Pipeline stage statuses for SLA enforcement.
     #[norito(default)]
     pub pipeline: GovernancePipeline,
+    /// Proposal-time parliament draw snapshot used for JIT sortition approvals.
+    #[norito(default)]
+    pub parliament_snapshot: Option<GovernanceParliamentSnapshot>,
+}
+
+/// Proposal-time parliament draw snapshot.
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
+pub struct GovernanceParliamentSnapshot {
+    /// Selection epoch/round identifier bound to this proposal.
+    pub selection_epoch: u64,
+    /// Deterministic 32-byte beacon used to derive body rosters.
+    pub beacon: [u8; 32],
+    /// Blake2b-32 commitment of the encoded [`ParliamentBodies`] payload.
+    pub roster_root: [u8; 32],
+    /// Multi-body roster snapshot bound to this proposal.
+    pub bodies: iroha_data_model::governance::types::ParliamentBodies,
 }
 
 impl GovernanceProposalRecord {
@@ -3190,6 +3206,14 @@ impl GovernanceProposalRecord {
             }
             iroha_data_model::governance::types::ProposalKind::DeployContract(_) => None,
         }
+    }
+
+    /// Resolve which approval epoch should gate stage quorum checks.
+    #[must_use]
+    pub fn approval_epoch(&self, fallback_epoch: u64) -> u64 {
+        self.parliament_snapshot
+            .as_ref()
+            .map_or(fallback_epoch, |snapshot| snapshot.selection_epoch)
     }
 }
 
@@ -3544,7 +3568,7 @@ fn update_governance_pipeline_slas(
     gov_cfg: &iroha_config::parameters::actual::Governance,
 ) {
     let trace_pipeline = gov_cfg.debug_trace_pipeline;
-    let council_epoch = now_h
+    let fallback_epoch = now_h
         .saturating_sub(1)
         .saturating_div(gov_cfg.parliament_term_blocks.max(1));
     let proposals: Vec<([u8; 32], GovernanceProposalRecord)> = wtx
@@ -3561,21 +3585,22 @@ fn update_governance_pipeline_slas(
         let mut changed = false;
         trace_pipeline_proposal(trace_pipeline, &rid_hex, &rec);
         let approvals_view = wtx.governance_stage_approvals.get(&rid_hex);
+        let approval_epoch = rec.approval_epoch(fallback_epoch);
         let approvals = StageApprovals::from_readiness(StageReadiness([
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::RulesCommittee, council_epoch)
+                approvals.quorum_met(ParliamentBody::RulesCommittee, approval_epoch)
             }),
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::AgendaCouncil, council_epoch)
+                approvals.quorum_met(ParliamentBody::AgendaCouncil, approval_epoch)
             }),
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::InterestPanel, council_epoch)
+                approvals.quorum_met(ParliamentBody::InterestPanel, approval_epoch)
             }),
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::ReviewPanel, council_epoch)
+                approvals.quorum_met(ParliamentBody::ReviewPanel, approval_epoch)
             }),
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::PolicyJury, council_epoch)
+                approvals.quorum_met(ParliamentBody::PolicyJury, approval_epoch)
             }),
         ]));
         let ctx = StageContext {
@@ -3887,7 +3912,7 @@ impl GovernanceStageApprovals {
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
 pub struct GovernanceStageApproval {
-    /// Epoch of the council that provided approvals.
+    /// Selection epoch/round for the roster that provided approvals.
     pub epoch: u64,
     /// Recorded approvers.
     #[norito(default)]
@@ -11391,6 +11416,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> &mut StorageTransaction<'block, 'world, [u8; 32], GovernanceProposalRecord> {
         &mut self.governance_proposals
     }
+    /// Test helper: get mutable access to citizenship storage for direct seeding.
+    pub fn citizens_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, AccountId, CitizenshipRecord> {
+        &mut self.citizens
+    }
     /// Test helper: get mutable access to stored proof records for direct seeding.
     pub fn proofs_mut_for_testing(
         &mut self,
@@ -13945,7 +13976,7 @@ impl State {
                 }
             }
             let term_blocks = sb.gov.parliament_term_blocks.max(1);
-            let council_epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
+            let fallback_epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
             // Collect candidates to open (avoid borrow conflicts)
             let to_open: Vec<(String, u64, u64)> = wtx
                 .governance_referenda
@@ -13957,50 +13988,49 @@ impl State {
                     if rec.h_start > now_h || now_h > rec.h_end {
                         return None;
                     }
-                    let approved =
-                        wtx.governance_stage_approvals
-                            .get(rid)
-                            .is_some_and(|approval| {
-                                let proposal_kind = hex::decode(rid.trim_start_matches("0x"))
-                                    .ok()
-                                    .and_then(|bytes| {
-                                        if bytes.len() != 32 {
-                                            return None;
-                                        }
-                                        let mut id = [0u8; 32];
-                                        id.copy_from_slice(&bytes);
-                                        wtx.governance_proposals
-                                            .get(&id)
-                                            .map(|proposal| proposal.kind.clone())
-                                    });
-                                match proposal_kind {
-                                    Some(
-                                        iroha_data_model::governance::types::ProposalKind::DeployContract(_),
-                                    ) => {
-                                        approval.quorum_met(
-                                            ParliamentBody::RulesCommittee,
-                                            council_epoch,
-                                        ) && approval.quorum_met(
-                                            ParliamentBody::AgendaCouncil,
-                                            council_epoch,
-                                        )
+                    let approved = wtx
+                        .governance_stage_approvals
+                        .get(rid)
+                        .is_some_and(|approval| {
+                            let proposal = hex::decode(rid.trim_start_matches("0x"))
+                                .ok()
+                                .and_then(|bytes| {
+                                    if bytes.len() != 32 {
+                                        return None;
                                     }
-                                    Some(
-                                        iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_),
-                                    ) => [
-                                        ParliamentBody::RulesCommittee,
-                                        ParliamentBody::AgendaCouncil,
-                                        ParliamentBody::InterestPanel,
-                                        ParliamentBody::ReviewPanel,
-                                        ParliamentBody::PolicyJury,
-                                        ParliamentBody::OversightCommittee,
-                                        ParliamentBody::FmaCommittee,
-                                    ]
-                                    .into_iter()
-                                    .all(|body| approval.quorum_met(body, council_epoch)),
-                                    None => false,
+                                    let mut id = [0u8; 32];
+                                    id.copy_from_slice(&bytes);
+                                    wtx.governance_proposals.get(&id).cloned()
+                                });
+                            match proposal {
+                                Some(proposal) => {
+                                    let approval_epoch = proposal.approval_epoch(fallback_epoch);
+                                    match proposal.kind {
+                                        iroha_data_model::governance::types::ProposalKind::DeployContract(_) => {
+                                            approval.quorum_met(
+                                                ParliamentBody::RulesCommittee,
+                                                approval_epoch,
+                                            ) && approval.quorum_met(
+                                                ParliamentBody::AgendaCouncil,
+                                                approval_epoch,
+                                            )
+                                        }
+                                        iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_) => [
+                                            ParliamentBody::RulesCommittee,
+                                            ParliamentBody::AgendaCouncil,
+                                            ParliamentBody::InterestPanel,
+                                            ParliamentBody::ReviewPanel,
+                                            ParliamentBody::PolicyJury,
+                                            ParliamentBody::OversightCommittee,
+                                            ParliamentBody::FmaCommittee,
+                                        ]
+                                        .into_iter()
+                                        .all(|body| approval.quorum_met(body, approval_epoch)),
+                                    }
                                 }
-                            });
+                                None => false,
+                            }
+                        });
                     if approved {
                         Some((rid.clone(), rec.h_start, rec.h_end))
                     } else {
@@ -22499,6 +22529,7 @@ impl StateTransaction<'_, '_> {
                     host.set_chain_id(self.chain_id());
                     host.set_durable_state_snapshot_from_world(&self.world);
                     host.set_public_inputs_from_parameters(self.world.parameters.get());
+                    host.set_vrf_epoch_seeds_from_world(&self.world);
                     host.set_query_state(self);
                     host.set_zk_snapshots_from_world(&self.world, &self.zk)
                         .map_err(|e| {

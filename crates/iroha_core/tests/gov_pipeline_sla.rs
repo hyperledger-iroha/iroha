@@ -57,6 +57,7 @@ fn pipeline_rejects_when_referendum_missing_at_study_deadline() {
             created_height: 1,
             status: GovernanceProposalStatus::Proposed,
             pipeline: GovernancePipeline::seeded(1, None, &tx1.gov),
+            parliament_snapshot: None,
         },
     );
     let mut approvals = GovernanceStageApprovals::default();
@@ -135,6 +136,7 @@ fn pipeline_marks_enactment_overdue() {
             created_height: 1,
             status: GovernanceProposalStatus::Approved,
             pipeline: GovernancePipeline::seeded(1, referendum_snapshot.as_ref(), &tx1.gov),
+            parliament_snapshot: None,
         },
     );
     let mut approvals = GovernanceStageApprovals::default();
@@ -202,6 +204,7 @@ fn pipeline_rejects_when_rules_quorum_missing() {
             created_height: 1,
             status: GovernanceProposalStatus::Proposed,
             pipeline: GovernancePipeline::seeded(1, None, &tx1.gov),
+            parliament_snapshot: None,
         },
     );
     tx1.apply();

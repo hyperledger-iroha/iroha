@@ -14,6 +14,7 @@ use iroha_core::{
     gas as isi_gas,
     kura::Kura,
     query::store::LiveQueryStore,
+    smartcontracts::Execute,
     state::{State, World},
 };
 use iroha_data_model::{
@@ -106,7 +107,15 @@ fn setup_none(_state: &mut BenchState) {}
 fn setup_role_exists(state: &mut BenchState) {
     let role_id: RoleId = "bench_role".parse().expect("role id");
     let new_role = Role::new(role_id, state.ctx.recipient.clone());
-    state.apply_instrs([Register::role(new_role).into()]);
+    let mut block = state.state.block(bench_block_header());
+    let mut tx = block.transaction();
+    // Bootstrap-only path: bypass initial-executor permission checks so the
+    // `GrantAccountRole` benchmark can measure grant cost instead of setup auth.
+    Register::role(new_role)
+        .execute(&state.ctx.authority, &mut tx)
+        .expect("setup role registration");
+    tx.apply();
+    block.commit().expect("setup block commit");
 }
 
 fn setup_role_assigned(state: &mut BenchState) {
