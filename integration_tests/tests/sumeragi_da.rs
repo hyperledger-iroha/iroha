@@ -633,9 +633,15 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
             submit_log_to_any_peer(&peers, message).await?;
             submitted = submitted.saturating_add(1);
 
-            network
-                .ensure_blocks_with(|height| height.total >= expected_height)
-                .await?;
+            timeout(da_commit_wait_timeout(), peer.once_block(expected_height))
+                .await
+                .map_err(|_| {
+                    eyre!(
+                        "peer {} did not reach expected height {expected_height} within {:?}",
+                        peer.mnemonic(),
+                        da_commit_wait_timeout()
+                    )
+                })?;
 
             let bytes = fs::read(&index_path).wrap_err("read blocks.index")?;
             ensure!(

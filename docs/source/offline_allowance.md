@@ -1289,7 +1289,8 @@ recording the attempt in their journals.【IrohaSwift/Sources/IrohaSwift/Offline
 - **App Attest verification.** `verify_apple_attestation` parses the operator-provided attestation
   report, pins the Apple trust anchors, recomputes the nonce derived from the receipt payload, and
   enforces that the monotonic counter advances exactly once per spend before accepting the
-  proof.【crates/iroha_core/src/smartcontracts/isi/offline.rs:1034】
+  proof. Nonce-extension decoding accepts both Apple production DER wrappers and the legacy plain
+  OCTET STRING form used by older fixtures/tools.【crates/iroha_core/src/smartcontracts/isi/offline.rs:1034】
 - **Android KeyMint verification.** `verify_android_attestation` decodes the X.509 chain, validates
   the KeyDescription (parsing `attestationApplicationId`, StrongBox/rollback flags, alias metadata),
   and optionally enforces marker-key signatures so marker series + counters remain bound to the
