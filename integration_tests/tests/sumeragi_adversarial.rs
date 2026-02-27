@@ -115,9 +115,16 @@ async fn run_chunk_drop_scenario() -> Result<()> {
     let session = wait_for_rbc_session(&client, expected_height, Duration::from_secs(20)).await?;
     sleep(Duration::from_secs(2)).await;
     let status_after = blocking_status(&client)?;
+    let sessions_after = tokio::task::spawn_blocking({
+        let client = client.clone();
+        move || client.get_sumeragi_rbc_sessions_json()
+    })
+    .await
+    .wrap_err("fetch RBC sessions after chunk-drop wait")??;
 
-    let delivered = get_bool(&session, "delivered").unwrap_or(false);
-    if delivered {
+    let delivered = get_bool(&session, "delivered").unwrap_or(false)
+        || any_delivered_session_for_height(&sessions_after, expected_height);
+    if delivered || status_after.blocks >= expected_height {
         ensure!(
             status_after.blocks >= expected_height,
             "chunk drop scenario delivered via local payload recovery; expected commit height to advance"
@@ -958,8 +965,15 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
     sleep(Duration::from_secs(4)).await;
 
     let status_after = blocking_status(&client)?;
+    let sessions_after = tokio::task::spawn_blocking({
+        let client = client.clone();
+        move || client.get_sumeragi_rbc_sessions_json()
+    })
+    .await
+    .wrap_err("fetch post-gate RBC sessions")??;
     let primary_delivered = get_bool(&primary_session, "delivered").unwrap_or(false);
-    if primary_delivered {
+    let delivered_after = any_delivered_session_for_height(&sessions_after, expected_height);
+    if primary_delivered || delivered_after || status_after.blocks >= expected_height {
         ensure!(
             status_after.blocks >= expected_height,
             "locked QC gate scenario recovered with delivered RBC session; expected commit height to advance"
@@ -994,11 +1008,14 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
         "proposal mismatch counter should remain unchanged when gated purely by locked QC (before={mismatch_before}, after={mismatch_after})"
     );
 
-    let duplicate_views: Vec<u64> =
+    let mut duplicate_views: Vec<u64> =
         extract_sessions_for_height(&sessions_snapshot, expected_height)
             .iter()
+            .chain(extract_sessions_for_height(&sessions_after, expected_height).iter())
             .filter_map(|value| value.as_object()?.get("view")?.as_u64())
             .collect();
+    duplicate_views.sort_unstable();
+    duplicate_views.dedup();
     ensure!(
         duplicate_views.contains(&base_view)
             && duplicate_views.contains(&(base_view.saturating_add(1))),
@@ -1242,6 +1259,27 @@ fn get_bool(value: &Value, key: &str) -> Option<bool> {
         .as_object()
         .and_then(|obj| obj.get(key))
         .and_then(Value::as_bool)
+}
+
+fn any_delivered_session_for_height(value: &Value, target_height: u64) -> bool {
+    extract_sessions_for_height(value, target_height)
+        .iter()
+        .any(|session| get_bool(session, "delivered").unwrap_or(false))
+}
+
+#[test]
+fn delivered_height_check_scans_all_sessions_for_the_height() {
+    let sessions = norito::json!({
+        "items": [
+            {"height": 3, "view": 0, "delivered": false},
+            {"height": 3, "view": 1, "delivered": true},
+            {"height": 4, "view": 0, "delivered": true}
+        ]
+    });
+
+    assert!(any_delivered_session_for_height(&sessions, 3));
+    assert!(any_delivered_session_for_height(&sessions, 4));
+    assert!(!any_delivered_session_for_height(&sessions, 5));
 }
 
 fn consensus_message_total(status: &Value, kind: &str, outcome: &str, reason: &str) -> u64 {

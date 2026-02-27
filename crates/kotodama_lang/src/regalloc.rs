@@ -366,6 +366,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | SubscriptionRecordUsage
         | DataRef { .. }
         | GetAuthority { .. }
+        | GetTriggerEvent { .. }
         | TransferBatchBegin
         | TransferBatchEnd => {}
         Binary { left, right, .. } => {
@@ -775,6 +776,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::Valcom { dest, .. }
         | Instr::MapNew { dest }
         | Instr::GetAuthority { dest }
+        | Instr::GetTriggerEvent { dest }
         | Instr::Copy { dest, .. }
         | Instr::PointerFromString { dest, .. }
         | Instr::PointerToNorito { dest, .. }

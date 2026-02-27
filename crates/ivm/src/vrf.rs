@@ -26,3 +26,24 @@ pub struct VrfVerifyBatchRequest {
     /// Items to verify in order; outputs preserve input order.
     pub items: Vec<VrfVerifyRequest>,
 }
+
+/// Request envelope for reading a persisted VRF epoch seed snapshot.
+#[derive(norito::Encode, norito::Decode)]
+pub struct VrfEpochSeedRequest {
+    /// Epoch to fetch from world snapshot storage.
+    pub epoch: u64,
+    /// If true and `epoch` is missing, return the latest known epoch seed.
+    #[norito(default)]
+    pub fallback_to_latest: bool,
+}
+
+/// Response envelope for `VrfEpochSeedRequest`.
+#[derive(norito::Encode, norito::Decode)]
+pub struct VrfEpochSeedResponse {
+    /// Whether a seed snapshot was found.
+    pub found: bool,
+    /// Epoch associated with `seed` (requested or latest fallback epoch).
+    pub epoch: u64,
+    /// Seed bytes (all-zero when `found == false`).
+    pub seed: [u8; 32],
+}

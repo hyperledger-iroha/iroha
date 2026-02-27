@@ -201,6 +201,7 @@ fn build_transfer(counter: u64) -> OfflineToOnlineTransfer {
         platform_snapshot: None,
         sender_certificate_id: certificate.certificate_id(),
         sender_signature: Signature::from_bytes(&[0; 64]),
+        build_claim: None,
     };
 
     let balance_proof = OfflineBalanceProof {

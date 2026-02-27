@@ -63,6 +63,7 @@ const FEATURE_BIT_VECTOR: u64 = 1 << 1;
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const GLOBAL_WILDCARD_KEY: &str = "*";
 const STATE_WILDCARD_KEY: &str = "state:*";
+const TRIGGER_EVENT_PUBLIC_INPUT_KEY: &str = "trigger_event_json";
 
 #[derive(Clone)]
 struct AccessSets {
@@ -3860,6 +3861,33 @@ impl Compiler {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_GET_AUTHORITY as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::GetTriggerEvent { dest } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(durable_required_msg),
+                                ));
+                            }
+                            emit_literal_stub(
+                                &mut code,
+                                &mut fixups,
+                                10,
+                                DataKey(DataKind::Name, TRIGGER_EVENT_PUBLIC_INPUT_KEY.to_string()),
+                            );
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_GET_PUBLIC_INPUT as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);

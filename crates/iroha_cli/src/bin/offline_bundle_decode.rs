@@ -160,6 +160,7 @@ fn decode_wire_receipt(payload: &[u8]) -> Result<OfflineSpendReceipt> {
         platform_snapshot,
         sender_certificate_id,
         sender_signature,
+        build_claim: None,
     })
 }
 

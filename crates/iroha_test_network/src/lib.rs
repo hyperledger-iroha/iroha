@@ -2693,8 +2693,7 @@ impl Network {
     pub async fn shutdown(&self) -> &Self {
         self.peers
             .iter()
-            .filter(|peer| peer.is_running())
-            .map(|peer| peer.shutdown())
+            .map(|peer| peer.shutdown_if_started())
             .collect::<FuturesUnordered<_>>()
             .collect::<Vec<_>>()
             .await;
@@ -8309,6 +8308,43 @@ mod tests {
         assert!(
             !peer.shutdown_if_started().await,
             "shutdown_if_started should be a no-op when the peer never started"
+        );
+    }
+
+    #[tokio::test]
+    async fn network_shutdown_clears_stale_peer_runs_even_when_not_marked_running() {
+        if skip_network_tests(
+            "network_shutdown_clears_stale_peer_runs_even_when_not_marked_running",
+        ) {
+            return;
+        }
+
+        let network = NetworkBuilder::new().build();
+        let peer = network
+            .peers()
+            .first()
+            .expect("network builder creates at least one peer")
+            .clone();
+
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::oneshot::channel();
+        let tasks = tokio::task::JoinSet::new();
+        let (fatal_tx, _fatal_rx) = watch::channel(false);
+        {
+            let mut guard = peer.run.lock().await;
+            *guard = Some(PeerRun {
+                tasks,
+                shutdown: shutdown_tx,
+                fatal_tx,
+                pid: None,
+            });
+        }
+        peer.is_running.store(false, Ordering::Relaxed);
+
+        network.shutdown().await;
+
+        assert!(
+            peer.run.lock().await.is_none(),
+            "network shutdown should clear stale peer run handles"
         );
     }
 

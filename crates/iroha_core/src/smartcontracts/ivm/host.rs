@@ -121,6 +121,7 @@ struct CachedProofEntry {
 
 const PUBLIC_INPUT_GAS_BASE_DEFAULT: u64 = 16;
 const PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT: u64 = 1;
+const TRIGGER_EVENT_PUBLIC_INPUT_KEY: &str = "trigger_event_json";
 
 #[derive(Debug, Clone, crate::json_macros::JsonDeserialize)]
 struct PublicInputDescriptor {
@@ -305,6 +306,7 @@ pub struct CoreHostImpl<QS> {
     // Snapshots for state-read syscalls
     zk_roots: BTreeMap<AssetDefinitionId, Vec<[u8; 32]>>,
     zk_elections: BTreeMap<String, (bool, Vec<u64>)>,
+    vrf_epoch_seeds: BTreeMap<u64, [u8; 32]>,
     // Registry snapshot of verifying keys.
     verifying_keys: BTreeMap<VerifyingKeyId, VerifyingKeyRecord>,
     // Registry snapshot of public inputs exposed via SYSCALL_GET_PUBLIC_INPUT.
@@ -893,6 +895,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_verified_tally: VecDeque::new(),
             zk_roots: BTreeMap::new(),
             zk_elections: BTreeMap::new(),
+            vrf_epoch_seeds: BTreeMap::new(),
             verifying_keys: BTreeMap::new(),
             public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
@@ -931,6 +934,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         host.hydrate_axt_replay_ledger(&view);
         host.set_durable_state_snapshot_from_world(view.world());
         host.set_public_inputs_from_parameters(view.world().parameters());
+        host.set_vrf_epoch_seeds_from_world(view.world());
         host.set_zk_snapshots_from_world(view.world(), &view.zk)
             .expect("valid ZK snapshot state");
         host = host.with_axt_policy_snapshot(&snapshot);
@@ -973,6 +977,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_verified_tally: VecDeque::new(),
             zk_roots: BTreeMap::new(),
             zk_elections: BTreeMap::new(),
+            vrf_epoch_seeds: BTreeMap::new(),
             verifying_keys: BTreeMap::new(),
             public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
@@ -1038,6 +1043,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_verified_tally: VecDeque::new(),
             zk_roots: BTreeMap::new(),
             zk_elections: BTreeMap::new(),
+            vrf_epoch_seeds: BTreeMap::new(),
             verifying_keys: BTreeMap::new(),
             public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
@@ -1742,6 +1748,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Install a read-only snapshot of ZK roots per asset for state-read syscalls.
     pub fn set_zk_roots_snapshot(&mut self, map: BTreeMap<AssetDefinitionId, Vec<[u8; 32]>>) {
         self.zk_roots = map;
+    }
+
+    /// Hydrate VRF epoch seed snapshots from world storage.
+    pub fn set_vrf_epoch_seeds_from_world(&mut self, world: &impl WorldReadOnly) {
+        self.vrf_epoch_seeds = world
+            .vrf_epochs()
+            .iter()
+            .map(|(epoch, record)| (*epoch, record.seed))
+            .collect();
     }
 
     /// Hydrate ZK snapshots (roots, elections, verifying keys) from a world view.
@@ -5146,6 +5161,32 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let name_ptr = vm.register(10);
                 let tlv = Self::expect_tlv(vm, name_ptr, PointerType::Name)?;
                 let name = Self::decode_name_payload(tlv.payload)?;
+                if name.as_ref() == TRIGGER_EVENT_PUBLIC_INPUT_KEY {
+                    let Some(args) = self.args.as_ref() else {
+                        return Err(ivm::VMError::PermissionDenied);
+                    };
+                    if !is_type_allowed_for_policy(vm.syscall_policy(), PointerType::Json) {
+                        return Err(ivm::VMError::AbiTypeNotAllowed {
+                            abi: vm.abi_version(),
+                            type_id: PointerType::Json as u16,
+                        });
+                    }
+                    let payload =
+                        norito::to_bytes(args).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                    let payload_len = Self::len_to_u32(payload.len())?;
+                    let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
+                    out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
+                    out.push(1);
+                    out.extend_from_slice(&payload_len.to_be_bytes());
+                    out.extend_from_slice(&payload);
+                    let h: [u8; Hash::LENGTH] = Hash::new(&payload).into();
+                    out.extend_from_slice(&h);
+                    let ptr = vm.alloc_input_tlv(&out)?;
+                    vm.set_register(10, ptr);
+                    let bytes = u64::try_from(out.len()).unwrap_or(u64::MAX);
+                    return Ok(PUBLIC_INPUT_GAS_BASE_DEFAULT
+                        .saturating_add(PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT.saturating_mul(bytes)));
+                }
                 let Some(record) = self.public_inputs.get(&name) else {
                     return Err(ivm::VMError::PermissionDenied);
                 };
@@ -5431,6 +5472,71 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 out.extend_from_slice(&h);
                 let p = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, p);
+                Ok(0)
+            }
+            ivm::syscalls::SYSCALL_VRF_EPOCH_SEED => {
+                use ivm::vrf::{VrfEpochSeedRequest, VrfEpochSeedResponse};
+
+                const OK: u64 = 0;
+                const ERR_TYPE: u64 = 1;
+                const ERR_DECODE: u64 = 2;
+                const ERR_OOM: u64 = 3;
+
+                let ptr = vm.register(10);
+                let tlv = vm.memory.validate_tlv(ptr)?;
+                if tlv.type_id != PointerType::NoritoBytes {
+                    vm.set_register(10, 0);
+                    vm.set_register(11, ERR_TYPE);
+                    return Ok(0);
+                }
+                let req: VrfEpochSeedRequest = match norito::decode_from_bytes(tlv.payload) {
+                    Ok(req) => req,
+                    Err(_) => {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, ERR_DECODE);
+                        return Ok(0);
+                    }
+                };
+
+                let resolved = self
+                    .vrf_epoch_seeds
+                    .get(&req.epoch)
+                    .map(|seed| (req.epoch, *seed))
+                    .or_else(|| {
+                        if req.fallback_to_latest {
+                            self.vrf_epoch_seeds
+                                .iter()
+                                .next_back()
+                                .map(|(epoch, seed)| (*epoch, *seed))
+                        } else {
+                            None
+                        }
+                    });
+                let (found, epoch, seed) = match resolved {
+                    Some((epoch, seed)) => (true, epoch, seed),
+                    None => (false, req.epoch, [0u8; 32]),
+                };
+
+                let resp = VrfEpochSeedResponse { found, epoch, seed };
+                let body = norito::to_bytes(&resp).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let body_len = Self::len_to_u32(body.len())?;
+                let mut out = Vec::with_capacity(7 + body.len() + 32);
+                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&body_len.to_be_bytes());
+                out.extend_from_slice(&body);
+                let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
+                out.extend_from_slice(&h);
+                match vm.alloc_input_tlv(&out) {
+                    Ok(p) => {
+                        vm.set_register(10, p);
+                        vm.set_register(11, OK);
+                    }
+                    Err(_) => {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, ERR_OOM);
+                    }
+                }
                 Ok(0)
             }
             // SM helper syscalls are gated by crypto configuration and forwarded to DefaultHost.
@@ -9496,6 +9602,134 @@ mod tests {
     }
 
     #[test]
+    fn vrf_epoch_seed_syscall_reads_world_snapshot() {
+        crate::test_alias::ensure();
+        let mut world = World::new();
+        world.vrf_epochs.insert(
+            7,
+            iroha_data_model::consensus::VrfEpochRecord {
+                epoch: 7,
+                seed: [0x11; 32],
+                epoch_length: 5,
+                commit_deadline_offset: 1,
+                reveal_deadline_offset: 2,
+                roster_len: 0,
+                finalized: true,
+                updated_at_height: 100,
+                participants: Vec::new(),
+                late_reveals: Vec::new(),
+                committed_no_reveal: Vec::new(),
+                no_participation: Vec::new(),
+                penalties_applied: false,
+                penalties_applied_at_height: None,
+                validator_election: None,
+            },
+        );
+        world.vrf_epochs.insert(
+            9,
+            iroha_data_model::consensus::VrfEpochRecord {
+                epoch: 9,
+                seed: [0x22; 32],
+                epoch_length: 5,
+                commit_deadline_offset: 1,
+                reveal_deadline_offset: 2,
+                roster_len: 0,
+                finalized: true,
+                updated_at_height: 110,
+                participants: Vec::new(),
+                late_reveals: Vec::new(),
+                committed_no_reveal: Vec::new(),
+                no_participation: Vec::new(),
+                penalties_applied: false,
+                penalties_applied_at_height: None,
+                validator_election: None,
+            },
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::from_state(authority, &state);
+        let mut vm = IVM::new(10_000);
+
+        let req = ivm::vrf::VrfEpochSeedRequest {
+            epoch: 7,
+            fallback_to_latest: false,
+        };
+        let req_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&req));
+        vm.set_register(10, req_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm),
+            Ok(0)
+        );
+        assert_eq!(vm.register(11), 0);
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        let resp: ivm::vrf::VrfEpochSeedResponse =
+            norito::decode_from_bytes(tlv.payload).expect("decode response");
+        assert!(resp.found);
+        assert_eq!(resp.epoch, 7);
+        assert_eq!(resp.seed, [0x11; 32]);
+
+        let fallback_req = ivm::vrf::VrfEpochSeedRequest {
+            epoch: 99,
+            fallback_to_latest: true,
+        };
+        let fallback_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito_blob(&fallback_req),
+        );
+        vm.set_register(10, fallback_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm),
+            Ok(0)
+        );
+        assert_eq!(vm.register(11), 0);
+        let out_ptr = vm.register(10);
+        let tlv = vm
+            .memory
+            .validate_tlv(out_ptr)
+            .expect("fallback output tlv");
+        let resp: ivm::vrf::VrfEpochSeedResponse =
+            norito::decode_from_bytes(tlv.payload).expect("decode fallback response");
+        assert!(resp.found);
+        assert_eq!(resp.epoch, 9);
+        assert_eq!(resp.seed, [0x22; 32]);
+    }
+
+    #[test]
+    fn vrf_epoch_seed_syscall_reports_missing_without_fallback() {
+        crate::test_alias::ensure();
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::from_state(authority, &state);
+        let mut vm = IVM::new(10_000);
+
+        let req = ivm::vrf::VrfEpochSeedRequest {
+            epoch: 42,
+            fallback_to_latest: false,
+        };
+        let req_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&req));
+        vm.set_register(10, req_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm),
+            Ok(0)
+        );
+        assert_eq!(vm.register(11), 0);
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        let resp: ivm::vrf::VrfEpochSeedResponse =
+            norito::decode_from_bytes(tlv.payload).expect("decode response");
+        assert!(!resp.found);
+        assert_eq!(resp.epoch, 42);
+        assert_eq!(resp.seed, [0u8; 32]);
+    }
+
+    #[test]
     fn zk_vote_tally_syscall_reads_world_snapshot() {
         crate::test_alias::ensure();
         let mut world = World::new();
@@ -10019,6 +10253,41 @@ mod tests {
         let expected_gas = PUBLIC_INPUT_GAS_BASE_DEFAULT.saturating_add(
             PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT
                 .saturating_mul(u64::try_from(tlv.len()).unwrap_or(u64::MAX)),
+        );
+        assert_eq!(gas, expected_gas);
+    }
+
+    #[test]
+    fn get_public_input_exposes_trigger_event_args() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let args = Json::from(norito::json!({
+            "kind": "asset_change",
+            "amount_i64": 10
+        }));
+        let mut host = CoreHost::with_accounts_and_args(
+            authority.clone(),
+            Arc::new(vec![authority]),
+            args.clone(),
+        );
+        let mut vm = IVM::new(10_000);
+        let name: Name = TRIGGER_EVENT_PUBLIC_INPUT_KEY.parse().unwrap();
+        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
+        vm.set_register(10, name_ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
+            .expect("public input syscall");
+        let out_ptr = vm.register(10);
+        let out_tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(out_tlv.type_id, PointerType::Json);
+        let decoded: Json = norito::decode_from_bytes(out_tlv.payload).expect("decode json");
+        assert_eq!(decoded, args);
+
+        let expected_tlv = make_tlv(PointerType::Json as u16, &norito_blob(&decoded));
+        let expected_gas = PUBLIC_INPUT_GAS_BASE_DEFAULT.saturating_add(
+            PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT
+                .saturating_mul(u64::try_from(expected_tlv.len()).unwrap_or(u64::MAX)),
         );
         assert_eq!(gas, expected_gas);
     }

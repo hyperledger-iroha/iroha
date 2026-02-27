@@ -67,7 +67,11 @@ def determine_base_ref() -> str:
 
     for candidate in ("origin/master", "origin/main"):
         try:
-            run_command(["git", "rev-parse", "--verify", candidate], check=True)
+            run_command(
+                ["git", "rev-parse", "--verify", candidate],
+                check=True,
+                capture_output=True,
+            )
         except subprocess.CalledProcessError:
             continue
         return candidate
@@ -172,10 +176,17 @@ def ensure_java_tool(tool: str) -> str | None:
     def prepend_path(directory: Path) -> None:
         os.environ["PATH"] = f"{directory}{os.pathsep}{os.environ.get('PATH', '')}"
 
+    def tool_is_usable(executable: Path) -> bool:
+        try:
+            run_command([executable, "-version"], capture_output=True)
+        except (FileNotFoundError, OSError, subprocess.CalledProcessError):
+            return False
+        return True
+
     java_home = os.environ.get("JAVA_HOME")
     if java_home:
         exe_path = Path(java_home) / "bin" / tool
-        if exe_path.exists():
+        if exe_path.exists() and tool_is_usable(exe_path):
             prepend_path(exe_path.parent)
             return str(exe_path)
 
@@ -193,13 +204,13 @@ def ensure_java_tool(tool: str) -> str | None:
             continue
         seen.add(prefix)
         exe_path = Path(prefix) / "bin" / tool
-        if exe_path.exists():
+        if exe_path.exists() and tool_is_usable(exe_path):
             os.environ.setdefault("JAVA_HOME", str(Path(prefix)))
             prepend_path(exe_path.parent)
             return str(exe_path)
 
     candidate = shutil.which(tool)
-    if candidate:
+    if candidate and tool_is_usable(Path(candidate)):
         return candidate
 
     if tool == "java":
@@ -213,7 +224,7 @@ def ensure_java_tool(tool: str) -> str | None:
             resolved = java_home_proc.stdout.strip()
             if resolved:
                 exe_path = Path(resolved) / "bin" / tool
-                if exe_path.exists():
+                if exe_path.exists() and tool_is_usable(exe_path):
                     os.environ.setdefault("JAVA_HOME", resolved)
                     prepend_path(exe_path.parent)
                     return str(exe_path)
@@ -415,11 +426,23 @@ def run_java_parity_checks() -> None:
 
     javac_path = ensure_java_tool("javac")
     if not javac_path:
-        raise CheckError("javac not found; install JDK 21+ to run tests")
+        if java_checks_are_strict():
+            raise CheckError("javac not found; install JDK 21+ to run tests")
+        print(
+            "[norito-java] javac not found; skipping JVM parity checks outside strict mode.",
+            file=sys.stderr,
+        )
+        return
 
     java_path = ensure_java_tool("java")
     if not java_path:
-        raise CheckError("java runtime not found; install JDK 21+ or set JAVA_HOME")
+        if java_checks_are_strict():
+            raise CheckError("java runtime not found; install JDK 21+ or set JAVA_HOME")
+        print(
+            "[norito-java] java runtime not found; skipping JVM parity checks outside strict mode.",
+            file=sys.stderr,
+        )
+        return
 
     root = REPO_ROOT / "java" / "norito_java"
     build_root = REPO_ROOT / "target" / "norito_java"
@@ -459,6 +482,16 @@ def run_java_parity_checks() -> None:
             )
         else:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def java_checks_are_strict() -> bool:
+    """Return whether missing Java tooling should fail parity checks."""
+
+    if os.environ.get("NORITO_JAVA_STRICT") == "1":
+        return True
+
+    ci_value = os.environ.get("CI", "").strip().lower()
+    return ci_value in {"1", "true", "yes", "on"}
 
 
 def main() -> int:
