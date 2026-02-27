@@ -339,11 +339,54 @@ impl BlockSyncRequestTracker {
 }
 
 const UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP: u64 = 16;
+const UNKNOWN_PREV_RESPONSE_HASH_CHANGE_MIN_HEIGHT_STEP: u64 = 4;
 const UNKNOWN_PREV_CACHE_RETENTION_HEIGHTS: u64 = 1024;
 const UNKNOWN_PREV_RESPONSE_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
+const UNKNOWN_PREV_RESPONSE_REPEAT_COOLDOWN_MULTIPLIER_CAP: u32 = 2;
+const UNKNOWN_PREV_INCREMENTAL_SHARE_MAX_BLOCKS: usize = 64;
+const UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD: u32 = 4;
 
 fn unknown_prev_response_cooldown(gossip_period: Duration) -> Duration {
     gossip_period.max(UNKNOWN_PREV_RESPONSE_COOLDOWN_FLOOR)
+}
+
+fn scale_unknown_prev_cooldown(cooldown: Duration, multiplier: u32) -> Duration {
+    if multiplier <= 1 {
+        return cooldown;
+    }
+    cooldown.checked_mul(multiplier).unwrap_or(Duration::MAX)
+}
+
+fn unknown_prev_repeat_cooldown(cooldown: Duration, responses_sent: u32) -> Duration {
+    let multiplier = responses_sent
+        .saturating_add(1)
+        .min(UNKNOWN_PREV_RESPONSE_REPEAT_COOLDOWN_MULTIPLIER_CAP);
+    scale_unknown_prev_cooldown(cooldown, multiplier)
+}
+
+fn unknown_prev_incremental_share_limit(gossip_size: usize) -> usize {
+    if gossip_size <= 1 {
+        return 1;
+    }
+    gossip_size
+        .saturating_mul(3)
+        .saturating_div(4)
+        .max(1)
+        .min(UNKNOWN_PREV_INCREMENTAL_SHARE_MAX_BLOCKS)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnknownPrevShareMode {
+    Full,
+    Incremental,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct UnknownPrevShareDecision {
+    share: bool,
+    mode: UnknownPrevShareMode,
+    effective_cooldown: Duration,
+    repeat_count: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -354,9 +397,126 @@ struct UnknownPrevHashState {
     local_head_hash: Option<HashOf<BlockHeader>>,
     served_at_height: u64,
     last_served_at: Instant,
+    responses_sent: u32,
 }
 
-fn should_share_unknown_prev_hash(
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct UnknownPrevGlobalKey {
+    prev_hash: HashOf<BlockHeader>,
+    latest_hash: Option<HashOf<BlockHeader>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UnknownPrevGlobalState {
+    fallback_start_height: NonZeroUsize,
+    local_head_hash: Option<HashOf<BlockHeader>>,
+    served_at_height: u64,
+    last_served_at: Instant,
+    responses_sent: u32,
+}
+
+fn should_share_unknown_prev_global_with_mode(
+    cache: &mut BTreeMap<UnknownPrevGlobalKey, UnknownPrevGlobalState>,
+    prev_hash: HashOf<BlockHeader>,
+    latest_hash: Option<HashOf<BlockHeader>>,
+    fallback_start_height: NonZeroUsize,
+    local_head_hash: Option<HashOf<BlockHeader>>,
+    height: u64,
+    now: Instant,
+    cooldown: Duration,
+) -> UnknownPrevShareDecision {
+    let key = UnknownPrevGlobalKey {
+        prev_hash,
+        latest_hash,
+    };
+    let skip = |effective_cooldown: Duration, repeat_count: u32| UnknownPrevShareDecision {
+        share: false,
+        mode: UnknownPrevShareMode::Incremental,
+        effective_cooldown,
+        repeat_count,
+    };
+    match cache.get_mut(&key) {
+        Some(state) => {
+            if state.fallback_start_height != fallback_start_height {
+                debug!(
+                    prev_hash = %prev_hash,
+                    latest_hash = ?latest_hash,
+                    previous_fallback_start_height = state.fallback_start_height.get(),
+                    fallback_start_height = fallback_start_height.get(),
+                    "unknown-prev fallback anchor changed while dedup key remained unchanged"
+                );
+                state.fallback_start_height = fallback_start_height;
+            }
+            let height_advance = height.saturating_sub(state.served_at_height);
+            let local_head_advanced = height_advance >= UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP
+                || (local_head_hash != state.local_head_hash
+                    && height_advance >= UNKNOWN_PREV_RESPONSE_HASH_CHANGE_MIN_HEIGHT_STEP);
+            let effective_cooldown = if cooldown > Duration::ZERO {
+                unknown_prev_repeat_cooldown(cooldown, state.responses_sent)
+            } else {
+                Duration::ZERO
+            };
+            if !local_head_advanced {
+                return skip(effective_cooldown, state.responses_sent);
+            }
+            if effective_cooldown > Duration::ZERO
+                && now.saturating_duration_since(state.last_served_at) < effective_cooldown
+            {
+                return skip(effective_cooldown, state.responses_sent);
+            }
+            let responses_before = state.responses_sent;
+            let stuck_refresh = responses_before >= UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD;
+            let mode = if responses_before == 0 || stuck_refresh {
+                UnknownPrevShareMode::Full
+            } else {
+                UnknownPrevShareMode::Incremental
+            };
+            if stuck_refresh {
+                debug!(
+                    prev_hash = %prev_hash,
+                    latest_hash = ?latest_hash,
+                    repeat_count = responses_before.saturating_sub(1),
+                    threshold = UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD,
+                    "forcing one-shot full unknown-prev refresh for stuck dedup key"
+                );
+            }
+            state.local_head_hash = local_head_hash;
+            state.served_at_height = height;
+            state.last_served_at = now;
+            state.responses_sent = if stuck_refresh {
+                1
+            } else {
+                responses_before.saturating_add(1)
+            };
+            UnknownPrevShareDecision {
+                share: true,
+                mode,
+                effective_cooldown,
+                repeat_count: if stuck_refresh { 0 } else { responses_before },
+            }
+        }
+        None => {
+            cache.insert(
+                key,
+                UnknownPrevGlobalState {
+                    fallback_start_height,
+                    local_head_hash,
+                    served_at_height: height,
+                    last_served_at: now,
+                    responses_sent: 1,
+                },
+            );
+            UnknownPrevShareDecision {
+                share: true,
+                mode: UnknownPrevShareMode::Full,
+                effective_cooldown: cooldown,
+                repeat_count: 0,
+            }
+        }
+    }
+}
+
+fn should_share_unknown_prev_hash_with_mode(
     cache: &mut BTreeMap<PeerId, UnknownPrevHashState>,
     peer_id: &PeerId,
     prev_hash: HashOf<BlockHeader>,
@@ -366,30 +526,76 @@ fn should_share_unknown_prev_hash(
     height: u64,
     now: Instant,
     cooldown: Duration,
-) -> bool {
+) -> UnknownPrevShareDecision {
+    let skip = |effective_cooldown: Duration, repeat_count: u32| UnknownPrevShareDecision {
+        share: false,
+        mode: UnknownPrevShareMode::Incremental,
+        effective_cooldown,
+        repeat_count,
+    };
     match cache.get_mut(peer_id) {
-        Some(state)
-            if state.prev_hash == prev_hash
-                && state.latest_hash == latest_hash
-                && state.fallback_start_height == fallback_start_height =>
-        {
+        Some(state) if state.prev_hash == prev_hash && state.latest_hash == latest_hash => {
+            if state.fallback_start_height != fallback_start_height {
+                debug!(
+                    requester = %peer_id,
+                    prev_hash = %prev_hash,
+                    latest_hash = ?latest_hash,
+                    previous_fallback_start_height = state.fallback_start_height.get(),
+                    fallback_start_height = fallback_start_height.get(),
+                    "unknown-prev fallback anchor changed while dedup key remained unchanged"
+                );
+                state.fallback_start_height = fallback_start_height;
+            }
             // Serve the same requester/frontier tuple only when local canonical state advanced
             // enough to provide new range content.
-            let local_head_advanced = local_head_hash != state.local_head_hash
-                || height.saturating_sub(state.served_at_height)
-                    >= UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP;
+            let height_advance = height.saturating_sub(state.served_at_height);
+            let local_head_advanced = height_advance >= UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP
+                || (local_head_hash != state.local_head_hash
+                    && height_advance >= UNKNOWN_PREV_RESPONSE_HASH_CHANGE_MIN_HEIGHT_STEP);
+            let effective_cooldown = if cooldown > Duration::ZERO {
+                unknown_prev_repeat_cooldown(cooldown, state.responses_sent)
+            } else {
+                Duration::ZERO
+            };
             if !local_head_advanced {
-                return false;
+                return skip(effective_cooldown, state.responses_sent);
             }
-            if cooldown > Duration::ZERO
-                && now.saturating_duration_since(state.last_served_at) < cooldown
+            if effective_cooldown > Duration::ZERO
+                && now.saturating_duration_since(state.last_served_at) < effective_cooldown
             {
-                return false;
+                return skip(effective_cooldown, state.responses_sent);
+            }
+            let responses_before = state.responses_sent;
+            let stuck_refresh = responses_before >= UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD;
+            let mode = if responses_before == 0 || stuck_refresh {
+                UnknownPrevShareMode::Full
+            } else {
+                UnknownPrevShareMode::Incremental
+            };
+            if stuck_refresh {
+                debug!(
+                    requester = %peer_id,
+                    prev_hash = %prev_hash,
+                    latest_hash = ?latest_hash,
+                    repeat_count = responses_before.saturating_sub(1),
+                    threshold = UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD,
+                    "forcing one-shot full unknown-prev refresh for stuck peer dedup key"
+                );
             }
             state.local_head_hash = local_head_hash;
             state.served_at_height = height;
             state.last_served_at = now;
-            true
+            state.responses_sent = if stuck_refresh {
+                1
+            } else {
+                responses_before.saturating_add(1)
+            };
+            UnknownPrevShareDecision {
+                share: true,
+                mode,
+                effective_cooldown,
+                repeat_count: if stuck_refresh { 0 } else { responses_before },
+            }
         }
         Some(state) => {
             *state = UnknownPrevHashState {
@@ -399,8 +605,14 @@ fn should_share_unknown_prev_hash(
                 local_head_hash,
                 served_at_height: height,
                 last_served_at: now,
+                responses_sent: 1,
             };
-            true
+            UnknownPrevShareDecision {
+                share: true,
+                mode: UnknownPrevShareMode::Full,
+                effective_cooldown: cooldown,
+                repeat_count: 0,
+            }
         }
         None => {
             cache.insert(
@@ -412,14 +624,55 @@ fn should_share_unknown_prev_hash(
                     local_head_hash,
                     served_at_height: height,
                     last_served_at: now,
+                    responses_sent: 1,
                 },
             );
-            true
+            UnknownPrevShareDecision {
+                share: true,
+                mode: UnknownPrevShareMode::Full,
+                effective_cooldown: cooldown,
+                repeat_count: 0,
+            }
         }
     }
 }
 
+#[cfg(test)]
+fn should_share_unknown_prev_hash(
+    cache: &mut BTreeMap<PeerId, UnknownPrevHashState>,
+    peer_id: &PeerId,
+    prev_hash: HashOf<BlockHeader>,
+    latest_hash: Option<HashOf<BlockHeader>>,
+    fallback_start_height: NonZeroUsize,
+    local_head_hash: Option<HashOf<BlockHeader>>,
+    height: u64,
+    now: Instant,
+    cooldown: Duration,
+) -> bool {
+    should_share_unknown_prev_hash_with_mode(
+        cache,
+        peer_id,
+        prev_hash,
+        latest_hash,
+        fallback_start_height,
+        local_head_hash,
+        height,
+        now,
+        cooldown,
+    )
+    .share
+}
+
 fn prune_unknown_prev_hashes(cache: &mut BTreeMap<PeerId, UnknownPrevHashState>, height: u64) {
+    cache.retain(|_, state| {
+        height.saturating_sub(state.served_at_height) <= UNKNOWN_PREV_CACHE_RETENTION_HEIGHTS
+    });
+}
+
+fn prune_unknown_prev_global_hashes(
+    cache: &mut BTreeMap<UnknownPrevGlobalKey, UnknownPrevGlobalState>,
+    height: u64,
+) {
     cache.retain(|_, state| {
         height.saturating_sub(state.served_at_height) <= UNKNOWN_PREV_CACHE_RETENTION_HEIGHTS
     });
@@ -701,6 +954,7 @@ mod gossip_backoff_tests {
             telemetry: None,
             seen_blocks: BTreeSet::new(),
             unknown_prev_hashes: BTreeMap::new(),
+            unknown_prev_global_hashes: BTreeMap::new(),
             request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                 Duration::from_secs(1),
                 Duration::from_secs(8),
@@ -793,6 +1047,17 @@ mod unknown_prev_hash_tests {
             &peer,
             hash1,
             latest1,
+            nonzero_ext::nonzero!(11_usize),
+            Some(hash(0x81)),
+            10,
+            now,
+            Duration::ZERO,
+        ));
+        assert!(!should_share_unknown_prev_hash(
+            &mut cache,
+            &peer,
+            hash1,
+            latest1,
             nonzero_ext::nonzero!(10_usize),
             Some(hash(0x81)),
             11,
@@ -843,7 +1108,7 @@ mod unknown_prev_hash_tests {
             now,
             Duration::ZERO,
         ));
-        assert!(should_share_unknown_prev_hash(
+        assert!(!should_share_unknown_prev_hash(
             &mut cache,
             &peer,
             hash2,
@@ -872,7 +1137,7 @@ mod unknown_prev_hash_tests {
             latest2,
             nonzero_ext::nonzero!(13_usize),
             Some(hash(0x83)),
-            12,
+            12 + UNKNOWN_PREV_RESPONSE_HASH_CHANGE_MIN_HEIGHT_STEP,
             now,
             Duration::ZERO,
         ));
@@ -917,9 +1182,326 @@ mod unknown_prev_hash_tests {
             nonzero_ext::nonzero!(10_usize),
             Some(hash(0x73)),
             10 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP * 2,
-            now + cooldown + Duration::from_millis(1),
+            now + cooldown + cooldown + Duration::from_millis(1),
             cooldown,
         ));
+    }
+
+    #[test]
+    fn unknown_prev_repeated_tuple_transitions_to_incremental_share_mode() {
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
+        let prev = hash(0x74);
+        let latest = Some(hash(0x75));
+        let cooldown = Duration::from_millis(25);
+        let now = Instant::now();
+
+        let first = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(8_usize),
+            Some(hash(0x76)),
+            8,
+            now,
+            cooldown,
+        );
+        assert!(first.share);
+        assert_eq!(first.mode, UnknownPrevShareMode::Full);
+        assert_eq!(first.repeat_count, 0);
+
+        let second = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(8_usize),
+            Some(hash(0x77)),
+            8 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+            now + cooldown + cooldown + Duration::from_millis(1),
+            cooldown,
+        );
+        assert!(second.share);
+        assert_eq!(second.mode, UnknownPrevShareMode::Incremental);
+        assert_eq!(second.repeat_count, 1);
+    }
+
+    #[test]
+    fn unknown_prev_fallback_anchor_change_keeps_peer_dedup_identity() {
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
+        let prev = hash(0x78);
+        let latest = Some(hash(0x79));
+        let now = Instant::now();
+
+        let first = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(8_usize),
+            Some(hash(0x7A)),
+            8,
+            now,
+            Duration::ZERO,
+        );
+        assert!(first.share);
+        assert_eq!(first.mode, UnknownPrevShareMode::Full);
+
+        let second = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(9_usize),
+            Some(hash(0x7B)),
+            8 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+            now,
+            Duration::ZERO,
+        );
+        assert!(second.share);
+        assert_eq!(
+            second.mode,
+            UnknownPrevShareMode::Incremental,
+            "fallback-anchor change must not reset unknown-prev dedup identity",
+        );
+    }
+
+    #[test]
+    fn unknown_prev_global_fallback_anchor_change_keeps_dedup_identity() {
+        let prev = hash(0x7C);
+        let latest = Some(hash(0x7D));
+        let now = Instant::now();
+        let mut global_cache: BTreeMap<UnknownPrevGlobalKey, UnknownPrevGlobalState> =
+            BTreeMap::new();
+
+        let first = should_share_unknown_prev_global_with_mode(
+            &mut global_cache,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(9_usize),
+            Some(hash(0x7E)),
+            9,
+            now,
+            Duration::ZERO,
+        );
+        assert!(first.share);
+        assert_eq!(first.mode, UnknownPrevShareMode::Full);
+
+        let second = should_share_unknown_prev_global_with_mode(
+            &mut global_cache,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(10_usize),
+            Some(hash(0x7F)),
+            9 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+            now,
+            Duration::ZERO,
+        );
+        assert!(second.share);
+        assert_eq!(
+            second.mode,
+            UnknownPrevShareMode::Incremental,
+            "fallback-anchor change must not reset global unknown-prev dedup identity",
+        );
+    }
+
+    #[test]
+    fn unknown_prev_stuck_key_triggers_one_shot_full_refresh() {
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
+        let prev = hash(0x90);
+        let latest = Some(hash(0x91));
+        let start_height = 8_u64;
+        let now = Instant::now();
+
+        let first = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(8_usize),
+            Some(hash(0x92)),
+            start_height,
+            now,
+            Duration::ZERO,
+        );
+        assert!(first.share);
+        assert_eq!(first.mode, UnknownPrevShareMode::Full);
+
+        for idx in 1..UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD {
+            let decision = should_share_unknown_prev_hash_with_mode(
+                &mut cache,
+                &peer,
+                prev,
+                latest,
+                nonzero_ext::nonzero!(8_usize),
+                Some(hash(0x92_u8 + u8::try_from(idx).expect("idx fits in u8"))),
+                start_height + u64::from(idx) * UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+                now,
+                Duration::ZERO,
+            );
+            assert!(decision.share);
+            assert_eq!(decision.mode, UnknownPrevShareMode::Incremental);
+        }
+
+        let refresh = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(8_usize),
+            Some(hash(0x97)),
+            start_height
+                + u64::from(UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD)
+                    * UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+            now,
+            Duration::ZERO,
+        );
+        assert!(refresh.share);
+        assert_eq!(
+            refresh.mode,
+            UnknownPrevShareMode::Full,
+            "stuck dedup tuple should force one bounded full-share refresh",
+        );
+        assert_eq!(
+            refresh.repeat_count, 0,
+            "full refresh should reset repeat counter",
+        );
+
+        let after_refresh = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(8_usize),
+            Some(hash(0x98)),
+            start_height
+                + u64::from(UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD + 1)
+                    * UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+            now,
+            Duration::ZERO,
+        );
+        assert!(after_refresh.share);
+        assert_eq!(
+            after_refresh.mode,
+            UnknownPrevShareMode::Incremental,
+            "post-refresh tuple should return to incremental mode",
+        );
+    }
+
+    #[test]
+    fn unknown_prev_global_gate_suppresses_cross_peer_duplicate_requests() {
+        let prev = hash(0x84);
+        let latest = Some(hash(0x85));
+        let fallback_start_height = nonzero_ext::nonzero!(9_usize);
+        let cooldown = Duration::from_millis(30);
+        let now = Instant::now();
+        let mut global_cache: BTreeMap<UnknownPrevGlobalKey, UnknownPrevGlobalState> =
+            BTreeMap::new();
+
+        let first = should_share_unknown_prev_global_with_mode(
+            &mut global_cache,
+            prev,
+            latest,
+            fallback_start_height,
+            Some(hash(0x86)),
+            9,
+            now,
+            cooldown,
+        );
+        assert!(first.share);
+        assert_eq!(first.mode, UnknownPrevShareMode::Full);
+        assert_eq!(first.repeat_count, 0);
+
+        let second = should_share_unknown_prev_global_with_mode(
+            &mut global_cache,
+            prev,
+            latest,
+            fallback_start_height,
+            Some(hash(0x86)),
+            9,
+            now + Duration::from_millis(1),
+            cooldown,
+        );
+        assert!(!second.share);
+        assert_eq!(second.mode, UnknownPrevShareMode::Incremental);
+
+        let third = should_share_unknown_prev_global_with_mode(
+            &mut global_cache,
+            prev,
+            latest,
+            fallback_start_height,
+            Some(hash(0x87)),
+            9 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+            now + cooldown + cooldown + Duration::from_millis(1),
+            cooldown,
+        );
+        assert!(third.share);
+        assert_eq!(third.mode, UnknownPrevShareMode::Incremental);
+        assert_eq!(third.repeat_count, 1);
+    }
+
+    #[test]
+    fn unknown_prev_global_gate_blocks_second_peer_full_share() {
+        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let prev = hash(0x88);
+        let latest = Some(hash(0x89));
+        let fallback_start_height = nonzero_ext::nonzero!(7_usize);
+        let cooldown = Duration::from_millis(40);
+        let now = Instant::now();
+        let mut peer_cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
+        let mut global_cache: BTreeMap<UnknownPrevGlobalKey, UnknownPrevGlobalState> =
+            BTreeMap::new();
+
+        let global_first = should_share_unknown_prev_global_with_mode(
+            &mut global_cache,
+            prev,
+            latest,
+            fallback_start_height,
+            Some(hash(0x8A)),
+            7,
+            now,
+            cooldown,
+        );
+        let peer_first = should_share_unknown_prev_hash_with_mode(
+            &mut peer_cache,
+            &peer_a,
+            prev,
+            latest,
+            fallback_start_height,
+            Some(hash(0x8A)),
+            7,
+            now,
+            cooldown,
+        );
+        assert!(global_first.share && peer_first.share);
+
+        let global_second = should_share_unknown_prev_global_with_mode(
+            &mut global_cache,
+            prev,
+            latest,
+            fallback_start_height,
+            Some(hash(0x8A)),
+            7,
+            now + Duration::from_millis(1),
+            cooldown,
+        );
+        let peer_second = should_share_unknown_prev_hash_with_mode(
+            &mut peer_cache,
+            &peer_b,
+            prev,
+            latest,
+            fallback_start_height,
+            Some(hash(0x8A)),
+            7,
+            now + Duration::from_millis(1),
+            cooldown,
+        );
+        assert!(!global_second.share);
+        assert!(peer_second.share);
     }
 
     #[test]
@@ -937,6 +1519,7 @@ mod unknown_prev_hash_tests {
                 local_head_hash: Some(hash(0x43)),
                 served_at_height: prune_at,
                 last_served_at: Instant::now(),
+                responses_sent: 1,
             },
         );
         cache.insert(
@@ -948,6 +1531,7 @@ mod unknown_prev_hash_tests {
                 local_head_hash: Some(hash(0x53)),
                 served_at_height: 10,
                 last_served_at: Instant::now(),
+                responses_sent: 1,
             },
         );
 
@@ -955,6 +1539,43 @@ mod unknown_prev_hash_tests {
 
         assert!(cache.contains_key(&fresh_peer));
         assert!(!cache.contains_key(&stale_peer));
+    }
+
+    #[test]
+    fn prune_unknown_prev_global_hashes_drops_stale_entries() {
+        let prune_at = 10 + UNKNOWN_PREV_CACHE_RETENTION_HEIGHTS + 1;
+        let mut cache: BTreeMap<UnknownPrevGlobalKey, UnknownPrevGlobalState> = BTreeMap::new();
+        cache.insert(
+            UnknownPrevGlobalKey {
+                prev_hash: hash(0x61),
+                latest_hash: Some(hash(0x62)),
+            },
+            UnknownPrevGlobalState {
+                fallback_start_height: nonzero_ext::nonzero!(1_usize),
+                local_head_hash: Some(hash(0x63)),
+                served_at_height: prune_at,
+                last_served_at: Instant::now(),
+                responses_sent: 1,
+            },
+        );
+        cache.insert(
+            UnknownPrevGlobalKey {
+                prev_hash: hash(0x71),
+                latest_hash: Some(hash(0x72)),
+            },
+            UnknownPrevGlobalState {
+                fallback_start_height: nonzero_ext::nonzero!(1_usize),
+                local_head_hash: Some(hash(0x73)),
+                served_at_height: 10,
+                last_served_at: Instant::now(),
+                responses_sent: 1,
+            },
+        );
+
+        prune_unknown_prev_global_hashes(&mut cache, prune_at);
+
+        assert_eq!(cache.len(), 1);
+        assert!(cache.keys().any(|entry| entry.prev_hash == hash(0x61)));
     }
 
     #[test]
@@ -1161,6 +1782,7 @@ pub struct BlockSynchronizer {
     telemetry: Option<Telemetry>,
     seen_blocks: BTreeSet<(NonZeroU64, HashOf<BlockHeader>)>,
     unknown_prev_hashes: BTreeMap<PeerId, UnknownPrevHashState>,
+    unknown_prev_global_hashes: BTreeMap<UnknownPrevGlobalKey, UnknownPrevGlobalState>,
     request_tracker: BlockSyncRequestTracker,
     latest_height: u64,
     last_peers: BTreeSet<PeerId>,
@@ -1263,8 +1885,10 @@ impl BlockSynchronizer {
         Self::prune_seen_blocks(&mut self.seen_blocks, now_height, previous_height);
         if now_height < previous_height {
             self.unknown_prev_hashes.clear();
+            self.unknown_prev_global_hashes.clear();
         }
         prune_unknown_prev_hashes(&mut self.unknown_prev_hashes, now_height);
+        prune_unknown_prev_global_hashes(&mut self.unknown_prev_global_hashes, now_height);
         self.latest_height = now_height;
 
         let peers = self
@@ -1399,6 +2023,7 @@ impl BlockSynchronizer {
             telemetry,
             seen_blocks: BTreeSet::new(),
             unknown_prev_hashes: BTreeMap::new(),
+            unknown_prev_global_hashes: BTreeMap::new(),
             request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                 gossip_period,
                 gossip_max_period,
@@ -4058,6 +4683,7 @@ pub mod message {
                     }
 
                     let mut share_unknown_prev = true;
+                    let mut unknown_prev_share_mode = UnknownPrevShareMode::Full;
                     let mut requested_latest = false;
                     let start_height = if let Some(hash) = *prev_hash {
                         if let Some(height) = block_sync.kura.get_block_height_by_hash(hash) {
@@ -4076,7 +4702,17 @@ pub mod message {
                                     *latest_hash,
                                     seen_blocks,
                                 );
-                            share_unknown_prev = should_share_unknown_prev_hash(
+                            let global_share_decision = should_share_unknown_prev_global_with_mode(
+                                &mut block_sync.unknown_prev_global_hashes,
+                                hash,
+                                *latest_hash,
+                                fallback_start_height,
+                                local_latest_block_hash,
+                                now_height,
+                                now,
+                                unknown_prev_cooldown,
+                            );
+                            let peer_share_decision = should_share_unknown_prev_hash_with_mode(
                                 &mut block_sync.unknown_prev_hashes,
                                 peer_id,
                                 hash,
@@ -4087,6 +4723,25 @@ pub mod message {
                                 now,
                                 unknown_prev_cooldown,
                             );
+                            share_unknown_prev =
+                                global_share_decision.share && peer_share_decision.share;
+                            unknown_prev_share_mode = if matches!(
+                                global_share_decision.mode,
+                                UnknownPrevShareMode::Incremental
+                            ) || matches!(
+                                peer_share_decision.mode,
+                                UnknownPrevShareMode::Incremental
+                            ) {
+                                UnknownPrevShareMode::Incremental
+                            } else {
+                                UnknownPrevShareMode::Full
+                            };
+                            let unknown_prev_effective_cooldown = global_share_decision
+                                .effective_cooldown
+                                .max(peer_share_decision.effective_cooldown);
+                            let unknown_prev_repeat_count = global_share_decision
+                                .repeat_count
+                                .max(peer_share_decision.repeat_count);
                             if share_unknown_prev {
                                 if should_request_latest {
                                     block_sync
@@ -4100,6 +4755,8 @@ pub mod message {
                                     block = %hash,
                                     requested_latest,
                                     fallback_start_height = fallback_start_height.get(),
+                                    share_mode = ?unknown_prev_share_mode,
+                                    repeat_count = unknown_prev_repeat_count,
                                     "Block hash not found; sharing from fallback anchor"
                                 );
                                 fallback_start_height
@@ -4109,7 +4766,8 @@ pub mod message {
                                     requester = %peer_id,
                                     block = %hash,
                                     fallback_start_height = fallback_start_height.get(),
-                                    cooldown_ms = unknown_prev_cooldown.as_millis(),
+                                    cooldown_ms = unknown_prev_effective_cooldown.as_millis(),
+                                    repeat_count = unknown_prev_repeat_count,
                                     "skipping repeated block sync response for unknown prev hash"
                                 );
                                 nonzero_ext::nonzero!(1_usize)
@@ -4125,6 +4783,14 @@ pub mod message {
 
                     let blocks = {
                         let tip_height = block_sync.state.committed_height();
+                        let share_limit = match unknown_prev_share_mode {
+                            UnknownPrevShareMode::Full => block_sync.gossip_size.get() as usize,
+                            UnknownPrevShareMode::Incremental => {
+                                unknown_prev_incremental_share_limit(
+                                    block_sync.gossip_size.get() as usize
+                                )
+                            }
+                        };
                         let blocks_iter = (start_height.get()..=tip_height)
                             .filter_map(|height| {
                                 let Some(height_nz) = NonZeroUsize::new(height) else {
@@ -4139,14 +4805,19 @@ pub mod message {
                                 })
                             })
                             .skip_while(|block| Some(block.hash()) == *latest_hash);
-                        Self::select_blocks_for_share(
-                            blocks_iter,
-                            seen_blocks,
-                            block_sync.gossip_size.get() as usize,
-                        )
+                        Self::select_blocks_for_share(blocks_iter, seen_blocks, share_limit)
                     };
 
                     if !blocks.is_empty() {
+                        if matches!(unknown_prev_share_mode, UnknownPrevShareMode::Incremental) {
+                            debug!(
+                                requester = %peer_id,
+                                prev_hash = ?prev_hash,
+                                mode = ?unknown_prev_share_mode,
+                                shared_blocks = blocks.len(),
+                                "serving bounded incremental fallback share for repeated unknown-prev request"
+                            );
+                        }
                         trace!(hash=?prev_hash, "Sharing blocks after hash");
 
                         let qcs: Vec<Option<Qc>> = {
@@ -4603,6 +5274,7 @@ pub mod message {
                     telemetry: None,
                     seen_blocks: BTreeSet::new(),
                     unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
                     request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                         Duration::from_secs(1),
                         Duration::from_secs(1),
@@ -4715,6 +5387,7 @@ pub mod message {
                     telemetry: None,
                     seen_blocks: BTreeSet::new(),
                     unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
                     request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                         Duration::from_secs(1),
                         Duration::from_secs(1),
@@ -4808,6 +5481,7 @@ pub mod message {
                     telemetry: None,
                     seen_blocks: BTreeSet::new(),
                     unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
                     request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                         Duration::from_secs(1),
                         Duration::from_secs(1),
@@ -4887,6 +5561,7 @@ pub mod message {
                     telemetry: None,
                     seen_blocks: BTreeSet::new(),
                     unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
                     request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                         Duration::from_secs(1),
                         Duration::from_secs(1),
@@ -4965,6 +5640,7 @@ pub mod message {
                     telemetry: None,
                     seen_blocks: BTreeSet::new(),
                     unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
                     request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                         Duration::from_secs(1),
                         Duration::from_secs(1),
@@ -5043,6 +5719,7 @@ pub mod message {
                     telemetry: Some(telemetry),
                     seen_blocks: BTreeSet::new(),
                     unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
                     request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                         Duration::from_secs(1),
                         Duration::from_secs(1),

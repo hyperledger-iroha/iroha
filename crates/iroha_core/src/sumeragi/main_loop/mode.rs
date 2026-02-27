@@ -193,6 +193,8 @@ impl Actor {
         self.deferred_missing_payload_qcs.clear();
         self.quarantined_block_sync_qcs.clear();
         self.vote_roster_cache.clear();
+        self.block_signer_cache.clear();
+        self.block_sync_roster_cache.clear();
         let now = Instant::now();
         let (effective_mode, pacemaker_block_time, pacemaker_timeouts) = {
             let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);

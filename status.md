@@ -1,6 +1,109 @@
 # Status
 
-Last update: 2026-02-26
+Last update: 2026-02-27
+- Latest sync (2026-02-27 sub-1s localnet plan tranche: fallback-anchor dedup + backlog hysteresis + vote-only fast-path):
+  - Implemented internal-only changes with no CLI/public-config/FSM topology changes in:
+    - `crates/iroha_core/src/block_sync.rs`:
+      - unknown-prev dedup identity no longer keys on fallback anchor (`global: (prev_hash, latest_hash)`, `per-peer: (peer, prev_hash, latest_hash)`),
+      - fallback-anchor drift now emits debug diagnostics without resetting dedup identity,
+      - stuck-key escape hatch added (deterministic one-shot full refresh after repeat threshold, then repeat counter reset),
+      - repeated-share path remains incremental/cooldown-gated and first share remains full.
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`:
+      - backlog-aware hysteresis added to `maybe_force_view_change_for_stalled_pending(...)` for non-near-quorum stalls (extended timeout + backlog-progress grace suppression),
+      - near-quorum reduced-timeout gate/cause path unchanged (`ViewChangeCause::QuorumTimeout`).
+    - `crates/iroha_core/src/sumeragi/main_loop/qc.rs`:
+      - when equivalent missing-block fetch is already in-flight, duplicate defer path now suppresses vote rebroadcast and range-pull escalation churn for that cooldown window.
+    - `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`:
+      - added early known-block vote-only fast-path before roster-selection/validation pipeline.
+    - `crates/iroha_core/src/sumeragi/main_loop.rs` + `tests.rs`:
+      - `BlockSyncRosterCacheKey` now ignores transient view-only variance (view removed from key; QC/checkpoint roster hashing normalized by validator-set hash).
+    - `crates/iroha_core/src/sumeragi/mod.rs`:
+      - lowered `VOTE_BURST_CAP_WITH_BLOCKS` to bounded backlog-safe value (aligned with payload-backlog burst cap) so block queue drains earlier under sustained block backlog.
+    - `crates/izanami/src/chaos.rs`:
+      - shared-host DA multipliers pinned to `quorum=4`, `availability=3` (availability floor remains `2000ms`); shared-host soak pipeline floor remains `600ms` in-tree.
+  - Added/updated regression tests:
+    - `crates/iroha_core/src/block_sync.rs`:
+      - `unknown_prev_fallback_anchor_change_keeps_peer_dedup_identity`
+      - `unknown_prev_global_fallback_anchor_change_keeps_dedup_identity`
+      - `unknown_prev_stuck_key_triggers_one_shot_full_refresh`
+      - updated `should_share_unknown_prev_hash_tracks_peer_and_height` expectations for fallback-anchor dedup stability.
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+      - `block_sync_update_known_block_vote_only_uses_fast_path`
+      - `block_sync_roster_cache_key_ignores_view_only_variance`
+      - `qc_missing_block_defer_inflight_fetch_suppresses_range_pull_escalation`
+      - `maybe_force_view_change_for_stalled_pending_backlog_hysteresis_extends_non_near_timeout`.
+  - Validation:
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core main_loop -- --nocapture` (order-sensitive failure remains in this tree: `1300 passed`, `1 failed`, `2 ignored`; failing: `sumeragi::main_loop::tests::new_view_tracker_counts_local_with_rotated_indices`)
+    - `cargo test -p iroha_core main_loop -- --nocapture --test-threads=1` (ok; `1301 passed`, `0 failed`, `2 ignored`)
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok; `3 passed`)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; `4 passed`)
+    - additional new-test checks (all ok):
+      - `cargo test -p iroha_core --lib unknown_prev_hash_tests:: -- --nocapture`
+      - `cargo test -p iroha_core --lib block_sync_update_known_block_vote_only_uses_fast_path -- --nocapture`
+      - `cargo test -p iroha_core --lib block_sync_roster_cache_key_ignores_view_only_variance -- --nocapture`
+      - `cargo test -p iroha_core --lib qc_missing_block_defer_inflight_fetch_suppresses_range_pull_escalation -- --nocapture`
+      - `cargo test -p iroha_core --lib maybe_force_view_change_for_stalled_pending_backlog_hysteresis_extends_non_near_timeout -- --nocapture`
+      - `cargo test -p iroha_core --lib run_worker_iteration_limits_vote_burst_when_blocks_pending -- --nocapture`
+  - Artifacts and deltas:
+    - No new 1200s/3600s soak artifacts were produced in this test-only rerun slice.
+    - Main-loop suite flake delta in this tree: previous broad run had 2 order-sensitive failures; latest broad rerun shows 1 remaining (`new_view_tracker_counts_local_with_rotated_indices`) and passes fully with `--test-threads=1`.
+- Latest sync (2026-02-27 plan implementation refresh):
+  - Implemented the remaining policy-only consensus liveness changes in:
+    - `crates/iroha_core/src/sumeragi/mod.rs` (tiered block backlog adaptive drain caps),
+    - `crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs` + `rbc.rs` (defer duplicate `BlockCreated` RBC hydration to async seed completion; seed worker threads `2 -> 4`),
+    - `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` + `mode.rs` (reuse signer cache in block-sync update path; clear signer/roster caches on mode reset),
+    - `crates/izanami/src/chaos.rs` (shared-host soak constants updated to pipeline `600ms`, DA multipliers `3/2`, floor unchanged `2000ms`).
+  - Added/updated focused regression coverage in:
+    - `crates/iroha_core/src/sumeragi/mod.rs`,
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+  - Validation:
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core main_loop -- --nocapture` (ok; `1297 passed`, `0 failed`, `2 ignored`)
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib duplicate_block_created_defers_hydration_when_seed_queue_accepts_work -- --nocapture` (ok)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok)
+- Latest sync (2026-02-27 gate A/B soak reruns collected, unchanged command shape):
+  - Commands:
+    - `target/release/izanami --allow-net --nexus --peers 4 --faulty 0 --duration 1200s --target-blocks 1200 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`
+    - `target/release/izanami --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 3600 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`
+  - Pilot rerun artifacts:
+    - log: `/tmp/izanami_pilot_1200_gate_20260227T091425Z.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_kCJXvG`
+    - summary: `successes=3050 failures=2 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`
+    - persisted heights: `641/641/641/641` (strict `641`, spread `0`)
+    - churn counters (peer logs): payload-missing defer `6`, forced-VC stall `0` (6s-class `0`), fallback-anchor share `13`, no-proposal-cutoff `1`, progress-timeout `no`.
+  - Acceptance rerun artifacts:
+    - log: `/tmp/izanami_acceptance_3600_gate_20260227T093924Z.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_uFsH2V`
+    - summary: `successes=7543 failures=3 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`
+    - persisted heights: `1544/1544/1544/1544` (strict `1544`, spread `0`)
+    - churn counters (peer logs): payload-missing defer `39`, forced-VC stall `0` (6s-class `0`), fallback-anchor share `26`, no-proposal-cutoff `0`, progress-timeout `no`.
+  - Delta vs latest 2026-02-26 baseline artifacts (`/tmp/izanami_pilot_1200_gate_20260226T191033Z.log`, `/tmp/izanami_acceptance_3600_gate_20260226T191033Z.log`):
+    - pilot: strict `+11` (`630 -> 641`), payload-missing `-2` (`8 -> 6`), forced-VC `-1` (`1 -> 0`), fallback-anchor `-6` (`19 -> 13`).
+    - acceptance: strict `+9` (`1535 -> 1544`), payload-missing `-17` (`56 -> 39`), forced-VC `-1` (`1 -> 0`), 6s-class forced-VC `-1` (`1 -> 0`), fallback-anchor `-22` (`48 -> 26`).
+- Latest sync (2026-02-27 policy-only consensus stall-time reduction follow-up):
+  - Implemented additional internal-only churn controls in:
+    - `crates/iroha_core/src/block_sync.rs`: unknown-prev fallback responses now use repeat-aware cooldown scaling and bounded incremental sharing for repeated `(peer, prev_hash, latest_hash, fallback_start)` tuples; first response remains full-share.
+    - `crates/iroha_core/src/sumeragi/main_loop/qc.rs`: `qc_missing_block_defer(...)` now suppresses vote rebroadcast when an equivalent missing-block fetch is already in-flight for the same block/height within retry window.
+    - `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`: near-quorum missing-payload entries now trigger bounded pre-timeout recovery escalation attempts each tick before timeout-boundary VC behavior.
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`: `maybe_force_view_change_for_stalled_pending(...)` now performs bounded pre-timeout near-quorum recovery escalation with the same recent-progress suppression semantics.
+  - Safety/FSM invariants preserved: no phase-topology changes, no quorum rule relaxation, forced VC still goes through `trigger_view_change_with_cause(..., ViewChangeCause::QuorumTimeout)`.
+  - Validation:
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core maybe_force_view_change_for_stalled_pending_uses_reduced_timeout_for_near_quorum_missing_payload -- --nocapture` (ok)
+    - `cargo test -p iroha_core maybe_force_view_change_for_stalled_pending_reduced_timeout_defers_on_recent_progress -- --nocapture` (ok)
+    - `cargo test -p iroha_core sidecar_mismatch_duplicate_within_cooldown_suppresses_recovery_actions -- --nocapture` (ok)
+    - `cargo test -p iroha_core should_share_unknown_prev_hash_applies_per_peer_hash_cooldown -- --nocapture` (ok)
+    - `cargo test -p iroha_core unknown_prev_repeated_tuple_transitions_to_incremental_share_mode -- --nocapture` (ok)
+    - `cargo test -p iroha_core pacemaker_defers_proposal_when_precommit_votes_present -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok)
+    - `cargo test -p iroha_core main_loop -- --nocapture --test-threads=1` (ok; `1295 passed`, `0 failed`, `2 ignored`)
+    - `cargo test -p iroha_core main_loop -- --nocapture` remains order/concurrency-sensitive in this tree (isolated failing tests pass when run alone).
 - Latest sync (2026-02-26 post-bottleneck-policy rerun, unchanged gate shape):
   - Reran canonical gate envelope (`--allow-net --nexus --peers 4 --faulty 0 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`) after the near-quorum/backlog and aggregate-mismatch policy refinements.
   - Pilot (`1200s`, `target-blocks=1200`):

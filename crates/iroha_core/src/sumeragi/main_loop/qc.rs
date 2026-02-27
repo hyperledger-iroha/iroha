@@ -2353,6 +2353,31 @@ impl Actor {
             if self.block_sync_fetch_log.allow(block_hash, now, cooldown) {
                 let local_peer = self.common_config.peer.id();
                 let targets = rebroadcast_targets_for_qc(local_peer, signers, signature_topology);
+                let fetch_freshness_cap =
+                    super::saturating_mul_duration(cooldown, 2).max(Duration::from_millis(1));
+                let (
+                    missing_fetch_inflight,
+                    missing_fetch_fresh,
+                    missing_fetch_age_ms,
+                    missing_fetch_freshness_window_ms,
+                ) = self
+                    .pending
+                    .missing_block_requests
+                    .get(&block_hash)
+                    .and_then(|request| {
+                        (request.height == height).then(|| {
+                            let request_age = now.saturating_duration_since(request.last_requested);
+                            let request_window = request.retry_window.max(Duration::from_millis(1));
+                            let freshness_window = request_window.min(fetch_freshness_cap);
+                            (
+                                true,
+                                request_age < freshness_window,
+                                request_age.as_millis(),
+                                freshness_window.as_millis(),
+                            )
+                        })
+                    })
+                    .unwrap_or((false, false, 0, 0));
                 let mut payload_rebroadcasted = false;
                 if let Some(block) = self
                     .pending
@@ -2376,7 +2401,7 @@ impl Actor {
                     }
                 }
                 let mut missing_block_requested = false;
-                if !targets.is_empty() {
+                if !targets.is_empty() && !missing_fetch_fresh {
                     self.request_missing_block(
                         block_hash,
                         height,
@@ -2393,9 +2418,33 @@ impl Actor {
                         None,
                         now,
                     );
+                } else if !targets.is_empty() && missing_fetch_fresh {
+                    debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        request_age_ms = missing_fetch_age_ms,
+                        freshness_window_ms = missing_fetch_freshness_window_ms,
+                        "suppressing duplicate missing-block fetch while equivalent request remains in-flight"
+                    );
                 }
-                let range_pull_allowed = self
-                    .allow_qc_missing_payload_range_pull(height, view, block_hash, now, cooldown);
+                let range_pull_allowed = if missing_fetch_fresh {
+                    debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        request_age_ms = missing_fetch_age_ms,
+                        freshness_window_ms = missing_fetch_freshness_window_ms,
+                        "suppressing range-pull recovery while missing-block fetch remains in-flight"
+                    );
+                    false
+                } else {
+                    self.allow_qc_missing_payload_range_pull(
+                        height, view, block_hash, now, cooldown,
+                    )
+                };
                 let block_sync_requested = if range_pull_allowed {
                     self.request_range_pull_from_anchor(
                         height,
@@ -2415,8 +2464,31 @@ impl Actor {
                         now,
                     );
                 }
-                let range_pull_escalated = self
-                    .maybe_escalate_missing_block_height_recovery(block_hash, height, view, now);
+                let range_pull_escalated = if missing_fetch_fresh {
+                    debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        request_age_ms = missing_fetch_age_ms,
+                        freshness_window_ms = missing_fetch_freshness_window_ms,
+                        "suppressing duplicate missing-block escalation while equivalent fetch remains in-flight"
+                    );
+                    false
+                } else if self
+                    .should_skip_missing_block_recovery_escalation(block_hash, height, view, now)
+                {
+                    debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        "suppressing duplicate missing-block escalation while prior recovery is in-flight"
+                    );
+                    false
+                } else {
+                    self.maybe_escalate_missing_block_height_recovery(block_hash, height, view, now)
+                };
                 let votes_rebroadcasted =
                     self.rebroadcast_block_votes(phase, block_hash, height, view, true);
                 debug!(
@@ -2430,6 +2502,10 @@ impl Actor {
                     missing_block_requested,
                     block_sync_requested,
                     range_pull_escalated,
+                    missing_fetch_inflight,
+                    missing_fetch_fresh,
+                    missing_fetch_age_ms,
+                    missing_fetch_freshness_window_ms,
                     range_pull_allowed,
                     cooldown_ms = cooldown.as_millis(),
                     "triggered fast payload-missing recovery for quorum-reached QC deferral"

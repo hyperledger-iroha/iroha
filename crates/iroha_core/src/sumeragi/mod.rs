@@ -1245,11 +1245,11 @@ mod tests {
         apply_adaptive_drain_caps(&mut cfg, depths);
         assert_eq!(
             cfg.block_payload_rx_drain_max_messages,
-            BLOCK_RX_BACKLOG_BLOCK_PAYLOAD_CAP
+            BLOCK_BACKLOG_PAYLOAD_RBC_MIN_CAP
         );
         assert_eq!(
             cfg.rbc_chunk_rx_drain_max_messages,
-            BLOCK_RX_BACKLOG_RBC_CHUNK_CAP
+            BLOCK_BACKLOG_PAYLOAD_RBC_MIN_CAP
         );
     }
 
@@ -5418,7 +5418,7 @@ mod tests {
         let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
 
-        for _ in 0..(BLOCK_RX_BACKLOG_DRAIN_CAP + 2) {
+        for _ in 0..20 {
             block_tx
                 .send(inbound(BlockMessage::ConsensusParams(
                     message::ConsensusParamsAdvert {
@@ -5478,8 +5478,66 @@ mod tests {
 
         let expected_cap = config
             .block_rx_drain_max_messages
-            .min(BLOCK_RX_BACKLOG_DRAIN_CAP);
+            .min(block_backlog_drain_cap(20));
         assert_eq!(stats.blocks_handled, expected_cap);
+    }
+
+    #[test]
+    fn block_backlog_drain_cap_uses_depth_tiers() {
+        assert_eq!(block_backlog_drain_cap(0), 0);
+        assert_eq!(block_backlog_drain_cap(1), BLOCK_RX_BACKLOG_DRAIN_CAP_SMALL);
+        assert_eq!(block_backlog_drain_cap(3), BLOCK_RX_BACKLOG_DRAIN_CAP_SMALL);
+        assert_eq!(
+            block_backlog_drain_cap(4),
+            BLOCK_RX_BACKLOG_DRAIN_CAP_MEDIUM
+        );
+        assert_eq!(
+            block_backlog_drain_cap(15),
+            BLOCK_RX_BACKLOG_DRAIN_CAP_MEDIUM
+        );
+        assert_eq!(
+            block_backlog_drain_cap(16),
+            BLOCK_RX_BACKLOG_DRAIN_CAP_LARGE
+        );
+        assert_eq!(
+            block_backlog_drain_cap(63),
+            BLOCK_RX_BACKLOG_DRAIN_CAP_LARGE
+        );
+        assert_eq!(block_backlog_drain_cap(64), BLOCK_RX_BACKLOG_DRAIN_CAP_HUGE);
+    }
+
+    #[test]
+    fn apply_adaptive_drain_caps_scales_payload_and_rbc_from_block_backlog() {
+        let mut cfg = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 32,
+            vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 32,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 32,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let depths = status::WorkerQueueDepthSnapshot {
+            block_rx: 20,
+            ..status::WorkerQueueDepthSnapshot::default()
+        };
+        apply_adaptive_drain_caps(&mut cfg, depths);
+
+        assert_eq!(cfg.block_rx_drain_max_messages, 16);
+        assert_eq!(cfg.block_payload_rx_drain_max_messages, 12);
+        assert_eq!(cfg.rbc_chunk_rx_drain_max_messages, 12);
     }
 
     #[test]
@@ -10218,29 +10276,41 @@ fn cap_rbc_drain_budget(raw: Duration, floor: Duration, budget_cap: Duration) ->
     raw.min(cap).max(floor)
 }
 
+fn block_backlog_drain_cap(queue_depth: u64) -> usize {
+    match queue_depth {
+        0 => 0,
+        1..=3 => BLOCK_RX_BACKLOG_DRAIN_CAP_SMALL,
+        4..=15 => BLOCK_RX_BACKLOG_DRAIN_CAP_MEDIUM,
+        16..=63 => BLOCK_RX_BACKLOG_DRAIN_CAP_LARGE,
+        _ => BLOCK_RX_BACKLOG_DRAIN_CAP_HUGE,
+    }
+}
+
 fn apply_adaptive_drain_caps(
     cfg: &mut WorkerLoopConfig,
     queue_depths: status::WorkerQueueDepthSnapshot,
 ) {
-    let base = cfg.block_payload_rx_drain_max_messages.max(1);
+    let block_payload_base = cfg.block_payload_rx_drain_max_messages.max(1);
+    let rbc_chunk_base = cfg.rbc_chunk_rx_drain_max_messages.max(1);
     if queue_depths.vote_rx > 0 {
-        let reduced =
-            (base / BLOCK_PAYLOAD_DRAIN_BACKLOG_DIVISOR).max(BLOCK_PAYLOAD_DRAIN_BACKLOG_MIN);
-        let cap = reduced.min(base);
-        if cap != base {
+        let reduced = (block_payload_base / BLOCK_PAYLOAD_DRAIN_BACKLOG_DIVISOR)
+            .max(BLOCK_PAYLOAD_DRAIN_BACKLOG_MIN);
+        let cap = reduced.min(block_payload_base);
+        if cap != block_payload_base {
             cfg.block_payload_rx_drain_max_messages = cap;
             iroha_logger::debug!(
                 vote_rx = queue_depths.vote_rx,
                 block_payload_rx = queue_depths.block_payload_rx,
-                base_cap = base,
+                base_cap = block_payload_base,
                 adaptive_cap = cap,
                 "adaptive block payload drain cap applied due to vote backlog"
             );
         }
     }
     if queue_depths.block_rx > 0 {
+        let target_block_cap = block_backlog_drain_cap(queue_depths.block_rx).max(1);
         let block_base = cfg.block_rx_drain_max_messages.max(1);
-        let block_cap = block_base.min(BLOCK_RX_BACKLOG_DRAIN_CAP);
+        let block_cap = block_base.min(target_block_cap);
         if block_cap != block_base {
             cfg.block_rx_drain_max_messages = block_cap;
             iroha_logger::debug!(
@@ -10250,8 +10320,12 @@ fn apply_adaptive_drain_caps(
                 "adaptive block drain cap applied due to block backlog"
             );
         }
+        let payload_target = target_block_cap
+            .saturating_mul(3)
+            .saturating_div(4)
+            .max(BLOCK_BACKLOG_PAYLOAD_RBC_MIN_CAP);
         let payload_base = cfg.block_payload_rx_drain_max_messages.max(1);
-        let payload_cap = payload_base.min(BLOCK_RX_BACKLOG_BLOCK_PAYLOAD_CAP);
+        let payload_cap = block_payload_base.min(payload_target);
         if payload_cap != payload_base {
             cfg.block_payload_rx_drain_max_messages = payload_cap;
             iroha_logger::debug!(
@@ -10263,7 +10337,7 @@ fn apply_adaptive_drain_caps(
             );
         }
         let rbc_base = cfg.rbc_chunk_rx_drain_max_messages.max(1);
-        let rbc_cap = rbc_base.min(BLOCK_RX_BACKLOG_RBC_CHUNK_CAP);
+        let rbc_cap = rbc_chunk_base.min(payload_target);
         if rbc_cap != rbc_base {
             cfg.rbc_chunk_rx_drain_max_messages = rbc_cap;
             iroha_logger::debug!(
@@ -10529,15 +10603,19 @@ const VOTE_BURST_CAP: usize = 32;
 #[cfg(test)]
 const VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG: usize =
     iroha_config::parameters::defaults::sumeragi::WORKER_VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG;
-// Keep vote bursts at full size even when blocks are queued to prioritize QC aggregation.
-const VOTE_BURST_CAP_WITH_BLOCKS: usize = 32;
+// Keep votes prioritized under block backlog, but bound burst size so block progress messages
+// are not starved behind long vote runs.
+const VOTE_BURST_CAP_WITH_BLOCKS: usize =
+    iroha_config::parameters::defaults::sumeragi::WORKER_VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG;
 const BLOCK_PAYLOAD_DRAIN_BACKLOG_DIVISOR: usize = 4;
 const BLOCK_PAYLOAD_DRAIN_BACKLOG_MIN: usize = 2;
 const BLOCK_RX_URGENT_FRACTION: u32 = 4;
 const BLOCK_RX_URGENT_FLOOR_MS: u64 = 200;
-const BLOCK_RX_BACKLOG_DRAIN_CAP: usize = 4;
-const BLOCK_RX_BACKLOG_BLOCK_PAYLOAD_CAP: usize = 4;
-const BLOCK_RX_BACKLOG_RBC_CHUNK_CAP: usize = 4;
+const BLOCK_RX_BACKLOG_DRAIN_CAP_SMALL: usize = 4;
+const BLOCK_RX_BACKLOG_DRAIN_CAP_MEDIUM: usize = 8;
+const BLOCK_RX_BACKLOG_DRAIN_CAP_LARGE: usize = 16;
+const BLOCK_RX_BACKLOG_DRAIN_CAP_HUGE: usize = 32;
+const BLOCK_BACKLOG_PAYLOAD_RBC_MIN_CAP: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PriorityTier {

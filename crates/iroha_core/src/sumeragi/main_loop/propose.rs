@@ -2520,6 +2520,9 @@ impl Actor {
                     queue_len = pending_queue_len,
                     "proposal already cached for this slot; waiting for votes/view change"
                 );
+                // Provide one cooldown-gated NEW_VIEW assist while waiting so peers that
+                // missed prior messages can converge without immediate view rotation.
+                self.maybe_rebroadcast_new_view_votes(height, now);
             } else {
                 trace!(
                     height,

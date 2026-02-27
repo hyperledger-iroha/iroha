@@ -1394,6 +1394,11 @@ impl Actor {
         let block_known = self.kura.get_block_height_by_hash(block_hash).is_some();
         let kura_known_ms =
             u64::try_from(kura_known_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let has_local_commit_snapshot = block_known
+            && self
+                .state
+                .commit_roster_snapshot_for_block(block_height, block_hash)
+                .is_some();
         let has_roster_hint = incoming_qc.is_some()
             || validator_checkpoint.is_some()
             || stake_snapshot.is_some()
@@ -1424,8 +1429,9 @@ impl Actor {
         let mut commit_votes = Some(commit_votes);
         let mut process_commit_votes = |actor: &mut Actor| {
             let Some(commit_votes) = commit_votes.take() else {
-                return;
+                return (0usize, 0usize);
             };
+            let mut processed_votes = 0usize;
             let mut dropped_votes = 0usize;
             for vote in commit_votes {
                 if vote.phase != crate::sumeragi::consensus::Phase::Commit
@@ -1438,6 +1444,7 @@ impl Actor {
                     continue;
                 }
                 actor.handle_vote(vote);
+                processed_votes = processed_votes.saturating_add(1);
             }
             if dropped_votes > 0 {
                 debug!(
@@ -1448,11 +1455,35 @@ impl Actor {
                     "dropping mismatched commit votes from block sync update"
                 );
             }
+            (processed_votes, dropped_votes)
         };
         let commit_votes_start = Instant::now();
-        process_commit_votes(self);
+        let (commit_votes_processed, commit_votes_dropped) = process_commit_votes(self);
         let commit_votes_pre_ms =
             u64::try_from(commit_votes_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let vote_only_known_block_fast_path = block_known
+            && has_commit_votes
+            && commit_votes_processed > 0
+            && commit_votes_dropped == 0
+            && has_local_commit_snapshot
+            && incoming_qc.is_none()
+            && validator_checkpoint.is_none()
+            && stake_snapshot.is_none();
+        if vote_only_known_block_fast_path {
+            debug!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                commit_votes_pre_ms,
+                commit_votes_processed,
+                "processed known-block vote-only block sync update via fast-path"
+            );
+            self.clear_missing_block_request(
+                &block_hash,
+                MissingBlockClearReason::PayloadAvailable,
+            );
+            return Ok(());
+        }
         if let Some(reason) = self.block_sync_update_deferral_reason() {
             self.defer_block_sync_update(
                 super::message::BlockSyncUpdate {
@@ -1856,103 +1887,135 @@ impl Actor {
             return Ok(());
         }
         let had_incoming_qc = incoming_qc.is_some();
+        let signer_cache_key = BlockSignerCacheKey::new(
+            block_hash,
+            selection.roster.as_slice(),
+            consensus_mode,
+            prf_seed,
+        );
         let signature_start = Instant::now();
-        let block_signers_result = {
-            let world_view = self.state.world_view();
-            validated_block_signers_from_world(&block, &topology, &world_view, mode_tag, prf_seed)
-        };
-        let signature_verify_ms =
-            u64::try_from(signature_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let block_signers = match block_signers_result {
-            Ok(signers) => signers,
-            Err(err) => {
-                let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
-                let parent_missing = block
-                    .header()
-                    .prev_block_hash()
-                    .is_some_and(|hash| !self.block_known_locally(hash));
-                let ahead = block_height > local_height.saturating_add(1);
-                let defer_signatures = matches!(
-                    err,
-                    crate::block::SignatureVerificationError::UnknownSignature
-                        | crate::block::SignatureVerificationError::UnknownSignatory
-                        | crate::block::SignatureVerificationError::MissingPop
-                );
-                if parent_missing && ahead && defer_signatures {
-                    let expected_height = local_height.saturating_add(1);
-                    let expected_usize = usize::try_from(expected_height).ok();
-                    let actual_usize = usize::try_from(block_height).ok();
-                    if let Some(parent_hash) = block.header().prev_block_hash() {
-                        let commit_topology = self.effective_commit_topology();
-                        self.request_missing_parent(
-                            block_hash,
-                            block_height,
-                            block_view,
-                            parent_hash,
-                            &commit_topology,
-                            Some(&selection.roster),
-                            expected_usize,
-                            actual_usize,
-                            "block_sync_signatures",
-                        );
-                        if block_height > expected_height.saturating_add(1) {
-                            self.request_missing_parents_for_gap(
+        let cached_block_signers = signer_cache_key
+            .as_ref()
+            .and_then(|key| self.block_signer_cache.get(key));
+        let block_signers = if let Some(signers) = cached_block_signers {
+            debug!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                signers = signers.len(),
+                "block sync signer cache hit"
+            );
+            signers
+        } else {
+            let block_signers_result = {
+                let world_view = self.state.world_view();
+                validated_block_signers_from_world(
+                    &block,
+                    &topology,
+                    &world_view,
+                    mode_tag,
+                    prf_seed,
+                )
+            };
+            match block_signers_result {
+                Ok(signers) => {
+                    if let Some(key) = signer_cache_key.clone() {
+                        self.block_signer_cache.insert(key, signers.clone());
+                    }
+                    signers
+                }
+                Err(err) => {
+                    let local_height =
+                        u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+                    let parent_missing = block
+                        .header()
+                        .prev_block_hash()
+                        .is_some_and(|hash| !self.block_known_locally(hash));
+                    let ahead = block_height > local_height.saturating_add(1);
+                    let defer_signatures = matches!(
+                        err,
+                        crate::block::SignatureVerificationError::UnknownSignature
+                            | crate::block::SignatureVerificationError::UnknownSignatory
+                            | crate::block::SignatureVerificationError::MissingPop
+                    );
+                    if parent_missing && ahead && defer_signatures {
+                        let expected_height = local_height.saturating_add(1);
+                        let expected_usize = usize::try_from(expected_height).ok();
+                        let actual_usize = usize::try_from(block_height).ok();
+                        if let Some(parent_hash) = block.header().prev_block_hash() {
+                            let commit_topology = self.effective_commit_topology();
+                            self.request_missing_parent(
+                                block_hash,
+                                block_height,
+                                block_view,
+                                parent_hash,
                                 &commit_topology,
                                 Some(&selection.roster),
-                                "block_sync_gap",
+                                expected_usize,
+                                actual_usize,
+                                "block_sync_signatures",
                             );
+                            if block_height > expected_height.saturating_add(1) {
+                                self.request_missing_parents_for_gap(
+                                    &commit_topology,
+                                    Some(&selection.roster),
+                                    "block_sync_gap",
+                                );
+                            }
                         }
+                        info!(
+                            ?err,
+                            height = block_height,
+                            view = block_view,
+                            block = %block_hash,
+                            local_height,
+                            "deferring block sync update due to signature mismatch while behind"
+                        );
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::BlockSyncUpdate,
+                            super::status::ConsensusMessageOutcome::Deferred,
+                            super::status::ConsensusMessageReason::SignatureMismatchDeferred,
+                        );
+                        let created = super::message::BlockCreated { block };
+                        let _ = self.handle_block_created(created, sender.clone());
+                        return Ok(());
                     }
-                    info!(
-                        ?err,
-                        height = block_height,
-                        view = block_view,
-                        block = %block_hash,
-                        local_height,
-                        "deferring block sync update due to signature mismatch while behind"
-                    );
-                    self.record_consensus_message_handling(
-                        super::status::ConsensusMessageKind::BlockSyncUpdate,
-                        super::status::ConsensusMessageOutcome::Deferred,
-                        super::status::ConsensusMessageReason::SignatureMismatchDeferred,
-                    );
-                    let created = super::message::BlockCreated { block };
-                    let _ = self.handle_block_created(created, sender.clone());
-                    return Ok(());
-                }
-                let has_roster_evidence = incoming_qc.is_some()
-                    || selection.commit_qc.is_some()
-                    || selection.checkpoint.is_some();
-                if has_roster_evidence {
-                    warn!(
-                        ?err,
-                        hash = ?block_hash,
-                        height = block_height,
-                        view = block_view,
-                        has_incoming_qc = incoming_qc.is_some(),
-                        has_commit_qc = selection.commit_qc.is_some(),
-                        has_checkpoint = selection.checkpoint.is_some(),
-                        "continuing block sync update despite signature mismatch because roster/QC evidence is available"
-                    );
-                    BTreeSet::new()
-                } else {
-                    super::status::inc_block_sync_drop_invalid_signatures();
-                    warn!(
-                        ?err,
-                        hash = ?block_hash,
-                        height = block_height,
-                        view = block_view,
-                        "dropping block sync update with invalid or insufficient signatures"
-                    );
-                    self.record_consensus_message_handling(
-                        super::status::ConsensusMessageKind::BlockSyncUpdate,
-                        super::status::ConsensusMessageOutcome::Dropped,
-                        super::status::ConsensusMessageReason::InvalidSignature,
-                    );
-                    return Ok(());
+                    let has_roster_evidence = incoming_qc.is_some()
+                        || selection.commit_qc.is_some()
+                        || selection.checkpoint.is_some();
+                    if has_roster_evidence {
+                        warn!(
+                            ?err,
+                            hash = ?block_hash,
+                            height = block_height,
+                            view = block_view,
+                            has_incoming_qc = incoming_qc.is_some(),
+                            has_commit_qc = selection.commit_qc.is_some(),
+                            has_checkpoint = selection.checkpoint.is_some(),
+                            "continuing block sync update despite signature mismatch because roster/QC evidence is available"
+                        );
+                        BTreeSet::new()
+                    } else {
+                        super::status::inc_block_sync_drop_invalid_signatures();
+                        warn!(
+                            ?err,
+                            hash = ?block_hash,
+                            height = block_height,
+                            view = block_view,
+                            "dropping block sync update with invalid or insufficient signatures"
+                        );
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::BlockSyncUpdate,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::InvalidSignature,
+                        );
+                        return Ok(());
+                    }
                 }
             }
         };
+        let signature_verify_ms =
+            u64::try_from(signature_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let qc_candidate_start = Instant::now();
         let commit_quorum = topology.min_votes_for_commit().max(1);
         let mut candidate_qc = {
