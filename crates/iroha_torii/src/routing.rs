@@ -81,15 +81,17 @@ use iroha_data_model::{
     },
     offline::{
         AGGREGATE_PROOF_VERSION_V1, AggregateProofEnvelope, AndroidIntegrityPolicy,
-        AppleAppAttestProof, OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceCommitment,
-        OfflineAllowanceRecord, OfflineBalanceProof, OfflineCounterState, OfflineCounterSummary,
-        OfflinePlatformProof, OfflinePlatformTokenSnapshot, OfflineProofRequestCounter,
-        OfflineProofRequestError, OfflineProofRequestKind, OfflineProofRequestReplay,
-        OfflineProofRequestSum, OfflineSpendReceipt, OfflineToOnlineTransfer,
-        OfflineTransferLifecycleEntry, OfflineTransferRecord, OfflineTransferRejectionPlatform,
-        OfflineTransferRejectionReason, OfflineTransferStatus, OfflineVerdictRevocation,
-        OfflineVerdictRevocationReason, OfflineVerdictSnapshot, OfflineWalletCertificate,
-        OfflineWalletPolicy, compute_receipts_root,
+        AppleAppAttestProof, OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY, OFFLINE_LINEAGE_EPOCH_KEY,
+        OFFLINE_LINEAGE_PREV_CERTIFICATE_ID_HEX_KEY, OFFLINE_LINEAGE_SCOPE_KEY,
+        OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceCommitment, OfflineAllowanceRecord,
+        OfflineBalanceProof, OfflineCounterState, OfflineCounterSummary, OfflinePlatformProof,
+        OfflinePlatformTokenSnapshot, OfflineProofRequestCounter, OfflineProofRequestError,
+        OfflineProofRequestKind, OfflineProofRequestReplay, OfflineProofRequestSum,
+        OfflineSpendReceipt, OfflineToOnlineTransfer, OfflineTransferLifecycleEntry,
+        OfflineTransferRecord, OfflineTransferRejectionPlatform, OfflineTransferRejectionReason,
+        OfflineTransferStatus, OfflineVerdictRevocation, OfflineVerdictRevocationReason,
+        OfflineVerdictSnapshot, OfflineWalletCertificate, OfflineWalletPolicy,
+        compute_receipts_root,
     },
     peer::PeerId,
     prelude::*,
@@ -38888,6 +38890,119 @@ pub async fn handle_v1_offline_transfer_proof(
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Clone)]
+struct OfflineDraftLineage {
+    scope: String,
+    epoch: u64,
+    prev_certificate_id: Option<Hash>,
+    min_build_number: u64,
+}
+
+#[cfg(feature = "app_api")]
+fn parse_offline_draft_lineage(metadata: &Metadata) -> Result<OfflineDraftLineage> {
+    let scope = draft_metadata_string(metadata, OFFLINE_LINEAGE_SCOPE_KEY, "lineage scope")?;
+    let scope = scope.trim();
+    if scope.is_empty() {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:offline.lineage.scope must not be empty"
+        )));
+    }
+
+    let epoch = draft_metadata_u64(metadata, OFFLINE_LINEAGE_EPOCH_KEY, "lineage epoch")?;
+    if epoch == 0 {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:offline.lineage.epoch must be greater than zero"
+        )));
+    }
+
+    let prev_hex =
+        draft_metadata_optional_string(metadata, OFFLINE_LINEAGE_PREV_CERTIFICATE_ID_HEX_KEY)?;
+    let prev_certificate_id = prev_hex
+        .as_deref()
+        .map(|value| parse_hash_hex(value, OFFLINE_LINEAGE_PREV_CERTIFICATE_ID_HEX_KEY))
+        .transpose()?;
+
+    if epoch == 1 && prev_certificate_id.is_some() {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:offline.lineage.prev_certificate_id_hex must be absent when epoch=1"
+        )));
+    }
+    if epoch > 1 && prev_certificate_id.is_none() {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:offline.lineage.prev_certificate_id_hex is required when epoch>1"
+        )));
+    }
+
+    let min_build_number = draft_metadata_u64(
+        metadata,
+        OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY,
+        "minimum build number",
+    )?;
+
+    Ok(OfflineDraftLineage {
+        scope: scope.to_string(),
+        epoch,
+        prev_certificate_id,
+        min_build_number,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn draft_metadata_optional_string(metadata: &Metadata, key: &str) -> Result<Option<String>> {
+    let name = Name::from_str(key).map_err(|err| {
+        conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:invalid metadata key `{key}`: {err}"
+        ))
+    })?;
+    metadata
+        .get(&name)
+        .map(|value| {
+            value.try_into_any::<String>().map_err(|err| {
+                conversion_error(format!(
+                    "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:metadata `{key}` must be a string: {err}"
+                ))
+            })
+        })
+        .transpose()
+}
+
+#[cfg(feature = "app_api")]
+fn draft_metadata_string(metadata: &Metadata, key: &str, label: &str) -> Result<String> {
+    draft_metadata_optional_string(metadata, key)?.ok_or_else(|| {
+        conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:missing {label} metadata `{key}`"
+        ))
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn draft_metadata_u64(metadata: &Metadata, key: &str, label: &str) -> Result<u64> {
+    let name = Name::from_str(key).map_err(|err| {
+        conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:invalid metadata key `{key}`: {err}"
+        ))
+    })?;
+    let value = metadata.get(&name).ok_or_else(|| {
+        conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:missing {label} metadata `{key}`"
+        ))
+    })?;
+    if let Ok(parsed) = value.try_into_any::<u64>() {
+        return Ok(parsed);
+    }
+    let text = value.try_into_any::<String>().map_err(|err| {
+        conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:metadata `{key}` must be a u64/string: {err}"
+        ))
+    })?;
+    text.parse::<u64>().map_err(|err| {
+        conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:metadata `{key}` could not parse as u64: {err}"
+        ))
+    })
+}
+
+#[cfg(feature = "app_api")]
 fn sign_offline_certificate(
     issuer: &crate::OfflineIssuerSigner,
     draft: OfflineWalletCertificateDraft,
@@ -38921,6 +39036,12 @@ fn sign_offline_certificate(
     if allowance_signatory != operator_key {
         return Err(conversion_error(format!(
             "{OFFLINE_REJECTION_REASON_PREFIX}operator_key_mismatch:operator key does not match operator account"
+        )));
+    }
+    let lineage = parse_offline_draft_lineage(&draft.metadata)?;
+    if lineage.min_build_number == 0 {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:offline.build_claim.min_build_number must be greater than zero"
         )));
     }
 
@@ -38994,6 +39115,29 @@ pub async fn handle_post_v1_offline_certificates_renew_issue(
     if record.certificate.controller != controller {
         return Err(conversion_error(format!(
             "{OFFLINE_REJECTION_REASON_PREFIX}unauthorized_controller:renewal certificate controller mismatch"
+        )));
+    }
+    let previous_lineage = parse_offline_draft_lineage(&record.certificate.metadata)?;
+    let renewed_lineage = parse_offline_draft_lineage(&req.certificate.metadata)?;
+    if renewed_lineage.scope != previous_lineage.scope {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:renewal lineage scope mismatch"
+        )));
+    }
+    let expected_epoch = previous_lineage.epoch.checked_add(1).ok_or_else(|| {
+        conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:renewal lineage epoch overflow"
+        ))
+    })?;
+    if renewed_lineage.epoch != expected_epoch {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:renewal lineage epoch must be {}",
+            expected_epoch
+        )));
+    }
+    if renewed_lineage.prev_certificate_id != Some(old_certificate_id) {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:renewal lineage prev certificate mismatch"
         )));
     }
 
@@ -42972,6 +43116,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
         platform_snapshot: None,
         sender_certificate_id: certificate.certificate_id(),
         sender_signature: Signature::from_bytes(&[1; 64]),
+        build_claim: None,
     };
 
     let receipts = vec![receipt];

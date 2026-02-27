@@ -481,6 +481,12 @@ ret = "r10=u64(0/1)"
 gas = "-"
 
 [[syscall]]
+number = "0x7E"
+args = "r10=&NoritoBytes(VrfEpochSeedRequest)"
+ret = "r10=ptr (&NoritoBytes(VrfEpochSeedResponse)), r11=status:u64"
+gas = "G_vote_get"
+
+[[syscall]]
 number = "0x90"
 args = "r10=&Blob(message)"
 ret = "r10=ptr (&Blob(digest))"

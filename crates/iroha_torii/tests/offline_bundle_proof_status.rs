@@ -435,6 +435,7 @@ fn build_receipt(
         platform_snapshot: None,
         sender_certificate_id: certificate.certificate_id(),
         sender_signature: Signature::from_bytes(&[0; 64]),
+        build_claim: None,
     };
     let challenge_hash = receipt
         .challenge_hash_with_chain_id(chain_id)

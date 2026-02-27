@@ -406,6 +406,7 @@ macro_rules! build_world_block {
             settlement_ledgers: $state.settlement_ledgers.$method(),
             offline_allowances: $state.offline_allowances.$method(),
             offline_verdict_revocations: $state.offline_verdict_revocations.$method(),
+            offline_consumed_build_claim_ids: $state.offline_consumed_build_claim_ids.$method(),
             offline_to_online_transfers: $state.offline_to_online_transfers.$method(),
             offline_transfer_sender_index: $state.offline_transfer_sender_index.$method(),
             offline_transfer_receiver_index: $state.offline_transfer_receiver_index.$method(),
@@ -526,6 +527,9 @@ macro_rules! build_world_transaction {
             settlement_ledgers: $state.settlement_ledgers.transaction(),
             offline_allowances: $state.offline_allowances.transaction(),
             offline_verdict_revocations: $state.offline_verdict_revocations.transaction(),
+            offline_consumed_build_claim_ids: $state
+                .offline_consumed_build_claim_ids
+                .transaction(),
             offline_to_online_transfers: $state.offline_to_online_transfers.transaction(),
             offline_transfer_sender_index: $state.offline_transfer_sender_index.transaction(),
             offline_transfer_receiver_index: $state.offline_transfer_receiver_index.transaction(),
@@ -1440,6 +1444,8 @@ pub struct World {
     pub(crate) offline_allowances: Storage<Hash, OfflineAllowanceRecord>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations: Storage<Hash, OfflineVerdictRevocation>,
+    /// Consumed build-claim identifiers used for replay protection across pruning.
+    pub(crate) offline_consumed_build_claim_ids: Storage<Hash, ()>,
     /// Pending offline-to-online transfer bundles keyed by bundle id.
     pub(crate) offline_to_online_transfers: Storage<Hash, OfflineTransferRecord>,
     /// Offline transfer bundles indexed by controller account id.
@@ -1720,6 +1726,8 @@ pub struct WorldBlock<'world> {
     pub(crate) offline_allowances: StorageBlock<'world, Hash, OfflineAllowanceRecord>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations: StorageBlock<'world, Hash, OfflineVerdictRevocation>,
+    /// Consumed build-claim identifiers used for replay protection across pruning.
+    pub(crate) offline_consumed_build_claim_ids: StorageBlock<'world, Hash, ()>,
     /// Pending offline-to-online transfer bundles keyed by bundle id.
     pub(crate) offline_to_online_transfers: StorageBlock<'world, Hash, OfflineTransferRecord>,
     /// Offline transfer bundles indexed by controller account id.
@@ -1848,6 +1856,10 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.parliament_bodies, ParliamentBodies);
         collect_reverts!(self.offline_allowances, OfflineAllowance);
         collect_reverts!(self.offline_verdict_revocations, OfflineVerdictRevocation);
+        collect_reverts!(
+            self.offline_consumed_build_claim_ids,
+            OfflineConsumedBuildClaimId
+        );
         collect_reverts!(self.offline_to_online_transfers, OfflineTransfer);
 
         diff
@@ -1896,6 +1908,10 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.parliament_bodies, ParliamentBodies);
         collect_payload!(self.offline_allowances, OfflineAllowance);
         collect_payload!(self.offline_verdict_revocations, OfflineVerdictRevocation);
+        collect_payload!(
+            self.offline_consumed_build_claim_ids,
+            OfflineConsumedBuildClaimId
+        );
         collect_payload!(self.offline_to_online_transfers, OfflineTransfer);
 
         payload
@@ -2166,6 +2182,8 @@ pub struct WorldTransaction<'block, 'world> {
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations:
         StorageTransaction<'block, 'world, Hash, OfflineVerdictRevocation>,
+    /// Consumed build-claim identifiers used for replay protection across pruning.
+    pub(crate) offline_consumed_build_claim_ids: StorageTransaction<'block, 'world, Hash, ()>,
     /// Pending offline-to-online transfer bundles keyed by bundle id.
     pub(crate) offline_to_online_transfers:
         StorageTransaction<'block, 'world, Hash, OfflineTransferRecord>,
@@ -2478,6 +2496,8 @@ pub struct WorldView<'world> {
     pub(crate) offline_allowances: StorageView<'world, Hash, OfflineAllowanceRecord>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations: StorageView<'world, Hash, OfflineVerdictRevocation>,
+    /// Consumed build-claim identifiers used for replay protection across pruning.
+    pub(crate) offline_consumed_build_claim_ids: StorageView<'world, Hash, ()>,
     /// Pending offline-to-online transfer bundles keyed by bundle id.
     pub(crate) offline_to_online_transfers: StorageView<'world, Hash, OfflineTransferRecord>,
     /// Offline transfer bundles indexed by controller account id.
@@ -3165,6 +3185,22 @@ pub struct GovernanceProposalRecord {
     /// Pipeline stage statuses for SLA enforcement.
     #[norito(default)]
     pub pipeline: GovernancePipeline,
+    /// Proposal-time parliament draw snapshot used for JIT sortition approvals.
+    #[norito(default)]
+    pub parliament_snapshot: Option<GovernanceParliamentSnapshot>,
+}
+
+/// Proposal-time parliament draw snapshot.
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
+pub struct GovernanceParliamentSnapshot {
+    /// Selection epoch/round identifier bound to this proposal.
+    pub selection_epoch: u64,
+    /// Deterministic 32-byte beacon used to derive body rosters.
+    pub beacon: [u8; 32],
+    /// Blake2b-32 commitment of the encoded [`ParliamentBodies`] payload.
+    pub roster_root: [u8; 32],
+    /// Multi-body roster snapshot bound to this proposal.
+    pub bodies: iroha_data_model::governance::types::ParliamentBodies,
 }
 
 impl GovernanceProposalRecord {
@@ -3190,6 +3226,14 @@ impl GovernanceProposalRecord {
             }
             iroha_data_model::governance::types::ProposalKind::DeployContract(_) => None,
         }
+    }
+
+    /// Resolve which approval epoch should gate stage quorum checks.
+    #[must_use]
+    pub fn approval_epoch(&self, fallback_epoch: u64) -> u64 {
+        self.parliament_snapshot
+            .as_ref()
+            .map_or(fallback_epoch, |snapshot| snapshot.selection_epoch)
     }
 }
 
@@ -3544,7 +3588,7 @@ fn update_governance_pipeline_slas(
     gov_cfg: &iroha_config::parameters::actual::Governance,
 ) {
     let trace_pipeline = gov_cfg.debug_trace_pipeline;
-    let council_epoch = now_h
+    let fallback_epoch = now_h
         .saturating_sub(1)
         .saturating_div(gov_cfg.parliament_term_blocks.max(1));
     let proposals: Vec<([u8; 32], GovernanceProposalRecord)> = wtx
@@ -3561,21 +3605,22 @@ fn update_governance_pipeline_slas(
         let mut changed = false;
         trace_pipeline_proposal(trace_pipeline, &rid_hex, &rec);
         let approvals_view = wtx.governance_stage_approvals.get(&rid_hex);
+        let approval_epoch = rec.approval_epoch(fallback_epoch);
         let approvals = StageApprovals::from_readiness(StageReadiness([
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::RulesCommittee, council_epoch)
+                approvals.quorum_met(ParliamentBody::RulesCommittee, approval_epoch)
             }),
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::AgendaCouncil, council_epoch)
+                approvals.quorum_met(ParliamentBody::AgendaCouncil, approval_epoch)
             }),
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::InterestPanel, council_epoch)
+                approvals.quorum_met(ParliamentBody::InterestPanel, approval_epoch)
             }),
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::ReviewPanel, council_epoch)
+                approvals.quorum_met(ParliamentBody::ReviewPanel, approval_epoch)
             }),
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::PolicyJury, council_epoch)
+                approvals.quorum_met(ParliamentBody::PolicyJury, approval_epoch)
             }),
         ]));
         let ctx = StageContext {
@@ -3887,7 +3932,7 @@ impl GovernanceStageApprovals {
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
 pub struct GovernanceStageApproval {
-    /// Epoch of the council that provided approvals.
+    /// Selection epoch/round for the roster that provided approvals.
     pub epoch: u64,
     /// Recorded approvers.
     #[norito(default)]
@@ -9156,6 +9201,21 @@ impl World {
         self.offline_transfer_status_index = status_index.into_iter().collect();
     }
 
+    fn rebuild_offline_consumed_build_claim_ids(&mut self) {
+        let mut consumed = BTreeSet::new();
+        for (_, record) in self.offline_to_online_transfers.view().iter() {
+            if record.status == OfflineTransferStatus::Rejected {
+                continue;
+            }
+            for receipt in &record.transfer.receipts {
+                if let Some(claim) = &receipt.build_claim {
+                    consumed.insert(claim.claim_id);
+                }
+            }
+        }
+        self.offline_consumed_build_claim_ids = consumed.into_iter().map(|id| (id, ())).collect();
+    }
+
     fn insert_account_bundle(
         index: &mut BTreeMap<AccountId, BTreeSet<Hash>>,
         account: AccountId,
@@ -9513,6 +9573,8 @@ pub trait WorldReadOnly {
     fn offline_allowances(&self) -> &impl StorageReadOnly<Hash, OfflineAllowanceRecord>;
     /// Recorded verdict revocations (read-only).
     fn offline_verdict_revocations(&self) -> &impl StorageReadOnly<Hash, OfflineVerdictRevocation>;
+    /// Consumed build-claim identifiers (read-only).
+    fn offline_consumed_build_claim_ids(&self) -> &impl StorageReadOnly<Hash, ()>;
     /// Pending offline-to-online bundles (read-only).
     fn offline_to_online_transfers(&self) -> &impl StorageReadOnly<Hash, OfflineTransferRecord>;
     /// Offline transfer bundles indexed by controller account (read-only).
@@ -10187,6 +10249,9 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<Hash, OfflineVerdictRevocation> {
                 &self.offline_verdict_revocations
             }
+            fn offline_consumed_build_claim_ids(&self) -> &impl StorageReadOnly<Hash, ()> {
+                &self.offline_consumed_build_claim_ids
+            }
             fn offline_to_online_transfers(
                 &self,
             ) -> &impl StorageReadOnly<Hash, OfflineTransferRecord> {
@@ -10557,6 +10622,7 @@ impl<'world> WorldBlock<'world> {
             settlement_ledgers,
             offline_allowances,
             offline_verdict_revocations,
+            offline_consumed_build_claim_ids,
             offline_to_online_transfers,
             offline_transfer_sender_index,
             offline_transfer_receiver_index,
@@ -10633,6 +10699,7 @@ impl<'world> WorldBlock<'world> {
         settlement_ledgers.commit();
         offline_allowances.commit();
         offline_verdict_revocations.commit();
+        offline_consumed_build_claim_ids.commit();
         offline_to_online_transfers.commit();
         offline_transfer_sender_index.commit();
         offline_transfer_receiver_index.commit();
@@ -11391,6 +11458,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> &mut StorageTransaction<'block, 'world, [u8; 32], GovernanceProposalRecord> {
         &mut self.governance_proposals
     }
+    /// Test helper: get mutable access to citizenship storage for direct seeding.
+    pub fn citizens_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, AccountId, CitizenshipRecord> {
+        &mut self.citizens
+    }
     /// Test helper: get mutable access to stored proof records for direct seeding.
     pub fn proofs_mut_for_testing(
         &mut self,
@@ -11498,6 +11571,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             settlement_ledgers,
             offline_allowances,
             offline_verdict_revocations,
+            offline_consumed_build_claim_ids,
             offline_to_online_transfers,
             offline_transfer_sender_index,
             offline_transfer_receiver_index,
@@ -11572,6 +11646,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         settlement_ledgers.apply();
         offline_allowances.apply();
         offline_verdict_revocations.apply();
+        offline_consumed_build_claim_ids.apply();
         offline_to_online_transfers.apply();
         offline_transfer_sender_index.apply();
         offline_transfer_receiver_index.apply();
@@ -13945,7 +14020,7 @@ impl State {
                 }
             }
             let term_blocks = sb.gov.parliament_term_blocks.max(1);
-            let council_epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
+            let fallback_epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
             // Collect candidates to open (avoid borrow conflicts)
             let to_open: Vec<(String, u64, u64)> = wtx
                 .governance_referenda
@@ -13957,50 +14032,49 @@ impl State {
                     if rec.h_start > now_h || now_h > rec.h_end {
                         return None;
                     }
-                    let approved =
-                        wtx.governance_stage_approvals
-                            .get(rid)
-                            .is_some_and(|approval| {
-                                let proposal_kind = hex::decode(rid.trim_start_matches("0x"))
-                                    .ok()
-                                    .and_then(|bytes| {
-                                        if bytes.len() != 32 {
-                                            return None;
-                                        }
-                                        let mut id = [0u8; 32];
-                                        id.copy_from_slice(&bytes);
-                                        wtx.governance_proposals
-                                            .get(&id)
-                                            .map(|proposal| proposal.kind.clone())
-                                    });
-                                match proposal_kind {
-                                    Some(
-                                        iroha_data_model::governance::types::ProposalKind::DeployContract(_),
-                                    ) => {
-                                        approval.quorum_met(
-                                            ParliamentBody::RulesCommittee,
-                                            council_epoch,
-                                        ) && approval.quorum_met(
-                                            ParliamentBody::AgendaCouncil,
-                                            council_epoch,
-                                        )
+                    let approved = wtx
+                        .governance_stage_approvals
+                        .get(rid)
+                        .is_some_and(|approval| {
+                            let proposal = hex::decode(rid.trim_start_matches("0x"))
+                                .ok()
+                                .and_then(|bytes| {
+                                    if bytes.len() != 32 {
+                                        return None;
                                     }
-                                    Some(
-                                        iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_),
-                                    ) => [
-                                        ParliamentBody::RulesCommittee,
-                                        ParliamentBody::AgendaCouncil,
-                                        ParliamentBody::InterestPanel,
-                                        ParliamentBody::ReviewPanel,
-                                        ParliamentBody::PolicyJury,
-                                        ParliamentBody::OversightCommittee,
-                                        ParliamentBody::FmaCommittee,
-                                    ]
-                                    .into_iter()
-                                    .all(|body| approval.quorum_met(body, council_epoch)),
-                                    None => false,
+                                    let mut id = [0u8; 32];
+                                    id.copy_from_slice(&bytes);
+                                    wtx.governance_proposals.get(&id).cloned()
+                                });
+                            match proposal {
+                                Some(proposal) => {
+                                    let approval_epoch = proposal.approval_epoch(fallback_epoch);
+                                    match proposal.kind {
+                                        iroha_data_model::governance::types::ProposalKind::DeployContract(_) => {
+                                            approval.quorum_met(
+                                                ParliamentBody::RulesCommittee,
+                                                approval_epoch,
+                                            ) && approval.quorum_met(
+                                                ParliamentBody::AgendaCouncil,
+                                                approval_epoch,
+                                            )
+                                        }
+                                        iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_) => [
+                                            ParliamentBody::RulesCommittee,
+                                            ParliamentBody::AgendaCouncil,
+                                            ParliamentBody::InterestPanel,
+                                            ParliamentBody::ReviewPanel,
+                                            ParliamentBody::PolicyJury,
+                                            ParliamentBody::OversightCommittee,
+                                            ParliamentBody::FmaCommittee,
+                                        ]
+                                        .into_iter()
+                                        .all(|body| approval.quorum_met(body, approval_epoch)),
+                                    }
                                 }
-                            });
+                                None => false,
+                            }
+                        });
                     if approved {
                         Some((rid.clone(), rec.h_start, rec.h_end))
                     } else {
@@ -22404,6 +22478,77 @@ impl StateTransaction<'_, '_> {
         }))
     }
 
+    fn trigger_args_from_event(event: &EventBox) -> Json {
+        match event {
+            EventBox::ExecuteTrigger(ev) => ev.args().clone(),
+            EventBox::Data(shared) => Self::trigger_args_from_data_event(shared.as_ref()),
+            _ => Json::default(),
+        }
+    }
+
+    fn trigger_args_from_data_event(event: &data_pre::DataEvent) -> Json {
+        use data_pre::{AccountEvent, AssetEvent, DataEvent, DomainEvent};
+
+        let mut payload = norito::json!({
+            "kind": "other",
+            "op": "none",
+        });
+
+        if let DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(asset_event))) = event {
+            let (op, changed) = match asset_event {
+                AssetEvent::Added(changed) => ("added", changed),
+                AssetEvent::Removed(changed) => ("removed", changed),
+                _ => return Json::from(payload),
+            };
+
+            let asset_id = changed.asset();
+            let amount_str = changed.amount().to_string();
+            let asset_definition_name = asset_id.definition().name().as_ref().to_owned();
+            let asset_definition_domain = asset_id.definition().domain().to_string();
+            let account_id = asset_id.account().to_string();
+            let account_domain = asset_id.account().domain().to_string();
+            if let Ok(amount_i64) = amount_str.parse::<i64>() {
+                let mut details = norito::json::Map::new();
+                details.insert("kind".to_owned(), norito::json!("asset_change"));
+                details.insert("op".to_owned(), norito::json!(op));
+                details.insert(
+                    "asset_definition_name".to_owned(),
+                    norito::json!(asset_definition_name),
+                );
+                details.insert(
+                    "asset_definition_domain".to_owned(),
+                    norito::json!(asset_definition_domain),
+                );
+                details.insert("account_id".to_owned(), norito::json!(account_id));
+                details.insert("account_domain".to_owned(), norito::json!(account_domain));
+                details.insert("amount".to_owned(), norito::json!(amount_str));
+                details.insert("amount_i64".to_owned(), norito::json!(amount_i64));
+                payload = norito::json::Value::Object(details);
+            } else {
+                let mut details = norito::json::Map::new();
+                details.insert(
+                    "kind".to_owned(),
+                    norito::json!("asset_change_unsupported_amount"),
+                );
+                details.insert("op".to_owned(), norito::json!(op));
+                details.insert(
+                    "asset_definition_name".to_owned(),
+                    norito::json!(asset_definition_name),
+                );
+                details.insert(
+                    "asset_definition_domain".to_owned(),
+                    norito::json!(asset_definition_domain),
+                );
+                details.insert("account_id".to_owned(), norito::json!(account_id));
+                details.insert("account_domain".to_owned(), norito::json!(account_domain));
+                details.insert("amount".to_owned(), norito::json!(amount_str));
+                payload = norito::json::Value::Object(details);
+            }
+        }
+
+        Json::from(payload)
+    }
+
     /// Execute any condition of trigger, staging its state changes.
     ///
     /// Returns the execution step on success, or the rejection reason on failure.
@@ -22426,11 +22571,7 @@ impl StateTransaction<'_, '_> {
             ),
             ExecutableRef::Ivm(blob_hash) => {
                 if let Some(bytecode) = self.world.triggers.get_original_contract(blob_hash) {
-                    // Extract args if this was an ExecuteTrigger event
-                    let trigger_args = match &event {
-                        EventBox::ExecuteTrigger(ev) => ev.args().clone(),
-                        _ => iroha_primitives::json::Json::default(),
-                    };
+                    let trigger_args = Self::trigger_args_from_event(&event);
                     let bytecode = bytecode.clone();
                     let summary = {
                         let mut cache = self.ivm_cache.lock();
@@ -22499,6 +22640,7 @@ impl StateTransaction<'_, '_> {
                     host.set_chain_id(self.chain_id());
                     host.set_durable_state_snapshot_from_world(&self.world);
                     host.set_public_inputs_from_parameters(self.world.parameters.get());
+                    host.set_vrf_epoch_seeds_from_world(&self.world);
                     host.set_query_state(self);
                     host.set_zk_snapshots_from_world(&self.world, &self.zk)
                         .map_err(|e| {
@@ -23403,6 +23545,8 @@ pub(crate) mod deserialize {
         let offline_allowances = take_optional_default(&mut map, "offline_allowances")?;
         let offline_verdict_revocations =
             take_optional_default(&mut map, "offline_verdict_revocations")?;
+        let offline_consumed_build_claim_ids =
+            take_optional_default(&mut map, "offline_consumed_build_claim_ids")?;
         let offline_to_online_transfers =
             take_optional_default(&mut map, "offline_to_online_transfers")?;
         let lane_relay_emergency_validators =
@@ -23500,6 +23644,7 @@ pub(crate) mod deserialize {
             settlement_ledgers,
             offline_allowances,
             offline_verdict_revocations,
+            offline_consumed_build_claim_ids,
             offline_to_online_transfers,
             offline_transfer_sender_index: Storage::default(),
             offline_transfer_receiver_index: Storage::default(),
@@ -23555,6 +23700,7 @@ pub(crate) mod deserialize {
                 message,
             })?;
         world.rebuild_offline_transfer_indexes();
+        world.rebuild_offline_consumed_build_claim_ids();
         Ok(world)
     }
 

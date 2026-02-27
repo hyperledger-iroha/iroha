@@ -95,9 +95,11 @@ pub mod isi {
 
     use super::*;
     use crate::{
-        governance::selector::derive_parliament_bodies,
-        smartcontracts::triggers::isi::register_trigger_internal, state::derive_validator_key_id,
-        sumeragi::status::PeerKeyPolicyRejectReason, zk::hash_vk,
+        governance::draw::{self, derive_parliament_bodies},
+        smartcontracts::triggers::isi::register_trigger_internal,
+        state::derive_validator_key_id,
+        sumeragi::status::PeerKeyPolicyRejectReason,
+        zk::hash_vk,
     };
 
     fn ensure_metadata_value(
@@ -794,6 +796,157 @@ pub mod isi {
         let multiplier = gov.citizen_service.bond_multiplier_for_role(role).max(1);
         gov.citizenship_bond_amount
             .saturating_mul(u128::from(multiplier))
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum GovernanceApprovalMode {
+        ParliamentSortitionJit,
+        LegacyCouncilEpoch,
+    }
+
+    fn resolve_governance_approval_mode(
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> GovernanceApprovalMode {
+        let catalog = &state_transaction.nexus.governance;
+        let Some(module_name) = catalog.default_module.as_deref() else {
+            return GovernanceApprovalMode::LegacyCouncilEpoch;
+        };
+        let module_type = catalog
+            .modules
+            .get(module_name)
+            .and_then(|module| module.module_type.as_deref())
+            .unwrap_or(module_name);
+        let normalized = module_type.trim().to_ascii_lowercase().replace('-', "_");
+        if normalized.contains("parliament") || normalized.contains("sortition") {
+            GovernanceApprovalMode::ParliamentSortitionJit
+        } else {
+            GovernanceApprovalMode::LegacyCouncilEpoch
+        }
+    }
+
+    fn latest_governance_entropy_seed(state_transaction: &StateTransaction<'_, '_>) -> [u8; 32] {
+        if let Some((_epoch, record)) = state_transaction.world.vrf_epochs.iter().last() {
+            return record.seed;
+        }
+        let mut input = Vec::with_capacity(
+            b"iroha:gov:jit:entropy:fallback:v1|".len()
+                + state_transaction.chain_id.as_str().len()
+                + core::mem::size_of::<u64>(),
+        );
+        input.extend_from_slice(b"iroha:gov:jit:entropy:fallback:v1|");
+        input.extend_from_slice(state_transaction.chain_id.as_str().as_bytes());
+        input.extend_from_slice(&state_transaction._curr_block.height().get().to_le_bytes());
+        let digest = Blake2b512::digest(input);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest[..32]);
+        out
+    }
+
+    fn derive_epoch_parliament_beacon(
+        epoch: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> [u8; 32] {
+        let entropy = latest_governance_entropy_seed(state_transaction);
+        let mut input = Vec::with_capacity(
+            b"iroha:gov:epoch-beacon:v1|".len()
+                + state_transaction.chain_id.as_str().len()
+                + core::mem::size_of::<u64>()
+                + entropy.len(),
+        );
+        input.extend_from_slice(b"iroha:gov:epoch-beacon:v1|");
+        input.extend_from_slice(state_transaction.chain_id.as_str().as_bytes());
+        input.extend_from_slice(&epoch.to_le_bytes());
+        input.extend_from_slice(&entropy);
+        let digest = Blake2b512::digest(input);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest[..32]);
+        out
+    }
+
+    fn derive_proposal_parliament_beacon(
+        proposal_id: [u8; 32],
+        created_height: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> [u8; 32] {
+        let entropy = latest_governance_entropy_seed(state_transaction);
+        let mut input = Vec::with_capacity(
+            b"iroha:gov:proposal-beacon:v1|".len()
+                + state_transaction.chain_id.as_str().len()
+                + core::mem::size_of::<u64>()
+                + proposal_id.len()
+                + entropy.len(),
+        );
+        input.extend_from_slice(b"iroha:gov:proposal-beacon:v1|");
+        input.extend_from_slice(state_transaction.chain_id.as_str().as_bytes());
+        input.extend_from_slice(&created_height.to_le_bytes());
+        input.extend_from_slice(&proposal_id);
+        input.extend_from_slice(&entropy);
+        let digest = Blake2b512::digest(input);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest[..32]);
+        out
+    }
+
+    fn compute_parliament_roster_root(
+        bodies: &iroha_data_model::governance::types::ParliamentBodies,
+    ) -> Result<[u8; 32], Error> {
+        let encoded = norito::to_bytes(bodies).map_err(|_| {
+            InstructionExecutionError::InvariantViolation(
+                "failed to encode parliament roster commitment".into(),
+            )
+        })?;
+        let digest = Blake2b512::digest(encoded);
+        let mut root = [0u8; 32];
+        root.copy_from_slice(&digest[..32]);
+        Ok(root)
+    }
+
+    fn derive_jit_parliament_snapshot(
+        proposal_id: [u8; 32],
+        created_height: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<crate::state::GovernanceParliamentSnapshot, Error> {
+        let selection_epoch = created_height;
+        let beacon =
+            derive_proposal_parliament_beacon(proposal_id, created_height, state_transaction);
+        let current_height = state_transaction._curr_block.height().get();
+        let required_bond =
+            required_citizenship_bond_for_role(&state_transaction.gov, "parliament").max(
+                required_citizenship_bond_for_role(&state_transaction.gov, "council"),
+            );
+        let candidates: Vec<(AccountId, u128)> = state_transaction
+            .world
+            .citizens
+            .iter()
+            .filter_map(|(account_id, record)| {
+                if record.amount < required_bond || record.cooldown_until > current_height {
+                    return None;
+                }
+                Some((account_id.clone(), record.amount))
+            })
+            .collect();
+        if candidates.is_empty() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "no eligible citizens available for proposal-time parliament sortition".into(),
+            ));
+        }
+        let bodies = draw::derive_parliament_bodies_from_bonded_citizens(
+            &state_transaction.gov,
+            &state_transaction.chain_id,
+            selection_epoch,
+            &beacon,
+            candidates
+                .iter()
+                .map(|(account_id, bond)| (account_id, *bond)),
+            iroha_data_model::isi::governance::CouncilDerivationKind::Vrf,
+        );
+        let roster_root = compute_parliament_roster_root(&bodies)?;
+        Ok(crate::state::GovernanceParliamentSnapshot {
+            selection_epoch,
+            beacon,
+            roster_root,
+            bodies,
+        })
     }
 
     fn lock_voting_bond(
@@ -1648,12 +1801,19 @@ pub mod isi {
                 referendum_snapshot.as_ref(),
                 &state_transaction.gov,
             );
+            let parliament_snapshot = match resolve_governance_approval_mode(state_transaction) {
+                GovernanceApprovalMode::ParliamentSortitionJit => Some(
+                    derive_jit_parliament_snapshot(id, created_height, state_transaction)?,
+                ),
+                GovernanceApprovalMode::LegacyCouncilEpoch => None,
+            };
             let rec = crate::state::GovernanceProposalRecord {
                 proposer: authority.clone(),
                 kind: kind.clone(),
                 created_height,
                 status: crate::state::GovernanceProposalStatus::Proposed,
                 pipeline,
+                parliament_snapshot,
             };
             state_transaction.world.governance_proposals.insert(id, rec);
 
@@ -1821,6 +1981,12 @@ pub mod isi {
                 referendum_snapshot.as_ref(),
                 &state_transaction.gov,
             );
+            let parliament_snapshot = match resolve_governance_approval_mode(state_transaction) {
+                GovernanceApprovalMode::ParliamentSortitionJit => Some(
+                    derive_jit_parliament_snapshot(id, created_height, state_transaction)?,
+                ),
+                GovernanceApprovalMode::LegacyCouncilEpoch => None,
+            };
             state_transaction.world.governance_proposals.insert(
                 id,
                 crate::state::GovernanceProposalRecord {
@@ -1829,6 +1995,7 @@ pub mod isi {
                     created_height,
                     status: crate::state::GovernanceProposalStatus::Proposed,
                     pipeline,
+                    parliament_snapshot,
                 },
             );
 
@@ -4101,7 +4268,9 @@ pub mod isi {
         ) -> Result<(), Error> {
             let ctx = load_approval_context(&self, state_transaction)?;
             ensure_parliament_member(authority, &ctx.roster)?;
-            persist_parliament_bodies_if_missing(&ctx, state_transaction);
+            if ctx.persist_epoch_bodies {
+                persist_parliament_bodies_if_missing(&ctx, state_transaction);
+            }
 
             let Some((approvals_count, required, approvals)) =
                 record_parliament_approval(&self, authority, &ctx, state_transaction)
@@ -4132,6 +4301,7 @@ pub mod isi {
         bodies: iroha_data_model::governance::types::ParliamentBodies,
         roster: iroha_data_model::governance::types::ParliamentRoster,
         epoch: u64,
+        persist_epoch_bodies: bool,
         now_h: u64,
         quorum_bps: u16,
     }
@@ -4166,25 +4336,85 @@ pub mod isi {
                 "referendum already closed".into(),
             ));
         }
-        let term_blocks = state_transaction.gov.parliament_term_blocks.max(1);
         let now_h = state_transaction._curr_block.height().get();
-        let epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
-        let council = state_transaction
-            .world
-            .council
-            .get(&epoch)
-            .cloned()
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "council roster missing for current epoch".into(),
-                )
-            })?;
-        let bodies = state_transaction
-            .world
-            .parliament_bodies
-            .get(&epoch)
-            .cloned()
-            .unwrap_or_else(|| derive_parliament_bodies(&council));
+        let (bodies, epoch, persist_epoch_bodies) =
+            if resolve_governance_approval_mode(state_transaction)
+                == GovernanceApprovalMode::ParliamentSortitionJit
+            {
+                if let Some(snapshot) = proposal.parliament_snapshot.as_ref() {
+                    if snapshot.bodies.selection_epoch != snapshot.selection_epoch {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "proposal parliament snapshot epoch mismatch".into(),
+                        ));
+                    }
+                    let roster_root = compute_parliament_roster_root(&snapshot.bodies)?;
+                    if roster_root != snapshot.roster_root {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "proposal parliament snapshot commitment mismatch".into(),
+                        ));
+                    }
+                    (snapshot.bodies.clone(), snapshot.selection_epoch, false)
+                } else {
+                    let term_blocks = state_transaction.gov.parliament_term_blocks.max(1);
+                    let fallback_epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
+                    let council = state_transaction
+                        .world
+                        .council
+                        .get(&fallback_epoch)
+                        .cloned()
+                        .ok_or_else(|| {
+                            InstructionExecutionError::InvariantViolation(
+                            "proposal parliament snapshot missing and council roster unavailable"
+                                .into(),
+                        )
+                        })?;
+                    let beacon = derive_epoch_parliament_beacon(fallback_epoch, state_transaction);
+                    let bodies = state_transaction
+                        .world
+                        .parliament_bodies
+                        .get(&fallback_epoch)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            derive_parliament_bodies(
+                                &state_transaction.gov,
+                                &state_transaction.chain_id,
+                                fallback_epoch,
+                                &beacon,
+                                &council,
+                            )
+                        });
+                    (bodies, fallback_epoch, true)
+                }
+            } else {
+                let term_blocks = state_transaction.gov.parliament_term_blocks.max(1);
+                let epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
+                let council = state_transaction
+                    .world
+                    .council
+                    .get(&epoch)
+                    .cloned()
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "council roster missing for current epoch".into(),
+                        )
+                    })?;
+                let beacon = derive_epoch_parliament_beacon(epoch, state_transaction);
+                let bodies = state_transaction
+                    .world
+                    .parliament_bodies
+                    .get(&epoch)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        derive_parliament_bodies(
+                            &state_transaction.gov,
+                            &state_transaction.chain_id,
+                            epoch,
+                            &beacon,
+                            &council,
+                        )
+                    });
+                (bodies, epoch, true)
+            };
         if bodies.selection_epoch != epoch {
             return Err(InstructionExecutionError::InvariantViolation(
                 "parliament roster epoch mismatch".into(),
@@ -4208,6 +4438,7 @@ pub mod isi {
             bodies,
             roster,
             epoch,
+            persist_epoch_bodies,
             now_h,
             quorum_bps: state_transaction.gov.parliament_quorum_bps,
         })
@@ -4422,7 +4653,14 @@ pub mod isi {
                     },
                 ),
             ));
-            let bodies = derive_parliament_bodies(&rec);
+            let beacon = derive_epoch_parliament_beacon(rec.epoch, state_transaction);
+            let bodies = derive_parliament_bodies(
+                &state_transaction.gov,
+                &state_transaction.chain_id,
+                rec.epoch,
+                &beacon,
+                &rec,
+            );
             state_transaction
                 .world
                 .parliament_bodies

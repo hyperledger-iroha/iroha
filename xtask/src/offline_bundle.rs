@@ -197,6 +197,7 @@ fn build_receipts(specs: &[ReceiptSpec], base_dir: &Path) -> Result<Vec<OfflineS
             platform_snapshot,
             sender_certificate_id: certificate.certificate_id(),
             sender_signature,
+            build_claim: None,
         });
     }
     Ok(receipts)
