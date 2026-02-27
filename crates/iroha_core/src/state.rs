@@ -527,9 +527,7 @@ macro_rules! build_world_transaction {
             settlement_ledgers: $state.settlement_ledgers.transaction(),
             offline_allowances: $state.offline_allowances.transaction(),
             offline_verdict_revocations: $state.offline_verdict_revocations.transaction(),
-            offline_consumed_build_claim_ids: $state
-                .offline_consumed_build_claim_ids
-                .transaction(),
+            offline_consumed_build_claim_ids: $state.offline_consumed_build_claim_ids.transaction(),
             offline_to_online_transfers: $state.offline_to_online_transfers.transaction(),
             offline_transfer_sender_index: $state.offline_transfer_sender_index.transaction(),
             offline_transfer_receiver_index: $state.offline_transfer_receiver_index.transaction(),
@@ -9345,6 +9343,7 @@ impl World {
             settlement_ledgers: self.settlement_ledgers.view(),
             offline_allowances: self.offline_allowances.view(),
             offline_verdict_revocations: self.offline_verdict_revocations.view(),
+            offline_consumed_build_claim_ids: self.offline_consumed_build_claim_ids.view(),
             offline_to_online_transfers: self.offline_to_online_transfers.view(),
             offline_transfer_sender_index: self.offline_transfer_sender_index.view(),
             offline_transfer_receiver_index: self.offline_transfer_receiver_index.view(),
