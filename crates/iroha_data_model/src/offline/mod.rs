@@ -33,6 +33,15 @@ pub use poseidon::*;
 pub const OFFLINE_REJECTION_REASON_PREFIX: &str = "offline_reason::";
 /// Asset-definition metadata key that enables offline allowances and escrow tracking.
 pub const OFFLINE_ASSET_ENABLED_METADATA_KEY: &str = "offline.enabled";
+/// Certificate metadata key carrying lineage scope identifier.
+pub const OFFLINE_LINEAGE_SCOPE_KEY: &str = "offline.lineage.scope";
+/// Certificate metadata key carrying lineage epoch.
+pub const OFFLINE_LINEAGE_EPOCH_KEY: &str = "offline.lineage.epoch";
+/// Certificate metadata key carrying previous certificate id (hex) for renewals.
+pub const OFFLINE_LINEAGE_PREV_CERTIFICATE_ID_HEX_KEY: &str =
+    "offline.lineage.prev_certificate_id_hex";
+/// Certificate metadata key carrying minimum accepted app build number.
+pub const OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY: &str = "offline.build_claim.min_build_number";
 
 /// Prefix used for Android marker-key series counter scopes.
 pub const MARKER_COUNTER_PREFIX: &str = "marker::";
@@ -643,6 +652,8 @@ const ANDROID_PROVISIONED_MANIFEST_SCHEMA_KEY: &str = "android.provisioned.manif
 const ANDROID_PROVISIONED_MANIFEST_VERSION_KEY: &str = "android.provisioned.manifest_version";
 const ANDROID_PROVISIONED_MAX_AGE_KEY: &str = "android.provisioned.max_manifest_age_ms";
 const ANDROID_PROVISIONED_MANIFEST_DIGEST_KEY: &str = "android.provisioned.manifest_digest";
+/// Certificate metadata key defining provisioned Android application identifier.
+pub const ANDROID_PROVISIONED_APP_ID_KEY: &str = "android.provisioned.app_id";
 #[allow(dead_code)]
 const ANDROID_PROVISIONED_DEVICE_ID_KEY: &str = "android.provisioned.device_id";
 
@@ -1661,6 +1672,86 @@ mod model {
         Provisioned(AndroidProvisionedProof),
     }
 
+    /// Platform label encoded in offline build claims.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "platform", content = "value")]
+    pub enum OfflineBuildClaimPlatform {
+        /// iOS builds distributed for App Attest flows.
+        Apple,
+        /// Android builds distributed for marker/play/hms/provisioned flows.
+        Android,
+    }
+
+    /// Operator-signed build attestation bound to one receipt nonce.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineBuildClaim {
+        /// Deterministic claim identifier used for one-time replay protection.
+        pub claim_id: Hash,
+        /// Platform this build claim is valid for.
+        pub platform: OfflineBuildClaimPlatform,
+        /// Application identifier (`bundle_id` on iOS, package name on Android).
+        pub app_id: String,
+        /// Build number certified by the operator.
+        pub build_number: u64,
+        /// Claim issuance timestamp (unix ms).
+        pub issued_at_ms: u64,
+        /// Claim expiry timestamp (unix ms).
+        pub expires_at_ms: u64,
+        /// Lineage scope this claim is pinned to.
+        pub lineage_scope: String,
+        /// Receipt nonce this claim is bound to (currently the receipt `tx_id`).
+        pub nonce: Hash,
+        /// Operator signature over the canonical claim payload.
+        pub operator_signature: Signature,
+    }
+
+    impl OfflineBuildClaim {
+        /// Canonical bytes signed by the operator.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`norito::Error`] when serialization fails.
+        pub fn signing_bytes(&self) -> Result<Vec<u8>, norito::Error> {
+            let payload = OfflineBuildClaimPayload::from(self);
+            to_bytes(&payload)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    struct OfflineBuildClaimPayload {
+        claim_id: Hash,
+        platform: OfflineBuildClaimPlatform,
+        app_id: String,
+        build_number: u64,
+        issued_at_ms: u64,
+        expires_at_ms: u64,
+        lineage_scope: String,
+        nonce: Hash,
+    }
+
+    impl From<&OfflineBuildClaim> for OfflineBuildClaimPayload {
+        fn from(claim: &OfflineBuildClaim) -> Self {
+            Self {
+                claim_id: claim.claim_id,
+                platform: claim.platform,
+                app_id: claim.app_id.clone(),
+                build_number: claim.build_number,
+                issued_at_ms: claim.issued_at_ms,
+                expires_at_ms: claim.expires_at_ms,
+                lineage_scope: claim.lineage_scope.clone(),
+                nonce: claim.nonce,
+            }
+        }
+    }
+
     /// Receiver-side evidence for a single offline spend.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1696,6 +1787,9 @@ mod model {
         pub sender_certificate_id: Hash,
         /// Signature produced by the sender's spend key over the offline transaction payload.
         pub sender_signature: Signature,
+        /// Optional operator-signed build claim tied to this spend.
+        #[norito(default)]
+        pub build_claim: Option<OfflineBuildClaim>,
     }
 
     impl OfflineSpendReceipt {
@@ -1727,6 +1821,7 @@ mod model {
                 platform_snapshot,
                 sender_certificate_id,
                 sender_signature,
+                build_claim: None,
             }
         }
     }
@@ -2285,6 +2380,18 @@ mod model {
         InvoiceDuplicate,
         /// Cached attestation verdict expired before bundle submission.
         VerdictExpired,
+        /// Certificate lineage metadata failed strict newest-first checks.
+        LineageInvalid,
+        /// Required receipt build claim was not supplied.
+        BuildClaimMissing,
+        /// Build claim payload/signature did not verify.
+        BuildClaimInvalid,
+        /// Build claim timestamp window is not valid.
+        BuildClaimExpired,
+        /// Build claim id was already consumed by a previously settled receipt.
+        BuildClaimReplayed,
+        /// Build claim build number is lower than the certificate minimum.
+        BuildClaimBuildTooLow,
     }
 
     impl OfflineTransferRejectionReason {
@@ -2328,6 +2435,12 @@ mod model {
                 Self::DuplicateBundle => "duplicate_bundle",
                 Self::InvoiceDuplicate => "invoice_duplicate",
                 Self::VerdictExpired => "verdict_expired",
+                Self::LineageInvalid => "lineage_invalid",
+                Self::BuildClaimMissing => "build_claim_missing",
+                Self::BuildClaimInvalid => "build_claim_invalid",
+                Self::BuildClaimExpired => "build_claim_expired",
+                Self::BuildClaimReplayed => "build_claim_replayed",
+                Self::BuildClaimBuildTooLow => "build_claim_build_too_low",
             }
         }
     }
@@ -2373,6 +2486,12 @@ mod model {
                 "duplicate_bundle" => Ok(Self::DuplicateBundle),
                 "invoice_duplicate" => Ok(Self::InvoiceDuplicate),
                 "verdict_expired" => Ok(Self::VerdictExpired),
+                "lineage_invalid" => Ok(Self::LineageInvalid),
+                "build_claim_missing" => Ok(Self::BuildClaimMissing),
+                "build_claim_invalid" => Ok(Self::BuildClaimInvalid),
+                "build_claim_expired" => Ok(Self::BuildClaimExpired),
+                "build_claim_replayed" => Ok(Self::BuildClaimReplayed),
+                "build_claim_build_too_low" => Ok(Self::BuildClaimBuildTooLow),
                 _ => Err(()),
             }
         }
@@ -3574,6 +3693,7 @@ mod tests {
             platform_snapshot: None,
             sender_certificate_id: certificate.certificate_id(),
             sender_signature: sample_signature(0x55),
+            build_claim: None,
         }
     }
 
@@ -4148,6 +4268,7 @@ mod receipt_challenge_tests {
             platform_snapshot: None,
             sender_certificate_id: certificate.certificate_id(),
             sender_signature: Signature::from_bytes(&[0xCD; 64]),
+            build_claim: None,
         }
     }
 

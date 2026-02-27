@@ -121,6 +121,7 @@ struct CachedProofEntry {
 
 const PUBLIC_INPUT_GAS_BASE_DEFAULT: u64 = 16;
 const PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT: u64 = 1;
+const TRIGGER_EVENT_PUBLIC_INPUT_KEY: &str = "trigger_event_json";
 
 #[derive(Debug, Clone, crate::json_macros::JsonDeserialize)]
 struct PublicInputDescriptor {
@@ -5146,6 +5147,32 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let name_ptr = vm.register(10);
                 let tlv = Self::expect_tlv(vm, name_ptr, PointerType::Name)?;
                 let name = Self::decode_name_payload(tlv.payload)?;
+                if name.as_ref() == TRIGGER_EVENT_PUBLIC_INPUT_KEY {
+                    let Some(args) = self.args.as_ref() else {
+                        return Err(ivm::VMError::PermissionDenied);
+                    };
+                    if !is_type_allowed_for_policy(vm.syscall_policy(), PointerType::Json) {
+                        return Err(ivm::VMError::AbiTypeNotAllowed {
+                            abi: vm.abi_version(),
+                            type_id: PointerType::Json as u16,
+                        });
+                    }
+                    let payload =
+                        norito::to_bytes(args).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                    let payload_len = Self::len_to_u32(payload.len())?;
+                    let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
+                    out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
+                    out.push(1);
+                    out.extend_from_slice(&payload_len.to_be_bytes());
+                    out.extend_from_slice(&payload);
+                    let h: [u8; Hash::LENGTH] = Hash::new(&payload).into();
+                    out.extend_from_slice(&h);
+                    let ptr = vm.alloc_input_tlv(&out)?;
+                    vm.set_register(10, ptr);
+                    let bytes = u64::try_from(out.len()).unwrap_or(u64::MAX);
+                    return Ok(PUBLIC_INPUT_GAS_BASE_DEFAULT
+                        .saturating_add(PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT.saturating_mul(bytes)));
+                }
                 let Some(record) = self.public_inputs.get(&name) else {
                     return Err(ivm::VMError::PermissionDenied);
                 };
@@ -10019,6 +10046,41 @@ mod tests {
         let expected_gas = PUBLIC_INPUT_GAS_BASE_DEFAULT.saturating_add(
             PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT
                 .saturating_mul(u64::try_from(tlv.len()).unwrap_or(u64::MAX)),
+        );
+        assert_eq!(gas, expected_gas);
+    }
+
+    #[test]
+    fn get_public_input_exposes_trigger_event_args() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let args = Json::from(norito::json!({
+            "kind": "asset_change",
+            "amount_i64": 10
+        }));
+        let mut host = CoreHost::with_accounts_and_args(
+            authority.clone(),
+            Arc::new(vec![authority]),
+            args.clone(),
+        );
+        let mut vm = IVM::new(10_000);
+        let name: Name = TRIGGER_EVENT_PUBLIC_INPUT_KEY.parse().unwrap();
+        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
+        vm.set_register(10, name_ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
+            .expect("public input syscall");
+        let out_ptr = vm.register(10);
+        let out_tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(out_tlv.type_id, PointerType::Json);
+        let decoded: Json = norito::decode_from_bytes(out_tlv.payload).expect("decode json");
+        assert_eq!(decoded, args);
+
+        let expected_tlv = make_tlv(PointerType::Json as u16, &norito_blob(&decoded));
+        let expected_gas = PUBLIC_INPUT_GAS_BASE_DEFAULT.saturating_add(
+            PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT
+                .saturating_mul(u64::try_from(expected_tlv.len()).unwrap_or(u64::MAX)),
         );
         assert_eq!(gas, expected_gas);
     }

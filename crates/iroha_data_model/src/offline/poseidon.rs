@@ -628,6 +628,7 @@ mod tests {
             platform_snapshot: None,
             sender_certificate_id: certificate_id,
             sender_signature: Signature::new(key_pair.private_key(), b"receipt"),
+            build_claim: None,
         }
     }
 
@@ -773,6 +774,7 @@ mod tests {
             platform_snapshot: None,
             sender_certificate_id: certificate_id,
             sender_signature: Signature::from_bytes(&[0; 64]),
+            build_claim: None,
         }
     }
 

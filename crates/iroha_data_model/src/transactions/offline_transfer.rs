@@ -370,6 +370,7 @@ mod tests {
             platform_snapshot: None,
             sender_certificate_id: certificate.certificate_id(),
             sender_signature: sample_signature(0x55),
+            build_claim: None,
         };
         let claimed_delta = receipt.amount.clone();
         let mut pos_snapshot = OfflineVerdictSnapshot::from_certificate(&certificate);

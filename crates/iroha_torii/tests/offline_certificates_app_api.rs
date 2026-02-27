@@ -30,8 +30,10 @@ use iroha_data_model::{
     metadata::Metadata,
     name::Name,
     offline::{
-        OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineAllowanceCommitment,
-        OfflineVerdictRevocationReason, OfflineWalletCertificate, OfflineWalletPolicy,
+        OFFLINE_ASSET_ENABLED_METADATA_KEY, OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY,
+        OFFLINE_LINEAGE_EPOCH_KEY, OFFLINE_LINEAGE_PREV_CERTIFICATE_ID_HEX_KEY,
+        OFFLINE_LINEAGE_SCOPE_KEY, OfflineAllowanceCommitment, OfflineVerdictRevocationReason,
+        OfflineWalletCertificate, OfflineWalletPolicy,
     },
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec};
@@ -343,7 +345,7 @@ fn build_cert_fixtures() -> CertFixtures {
 
     let verdict_id = Hash::new(b"verdict-1");
 
-    let certificate = OfflineWalletCertificate {
+    let mut certificate = OfflineWalletCertificate {
         controller: controller.clone(),
         operator: controller.clone(),
         allowance: OfflineAllowanceCommitment {
@@ -366,11 +368,19 @@ fn build_cert_fixtures() -> CertFixtures {
         attestation_nonce: None,
         refresh_at_ms: None,
     };
+    set_lineage_metadata(&mut certificate, "cert-app-api", 1, None);
+    let certificate_id = certificate.certificate_id();
     let mut renewed_certificate = certificate.clone();
     renewed_certificate.issued_at_ms = 1_750_000_000;
     renewed_certificate.expires_at_ms = 1_850_000_000;
+    set_lineage_metadata(
+        &mut renewed_certificate,
+        "cert-app-api",
+        2,
+        Some(certificate_id),
+    );
 
-    let certificate_hex = hex::encode(certificate.certificate_id().as_ref());
+    let certificate_hex = hex::encode(certificate_id.as_ref());
     let renewed_hex = hex::encode(renewed_certificate.certificate_id().as_ref());
     let verdict_hex = hex::encode(verdict_id.as_ref());
 
@@ -383,6 +393,36 @@ fn build_cert_fixtures() -> CertFixtures {
         renewed_hex,
         verdict_hex,
     }
+}
+
+fn set_lineage_metadata(
+    certificate: &mut OfflineWalletCertificate,
+    scope: &str,
+    epoch: u64,
+    prev_certificate_id: Option<Hash>,
+) {
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        Name::from_str(OFFLINE_LINEAGE_SCOPE_KEY).expect("lineage scope key"),
+        scope,
+    );
+    metadata.insert(
+        Name::from_str(OFFLINE_LINEAGE_EPOCH_KEY).expect("lineage epoch key"),
+        epoch,
+    );
+    metadata.insert(
+        Name::from_str(OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY).expect("min build key"),
+        1_u64,
+    );
+    if let Some(prev_certificate_id) = prev_certificate_id {
+        let prev_hex = hex::encode(prev_certificate_id.as_ref());
+        metadata.insert(
+            Name::from_str(OFFLINE_LINEAGE_PREV_CERTIFICATE_ID_HEX_KEY)
+                .expect("lineage previous key"),
+            prev_hex.as_str(),
+        );
+    }
+    certificate.metadata = metadata;
 }
 
 fn certificate_draft_json(certificate: &OfflineWalletCertificate) -> Value {

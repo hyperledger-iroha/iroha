@@ -498,6 +498,10 @@ pub enum Instr {
     GetAuthority {
         dest: Temp,
     },
+    /// Load trigger event payload (`Json*`) into `dest` (host-provided).
+    GetTriggerEvent {
+        dest: Temp,
+    },
     /// ZK verify syscalls with NoritoBytes TLV pointer in r10.
     ZkVerify {
         /// Syscall number (0x60..0x63)
@@ -2173,6 +2177,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "authority" => {
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::GetAuthority { dest: t });
+                    t
+                }
+                "trigger_event" => {
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::GetTriggerEvent { dest: t });
                     t
                 }
                 "isqrt" => {
@@ -3969,6 +3978,27 @@ mod tests {
             }
         }
         assert!(saw_setvl, "expected SetVl instruction in lowered IR");
+    }
+
+    #[test]
+    fn lower_trigger_event_builtin() {
+        let src = "fn main() { let ev = trigger_event(); let _kind = json_get_name(ev, name(\"kind\")); }";
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let f = &ir.functions[0];
+        let mut saw_trigger_event = false;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                if let Instr::GetTriggerEvent { .. } = instr {
+                    saw_trigger_event = true;
+                }
+            }
+        }
+        assert!(
+            saw_trigger_event,
+            "expected GetTriggerEvent instruction in lowered IR"
+        );
     }
 
     #[test]

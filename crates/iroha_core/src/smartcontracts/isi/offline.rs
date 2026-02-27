@@ -42,19 +42,21 @@ use iroha_data_model::{
         AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_CIRCUIT_ID,
         AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_PUBLIC_INPUTS_B64,
         AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_RECURSION_DEPTH, AGGREGATE_PROOF_VERSION_V1,
-        AGGREGATE_PROOF_VERSION_V2, AndroidHmsSafetyDetectMetadata, AndroidIntegrityMetadata,
-        AndroidIntegrityPolicy, AndroidMarkerKeyMetadata, AndroidPlayIntegrityMetadata,
-        AndroidProvisionedMetadata, AndroidProvisionedProof, HmsSafetyDetectEvaluation,
-        OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceRecord, OfflineBalanceProof,
-        OfflineCounterState, OfflineCounterSummary, OfflinePlatformProof,
-        OfflinePlatformTokenSnapshot, OfflineProofRequestError, OfflineSpendReceipt,
-        OfflineToOnlineTransfer, OfflineTransferRecord, OfflineTransferRejectionPlatform,
-        OfflineTransferRejectionReason, OfflineTransferStatus, OfflineVerdictRevocation,
-        OfflineVerdictSnapshot, OfflineWalletCertificate, PROVISIONED_COUNTER_PREFIX,
-        PlayIntegrityAppVerdict, PlayIntegrityDeviceVerdict, PlayIntegrityEnvironment,
-        canonical_app_attest_key_id, canonical_receipts, chain_bound_receipt_hash,
-        compute_receipts_root, ensure_single_counter_scope, marker_series_from_public_key,
-        receipts_are_canonical,
+        AGGREGATE_PROOF_VERSION_V2, ANDROID_PROVISIONED_APP_ID_KEY, AndroidHmsSafetyDetectMetadata,
+        AndroidIntegrityMetadata, AndroidIntegrityPolicy, AndroidMarkerKeyMetadata,
+        AndroidPlayIntegrityMetadata, AndroidProvisionedMetadata, AndroidProvisionedProof,
+        HmsSafetyDetectEvaluation, OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY,
+        OFFLINE_LINEAGE_EPOCH_KEY, OFFLINE_LINEAGE_PREV_CERTIFICATE_ID_HEX_KEY,
+        OFFLINE_LINEAGE_SCOPE_KEY, OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceRecord,
+        OfflineBalanceProof, OfflineBuildClaim, OfflineBuildClaimPlatform, OfflineCounterState,
+        OfflineCounterSummary, OfflinePlatformProof, OfflinePlatformTokenSnapshot,
+        OfflineProofRequestError, OfflineSpendReceipt, OfflineToOnlineTransfer,
+        OfflineTransferRecord, OfflineTransferRejectionPlatform, OfflineTransferRejectionReason,
+        OfflineTransferStatus, OfflineVerdictRevocation, OfflineVerdictSnapshot,
+        OfflineWalletCertificate, PROVISIONED_COUNTER_PREFIX, PlayIntegrityAppVerdict,
+        PlayIntegrityDeviceVerdict, PlayIntegrityEnvironment, canonical_app_attest_key_id,
+        canonical_receipts, chain_bound_receipt_hash, compute_receipts_root,
+        ensure_single_counter_scope, marker_series_from_public_key, receipts_are_canonical,
     },
     query::{
         dsl::{CompoundPredicate, EvaluatePredicate},
@@ -329,6 +331,263 @@ fn ensure_allowance_owner_matches_controller(
         ));
     }
     Ok(())
+}
+
+#[derive(Clone)]
+struct CertificateLineageMetadata {
+    scope: String,
+    epoch: u64,
+    prev_certificate_id: Option<Hash>,
+    min_build_number: u64,
+}
+
+fn parse_certificate_lineage_metadata(
+    certificate: &OfflineWalletCertificate,
+) -> Result<CertificateLineageMetadata, InstructionExecutionError> {
+    let metadata = &certificate.metadata;
+
+    let scope = metadata_string_field(metadata, OFFLINE_LINEAGE_SCOPE_KEY, "lineage scope")?;
+    if scope.trim().is_empty() {
+        return Err(rejection_error(
+            OfflineTransferRejectionReason::LineageInvalid,
+            OfflineTransferRejectionPlatform::General,
+            "offline.lineage.scope must not be empty",
+        ));
+    }
+    let scope = scope.trim().to_string();
+
+    let epoch = metadata_u64_field(metadata, OFFLINE_LINEAGE_EPOCH_KEY, "lineage epoch")?;
+    if epoch == 0 {
+        return Err(rejection_error(
+            OfflineTransferRejectionReason::LineageInvalid,
+            OfflineTransferRejectionPlatform::General,
+            "offline.lineage.epoch must be greater than zero",
+        ));
+    }
+
+    let prev_certificate_id_hex =
+        metadata_optional_string_field(metadata, OFFLINE_LINEAGE_PREV_CERTIFICATE_ID_HEX_KEY)?;
+    let prev_certificate_id = prev_certificate_id_hex
+        .as_deref()
+        .map(parse_certificate_id_hex)
+        .transpose()?;
+
+    if epoch == 1 && prev_certificate_id.is_some() {
+        return Err(rejection_error(
+            OfflineTransferRejectionReason::LineageInvalid,
+            OfflineTransferRejectionPlatform::General,
+            "offline.lineage.prev_certificate_id_hex must be absent when epoch is 1",
+        ));
+    }
+    if epoch > 1 && prev_certificate_id.is_none() {
+        return Err(rejection_error(
+            OfflineTransferRejectionReason::LineageInvalid,
+            OfflineTransferRejectionPlatform::General,
+            "offline.lineage.prev_certificate_id_hex is required when epoch is greater than 1",
+        ));
+    }
+
+    let min_build_number = metadata_u64_field(
+        metadata,
+        OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY,
+        "minimum build number",
+    )?;
+
+    Ok(CertificateLineageMetadata {
+        scope,
+        epoch,
+        prev_certificate_id,
+        min_build_number,
+    })
+}
+
+fn validate_certificate_lineage(
+    state_transaction: &StateTransaction<'_, '_>,
+    certificate: &OfflineWalletCertificate,
+    lineage: &CertificateLineageMetadata,
+) -> Result<(), InstructionExecutionError> {
+    let mut head: Option<(Hash, u64)> = None;
+    for (existing_id, record) in state_transaction.world.offline_allowances.iter() {
+        if record.certificate.controller != certificate.controller
+            || record.certificate.allowance.asset.definition()
+                != certificate.allowance.asset.definition()
+        {
+            continue;
+        }
+        let existing_lineage = parse_certificate_lineage_metadata(&record.certificate)?;
+        if existing_lineage.scope != lineage.scope {
+            continue;
+        }
+        if existing_lineage.epoch == lineage.epoch {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::LineageInvalid,
+                OfflineTransferRejectionPlatform::General,
+                format!(
+                    "duplicate lineage epoch {} for scope `{}`",
+                    lineage.epoch, lineage.scope
+                ),
+            ));
+        }
+        match head {
+            Some((head_id, head_epoch))
+                if existing_lineage.epoch < head_epoch
+                    || (existing_lineage.epoch == head_epoch && *existing_id >= head_id) => {}
+            _ => {
+                head = Some((*existing_id, existing_lineage.epoch));
+            }
+        }
+    }
+
+    match head {
+        None => {
+            if lineage.epoch != 1 {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::LineageInvalid,
+                    OfflineTransferRejectionPlatform::General,
+                    format!(
+                        "first certificate for scope `{}` must start with epoch 1",
+                        lineage.scope
+                    ),
+                ));
+            }
+        }
+        Some((head_id, head_epoch)) => {
+            let expected_epoch = head_epoch.checked_add(1).ok_or_else(|| {
+                rejection_error(
+                    OfflineTransferRejectionReason::LineageInvalid,
+                    OfflineTransferRejectionPlatform::General,
+                    "lineage epoch overflow",
+                )
+            })?;
+            if lineage.epoch != expected_epoch {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::LineageInvalid,
+                    OfflineTransferRejectionPlatform::General,
+                    format!(
+                        "lineage epoch mismatch for scope `{}`: expected {}, got {}",
+                        lineage.scope, expected_epoch, lineage.epoch
+                    ),
+                ));
+            }
+            if lineage.prev_certificate_id != Some(head_id) {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::LineageInvalid,
+                    OfflineTransferRejectionPlatform::General,
+                    format!(
+                        "lineage previous certificate mismatch for scope `{}`",
+                        lineage.scope
+                    ),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn metadata_value<'a>(
+    metadata: &'a Metadata,
+    key: &str,
+) -> Result<Option<&'a iroha_primitives::json::Json>, InstructionExecutionError> {
+    let name = Name::from_str(key).map_err(|err| {
+        rejection_error(
+            OfflineTransferRejectionReason::LineageInvalid,
+            OfflineTransferRejectionPlatform::General,
+            format!("invalid metadata key `{key}`: {err}"),
+        )
+    })?;
+    Ok(metadata.get(&name))
+}
+
+fn metadata_optional_string_field(
+    metadata: &Metadata,
+    key: &str,
+) -> Result<Option<String>, InstructionExecutionError> {
+    metadata_value(metadata, key)?
+        .map(|value| {
+            value.try_into_any::<String>().map_err(|err| {
+                rejection_error(
+                    OfflineTransferRejectionReason::LineageInvalid,
+                    OfflineTransferRejectionPlatform::General,
+                    format!("metadata entry `{key}` is not a string: {err}"),
+                )
+            })
+        })
+        .transpose()
+}
+
+fn metadata_string_field(
+    metadata: &Metadata,
+    key: &str,
+    label: &str,
+) -> Result<String, InstructionExecutionError> {
+    metadata_optional_string_field(metadata, key)?.ok_or_else(|| {
+        rejection_error(
+            OfflineTransferRejectionReason::LineageInvalid,
+            OfflineTransferRejectionPlatform::General,
+            format!("missing {label} metadata `{key}`"),
+        )
+    })
+}
+
+fn metadata_u64_field(
+    metadata: &Metadata,
+    key: &str,
+    label: &str,
+) -> Result<u64, InstructionExecutionError> {
+    let value = metadata_value(metadata, key)?.ok_or_else(|| {
+        rejection_error(
+            OfflineTransferRejectionReason::LineageInvalid,
+            OfflineTransferRejectionPlatform::General,
+            format!("missing {label} metadata `{key}`"),
+        )
+    })?;
+    if let Ok(parsed) = value.try_into_any::<u64>() {
+        return Ok(parsed);
+    }
+    let text = value.try_into_any::<String>().map_err(|err| {
+        rejection_error(
+            OfflineTransferRejectionReason::LineageInvalid,
+            OfflineTransferRejectionPlatform::General,
+            format!("metadata entry `{key}` is not a u64/string: {err}"),
+        )
+    })?;
+    text.parse::<u64>().map_err(|err| {
+        rejection_error(
+            OfflineTransferRejectionReason::LineageInvalid,
+            OfflineTransferRejectionPlatform::General,
+            format!("metadata entry `{key}` could not be parsed as u64: {err}"),
+        )
+    })
+}
+
+fn parse_certificate_id_hex(value: &str) -> Result<Hash, InstructionExecutionError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(rejection_error(
+            OfflineTransferRejectionReason::LineageInvalid,
+            OfflineTransferRejectionPlatform::General,
+            "offline.lineage.prev_certificate_id_hex must not be empty",
+        ));
+    }
+    let bytes = hex::decode(trimmed).map_err(|err| {
+        rejection_error(
+            OfflineTransferRejectionReason::LineageInvalid,
+            OfflineTransferRejectionPlatform::General,
+            format!("offline.lineage.prev_certificate_id_hex is not valid hex: {err}"),
+        )
+    })?;
+    let digest: [u8; Hash::LENGTH] = bytes.try_into().map_err(|_| {
+        rejection_error(
+            OfflineTransferRejectionReason::LineageInvalid,
+            OfflineTransferRejectionPlatform::General,
+            format!(
+                "offline.lineage.prev_certificate_id_hex must be {} bytes",
+                Hash::LENGTH
+            ),
+        )
+    })?;
+    Ok(Hash::prehashed(digest))
 }
 
 fn resolve_offline_escrow_account(
@@ -929,6 +1188,8 @@ pub mod isi {
         assert_numeric_spec_with(&certificate.policy.max_tx_value, spec)?;
         ensure_certificate_policy(&certificate, expected_scale)?;
         ensure_operator_signature(&certificate)?;
+        let lineage = parse_certificate_lineage_metadata(&certificate)?;
+        validate_certificate_lineage(state_transaction, &certificate, &lineage)?;
 
         let now_ms = state_transaction.block_unix_timestamp_ms();
         if certificate.issued_at_ms > now_ms {
@@ -1024,6 +1285,7 @@ pub mod isi {
             domain::Domain,
             offline::{
                 AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY,
+                AndroidProvisionedProof, OfflineBuildClaim, OfflineBuildClaimPlatform,
                 OfflineCertificateBalanceProof, OfflineVerdictRevocationReason,
             },
             query::error::FindError,
@@ -1044,13 +1306,45 @@ pub mod isi {
             AccountId::new(domain_id, keypair.public_key().clone())
         }
 
+        fn set_certificate_lineage(
+            certificate: &mut OfflineWalletCertificate,
+            scope: &str,
+            epoch: u64,
+            prev_certificate_id: Option<Hash>,
+        ) {
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                OFFLINE_LINEAGE_SCOPE_KEY.parse().expect("metadata key"),
+                Json::new(scope.to_owned()),
+            );
+            metadata.insert(
+                OFFLINE_LINEAGE_EPOCH_KEY.parse().expect("metadata key"),
+                Json::new(epoch.to_string()),
+            );
+            metadata.insert(
+                OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY
+                    .parse()
+                    .expect("metadata key"),
+                Json::new("1".to_owned()),
+            );
+            if let Some(prev_certificate_id) = prev_certificate_id {
+                metadata.insert(
+                    OFFLINE_LINEAGE_PREV_CERTIFICATE_ID_HEX_KEY
+                        .parse()
+                        .expect("metadata key"),
+                    Json::new(hex::encode(prev_certificate_id.as_ref())),
+                );
+            }
+            certificate.metadata = metadata;
+        }
+
         fn sample_certificate() -> OfflineWalletCertificate {
             let controller = sample_account(0x01, "offline");
             let definition =
                 AssetDefinitionId::from_str("xor#offline").expect("asset definition id");
             let asset = AssetId::new(definition, controller.clone());
             let spend_pair = iroha_crypto::KeyPair::from_seed(vec![0xEE; 32], Algorithm::Ed25519);
-            OfflineWalletCertificate {
+            let mut certificate = OfflineWalletCertificate {
                 controller,
                 operator: sample_account(0x01, "offline"),
                 allowance: OfflineAllowanceCommitment {
@@ -1072,7 +1366,9 @@ pub mod isi {
                 verdict_id: None,
                 attestation_nonce: None,
                 refresh_at_ms: None,
-            }
+            };
+            set_certificate_lineage(&mut certificate, "register-tests-default", 1, None);
+            certificate
         }
 
         #[test]
@@ -1754,6 +2050,7 @@ pub mod isi {
                 platform_snapshot: None,
                 sender_certificate_id: certificate.certificate_id(),
                 sender_signature: Signature::from_bytes(&[0; 64]),
+                build_claim: None,
             };
             let snapshot = OfflinePlatformTokenSnapshot {
                 policy: policy.as_str().into(),
@@ -1825,6 +2122,7 @@ pub mod isi {
                 platform_snapshot: None,
                 sender_certificate_id: certificate.certificate_id(),
                 sender_signature: Signature::from_bytes(&[0; 64]),
+                build_claim: None,
             };
             let transfer = OfflineToOnlineTransfer {
                 bundle_id: Hash::new(b"bundle-ts"),
@@ -1855,6 +2153,67 @@ pub mod isi {
             (transfer, record)
         }
 
+        fn attach_android_provisioned_build_claim(
+            receipt: &mut OfflineSpendReceipt,
+            certificate: &mut OfflineWalletCertificate,
+            claim_id: Hash,
+        ) {
+            let app_id = "com.example.offline.android";
+            certificate.metadata.insert(
+                ANDROID_PROVISIONED_APP_ID_KEY
+                    .parse()
+                    .expect("metadata key"),
+                Json::new(app_id.to_owned()),
+            );
+
+            let mut device_manifest = Metadata::default();
+            device_manifest.insert(
+                Name::from_str(ANDROID_PROVISIONED_DEVICE_ID_KEY).expect("metadata key"),
+                Json::new("device-001".to_owned()),
+            );
+            receipt.platform_proof = OfflinePlatformProof::Provisioned(AndroidProvisionedProof {
+                manifest_schema: "offline_provisioning_v1".to_owned(),
+                manifest_version: Some(1),
+                manifest_issued_at_ms: receipt.issued_at_ms.saturating_sub(1),
+                challenge_hash: Hash::new(b"provisioned-challenge"),
+                counter: 1,
+                device_manifest,
+                inspector_signature: Signature::from_bytes(&[0; 64]),
+            });
+
+            let lineage_scope = metadata_string_field(
+                &certificate.metadata,
+                OFFLINE_LINEAGE_SCOPE_KEY,
+                "lineage scope",
+            )
+            .expect("lineage scope");
+            let mut build_claim = OfflineBuildClaim {
+                claim_id,
+                platform: OfflineBuildClaimPlatform::Android,
+                app_id: app_id.to_owned(),
+                build_number: 1,
+                issued_at_ms: receipt.issued_at_ms.saturating_sub(1),
+                expires_at_ms: receipt.issued_at_ms + 60_000,
+                lineage_scope,
+                nonce: receipt.tx_id,
+                operator_signature: Signature::from_bytes(&[0; 64]),
+            };
+            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            build_claim.operator_signature = Signature::new(
+                operator_keys.private_key(),
+                &build_claim
+                    .signing_bytes()
+                    .expect("build claim signing bytes"),
+            );
+            receipt.build_claim = Some(build_claim);
+
+            let spend_pair = KeyPair::from_seed(vec![0xEE; 32], Algorithm::Ed25519);
+            receipt.sender_signature = Signature::new(
+                spend_pair.private_key(),
+                &receipt.signing_bytes().expect("receipt signing bytes"),
+            );
+        }
+
         #[test]
         fn receipt_amount_exceeds_policy_max_is_rejected() {
             let mut certificate = sample_certificate();
@@ -1878,6 +2237,7 @@ pub mod isi {
                 platform_snapshot: None,
                 sender_certificate_id: certificate.certificate_id(),
                 sender_signature: Signature::from_bytes(&[0; 64]),
+                build_claim: None,
             };
             let transfer = OfflineToOnlineTransfer {
                 bundle_id: Hash::new(b"bundle-max"),
@@ -1936,6 +2296,7 @@ pub mod isi {
                 platform_snapshot: None,
                 sender_certificate_id: certificate.certificate_id(),
                 sender_signature: Signature::from_bytes(&[0; 64]),
+                build_claim: None,
             };
 
             let err = super::aggregate_amount(&[receipt], certificate.allowance.amount.scale())
@@ -2243,16 +2604,6 @@ pub mod isi {
             let controller = certificate.controller.clone();
             let escrow = sample_account(0x02, "offline");
             let definition_id = certificate.allowance.asset.definition().clone();
-            let record = OfflineAllowanceRecord {
-                certificate: certificate.clone(),
-                current_commitment: certificate.allowance.commitment.clone(),
-                registered_at_ms: certificate.issued_at_ms,
-                remaining_amount: Numeric::new(50, 0),
-                counter_state: OfflineCounterState::default(),
-                verdict_id: None,
-                attestation_nonce: None,
-                refresh_at_ms: None,
-            };
             let domain = Domain::new(controller.domain().clone()).build(&controller);
             let controller_account = Account::new(controller.clone()).build(&controller);
             let escrow_account = Account::new(escrow.clone()).build(&escrow);
@@ -2267,15 +2618,13 @@ pub mod isi {
                 AssetId::new(definition_id.clone(), escrow.clone()),
                 Numeric::new(50, 0),
             );
-            let mut world = World::with_assets(
+            let world = World::with_assets(
                 [domain],
                 [controller_account, escrow_account],
                 [asset_definition],
                 [controller_asset_entry, escrow_asset_entry],
                 [],
             );
-            let certificate_id = certificate.certificate_id();
-            world.offline_allowances.insert(certificate_id, record);
 
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -2834,6 +3183,56 @@ pub mod isi {
         }
 
         #[test]
+        fn submit_transfer_rejects_replayed_build_claim_even_without_transfer_history() {
+            let issued_at_ms = 1_700_000_100;
+            let (mut transfer, mut record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
+            record
+                .current_commitment
+                .clone_from(&record.certificate.allowance.commitment);
+
+            let claim_id = Hash::new(b"claim-replay-pruned");
+            attach_android_provisioned_build_claim(
+                transfer.receipts.get_mut(0).expect("receipt"),
+                &mut record.certificate,
+                claim_id,
+            );
+
+            let controller = record.certificate.controller.clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let account = Account::new(controller.clone()).build(&controller);
+            let definition_id = record.certificate.allowance.asset.definition().clone();
+            let asset_definition =
+                AssetDefinition::new(definition_id, NumericSpec::integer()).build(&controller);
+            let mut world = World::with([domain], [account], [asset_definition]);
+            let certificate_id = record.certificate.certificate_id();
+            world.offline_allowances.insert(certificate_id, record);
+            world
+                .offline_consumed_build_claim_ids
+                .insert(claim_id, ());
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.skip_platform_attestation = true;
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, issued_at_ms + 100, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let authority = transfer.receiver.clone();
+            let err = submit_transfer(
+                SubmitOfflineToOnlineTransfer { transfer },
+                &authority,
+                &mut transaction,
+            )
+            .expect_err("replayed build claim should be rejected");
+            let expected = format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}{}",
+                OfflineTransferRejectionReason::BuildClaimReplayed.as_label()
+            );
+            assert!(err.to_string().contains(&expected));
+        }
+
+        #[test]
         fn submit_transfer_rejects_insufficient_escrow_without_mutating_allowance_or_credit() {
             let issued_at_ms = 1_700_000_100;
             let controller = sample_account(0x01, "offline");
@@ -2903,6 +3302,7 @@ pub mod isi {
                 platform_snapshot: None,
                 sender_certificate_id: certificate.certificate_id(),
                 sender_signature: Signature::from_bytes(&[0; 64]),
+                build_claim: None,
             };
             receipt.sender_signature = Signature::new(
                 spend_pair.private_key(),
@@ -3475,6 +3875,7 @@ pub mod isi {
             previous_certificate.issued_at_ms = now_ms - 2_000;
             previous_certificate.expires_at_ms = now_ms + 10_000;
             previous_certificate.policy.expires_at_ms = previous_certificate.expires_at_ms;
+            set_certificate_lineage(&mut previous_certificate, "register-reissue", 1, None);
             let previous_id = previous_certificate.certificate_id();
 
             let previous_record = OfflineAllowanceRecord {
@@ -3496,6 +3897,12 @@ pub mod isi {
             reissued_certificate.issued_at_ms = now_ms - 10;
             reissued_certificate.expires_at_ms = now_ms + 20_000;
             reissued_certificate.policy.expires_at_ms = reissued_certificate.expires_at_ms;
+            set_certificate_lineage(
+                &mut reissued_certificate,
+                "register-reissue",
+                2,
+                Some(previous_id),
+            );
             let reissue_spend = KeyPair::from_seed(vec![0x88; 32], Algorithm::Ed25519);
             reissued_certificate.spend_public_key = reissue_spend.public_key().clone();
             let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
@@ -3606,6 +4013,7 @@ pub mod isi {
             previous_certificate.issued_at_ms = now_ms - 2_000;
             previous_certificate.expires_at_ms = now_ms + 10_000;
             previous_certificate.policy.expires_at_ms = previous_certificate.expires_at_ms;
+            set_certificate_lineage(&mut previous_certificate, "register-reissue", 1, None);
             let previous_id = previous_certificate.certificate_id();
 
             let previous_record = OfflineAllowanceRecord {
@@ -3627,6 +4035,12 @@ pub mod isi {
             reissued_certificate.issued_at_ms = now_ms - 10;
             reissued_certificate.expires_at_ms = now_ms + 20_000;
             reissued_certificate.policy.expires_at_ms = reissued_certificate.expires_at_ms;
+            set_certificate_lineage(
+                &mut reissued_certificate,
+                "register-reissue",
+                2,
+                Some(previous_id),
+            );
             let reissue_spend = KeyPair::from_seed(vec![0x99; 32], Algorithm::Ed25519);
             reissued_certificate.spend_public_key = reissue_spend.public_key().clone();
             let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
@@ -3728,6 +4142,176 @@ pub mod isi {
         }
 
         #[test]
+        fn register_allowance_reissue_prefers_newest_allowance_capacity_first() {
+            let now_ms = 1_700_000_500;
+            let mut older_certificate = sample_certificate();
+            older_certificate.allowance.amount = Numeric::new(40, 0);
+            older_certificate.policy.max_balance = Numeric::new(40, 0);
+            older_certificate.policy.max_tx_value = Numeric::new(40, 0);
+            older_certificate.allowance.commitment = vec![0xA1; 32];
+            older_certificate.issued_at_ms = now_ms - 4_000;
+            older_certificate.expires_at_ms = now_ms + 20_000;
+            older_certificate.policy.expires_at_ms = older_certificate.expires_at_ms;
+            set_certificate_lineage(&mut older_certificate, "register-reissue", 1, None);
+            let older_id = older_certificate.certificate_id();
+            let older_record = OfflineAllowanceRecord {
+                certificate: older_certificate,
+                current_commitment: vec![0xA1; 32],
+                registered_at_ms: now_ms - 3_000,
+                remaining_amount: Numeric::new(40, 0),
+                counter_state: OfflineCounterState::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
+
+            let mut newer_certificate = sample_certificate();
+            newer_certificate.allowance.amount = Numeric::new(40, 0);
+            newer_certificate.policy.max_balance = Numeric::new(40, 0);
+            newer_certificate.policy.max_tx_value = Numeric::new(40, 0);
+            newer_certificate.allowance.commitment = vec![0xB2; 32];
+            newer_certificate.issued_at_ms = now_ms - 2_000;
+            newer_certificate.expires_at_ms = now_ms + 20_000;
+            newer_certificate.policy.expires_at_ms = newer_certificate.expires_at_ms;
+            set_certificate_lineage(
+                &mut newer_certificate,
+                "register-reissue",
+                2,
+                Some(older_id),
+            );
+            let newer_id = newer_certificate.certificate_id();
+            let newer_record = OfflineAllowanceRecord {
+                certificate: newer_certificate,
+                current_commitment: vec![0xB2; 32],
+                registered_at_ms: now_ms - 1_000,
+                remaining_amount: Numeric::new(40, 0),
+                counter_state: OfflineCounterState::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
+
+            let mut reissued_certificate = sample_certificate();
+            reissued_certificate.allowance.amount = Numeric::new(30, 0);
+            reissued_certificate.policy.max_balance = Numeric::new(30, 0);
+            reissued_certificate.policy.max_tx_value = Numeric::new(30, 0);
+            reissued_certificate.allowance.commitment = vec![0xCC; 32];
+            reissued_certificate.issued_at_ms = now_ms - 10;
+            reissued_certificate.expires_at_ms = now_ms + 20_000;
+            reissued_certificate.policy.expires_at_ms = reissued_certificate.expires_at_ms;
+            set_certificate_lineage(
+                &mut reissued_certificate,
+                "register-reissue",
+                3,
+                Some(newer_id),
+            );
+            let reissue_spend = KeyPair::from_seed(vec![0xA4; 32], Algorithm::Ed25519);
+            reissued_certificate.spend_public_key = reissue_spend.public_key().clone();
+            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            reissued_certificate.operator_signature = Signature::new(
+                operator_keys.private_key(),
+                &reissued_certificate
+                    .operator_signing_bytes()
+                    .expect("certificate signing bytes"),
+            );
+            let reissued_id = reissued_certificate.certificate_id();
+
+            let controller = reissued_certificate.controller.clone();
+            let escrow = sample_account(0x02, "offline");
+            let definition_id = reissued_certificate.allowance.asset.definition().clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let escrow_asset = Asset::new(
+                AssetId::new(definition_id.clone(), escrow.clone()),
+                Numeric::new(80, 0),
+            );
+            let mut world = World::with_assets(
+                [domain],
+                [controller_account, escrow_account],
+                [asset_definition],
+                [escrow_asset],
+                [],
+            );
+            world.offline_allowances.insert(older_id, older_record);
+            world.offline_allowances.insert(newer_id, newer_record);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow.clone());
+
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, now_ms, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            register_allowance(
+                RegisterOfflineAllowance {
+                    certificate: reissued_certificate,
+                },
+                &controller,
+                &mut transaction,
+            )
+            .expect("reissue should consume newest capacity deterministically");
+
+            let older = transaction
+                .world
+                .offline_allowances
+                .get(&older_id)
+                .expect("older record should remain");
+            assert_eq!(
+                older.remaining_amount,
+                Numeric::new(40, 0),
+                "older allowance should remain untouched when newer capacity is sufficient",
+            );
+
+            let newer = transaction
+                .world
+                .offline_allowances
+                .get(&newer_id)
+                .expect("newer record should remain");
+            assert_eq!(
+                newer.remaining_amount,
+                Numeric::new(10, 0),
+                "newer allowance should be consumed first",
+            );
+
+            let reissued = transaction
+                .world
+                .offline_allowances
+                .get(&reissued_id)
+                .expect("reissued allowance must be registered");
+            assert_eq!(reissued.remaining_amount, Numeric::new(30, 0));
+
+            let escrow_balance = transaction
+                .world
+                .assets
+                .get(&AssetId::new(definition_id.clone(), escrow))
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(
+                escrow_balance,
+                Numeric::new(80, 0),
+                "pure reallocation should keep escrow total unchanged",
+            );
+
+            let controller_balance = transaction
+                .world
+                .assets
+                .get(&AssetId::new(definition_id, controller))
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(controller_balance, Numeric::zero());
+        }
+
+        #[test]
         fn renewal_registers_new_allowance_without_implicitly_reclaiming_expired_remainder() {
             let now_ms = 1_700_000_500;
             let mut expired_certificate = sample_certificate();
@@ -3736,6 +4320,7 @@ pub mod isi {
             expired_certificate.policy.max_tx_value = Numeric::new(50, 0);
             expired_certificate.expires_at_ms = now_ms - 100;
             expired_certificate.policy.expires_at_ms = expired_certificate.expires_at_ms;
+            set_certificate_lineage(&mut expired_certificate, "register-renewal", 1, None);
             let expired_id = expired_certificate.certificate_id();
 
             let expired_record = OfflineAllowanceRecord {
@@ -3756,6 +4341,12 @@ pub mod isi {
             renewal_certificate.issued_at_ms = now_ms - 10;
             renewal_certificate.expires_at_ms = now_ms + 10_000;
             renewal_certificate.policy.expires_at_ms = renewal_certificate.expires_at_ms;
+            set_certificate_lineage(
+                &mut renewal_certificate,
+                "register-renewal",
+                2,
+                Some(expired_id),
+            );
             let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
             renewal_certificate.operator_signature = Signature::new(
                 operator_keys.private_key(),
@@ -4007,6 +4598,7 @@ pub mod isi {
         let mut settled_platform_snapshot: Option<OfflinePlatformTokenSnapshot> = None;
         let mut expected_controller: Option<AccountId> = None;
         let mut claimed_amount = Numeric::zero();
+        let mut claim_ids_in_bundle = BTreeSet::new();
 
         for (certificate_id, certificate_receipts) in &receipts_by_certificate {
             let record = state_transaction
@@ -4021,6 +4613,7 @@ pub mod isi {
                     )
                 })?
                 .clone();
+            let lineage = parse_certificate_lineage_metadata(&record.certificate)?;
 
             if let Some(expected) = expected_controller.as_ref() {
                 if &record.certificate.controller != expected {
@@ -4128,6 +4721,14 @@ pub mod isi {
                     block_timestamp_ms,
                     &state_transaction.settlement.offline,
                     attestation_snapshot,
+                )?;
+                verify_receipt_build_claim(
+                    state_transaction,
+                    receipt,
+                    &record.certificate,
+                    &lineage,
+                    block_timestamp_ms,
+                    &mut claim_ids_in_bundle,
                 )?;
             }
 
@@ -4911,6 +5512,16 @@ pub mod isi {
         record: OfflineTransferRecord,
     ) {
         let bundle_id = record.transfer.bundle_id;
+        if record.status != OfflineTransferStatus::Rejected {
+            for receipt in &record.transfer.receipts {
+                if let Some(claim) = &receipt.build_claim {
+                    state_transaction
+                        .world
+                        .offline_consumed_build_claim_ids
+                        .insert(claim.claim_id, ());
+                }
+            }
+        }
         {
             let sender_index = &mut state_transaction.world.offline_transfer_sender_index;
             if let Some(set) = sender_index.get_mut(&record.controller) {
@@ -5397,6 +6008,287 @@ pub mod isi {
                     OfflineTransferRejectionPlatform::General,
                     "receipt signature does not match spend public key",
                 )
+            })
+    }
+
+    fn verify_receipt_build_claim(
+        state_transaction: &StateTransaction<'_, '_>,
+        receipt: &OfflineSpendReceipt,
+        certificate: &OfflineWalletCertificate,
+        lineage: &CertificateLineageMetadata,
+        block_timestamp_ms: u64,
+        claim_ids_in_bundle: &mut BTreeSet<Hash>,
+    ) -> Result<(), Error> {
+        let claim = receipt.build_claim.as_ref().ok_or_else(|| {
+            rejection_error(
+                OfflineTransferRejectionReason::BuildClaimMissing,
+                OfflineTransferRejectionPlatform::General,
+                "receipt is missing build claim",
+            )
+        })?;
+
+        if !claim_ids_in_bundle.insert(claim.claim_id) {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::BuildClaimReplayed,
+                OfflineTransferRejectionPlatform::General,
+                "build claim already used in this bundle",
+            )
+            .into());
+        }
+
+        if is_build_claim_consumed(state_transaction, &claim.claim_id) {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::BuildClaimReplayed,
+                OfflineTransferRejectionPlatform::General,
+                "build claim already consumed by a previous transfer",
+            )
+            .into());
+        }
+
+        if claim.lineage_scope.trim().is_empty() {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                OfflineTransferRejectionPlatform::General,
+                "build claim lineage scope must not be empty",
+            )
+            .into());
+        }
+        if claim.lineage_scope.trim() != lineage.scope {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                OfflineTransferRejectionPlatform::General,
+                "build claim lineage scope mismatch",
+            )
+            .into());
+        }
+
+        if claim.nonce != receipt.tx_id {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                OfflineTransferRejectionPlatform::General,
+                "build claim nonce does not match receipt tx_id",
+            )
+            .into());
+        }
+
+        if claim.build_number < lineage.min_build_number {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::BuildClaimBuildTooLow,
+                OfflineTransferRejectionPlatform::General,
+                "build claim build number is lower than certificate minimum",
+            )
+            .into());
+        }
+
+        if claim.issued_at_ms > claim.expires_at_ms
+            || receipt.issued_at_ms < claim.issued_at_ms
+            || receipt.issued_at_ms > claim.expires_at_ms
+            || block_timestamp_ms > claim.expires_at_ms
+        {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::BuildClaimExpired,
+                OfflineTransferRejectionPlatform::General,
+                "build claim timestamp window is invalid or expired",
+            )
+            .into());
+        }
+
+        let expected_platform = match &receipt.platform_proof {
+            OfflinePlatformProof::AppleAppAttest(_) => OfflineBuildClaimPlatform::Apple,
+            OfflinePlatformProof::AndroidMarkerKey(_) | OfflinePlatformProof::Provisioned(_) => {
+                OfflineBuildClaimPlatform::Android
+            }
+        };
+        if claim.platform != expected_platform {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                OfflineTransferRejectionPlatform::General,
+                "build claim platform does not match receipt platform proof",
+            )
+            .into());
+        }
+
+        verify_build_claim_app_binding(claim, receipt, certificate)?;
+
+        let operator_key = certificate.operator.try_signatory().ok_or_else(|| {
+            rejection_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                OfflineTransferRejectionPlatform::General,
+                "certificate operator account must be single-signature for build claims",
+            )
+        })?;
+        let payload = claim.signing_bytes().map_err(|err| {
+            rejection_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                OfflineTransferRejectionPlatform::General,
+                format!("failed to encode build claim payload: {err}"),
+            )
+        })?;
+        claim
+            .operator_signature
+            .verify(operator_key, &payload)
+            .map_err(|_| {
+                rejection_error(
+                    OfflineTransferRejectionReason::BuildClaimInvalid,
+                    OfflineTransferRejectionPlatform::General,
+                    "build claim signature does not match certificate operator",
+                )
+            })?;
+
+        Ok(())
+    }
+
+    fn verify_build_claim_app_binding(
+        claim: &OfflineBuildClaim,
+        receipt: &OfflineSpendReceipt,
+        certificate: &OfflineWalletCertificate,
+    ) -> Result<(), Error> {
+        match &receipt.platform_proof {
+            OfflinePlatformProof::AppleAppAttest(_) => {
+                let ios = extract_ios_metadata(&certificate.metadata).map_err(|err| {
+                    rejection_error(
+                        OfflineTransferRejectionReason::BuildClaimInvalid,
+                        OfflineTransferRejectionPlatform::General,
+                        format!("ios metadata missing for build claim validation: {err}"),
+                    )
+                })?;
+                if claim.app_id != ios.bundle_id {
+                    return Err(rejection_error(
+                        OfflineTransferRejectionReason::BuildClaimInvalid,
+                        OfflineTransferRejectionPlatform::General,
+                        "build claim app_id does not match ios.app_attest.bundle_id",
+                    )
+                    .into());
+                }
+            }
+            OfflinePlatformProof::AndroidMarkerKey(_) => {
+                let metadata =
+                    android_integrity_metadata(&certificate.metadata).map_err(|err| {
+                        rejection_error(
+                            OfflineTransferRejectionReason::BuildClaimInvalid,
+                            OfflineTransferRejectionPlatform::General,
+                            format!("android metadata missing for build claim validation: {err}"),
+                        )
+                    })?;
+                match metadata {
+                    AndroidIntegrityMetadata::MarkerKey(meta) => {
+                        if !meta.package_names.contains(&claim.app_id) {
+                            return Err(rejection_error(
+                                OfflineTransferRejectionReason::BuildClaimInvalid,
+                                OfflineTransferRejectionPlatform::General,
+                                "build claim app_id is not in marker-key package whitelist",
+                            )
+                            .into());
+                        }
+                    }
+                    AndroidIntegrityMetadata::PlayIntegrity(meta) => {
+                        if !meta.package_names.contains(&claim.app_id) {
+                            return Err(rejection_error(
+                                OfflineTransferRejectionReason::BuildClaimInvalid,
+                                OfflineTransferRejectionPlatform::General,
+                                "build claim app_id is not in play integrity package whitelist",
+                            )
+                            .into());
+                        }
+                    }
+                    AndroidIntegrityMetadata::HmsSafetyDetect(meta) => {
+                        if !meta.package_names.contains(&claim.app_id) {
+                            return Err(rejection_error(
+                                OfflineTransferRejectionReason::BuildClaimInvalid,
+                                OfflineTransferRejectionPlatform::General,
+                                "build claim app_id is not in hms package whitelist",
+                            )
+                            .into());
+                        }
+                    }
+                    AndroidIntegrityMetadata::Provisioned(_) => {
+                        return Err(rejection_error(
+                            OfflineTransferRejectionReason::BuildClaimInvalid,
+                            OfflineTransferRejectionPlatform::General,
+                            "marker-key receipt cannot be validated against provisioned metadata",
+                        )
+                        .into());
+                    }
+                }
+            }
+            OfflinePlatformProof::Provisioned(_) => {
+                let configured_app_id = build_claim_metadata_string(
+                    &certificate.metadata,
+                    ANDROID_PROVISIONED_APP_ID_KEY,
+                )?;
+                if claim.app_id != configured_app_id {
+                    return Err(rejection_error(
+                        OfflineTransferRejectionReason::BuildClaimInvalid,
+                        OfflineTransferRejectionPlatform::General,
+                        "build claim app_id does not match android.provisioned.app_id",
+                    )
+                    .into());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn build_claim_metadata_string(metadata: &Metadata, key: &str) -> Result<String, Error> {
+        let name = Name::from_str(key).map_err(|err| {
+            rejection_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                OfflineTransferRejectionPlatform::General,
+                format!("invalid build claim metadata key `{key}`: {err}"),
+            )
+        })?;
+        let value = metadata.get(&name).ok_or_else(|| {
+            rejection_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                OfflineTransferRejectionPlatform::General,
+                format!("missing build claim metadata `{key}`"),
+            )
+        })?;
+        let value = value.try_into_any::<String>().map_err(|err| {
+            rejection_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                OfflineTransferRejectionPlatform::General,
+                format!("build claim metadata `{key}` is not a string: {err}"),
+            )
+        })?;
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                OfflineTransferRejectionPlatform::General,
+                format!("build claim metadata `{key}` must not be empty"),
+            )
+            .into());
+        }
+        Ok(trimmed.to_string())
+    }
+
+    fn is_build_claim_consumed(
+        state_transaction: &StateTransaction<'_, '_>,
+        claim_id: &Hash,
+    ) -> bool {
+        if state_transaction
+            .world
+            .offline_consumed_build_claim_ids
+            .get(claim_id)
+            .is_some()
+        {
+            return true;
+        }
+
+        // Fallback for pre-index snapshots while rolling out persisted replay tracking.
+        state_transaction
+            .world
+            .offline_to_online_transfers
+            .iter()
+            .filter(|(_, record)| record.status != OfflineTransferStatus::Rejected)
+            .any(|(_, record)| {
+                record.transfer.receipts.iter().any(|receipt| {
+                    receipt
+                        .build_claim
+                        .as_ref()
+                        .is_some_and(|claim| &claim.claim_id == claim_id)
+                })
             })
     }
 }
@@ -9082,6 +9974,7 @@ mod attestation {
                     platform_snapshot: None,
                     sender_certificate_id: certificate.certificate_id(),
                     sender_signature: Signature::from_bytes(&[0; 64]),
+                    build_claim: None,
                 };
                 let chain_id = sample_chain_id();
                 let challenge = derive_receipt_challenge(&receipt, &chain_id).expect("challenge");
@@ -9433,6 +10326,7 @@ mod attestation {
                 platform_snapshot: None,
                 sender_certificate_id: certificate.certificate_id(),
                 sender_signature: Signature::from_bytes(&[0; 64]),
+                build_claim: None,
             };
             let payload = receipt.signing_bytes().expect("receipt payload");
             receipt.sender_signature = Signature::new(spend_pair.private_key(), &payload);
@@ -9744,6 +10638,7 @@ mod attestation {
                 platform_snapshot: None,
                 sender_certificate_id: certificate.certificate_id(),
                 sender_signature: Signature::from_bytes(&[0; 64]),
+                build_claim: None,
             }
         }
     }
@@ -10088,6 +10983,7 @@ mod aggregate_proof_tests {
             platform_snapshot: None,
             sender_certificate_id: certificate.certificate_id(),
             sender_signature: Signature::from_bytes(&[1; 64]),
+            build_claim: None,
         };
         let receipt_b = OfflineSpendReceipt {
             tx_id: Hash::new(b"agg-receipt-b"),
@@ -10106,6 +11002,7 @@ mod aggregate_proof_tests {
             platform_snapshot: None,
             sender_certificate_id: certificate.certificate_id(),
             sender_signature: Signature::from_bytes(&[1; 64]),
+            build_claim: None,
         };
 
         let receipts = vec![receipt_a, receipt_b];

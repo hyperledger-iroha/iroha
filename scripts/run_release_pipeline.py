@@ -9,12 +9,12 @@ for release targets (SoraFS/SoraNet gateways or other URIs).
 
 Example:
     ./scripts/run_release_pipeline.py \\
-        --version 2.0.0-rc.3 \\
-        --previous-tag iroha2-v2.0.0-rc.2 \\
-        --output-dir artifacts/releases/2.0.0-rc.3 \\
+        --version <release-version> \\
+        --previous-tag <previous-release-tag> \\
+        --output-dir artifacts/releases/<release-version> \\
         --signing-key ~/.keys/iroha_signing.pem \\
-        --publish-target iroha2=sorafs://releases/iroha2/v2.0.0-rc.3 \\
-        --publish-target iroha3=sorafs://releases/iroha3/v2.0.0-rc.3
+        --publish-target iroha2=sorafs://releases/iroha2/v<release-version> \\
+        --publish-target iroha3=sorafs://releases/iroha3/v<release-version>
 """
 from __future__ import annotations
 
@@ -172,7 +172,10 @@ def export_fastpq_dashboard(grafana_url: str, token: str, destination: Path) -> 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="Target release version (e.g., 2.0.0-rc.3 or v2.0.0-rc.3)")
-    parser.add_argument("--previous-tag", help="Previous tag for changelog generation (optional)")
+    parser.add_argument(
+        "--previous-tag",
+        help="Previous release tag for changelog generation (optional; should match the release line being prepared).",
+    )
     parser.add_argument(
         "--output-dir",
         default="artifacts/releases",
