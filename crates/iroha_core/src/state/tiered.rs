@@ -1909,6 +1909,11 @@ impl TieredStateBackend {
             world.offline_verdict_revocations
         );
         collect_map!(
+            TieredSegment::OfflineConsumedBuildClaimIds,
+            OfflineConsumedBuildClaimId,
+            world.offline_consumed_build_claim_ids
+        );
+        collect_map!(
             TieredSegment::OfflineTransfers,
             OfflineTransfer,
             world.offline_to_online_transfers
@@ -3884,6 +3889,7 @@ enum TieredSegment {
     OfflineAllowances,
     OfflineVerdictRevocations,
     OfflineTransfers,
+    OfflineConsumedBuildClaimIds,
 }
 
 impl TieredSegment {
@@ -3921,6 +3927,7 @@ impl TieredSegment {
             TieredSegment::OfflineAllowances => "offline_allowances",
             TieredSegment::OfflineVerdictRevocations => "offline_verdict_revocations",
             TieredSegment::OfflineTransfers => "offline_transfers",
+            TieredSegment::OfflineConsumedBuildClaimIds => "offline_consumed_build_claim_ids",
         }
     }
 }
@@ -3969,6 +3976,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "offline_allowances" => TieredSegment::OfflineAllowances,
             "offline_verdict_revocations" => TieredSegment::OfflineVerdictRevocations,
             "offline_transfers" => TieredSegment::OfflineTransfers,
+            "offline_consumed_build_claim_ids" => TieredSegment::OfflineConsumedBuildClaimIds,
             other => {
                 return Err(norito::json::Error::InvalidField {
                     field: "segment".into(),
@@ -4160,6 +4168,7 @@ pub(crate) enum TieredKeyHandle {
     OfflineAllowance(iroha_crypto::Hash),
     OfflineVerdictRevocation(iroha_crypto::Hash),
     OfflineTransfer(iroha_crypto::Hash),
+    OfflineConsumedBuildClaimId(iroha_crypto::Hash),
 }
 
 impl TieredKeyHandle {
@@ -4199,6 +4208,9 @@ impl TieredKeyHandle {
                 TieredSegment::OfflineVerdictRevocations
             }
             TieredKeyHandle::OfflineTransfer(_) => TieredSegment::OfflineTransfers,
+            TieredKeyHandle::OfflineConsumedBuildClaimId(_) => {
+                TieredSegment::OfflineConsumedBuildClaimIds
+            }
         }
     }
 
@@ -4241,6 +4253,9 @@ impl TieredKeyHandle {
                 Ok(norito::codec::Encode::encode(key))
             }
             TieredKeyHandle::OfflineTransfer(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::OfflineConsumedBuildClaimId(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
         }
     }
 
@@ -4300,6 +4315,9 @@ impl TieredKeyHandle {
                 fetch!(world.offline_verdict_revocations, id)
             }
             TieredKeyHandle::OfflineTransfer(id) => fetch!(world.offline_to_online_transfers, id),
+            TieredKeyHandle::OfflineConsumedBuildClaimId(id) => {
+                fetch!(world.offline_consumed_build_claim_ids, id)
+            }
         }
     }
 
@@ -4352,6 +4370,9 @@ impl TieredKeyHandle {
                 fetch!(world.offline_verdict_revocations, id)
             }
             TieredKeyHandle::OfflineTransfer(id) => fetch!(world.offline_to_online_transfers, id),
+            TieredKeyHandle::OfflineConsumedBuildClaimId(id) => {
+                fetch!(world.offline_consumed_build_claim_ids, id)
+            }
         }
     }
 }
@@ -4393,6 +4414,9 @@ impl fmt::Display for TieredKeyHandle {
                 write!(f, "offline_verdict_revocation:{id}")
             }
             TieredKeyHandle::OfflineTransfer(id) => write!(f, "offline_transfer:{id}"),
+            TieredKeyHandle::OfflineConsumedBuildClaimId(id) => {
+                write!(f, "offline_consumed_build_claim_id:{id}")
+            }
         }
     }
 }
