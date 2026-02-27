@@ -703,6 +703,7 @@ fn is_entrypoint_hint_safe_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_SM4_CCM_OPEN
             | ivm::syscalls::SYSCALL_VRF_VERIFY
             | ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH
+            | ivm::syscalls::SYSCALL_VRF_EPOCH_SEED
             | ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
             | ivm::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
             | ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
@@ -755,6 +756,7 @@ fn is_state_only_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_SM4_CCM_OPEN
             | ivm::syscalls::SYSCALL_VRF_VERIFY
             | ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH
+            | ivm::syscalls::SYSCALL_VRF_EPOCH_SEED
             | ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
             | ivm::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
             | ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
@@ -1258,6 +1260,7 @@ where
     host.set_halo2_config(&state_ro.zk().halo2);
     host.set_durable_state_snapshot_from_world(state_ro.world());
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
+    host.set_vrf_epoch_seeds_from_world(state_ro.world());
     host.set_query_state(state_ro);
     host.set_chain_id(state_ro.chain_id());
     host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())

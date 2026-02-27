@@ -247,6 +247,7 @@ fn enact_rejects_on_conflicting_existing_manifest() {
             created_height: 1,
             status: iroha_core::state::GovernanceProposalStatus::Approved,
             pipeline: iroha_core::state::GovernancePipeline::seeded(1, None, &stx.gov),
+            parliament_snapshot: None,
         },
     );
 

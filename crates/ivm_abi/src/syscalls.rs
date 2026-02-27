@@ -269,6 +269,11 @@ pub const SYSCALL_VRF_VERIFY: u32 = 0x66;
 /// Batch VRF verification: verify multiple tuples and return a Norito-encoded
 /// vector of 32-byte outputs on success.
 pub const SYSCALL_VRF_VERIFY_BATCH: u32 = 0x67;
+/// Read a VRF epoch seed snapshot from world state for governance sortition.
+///
+/// Args: `r10 = &NoritoBytes(VrfEpochSeedRequest)`
+/// Return: `r10 = ptr (&NoritoBytes(VrfEpochSeedResponse)), r11 = status:u64`
+pub const SYSCALL_VRF_EPOCH_SEED: u32 = 0x7E;
 
 /// Hardware and proof generation helpers.
 pub const SYSCALL_PROVE_EXECUTION: u32 = 0xF4;
@@ -502,6 +507,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         // VRF
         v.push(SYSCALL_VRF_VERIFY);
         v.push(SYSCALL_VRF_VERIFY_BATCH);
+        v.push(SYSCALL_VRF_EPOCH_SEED);
         // Dev/vendor helpers
         v.extend_from_slice(&[
             SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
@@ -663,6 +669,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         // VRF
         SYSCALL_VRF_VERIFY => "VRF_VERIFY",
         SYSCALL_VRF_VERIFY_BATCH => "VRF_VERIFY_BATCH",
+        SYSCALL_VRF_EPOCH_SEED => "VRF_EPOCH_SEED",
         // Dev/vendor helpers
         SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => "SMARTCONTRACT_EXECUTE_INSTRUCTION",
         SYSCALL_SMARTCONTRACT_EXECUTE_QUERY => "SMARTCONTRACT_EXECUTE_QUERY",
