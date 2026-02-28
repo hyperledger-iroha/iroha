@@ -10,7 +10,6 @@ workspace = true
 
 [dependencies]
 vergen = { workspace = true, features = ["cargo"] }
-vergen-git2 = { workspace = true }
 norito = { workspace = true }
 
 [lib]

@@ -307,12 +307,26 @@ exclude = [
 [profile.dev]
 incremental = true
 split-debuginfo = "packed"
+debug = "line-tables-only"
+
+[profile.dev.build-override]
+debug = 0
+codegen-units = 256
 
 [profile.test]
 # Avoid long dsymutil phases on macOS test binaries.
 split-debuginfo = "unpacked"
+debug = "line-tables-only"
+incremental = true
+
+[profile.test.build-override]
+debug = 0
+codegen-units = 256
 
 [profile.dev.package."*"]
+debug = 0
+
+[profile.test.package."*"]
 debug = 0
 
 [profile.deploy]
