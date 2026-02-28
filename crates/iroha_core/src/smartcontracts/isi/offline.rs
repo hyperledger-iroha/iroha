@@ -1284,9 +1284,9 @@ pub mod isi {
             block::BlockHeader,
             domain::Domain,
             offline::{
-                AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY,
-                AndroidProvisionedProof, OfflineBuildClaim, OfflineBuildClaimPlatform,
-                OfflineCertificateBalanceProof, OfflineVerdictRevocationReason,
+                AndroidProvisionedProof, AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY,
+                OfflineBuildClaim, OfflineBuildClaimPlatform, OfflineCertificateBalanceProof,
+                OfflineVerdictRevocationReason,
             },
             query::error::FindError,
         };
@@ -1667,7 +1667,10 @@ pub mod isi {
             )
             .expect_err("missing escrow config should be rejected");
             let expected = format!("{OFFLINE_REJECTION_REASON_PREFIX}escrow_missing");
-            assert!(err.to_string().contains(&expected));
+            assert!(
+                err.to_string().contains(&expected),
+                "unexpected rejection: {err}"
+            );
         }
 
         #[test]
@@ -2165,6 +2168,13 @@ pub mod isi {
                     .expect("metadata key"),
                 Json::new(app_id.to_owned()),
             );
+            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            certificate.operator_signature = Signature::new(
+                operator_keys.private_key(),
+                &certificate
+                    .operator_signing_bytes()
+                    .expect("certificate signing bytes"),
+            );
 
             let mut device_manifest = Metadata::default();
             device_manifest.insert(
@@ -2198,7 +2208,6 @@ pub mod isi {
                 nonce: receipt.tx_id,
                 operator_signature: Signature::from_bytes(&[0; 64]),
             };
-            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
             build_claim.operator_signature = Signature::new(
                 operator_keys.private_key(),
                 &build_claim
@@ -2206,6 +2215,7 @@ pub mod isi {
                     .expect("build claim signing bytes"),
             );
             receipt.build_claim = Some(build_claim);
+            receipt.sender_certificate_id = certificate.certificate_id();
 
             let spend_pair = KeyPair::from_seed(vec![0xEE; 32], Algorithm::Ed25519);
             receipt.sender_signature = Signature::new(
@@ -3206,9 +3216,7 @@ pub mod isi {
             let mut world = World::with([domain], [account], [asset_definition]);
             let certificate_id = record.certificate.certificate_id();
             world.offline_allowances.insert(certificate_id, record);
-            world
-                .offline_consumed_build_claim_ids
-                .insert(claim_id, ());
+            world.offline_consumed_build_claim_ids.insert(claim_id, ());
 
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -3229,7 +3237,10 @@ pub mod isi {
                 "{OFFLINE_REJECTION_REASON_PREFIX}{}",
                 OfflineTransferRejectionReason::BuildClaimReplayed.as_label()
             );
-            assert!(err.to_string().contains(&expected));
+            assert!(
+                err.to_string().contains(&expected),
+                "unexpected rejection: {err}"
+            );
         }
 
         #[test]
