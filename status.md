@@ -1,6 +1,74 @@
 # Status
 
-Last update: 2026-02-27
+Last update: 2026-02-28
+- Latest sync (2026-02-28 QC duplicate-fetch churn suppression + fresh gate reruns):
+  - Completed the remaining sub-1s plan gap in `crates/iroha_core/src/sumeragi/main_loop/qc.rs`:
+    - in `qc_missing_block_defer(...)`, duplicate defer events now suppress `rebroadcast_block_votes(...)` while an equivalent missing-block fetch is still fresh/in-flight for the cooldown window.
+  - Added regression coverage in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+    - `qc_missing_block_defer_inflight_fetch_suppresses_range_pull_escalation` now also seeds a commit vote and asserts no `QcVote` background rebroadcast is emitted for duplicate in-flight defer events.
+  - Validation:
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core qc_missing_block_defer_inflight_fetch_suppresses_range_pull_escalation -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib duplicate_block_created_hydrates_inline_when_seed_queue_accepts_work -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib retry_missing_block_requests_defers_view_change_on_attempt_cap_with_rbc_pending -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib new_view_tracker_counts_local_with_rotated_indices -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok; `3 passed`)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; `4 passed`)
+    - `cargo test -p iroha_core main_loop -- --nocapture` (order-sensitive in this tree: `1299 passed`, `2 failed`, `2 ignored`; failing names: `deferred_missing_payload_qc_expiry_is_bounded`, `commit_pipeline_keeps_deferred_validation_when_inflight_is_fresh`)
+    - isolated reruns of both failing names pass via `cargo test -p iroha_core --lib <name> -- --nocapture`.
+  - Fresh unchanged-shape soak artifacts (`--allow-net --nexus --peers 4 --faulty 0 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`):
+    - pilot (`--duration 1200s --target-blocks 1200`):
+      - log: `/tmp/izanami_pilot_1200_gate_planfix_20260227T235705Z.log`
+      - summary: `successes=3010 failures=0 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`
+      - result: `izanami run stopped before target blocks reached`
+      - last observed progress line: `quorum_min_height=629 strict_min_height=629`.
+    - acceptance (`--duration 3600s --target-blocks 3600`):
+      - log: `/tmp/izanami_acceptance_3600_gate_planfix_20260228T002142Z.log`
+      - summary: `successes=4166 failures=30 izanami_ingress_failover_total=160 izanami_ingress_endpoint_unhealthy_total=122`
+      - result: `no block height progress for 600s (quorum min height 868, strict min 868, target 3600, tolerated_failures 1)`
+      - last observed progress line: `quorum_min_height=868 strict_min_height=868`.
+  - Additional run diagnostics from the new logs:
+    - pilot `Connection refused (os error 61)` count: `1100`; `transaction queued for too long`: `0`.
+    - acceptance `Connection refused (os error 61)` count: `1085`; `transaction queued for too long`: `273`.
+    - this rerun slice did not preserve `irohad_test_network_*` temp dirs (`IROHA_TEST_NETWORK_KEEP_DIRS` unset), so persisted lane Kura counts and peer-stdout churn counters are unavailable for these two artifacts.
+  - Delta vs prior pass-1 gate artifacts (`/tmp/izanami_pilot_1200_gate_pass1_20260227T222346Z.log`, `/tmp/izanami_acceptance_3600_gate_pass1_20260227T225021Z.log`):
+    - pilot: strict `-22` (`651 -> 629`), successes `-14` (`3024 -> 3010`), failures unchanged (`0 -> 0`).
+    - acceptance: strict `+257` (`611 -> 868`), successes `+1303` (`2863 -> 4166`), failures `+5` (`25 -> 30`), ingress failover unchanged (`160 -> 160`), ingress endpoint unhealthy `+31` (`91 -> 122`).
+- Latest sync (2026-02-27 plan implementation finalization + pass-1 soak reruns):
+  - Finalized plan-aligned fixes in `crates/iroha_core/src/sumeragi/main_loop.rs` and `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+    - backlog hysteresis cap now preserves deterministic backlog grace (`backlog_extended_view_change_timeout(...)`) for tiny base windows,
+    - duplicate `BlockCreated` seed-queue behavior/tests now match inline hydration semantics (`duplicate_block_created_hydrates_inline_when_seed_queue_accepts_work`).
+  - Corrected soak profile selection in `crates/izanami/src/chaos.rs`:
+    - restored pass-1 constants (`pipeline=600ms`, `rbc.payload_chunks_per_tick=96`, `rbc.rebroadcast_sessions_per_tick=12`),
+    - reverted accidental pass-2 pinning (`450ms`, `128`, `16`) so pass-2 remains conditional follow-up only.
+  - Validation:
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core duplicate_block_created_hydrates_inline_when_seed_queue_accepts_work -- --nocapture` (ok)
+    - `cargo test -p iroha_core retry_missing_block_requests_defers_view_change_on_attempt_cap_with_rbc_pending -- --nocapture` (ok)
+    - `cargo test -p iroha_core new_view_tracker_counts_local_with_rotated_indices -- --nocapture` (ok)
+    - `cargo test -p iroha_core main_loop -- --nocapture` (ok; `1303 passed`, `0 failed`)
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok; `3 passed`)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; `4 passed`)
+  - Fresh pass-1 unchanged-shape soak artifacts (`--allow-net --nexus --peers 4 --faulty 0 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`):
+    - pilot (`--duration 1200s --target-blocks 1200`):
+      - log: `/tmp/izanami_pilot_1200_gate_pass1_20260227T222346Z.log`
+      - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_PeY1Wm`
+      - summary: `successes=3024 failures=0 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`
+      - result: `izanami run stopped before target blocks reached`
+      - persisted lane-000-core heights: `651/651/651/651` (strict min `651`)
+      - churn counts (peer stdout): payload-missing `10`, forced-VC `0` (6s-class `0`), fallback-anchor `16`, no-proposal-cutoff `1`.
+    - acceptance (`--duration 3600s --target-blocks 3600`):
+      - log: `/tmp/izanami_acceptance_3600_gate_pass1_20260227T225021Z.log`
+      - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_dCnn76`
+      - summary: `successes=2863 failures=25 izanami_ingress_failover_total=160 izanami_ingress_endpoint_unhealthy_total=91`
+      - result: `no block height progress for 600s (quorum min height 611, strict min 611, target 3600, tolerated_failures 1)`
+      - persisted lane-000-core heights: `611/611/611/611` (strict min `611`)
+      - churn counts (peer stdout): payload-missing `26`, forced-VC `5` (6s-class `0`), fallback-anchor `16`, no-proposal-cutoff `179`.
+  - Delta vs latest 2026-02-27 gate snapshot (`/tmp/izanami_pilot_1200_gate_20260227T091425Z.log`, `/tmp/izanami_acceptance_3600_gate_20260227T093924Z.log`):
+    - pilot: strict `+10` (`641 -> 651`), payload-missing `+4` (`6 -> 10`), forced-VC `0` (`0 -> 0`), fallback-anchor `+3` (`13 -> 16`).
+    - acceptance: strict `-933` (`1544 -> 611`), payload-missing `-13` (`39 -> 26`), forced-VC `+5` (`0 -> 5`), 6s-class forced-VC `0` (`0 -> 0`), fallback-anchor `-10` (`26 -> 16`), plus progress-timeout failure.
 - Latest sync (2026-02-27 sub-1s localnet plan tranche: fallback-anchor dedup + backlog hysteresis + vote-only fast-path):
   - Implemented internal-only changes with no CLI/public-config/FSM topology changes in:
     - `crates/iroha_core/src/block_sync.rs`:
