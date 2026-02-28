@@ -20055,6 +20055,7 @@ async fn qc_missing_block_defer_fast_recovery_is_single_shot_per_cooldown() {
     consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+    actor.relay_backpressure.disable_for_tests();
     let _ = seed_genesis_block_for_state(&actor.state);
 
     let mut block_hash =
@@ -20187,6 +20188,23 @@ async fn qc_missing_block_defer_inflight_fetch_suppresses_range_pull_escalation(
             attempts: 1,
         },
     );
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    actor.vote_log.insert(
+        (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+        vote,
+    );
+    let _ = harness.background_rx.try_iter().count();
 
     let before = super::status::snapshot();
     assert!(
@@ -20210,6 +20228,28 @@ async fn qc_missing_block_defer_inflight_fetch_suppresses_range_pull_escalation(
     assert_eq!(
         after.blocksync_range_pull_escalation_total, before.blocksync_range_pull_escalation_total,
         "duplicate defer with in-flight fetch should suppress range-pull escalation churn",
+    );
+    let vote_posts = harness
+        .background_rx
+        .try_iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::QcVote(vote)
+                            if vote.phase == Phase::Commit
+                                && vote.block_hash == block_hash
+                                && vote.height == height
+                                && vote.view == view
+                    )
+            )
+        })
+        .count();
+    assert_eq!(
+        vote_posts, 0,
+        "duplicate defer with in-flight fetch should suppress vote rebroadcast churn",
     );
 
     harness.shutdown.send();
@@ -55644,7 +55684,7 @@ async fn pending_block_hydrates_rbc_session_for_init() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn duplicate_block_created_defers_hydration_when_seed_queue_accepts_work() {
+async fn duplicate_block_created_hydrates_inline_when_seed_queue_accepts_work() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -55733,17 +55773,17 @@ async fn duplicate_block_created_defers_hydration_when_seed_queue_accepts_work()
         .expect("session exists after duplicate");
     assert_eq!(
         session.received_chunks(),
-        0,
-        "duplicate BlockCreated should defer hydration while seed work is in-flight"
+        session.total_chunks(),
+        "duplicate BlockCreated should hydrate payload inline once seed work is queued"
     );
     assert!(
-        actor
+        !actor
             .subsystems
             .da_rbc
             .rbc
             .seed_inflight
             .contains_key(&session_key),
-        "seed should remain in-flight until seed worker result is drained"
+        "inline hydration should clear seed in-flight marker immediately"
     );
 
     let work = work_rx.try_recv().expect("seed work queued");
@@ -55763,7 +55803,10 @@ async fn duplicate_block_created_defers_hydration_when_seed_queue_accepts_work()
         .expect("send seed result");
 
     let progressed = actor.poll_rbc_seed_results_inner();
-    assert!(progressed, "seed result poll should report progress");
+    assert!(
+        !progressed,
+        "stale queued seed result should be ignored once inline hydration already completed"
+    );
     assert!(
         !actor
             .subsystems
@@ -55783,7 +55826,7 @@ async fn duplicate_block_created_defers_hydration_when_seed_queue_accepts_work()
     assert_eq!(
         session.received_chunks(),
         session.total_chunks(),
-        "seed result should hydrate deferred session fully"
+        "inline-hydrated session should remain fully hydrated after stale seed result is drained"
     );
 
     harness.shutdown.send();

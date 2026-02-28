@@ -35,12 +35,12 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     offline::{
-        ANDROID_PROVISIONED_APP_ID_KEY, AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY,
-        OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY, OFFLINE_LINEAGE_EPOCH_KEY,
-        OFFLINE_LINEAGE_SCOPE_KEY, OfflineAllowanceCommitment, OfflineBuildClaim,
-        OfflineBuildClaimPlatform, OfflinePlatformProof, OfflineSpendReceipt,
+        ANDROID_PROVISIONED_APP_ID_KEY, AndroidProvisionedProof, AppleAppAttestProof,
+        OFFLINE_ASSET_ENABLED_METADATA_KEY, OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY,
+        OFFLINE_LINEAGE_EPOCH_KEY, OFFLINE_LINEAGE_SCOPE_KEY, OfflineAllowanceCommitment,
+        OfflineBuildClaim, OfflineBuildClaimPlatform, OfflinePlatformProof, OfflineSpendReceipt,
         OfflineToOnlineTransfer, OfflineWalletCertificate, OfflineWalletPolicy,
-        AndroidProvisionedProof, compute_receipts_root,
+        compute_receipts_root,
     },
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec};

@@ -15144,7 +15144,11 @@ impl Actor {
         let backlog_grace =
             saturating_mul_duration(self.rebroadcast_cooldown(), 8).max(Duration::from_secs(2));
         let extended = base_timeout.saturating_add(backlog_grace);
-        let cap = saturating_mul_duration(base_timeout, 2).max(base_timeout);
+        let cap_floor = self
+            .recovery_deferred_qc_ttl()
+            .saturating_add(self.rebroadcast_cooldown())
+            .max(base_timeout);
+        let cap = saturating_mul_duration(base_timeout, 2).max(cap_floor);
         extended.min(cap)
     }
 

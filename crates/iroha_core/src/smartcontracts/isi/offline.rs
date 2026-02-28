@@ -1284,9 +1284,9 @@ pub mod isi {
             block::BlockHeader,
             domain::Domain,
             offline::{
-                AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY,
-                AndroidProvisionedProof, OfflineBuildClaim, OfflineBuildClaimPlatform,
-                OfflineCertificateBalanceProof, OfflineVerdictRevocationReason,
+                AndroidProvisionedProof, AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY,
+                OfflineBuildClaim, OfflineBuildClaimPlatform, OfflineCertificateBalanceProof,
+                OfflineVerdictRevocationReason,
             },
             query::error::FindError,
         };
@@ -3206,9 +3206,7 @@ pub mod isi {
             let mut world = World::with([domain], [account], [asset_definition]);
             let certificate_id = record.certificate.certificate_id();
             world.offline_allowances.insert(certificate_id, record);
-            world
-                .offline_consumed_build_claim_ids
-                .insert(claim_id, ());
+            world.offline_consumed_build_claim_ids.insert(claim_id, ());
 
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();

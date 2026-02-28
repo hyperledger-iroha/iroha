@@ -2489,8 +2489,20 @@ impl Actor {
                 } else {
                     self.maybe_escalate_missing_block_height_recovery(block_hash, height, view, now)
                 };
-                let votes_rebroadcasted =
-                    self.rebroadcast_block_votes(phase, block_hash, height, view, true);
+                let votes_rebroadcasted = if missing_fetch_fresh {
+                    debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        request_age_ms = missing_fetch_age_ms,
+                        freshness_window_ms = missing_fetch_freshness_window_ms,
+                        "suppressing duplicate vote rebroadcast while equivalent missing-block fetch remains in-flight"
+                    );
+                    0
+                } else {
+                    self.rebroadcast_block_votes(phase, block_hash, height, view, true)
+                };
                 debug!(
                     height,
                     view,
