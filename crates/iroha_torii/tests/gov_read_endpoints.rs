@@ -55,6 +55,7 @@ async fn gov_proposal_get_returns_record() {
         created_height: 0,
         status: iroha_core::state::GovernanceProposalStatus::Proposed,
         pipeline: iroha_core::state::GovernancePipeline::default(),
+        parliament_snapshot: None,
     };
     iroha_core::query::insert_gov_proposal_for_test(&mut st_raw, id_bytes, rec);
     {
