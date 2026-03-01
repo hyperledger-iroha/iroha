@@ -1,6 +1,8 @@
 # Status
 
-Last update: 2026-02-28
+Last update: 2026-03-01
+- Integration tests/unstable network supply-consistency hardening (`integration_tests/tests/extra_functional/unstable_network.rs`): removed height-only success shortcuts in round/final supply checks so rounds only pass after observing the expected minted asset value, and changed recovery resubmission gating from one-shot to periodic retry while waiting for supply confirmation (duplicate-safe via existing already-accepted handling). This fixes the observed flake where `unstable_network_5_peers_1_fault` could stall at supply `4` while block height advanced.
+- Tests: `cargo fmt --all` (ok), `cargo test -p integration_tests --test mod extra_functional::unstable_network::tests::resubmit_gate_respects_flags_and_deadline` (ok), `cargo test -p integration_tests --test mod extra_functional::unstable_network::unstable_network_5_peers_1_fault -- --nocapture` (ok; `1 passed`, `0 failed`).
 - Compilation speed-up for unchanged feature surface (`Cargo.toml`, `crates/build-support/Cargo.toml`, `crates/build-support/src/lib.rs`): removed `vergen-git2` and replaced git metadata collection with file-based `.git` discovery/ref parsing that still exports `VERGEN_GIT_SHA` and emits deterministic `rerun-if-changed` hints for `.git/HEAD`, `.git/packed-refs`, and the active symbolic ref file. This removes per-build-script git process spawning while keeping IVM/ZK behavior unchanged (no feature/opcode/syscall gating changes).
 - Dev/test profile tuning for faster local compile turnaround (same runtime features): set `debug = "line-tables-only"` for `[profile.dev]`/`[profile.test]`; added `[profile.dev.build-override]`/`[profile.test.build-override]` with `debug = 0`, `codegen-units = 256`; enabled `[profile.test] incremental = true`; and added `[profile.test.package."*"] debug = 0` to reduce dependency debug-info cost in test builds.
 - Validation + timings (post-change, isolated targets):

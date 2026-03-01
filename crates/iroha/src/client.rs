@@ -15200,7 +15200,7 @@ mod tests {
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_JSON)
-            .body(br#"{}"#.to_vec())
+            .body(br"{}".to_vec())
             .unwrap();
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
 

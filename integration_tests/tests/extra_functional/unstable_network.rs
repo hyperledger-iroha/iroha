@@ -456,13 +456,8 @@ fn stagger_recovery_gap(pipeline_time: Duration) -> Duration {
         .max(Duration::from_secs(1))
 }
 
-fn should_resubmit_tx(
-    allow_resubmit: bool,
-    already_resubmitted: bool,
-    now: Instant,
-    resubmit_at: Instant,
-) -> bool {
-    allow_resubmit && !already_resubmitted && now >= resubmit_at
+fn should_resubmit_tx(allow_resubmit: bool, now: Instant, next_resubmit_at: Instant) -> bool {
+    allow_resubmit && now >= next_resubmit_at
 }
 
 fn permissioned_prf_seed(chain_id: &ChainId) -> [u8; 32] {
@@ -1383,7 +1378,7 @@ impl UnstableNetwork {
         let expected_supply = Numeric::new((round_index + 1) as u128, 0);
         let supply_start = Instant::now();
         let supply_deadline = supply_start + sync_timeout;
-        let resubmit_at =
+        let initial_resubmit_at =
             supply_start + initial_resubmit_delay(sync_timeout, network.pipeline_time());
         let allow_resubmit = self.n_faulty_peers > 0;
         let supply_peers: Vec<_> = peers
@@ -1392,19 +1387,12 @@ impl UnstableNetwork {
             .collect();
         let mut last_seen = None;
         let mut last_height = None;
-        let mut resubmitted = false;
+        let mut resubmit_attempt = 0usize;
+        let mut next_resubmit_at = initial_resubmit_at;
         'wait_supply: loop {
             for peer in &supply_peers {
                 if let Some(height) = peer.best_effort_block_height() {
                     last_height = Some(height);
-                    if height.non_empty >= target_height {
-                        iroha_logger::warn!(
-                            expected_supply = ?expected_supply,
-                            observed_height = ?height,
-                            "supply check accepting committed height without asset confirmation"
-                        );
-                        break 'wait_supply;
-                    }
                 }
                 let client = peer.client();
                 let asset =
@@ -1438,7 +1426,8 @@ impl UnstableNetwork {
                 last_seen = asset_value;
             }
             let now = Instant::now();
-            if should_resubmit_tx(allow_resubmit, resubmitted, now, resubmit_at) {
+            if should_resubmit_tx(allow_resubmit, now, next_resubmit_at) {
+                let attempt = resubmit_attempt.saturating_add(1);
                 let remaining = supply_deadline.saturating_duration_since(now);
                 if !remaining.is_zero() {
                     if let Err(err) =
@@ -1446,11 +1435,13 @@ impl UnstableNetwork {
                     {
                         iroha_logger::warn!(
                             ?err,
+                            attempt,
                             "recovered submit retry failed while waiting for supply"
                         );
                     }
                 }
-                resubmitted = true;
+                resubmit_attempt = attempt;
+                next_resubmit_at = Instant::now() + submit_retry_backoff(attempt);
             }
             if now >= supply_deadline {
                 return Err(eyre!(
@@ -1534,14 +1525,6 @@ impl UnstableNetwork {
             for peer in peers {
                 if let Some(height) = peer.best_effort_block_height() {
                     last_height = Some(height);
-                    if height.non_empty >= expected_height {
-                        iroha_logger::warn!(
-                            expected_supply = ?expected,
-                            observed_height = ?height,
-                            "final supply check accepting committed height without asset confirmation"
-                        );
-                        return Ok(());
-                    }
                 }
                 let client = peer.client();
                 let asset =
@@ -1576,7 +1559,7 @@ impl UnstableNetwork {
             }
             if Instant::now() >= deadline {
                 return Err(eyre!(
-                    "total supply did not reach expected {expected}; last seen value: {last_seen:?}; last height: {last_height:?}"
+                    "total supply did not reach expected {expected} with expected height >= {expected_height}; last seen value: {last_seen:?}; last height: {last_height:?}"
                 ));
             }
             sleep(Duration::from_millis(200)).await;
@@ -1689,15 +1672,9 @@ mod tests {
     #[test]
     fn resubmit_gate_respects_flags_and_deadline() {
         let now = Instant::now();
-        assert!(!should_resubmit_tx(false, false, now, now));
-        assert!(!should_resubmit_tx(true, true, now, now));
-        assert!(should_resubmit_tx(true, false, now, now));
-        assert!(!should_resubmit_tx(
-            true,
-            false,
-            now,
-            now + Duration::from_secs(1)
-        ));
+        assert!(!should_resubmit_tx(false, now, now));
+        assert!(should_resubmit_tx(true, now, now));
+        assert!(!should_resubmit_tx(true, now, now + Duration::from_secs(1)));
     }
 
     #[test]
