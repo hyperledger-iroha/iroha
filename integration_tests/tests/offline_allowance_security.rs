@@ -16,7 +16,8 @@ use iroha::{
         },
         metadata::Metadata,
         offline::{
-            OFFLINE_ASSET_ENABLED_METADATA_KEY, OFFLINE_REJECTION_REASON_PREFIX,
+            OFFLINE_ASSET_ENABLED_METADATA_KEY, OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY,
+            OFFLINE_LINEAGE_EPOCH_KEY, OFFLINE_LINEAGE_SCOPE_KEY, OFFLINE_REJECTION_REASON_PREFIX,
             OfflineAllowanceCommitment, OfflineWalletCertificate, OfflineWalletPolicy,
         },
         prelude::*,
@@ -47,6 +48,25 @@ fn signed_certificate_for(
     controller: AccountId,
 ) -> OfflineWalletCertificate {
     let spend_keys = KeyPair::from_seed(vec![0xCD; 32], Algorithm::Ed25519);
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        OFFLINE_LINEAGE_SCOPE_KEY
+            .parse()
+            .expect("offline.lineage.scope metadata key should parse"),
+        Json::new(format!("offline_allowance_security::{definition_id}")),
+    );
+    metadata.insert(
+        OFFLINE_LINEAGE_EPOCH_KEY
+            .parse()
+            .expect("offline.lineage.epoch metadata key should parse"),
+        Json::new("1".to_owned()),
+    );
+    metadata.insert(
+        OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY
+            .parse()
+            .expect("offline.build_claim.min_build_number metadata key should parse"),
+        Json::new("1".to_owned()),
+    );
     let mut certificate = OfflineWalletCertificate {
         controller: controller.clone(),
         operator: ALICE_ID.clone(),
@@ -65,7 +85,7 @@ fn signed_certificate_for(
             expires_at_ms: now_ms + 3_600_000,
         },
         operator_signature: Signature::from_bytes(&[0; 64]),
-        metadata: Metadata::default(),
+        metadata,
         verdict_id: None,
         attestation_nonce: None,
         refresh_at_ms: None,
