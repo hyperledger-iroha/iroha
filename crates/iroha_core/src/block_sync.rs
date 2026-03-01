@@ -3020,6 +3020,35 @@ mod roster_metadata_tests {
         );
         assert_eq!(effective, Some(fallback));
     }
+
+    #[test]
+    fn merge_qc_hint_populates_empty_roster_metadata() {
+        let (commit_qc, _checkpoint) = sample_roster_artifacts();
+        let metadata = RosterMetadata {
+            commit_qc: None,
+            validator_checkpoint: None,
+            stake_snapshot: None,
+        };
+
+        let merged = super::message::merge_qc_hint_into_roster_metadata(metadata, Some(&commit_qc));
+        assert_eq!(merged.commit_qc, Some(commit_qc));
+        assert!(merged.validator_checkpoint.is_none());
+    }
+
+    #[test]
+    fn merge_qc_hint_keeps_existing_commit_qc() {
+        let (existing_qc, _checkpoint) = sample_roster_artifacts();
+        let mut alt_qc = existing_qc.clone();
+        alt_qc.height = alt_qc.height.saturating_add(1);
+        let metadata = RosterMetadata {
+            commit_qc: Some(existing_qc.clone()),
+            validator_checkpoint: None,
+            stake_snapshot: None,
+        };
+
+        let merged = super::message::merge_qc_hint_into_roster_metadata(metadata, Some(&alt_qc));
+        assert_eq!(merged.commit_qc, Some(existing_qc));
+    }
 }
 
 #[cfg(test)]
@@ -3729,6 +3758,16 @@ pub mod message {
             }
         }
         None
+    }
+
+    pub(super) fn merge_qc_hint_into_roster_metadata(
+        mut metadata: RosterMetadata,
+        qc_hint: Option<&Qc>,
+    ) -> RosterMetadata {
+        if metadata.commit_qc.is_none() {
+            metadata.commit_qc = qc_hint.cloned();
+        }
+        metadata
     }
 
     /// Message used to share blocks to a peer.
@@ -4835,10 +4874,11 @@ pub mod message {
                         };
                         let rosters: Vec<RosterMetadata> = blocks
                             .iter()
-                            .map(|block| {
+                            .zip(qcs.iter())
+                            .map(|(block, qc_hint)| {
                                 let height = block.header().height().get();
                                 let hash = block.hash();
-                                roster_metadata_from_state(
+                                let metadata = roster_metadata_from_state(
                                     &block_sync.state,
                                     &block_sync.kura,
                                     height,
@@ -4849,7 +4889,8 @@ pub mod message {
                                     commit_qc: None,
                                     validator_checkpoint: None,
                                     stake_snapshot: None,
-                                })
+                                });
+                                merge_qc_hint_into_roster_metadata(metadata, qc_hint.as_ref())
                             })
                             .collect();
                         let mut blocks = blocks;

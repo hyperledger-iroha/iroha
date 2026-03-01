@@ -3396,6 +3396,35 @@ impl Actor {
         added
     }
 
+    fn vote_recorded_or_queued_for_validation(
+        &self,
+        vote: &crate::sumeragi::consensus::Vote,
+    ) -> bool {
+        let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+        if self
+            .vote_log
+            .get(&key)
+            .is_some_and(|existing| existing.block_hash == vote.block_hash)
+        {
+            return true;
+        }
+        let verify_key = super::VoteVerifyKey::from_vote(vote);
+        self.subsystems
+            .vote_verify
+            .pending_validation
+            .contains_key(&verify_key)
+            || self
+                .subsystems
+                .vote_verify
+                .pending
+                .contains_key(&verify_key)
+            || self
+                .subsystems
+                .vote_verify
+                .inflight
+                .contains_key(&verify_key)
+    }
+
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn emit_precommit_vote(
@@ -3465,26 +3494,12 @@ impl Actor {
             );
             return false;
         }
-        let local_peer = self.common_config.peer.id();
-        let conflicting_vote = self.vote_log.values().find(|vote| {
-            if vote.phase != crate::sumeragi::consensus::Phase::Commit {
-                return false;
-            }
-            if vote.height != height || vote.epoch != epoch || vote.block_hash == block_hash {
-                return false;
-            }
-            if vote.view < view {
-                return false;
-            }
-            let signature_topology =
-                topology_for_view(topology, vote.height, vote.view, mode_tag, prf_seed);
-            let Ok(vote_idx) = usize::try_from(vote.signer) else {
-                return false;
-            };
-            signature_topology
-                .as_ref()
-                .get(vote_idx)
-                .is_some_and(|peer| peer == local_peer)
+        let conflicting_vote = self.vote_log.get(&sent_key).filter(|vote| {
+            vote.phase == crate::sumeragi::consensus::Phase::Commit
+                && vote.height == height
+                && vote.view == view
+                && vote.epoch == epoch
+                && vote.block_hash != block_hash
         });
         if let Some(conflict) = conflicting_vote {
             warn!(
@@ -3564,6 +3579,17 @@ impl Actor {
             return false;
         };
         self.handle_vote(vote.clone());
+        if !self.vote_recorded_or_queued_for_validation(&vote) {
+            warn!(
+                height,
+                view,
+                epoch,
+                block = ?block_hash,
+                signer = local_idx,
+                "skipping precommit broadcast: local vote rejected before recording"
+            );
+            return false;
+        }
 
         let vote_msg = Arc::new(BlockMessage::QcVote(vote));
         let vote_encoded = Arc::new(BlockMessageWire::encode_message(vote_msg.as_ref()));
@@ -3753,6 +3779,18 @@ impl Actor {
             return false;
         };
         self.handle_vote(vote.clone());
+        if !self.vote_recorded_or_queued_for_validation(&vote) {
+            warn!(
+                height,
+                view,
+                epoch,
+                signer = local_idx,
+                highest_height = highest_qc.height,
+                highest_view = highest_qc.view,
+                "skipping NEW_VIEW broadcast: local vote rejected before recording"
+            );
+            return false;
+        }
 
         let vote_msg = Arc::new(BlockMessage::QcVote(vote));
         let vote_encoded = Arc::new(BlockMessageWire::encode_message(vote_msg.as_ref()));

@@ -1,6 +1,211 @@
 # Status
 
-Last update: 2026-02-28
+Last update: 2026-03-01
+- Latest sync (2026-03-01 missing-QC storm follow-up v2.2 balanced: fresh full-soak rerun + bottleneck readout):
+  - Acceptance rerun command (unchanged envelope, explicit capture):
+    - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo run -p izanami -- --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 3600 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable 2>&1 | tee /tmp/izanami_acceptance_3600_gate_v22r3_20260301T091543Z.log`
+  - Artifacts:
+    - log: `/tmp/izanami_acceptance_3600_gate_v22r3_20260301T091543Z.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_ITQMYW`
+  - Result:
+    - terminal failure: `no block height progress for 600s (quorum min height 605, strict min 605, target 3600, tolerated_failures 1)`
+    - summary: `successes=2850 failures=34 izanami_ingress_failover_total=160 izanami_ingress_endpoint_unhealthy_total=96`
+    - persisted lane-000-core heights: `605/605/605/605` (all peers converged to the same strict plateau).
+  - Consensus churn profile (peer stdout, ANSI-stripped aggregate):
+    - `view change triggered`: `399` total (`missing_qc=374`, `quorum_timeout=10`, `stake_quorum_timeout=15`).
+    - dominant rotation height: `606:391/399` overall (`97.99%`); `missing_qc` at `606:372/374` (`99.47%`).
+    - same-height view order remained strictly increasing on all peers (height `606`): duplicate views `0`, non-increasing steps `0`.
+    - split-vote lock signal: `skipping precommit: local validator already voted for a different block at this height` = `50,409` total (`50,394` at height `606`), with `147` unique current block hashes at that height.
+    - reschedule churn: `commit quorum missing past timeout; rescheduling block for reassembly` = `916` total (`913` at height `606`), with votes mostly below quorum (`0/3`: `900`, `1/3`: `9`, `2/3`: `4`).
+    - missing-payload reacquire churn: `requested missing block payload from highest QC` = `457` total (`443` at height `605`), dominated by a single block hash (`b949394a...`: `443`).
+  - Ingress/client-path symptoms (from soak log):
+    - `transaction queued for too long`: `179`
+    - `tx confirmation timed out`: `107`
+    - `marking ingress endpoint unhealthy`: `96`
+    - `Connection refused`: `198` total, `0` before progress monitor stop (post-stop shutdown noise).
+  - Backlog-timeout mismatch sentinel (targeted by v2.2 timeout accumulator fix):
+    - `forcing view change for stalled pending block` lines: `0`
+    - `backlog_hysteresis_stalled=true && near_quorum_stalled=false && timeout_ms<backlog_timeout_ms`: `0`
+  - Delta vs prior v2.2 acceptance rerun (`/tmp/izanami_acceptance_3600_gate_v22r2_20260301T122831.log`, `/var/folders/.../irohad_test_network_YWOY54`):
+    - strict `-169` (`774 -> 605`), successes `-821` (`3671 -> 2850`), failures `-6` (`40 -> 34`)
+    - `missing_qc -37` (`411 -> 374`), but single-height concentration remains extreme (`775:419 -> 606:391`)
+    - split-vote churn worsened (`skip-precommit 49,590 -> 50,409`)
+    - reschedule pressure is flat (`917 -> 916`) and missing-payload reacquire remains high (`473 -> 457`).
+- Latest sync (2026-03-01 missing-QC storm follow-up v2.2 balanced: timeout-accumulator fix + stale-view trigger drop + gate reruns):
+  - Implemented in `crates/iroha_core/src/sumeragi/main_loop.rs`:
+    - fixed stalled-pending effective-timeout accumulation to only `min(...)` across actually stalled candidates (`Option<Duration>` accumulator, `unwrap_or(base_timeout)` fallback),
+    - dropped stale same-height view-change triggers when `view < current_view` in `trigger_view_change_with_cause(...)` (no stale-view upgrade/bump),
+    - preserved stale-height drop and all safety-critical QC/quorum/commit/lock paths unchanged.
+  - Test updates in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+    - replaced stale-view behavior test with `trigger_view_change_with_cause_ignores_stale_view_input`,
+    - added `maybe_force_view_change_for_stalled_pending_uses_backlog_timeout_when_view_age_lags_pending_stall`,
+    - adjusted existing trigger tests to invoke non-stale views where they validate counter/pruning/DA-retention behavior.
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core --lib maybe_force_view_change_for_stalled_pending_uses_backlog_timeout_when_view_age_lags_pending_stall -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib trigger_view_change_with_cause_ignores_stale_view_input -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core main_loop -- --nocapture` (ok; `1314 passed; 0 failed; 2 ignored`)
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok; `3 passed`)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; `4 passed`)
+  - Gate reruns (`IROHA_TEST_NETWORK_KEEP_DIRS=1`, unchanged envelope `--allow-net --nexus --peers 4 --faulty 0 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`):
+    - pilot (`--duration 1200s --target-blocks 1200`):
+      - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_5MAUoU`
+      - result: `izanami run stopped before target blocks reached`
+      - persisted lane-000-core heights: `580/580/580/580` (strict min `580`)
+      - churn (peer stdout): `missing_qc=2`, `quorum_timeout=1`, `stake_quorum_timeout=1`, `no-proposal-cutoff=1`, `no-roster-drop=0`
+      - dominant `missing_qc` heights: `556:1`, `205:1`
+    - acceptance (`--duration 3600s --target-blocks 3600`):
+      - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_Uhc5uo`
+      - result: `no block height progress for 600s (quorum min height 524, strict min 524, target 3600, tolerated_failures 1)`
+      - persisted lane-000-core heights: `524/524/524/524` (strict min `524`)
+      - churn (peer stdout): `missing_qc=388`, `quorum_timeout=7`, `stake_quorum_timeout=12`, `no-proposal-cutoff=2`, `no-roster-drop=0`
+      - dominant `missing_qc` heights: `525:386`, `96:1`, `22:1`
+  - Stalled-pending backlog-timeout mismatch check from run logs:
+    - `backlog_hysteresis_stalled=true && near_quorum_stalled=false && timeout_ms<backlog_timeout_ms` occurrences: `0` (pilot `0`, acceptance `0`).
+  - Delta vs baselines:
+    - vs v2.1 acceptance (`strict=807`, `missing_qc=1222`, dominant `808:483`): strict `-283` (`807 -> 524`), `missing_qc -834` (`1222 -> 388`), dominant cluster reduced but still concentrated (`525:386`).
+    - vs stormfix acceptance (`strict=380`, `missing_qc=456`, dominant `381:455`): strict `+144` (`380 -> 524`), `missing_qc -68` (`456 -> 388`), dominant cluster reduced (`525:386`).
+    - vs fixv6 acceptance (`strict=1138`, `missing_qc=198`, dominant `1139:190`): strict `-614` (`1138 -> 524`), `missing_qc +190` (`198 -> 388`), dominant cluster worsened (`525:386`).
+    - vs fixv6 pilot (`strict=587`, `missing_qc=0`): strict `-7` (`587 -> 580`), `missing_qc +2` (`0 -> 2`).
+  - Note: the latest two reruns did not emit the single-line `izanami::summary` counter tuple (`successes/failures/izanami_ingress_failover_total/izanami_ingress_endpoint_unhealthy_total`) in retained artifacts; rerun with explicit stdout capture is required if those exact fields are needed.
+- Latest sync (2026-03-01 missing-QC storm root-cause fix v2.1 gate reruns):
+  - Ran the requested unchanged-envelope gate pair with `IROHA_TEST_NETWORK_KEEP_DIRS=1`:
+    - pilot: `cargo run -p izanami -- --allow-net --nexus --peers 4 --faulty 0 --duration 1200s --target-blocks 1200 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`
+      - log: `/tmp/izanami_pilot_1200_gate_v21_20260228T222515Z.log`
+      - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_NXxTIG`
+      - summary: `successes=2931 failures=1 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`
+      - result: `izanami run stopped before target blocks reached`
+      - churn (peer stdout): `missing_qc=0`, `quorum_timeout=0`, `stake_quorum_timeout=2`, `no-proposal-cutoff=0`, `no-roster-drop=0`.
+    - acceptance: `cargo run -p izanami -- --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 3600 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`
+      - log: `/tmp/izanami_acceptance_3600_gate_v21_20260228T225844Z.log`
+      - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_S0n5L0`
+      - summary: `successes=3788 failures=110 izanami_ingress_failover_total=442 izanami_ingress_endpoint_unhealthy_total=277`
+      - result: `no block height progress for 600s (quorum min height 807, strict min 807, target 3600, tolerated_failures 1)`
+      - churn (peer stdout): `missing_qc=1222`, `quorum_timeout=54`, `stake_quorum_timeout=36`, `no-proposal-cutoff=37`, `no-roster-drop=8`.
+      - dominant `missing_qc` heights: `808:483`, `767:469`, `579:243` (single-height storm remains with hundreds of rotations).
+  - Delta vs stormfix artifacts (`/tmp/izanami_pilot_1200_gate_stormfix_20260228T184438Z.log`, `/tmp/izanami_acceptance_3600_gate_stormfix_20260228T191631Z.log`):
+    - pilot: successes `+19` (`2912 -> 2931`), failures `-1` (`2 -> 1`), ingress failover `-2` (`2 -> 0`), endpoint unhealthy unchanged (`0 -> 0`), `missing_qc -2` (`2 -> 0`).
+    - acceptance: strict `+427` (`380 -> 807`), successes `+2011` (`1777 -> 3788`), failures `+71` (`39 -> 110`), ingress failover `+282` (`160 -> 442`), endpoint unhealthy `+134` (`143 -> 277`), `missing_qc +766` (`456 -> 1222`), dominant storm height worsened from `381:455` to `808:483`.
+  - Delta vs fixv6 artifacts (`/tmp/izanami_pilot_1200_gate_fixv6_20260228T084041Z.log`, `/tmp/izanami_acceptance_3600_gate_fixv6_20260228T090531Z.log`):
+    - pilot: successes `+175` (`2756 -> 2931`), failures `-1` (`2 -> 1`), ingress failover `-1` (`1 -> 0`), endpoint unhealthy unchanged (`0 -> 0`), `missing_qc` unchanged (`0 -> 0`).
+    - acceptance: strict `-331` (`1138 -> 807`), successes `-1739` (`5527 -> 3788`), failures `+70` (`40 -> 110`), ingress failover `+282` (`160 -> 442`), endpoint unhealthy `+148` (`129 -> 277`), `missing_qc +1024` (`198 -> 1222`), dominant storm height worsened from `1139:190` to `808:483`.
+  - Gate outcome: acceptance criteria are not met on this run (progress-timeout persists; same-height missing-QC storm intensity remains severe).
+- Latest sync (2026-02-28 missing-QC storm root-cause fix v2.1 validation stabilization):
+  - Kept the core-only timeout/defer logic from the v2 patch set and stabilized test isolation in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+    - added `worker_queue_test_guard` + `reset_worker_loop_snapshot_for_tests()` to `should_not_defer_missing_block_view_change_for_inflight_without_recent_progress`,
+    - added `commit_history_test_guard` + `reset_commit_certs_for_tests()` bracketing to `new_view_tracker_counts_local_with_rotated_indices`.
+  - Validation rerun (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core --lib should_not_defer_missing_block_view_change_for_inflight_without_recent_progress -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib new_view_tracker_counts_local_with_rotated_indices -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core main_loop -- --nocapture` (ok; `1313 passed; 0 failed; 2 ignored`)
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok; `3 passed`)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; `4 passed`)
+  - Gate reruns for this stabilized patch set were executed in the 2026-03-01 sync entry above.
+- Latest sync (2026-02-28 missing-QC storm root-cause fix v2, core-only):
+  - Implemented the planned core-only changes in `crates/iroha_core/src/sumeragi/main_loop.rs`:
+    - added unified `IdleBacklogSignals` derivation via `idle_backlog_signals_for_height(...)` and reused it in both `maybe_force_view_change_for_stalled_pending(...)` and `force_view_change_if_idle(...)`,
+    - corrected stalled-pending near-quorum gate inputs to use derived near-quorum backlog booleans,
+    - preserved missing-QC dependency reacquire semantics (`existing_worker_backlog || residual_round_backlog`) so `queue_active_len` alone does not force dependency reacquire attempts,
+    - added bounded same-height missing-QC dampening (`missing_qc_same_height_backoff_remaining(...)`, streak multiplier cap `4`, hard-cap bounded by `missing_qc_rotation_hard_cap(...)`),
+    - added repeated same-height missing-QC stale-local cleanup before final rotate/defer (`prune_stale_view_state(height, current_view)` + `clear_missing_block_recovery_for_height(height, now)`),
+    - expanded existing debug/warn diagnostics with `queue_active_backlog`, `residual_round_backlog`, and derived near-quorum gate booleans (no new public telemetry metric keys).
+  - Added focused regressions in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+    - `maybe_force_view_change_for_stalled_pending_near_quorum_fast_path_closes_when_residual_round_backlog_present`
+    - `force_view_change_if_idle_missing_qc_same_height_backoff_applies_under_backlog`
+    - `force_view_change_if_idle_missing_qc_same_height_backoff_not_applied_without_backlog`
+    - `force_view_change_if_idle_missing_qc_backoff_expires_and_rotation_proceeds`
+    - `force_view_change_if_idle_prunes_stale_round_state_during_repeated_same_height_missing_qc`
+  - Validation:
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core main_loop -- --nocapture` (order-sensitive in this tree: `1312 passed; 1 failed; 2 ignored`; failing test `new_view_tracker_counts_local_with_rotated_indices`)
+    - isolated rerun (ok): `cargo test -p iroha_core --lib new_view_tracker_counts_local_with_rotated_indices -- --nocapture`
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok; `3 passed`)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; `4 passed`)
+    - new focused tests (all ok): `maybe_force_view_change_for_stalled_pending_near_quorum_fast_path_closes_when_residual_round_backlog_present`, `missing_qc_same_height_backoff*`, `force_view_change_if_idle_prunes_stale_round_state_during_repeated_same_height_missing_qc`, `force_view_change_if_idle_missing_qc_backoff_expires_and_rotation_proceeds`.
+  - Gate reruns (`1200s` pilot / `3600s` acceptance) were not executed in this code-validation pass; existing stormfix/fixv6 artifacts remain the latest soak baseline.
+- Latest sync (2026-02-28 missing-QC storm core-only hotfix + gate reruns):
+  - Implemented the core-only backlog-signal hotfix in `crates/iroha_core/src/sumeragi/main_loop.rs`:
+    - added residual-round backlog derivation helpers (`pending_entry_durably_resolved`, `rbc_session_has_residual_round_backlog`, `has_residual_round_backlog_for_height`),
+    - wired `queue_active_backlog` + `residual_round_backlog` into `force_view_change_if_idle()` and `maybe_force_view_change_for_stalled_pending()`,
+    - preserved timeout constants/cause labels/FSM safety behavior; diagnostics were expanded only (no new public telemetry schema).
+  - Added/updated targeted regressions in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+    - `force_view_change_if_idle_uses_residual_round_backlog_for_missing_qc_hysteresis`
+    - `force_view_change_if_idle_treats_active_queue_len_as_backlog`
+    - `maybe_force_view_change_for_stalled_pending_applies_backlog_hysteresis_with_residual_round_state`
+  - Validation:
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core main_loop -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok; `3 passed`)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; `4 passed`)
+  - Fresh unchanged-shape gate artifacts (`--allow-net --nexus --peers 4 --faulty 0 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`, `IROHA_TEST_NETWORK_KEEP_DIRS=1`):
+    - pilot (`--duration 1200s --target-blocks 1200`):
+      - log: `/tmp/izanami_pilot_1200_gate_stormfix_20260228T184438Z.log`
+      - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_o7Ygvq`
+      - summary: `successes=2912 failures=2 izanami_ingress_failover_total=2 izanami_ingress_endpoint_unhealthy_total=0`
+      - result: `izanami run stopped before target blocks reached`
+      - churn counts (peer stdout): `missing_qc=2` (top heights `560:1`, `226:1`), `quorum_timeout=0`, `stake_quorum_timeout=9`, `no-proposal-cutoff=0`, `fallback-anchor=46`, `payload-missing-defer=23`, `no-roster-drop=2`.
+    - acceptance (`--duration 3600s --target-blocks 3600`):
+      - log: `/tmp/izanami_acceptance_3600_gate_stormfix_20260228T191631Z.log`
+      - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_CTBFaw`
+      - summary: `successes=1777 failures=39 izanami_ingress_failover_total=160 izanami_ingress_endpoint_unhealthy_total=143`
+      - result: `no block height progress for 600s (quorum min height 380, strict min 380, target 3600, tolerated_failures 1)`
+      - churn counts (peer stdout): `missing_qc=456` with fixed-height concentration `381:455`, `quorum_timeout=23`, `stake_quorum_timeout=21`, `no-proposal-cutoff=45`, `fallback-anchor=31`, `payload-missing-defer=10`, `no-roster-drop=1`.
+  - Delta vs fixv6 gate artifacts (`/tmp/izanami_pilot_1200_gate_fixv6_20260228T084041Z.log`, `/tmp/izanami_acceptance_3600_gate_fixv6_20260228T090531Z.log`):
+    - pilot: successes `+156` (`2756 -> 2912`), failures unchanged (`2 -> 2`), ingress failover `+1` (`1 -> 2`), ingress endpoint unhealthy unchanged (`0 -> 0`), `missing_qc +2` (`0 -> 2`).
+    - acceptance: strict `-758` (`1138 -> 380`), successes `-3750` (`5527 -> 1777`), failures `-1` (`40 -> 39`), ingress failover unchanged (`160 -> 160`), ingress endpoint unhealthy `+14` (`129 -> 143`), `missing_qc +258` (`198 -> 456`), dominant storm height worsened (`1139:190 -> 381:455`).
+  - Gate outcome: acceptance criteria are not met on this run (progress-timeout persists; fixed-height `missing_qc` storm intensity increased versus fixv6).
+- Latest sync (2026-02-28 implementation sweep rerun):
+  - Stabilized `crates/iroha_core/src/sumeragi/main_loop/tests.rs` by removing the order-sensitive precondition in `handle_rbc_init_uses_active_roster_when_derived_missing` (the test now asserts the postcondition only: INIT handling records `RbcRosterSource::Derived`).
+  - Validation rerun on the current implementation set:
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core --lib handle_rbc_init_uses_active_roster_when_derived_missing -- --nocapture` (ok)
+    - `cargo test -p iroha_core main_loop -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (ok)
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok; `3 passed`)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; `4 passed`)
+- Latest sync (2026-02-28 fixv6 roster-fallback recovery + vote-only deferral bypass):
+  - Completed the remaining plan adjustments in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`:
+      - hardened uncertified `select_block_sync_roster(...)` fallback selection to avoid fail-closed empty-roster drops when live-key filtering collapses under missing-block recovery (deterministic fallback order: `height+1` live-key filter -> `height` live-key filter -> mode-aware active-topology derivation -> trusted-topology fallback -> canonical base roster).
+    - `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`:
+      - known-block vote-only `BlockSyncUpdate` fast path now bypasses deferral/roster-validation pipeline whenever no roster-affecting artifacts are present (`commit_qc`/`validator_checkpoint`/`stake_snapshot` absent), preserving immediate vote ingestion under busy pending-processing states.
+    - `crates/izanami/src/chaos.rs`:
+      - shared-host DA multipliers aligned to the plan defaults (`quorum=4`, `availability=3`) while keeping pass-1 soak constants unchanged (`pipeline=600ms`, `rbc.payload_chunks_per_tick=96`, `rbc.rebroadcast_sessions_per_tick=12`, availability floor `2000ms`).
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+      - added `block_sync_update_known_block_vote_only_fast_path_bypasses_deferral_gate`,
+      - added `block_sync_selection_npos_uncertified_falls_back_when_live_keys_filter_empty`.
+  - Validation:
+    - `cargo fmt --all` (ok)
+    - targeted regressions (all ok): `block_sync_update_known_block_vote_only_uses_fast_path`, `block_sync_update_known_block_vote_only_fast_path_bypasses_deferral_gate`, `block_sync_selection_npos_uncertified_falls_back_when_live_keys_filter_empty`, `qc_missing_block_defer_inflight_fetch_suppresses_range_pull_escalation`, `maybe_force_view_change_for_stalled_pending_backlog_hysteresis_extends_non_near_timeout`, `run_worker_iteration_limits_vote_burst_when_blocks_pending`.
+    - `cargo test -p iroha_core main_loop -- --nocapture` (order-sensitive in this tree: `1303 passed`, `1 failed`, `2 ignored`; failing name `new_view_tracker_counts_local_with_rotated_indices`).
+    - isolated reruns (ok): `cargo test -p iroha_core --lib new_view_tracker_counts_local_with_rotated_indices -- --nocapture`, `cargo test -p iroha_core --lib should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture`.
+    - `cargo test -p izanami shared_host_recovery_profile_ -- --nocapture` (ok; `3 passed`)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; `4 passed`)
+  - Fresh unchanged-shape soak artifacts (`--allow-net --nexus --peers 4 --faulty 0 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`, `IROHA_TEST_NETWORK_KEEP_DIRS=1`):
+    - pilot (`--duration 1200s --target-blocks 1200`):
+      - log: `/tmp/izanami_pilot_1200_gate_fixv6_20260228T084041Z.log`
+      - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_Wb9nQp`
+      - summary: `successes=2756 failures=2 izanami_ingress_failover_total=1 izanami_ingress_endpoint_unhealthy_total=0`
+      - result: `izanami run stopped before target blocks reached`
+      - last observed progress line: `quorum_min_height=587 strict_min_height=587`.
+      - churn counts (peer stdout): `no-roster-drop=0`, `forced-VC=0` (`6s-class=0`), `fallback-anchor=19`, `no-proposal-cutoff=0`, `payload-missing-defer=11`.
+    - acceptance (`--duration 3600s --target-blocks 3600`):
+      - log: `/tmp/izanami_acceptance_3600_gate_fixv6_20260228T090531Z.log`
+      - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_5VBIgR`
+      - summary: `successes=5527 failures=40 izanami_ingress_failover_total=160 izanami_ingress_endpoint_unhealthy_total=129`
+      - result: `no block height progress for 600s (quorum min height 1138, strict min 1138, target 3600, tolerated_failures 1)`
+      - last observed progress line: `quorum_min_height=1138 strict_min_height=1138`.
+      - churn counts (peer stdout): `no-roster-drop=0`, `forced-VC=0` (`6s-class=0`), `fallback-anchor=39`, `no-proposal-cutoff=198`, `payload-missing-defer=27`.
+  - Delta vs latest planfix gate artifacts (`/tmp/izanami_pilot_1200_gate_planfix_20260227T235705Z.log`, `/tmp/izanami_acceptance_3600_gate_planfix_20260228T002142Z.log`):
+    - pilot: strict `-42` (`629 -> 587`), successes `-254` (`3010 -> 2756`), failures `+2` (`0 -> 2`), ingress failover `+1` (`0 -> 1`), ingress endpoint unhealthy unchanged (`0 -> 0`).
+    - acceptance: strict `+270` (`868 -> 1138`), successes `+1361` (`4166 -> 5527`), failures `+10` (`30 -> 40`), ingress failover unchanged (`160 -> 160`), ingress endpoint unhealthy `+7` (`122 -> 129`).
+  - Delta vs prior no-roster-drop failure artifact (`/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_1a881n`):
+    - acceptance `dropping block sync update: no verifiable roster available` dropped from `190` (all on `witty_crossbill`) to `0` in fixv6 acceptance artifacts.
 - Latest sync (2026-02-28 QC duplicate-fetch churn suppression + fresh gate reruns):
   - Completed the remaining sub-1s plan gap in `crates/iroha_core/src/sumeragi/main_loop/qc.rs`:
     - in `qc_missing_block_defer(...)`, duplicate defer events now suppress `rebroadcast_block_votes(...)` while an equivalent missing-block fetch is still fresh/in-flight for the cooldown window.
