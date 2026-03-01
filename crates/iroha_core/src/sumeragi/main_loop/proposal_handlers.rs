@@ -78,6 +78,7 @@ impl Actor {
         height: u64,
         locked_hash: HashOf<BlockHeader>,
         locked_height: u64,
+        known_parent: Option<HashOf<BlockHeader>>,
     ) -> bool {
         if hash == locked_hash {
             return false;
@@ -86,10 +87,29 @@ impl Actor {
         let known_conflict = self
             .committed_block_hash_for_height(height)
             .is_some_and(|known_hash| known_hash != hash);
-        // Lock rejection may only clear requests that are disproven by committed chain
-        // evidence or by locally known canonical lock-height ancestry. Future-height requests
-        // above the locked horizon must remain tracked until commitment catches up.
+        let locally_conflicts_with_locked = matches!(
+            super::chain_extends_tip(
+                hash,
+                height,
+                locked_height,
+                locked_hash,
+                |candidate, candidate_height| {
+                    if candidate == hash {
+                        known_parent.or_else(|| self.parent_hash_for(candidate, candidate_height))
+                    } else {
+                        self.parent_hash_for(candidate, candidate_height)
+                    }
+                }
+            ),
+            Some(false)
+        );
+        let locked_chain_committed = locked_height <= committed_height;
+        // Lock rejection may clear requests once local evidence disproves the branch:
+        // either committed history conflicts with the hash, or local ancestry proves the hash
+        // does not extend a lock that is already anchored by committed history. Preserve
+        // unresolved requests when lock ancestry may still legitimately realign.
         (height <= committed_height || height <= locked_height) && known_conflict
+            || (locked_chain_committed && locally_conflicts_with_locked)
     }
 
     fn should_clear_missing_request_on_stale_block_drop(
@@ -961,6 +981,7 @@ impl Actor {
                     pending.height,
                     locked_parent_hash,
                     height.saturating_sub(1),
+                    pending.block.header().prev_block_hash(),
                 ) {
                     self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
                 } else {
@@ -990,6 +1011,7 @@ impl Actor {
                 request_height,
                 locked_parent_hash,
                 height.saturating_sub(1),
+                None,
             ) && self.pending.missing_block_requests.contains_key(&hash)
             {
                 self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
@@ -1745,6 +1767,7 @@ impl Actor {
                         height,
                         lock.subject_block_hash,
                         lock.height,
+                        header.prev_block_hash(),
                     ) {
                         self.clear_missing_block_request(
                             &block_hash,
@@ -1774,6 +1797,7 @@ impl Actor {
                         parent_height,
                         lock.subject_block_hash,
                         lock.height,
+                        None,
                     ) {
                         self.clear_missing_block_request(
                             &parent_hash,
@@ -1929,6 +1953,7 @@ impl Actor {
                                 height,
                                 locked_hash,
                                 lock.height,
+                                parent_hash,
                             ) {
                                 self.clear_missing_block_request(
                                     &block_hash,
@@ -1950,6 +1975,7 @@ impl Actor {
                                     parent_height,
                                     locked_hash,
                                     lock.height,
+                                    None,
                                 ) {
                                     self.clear_missing_block_request(
                                         &parent_hash,

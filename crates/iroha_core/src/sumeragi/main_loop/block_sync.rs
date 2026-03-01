@@ -1394,11 +1394,6 @@ impl Actor {
         let block_known = self.kura.get_block_height_by_hash(block_hash).is_some();
         let kura_known_ms =
             u64::try_from(kura_known_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let has_local_commit_snapshot = block_known
-            && self
-                .state
-                .commit_roster_snapshot_for_block(block_height, block_hash)
-                .is_some();
         let has_roster_hint = incoming_qc.is_some()
             || validator_checkpoint.is_some()
             || stake_snapshot.is_some()
@@ -1463,9 +1458,6 @@ impl Actor {
             u64::try_from(commit_votes_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let vote_only_known_block_fast_path = block_known
             && has_commit_votes
-            && commit_votes_processed > 0
-            && commit_votes_dropped == 0
-            && has_local_commit_snapshot
             && incoming_qc.is_none()
             && validator_checkpoint.is_none()
             && stake_snapshot.is_none();
@@ -1476,6 +1468,7 @@ impl Actor {
                 block = %block_hash,
                 commit_votes_pre_ms,
                 commit_votes_processed,
+                commit_votes_dropped,
                 "processed known-block vote-only block sync update via fast-path"
             );
             self.clear_missing_block_request(
