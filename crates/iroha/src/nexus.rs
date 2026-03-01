@@ -425,7 +425,7 @@ mod tests {
         );
         let duplicate_settlement = sample_settlement(lane_id, dataspace_id, duplicate_height);
         let first = CrossLaneTransferBuilder::new(
-            duplicate_header.clone(),
+            duplicate_header,
             None,
             None,
             duplicate_settlement.clone(),
@@ -477,7 +477,7 @@ mod tests {
         let first_settlement = sample_settlement(lane_id, first_dataspace, header.height().get());
         let second_settlement = sample_settlement(lane_id, second_dataspace, header.height().get());
 
-        let first = CrossLaneTransferBuilder::new(header.clone(), None, None, first_settlement)
+        let first = CrossLaneTransferBuilder::new(header, None, None, first_settlement)
             .build()
             .expect("first envelope should be valid")
             .envelope()
@@ -501,7 +501,7 @@ mod tests {
         let first_settlement = sample_settlement(first_lane, dataspace_id, header.height().get());
         let second_settlement = sample_settlement(second_lane, dataspace_id, header.height().get());
 
-        let first = CrossLaneTransferBuilder::new(header.clone(), None, None, first_settlement)
+        let first = CrossLaneTransferBuilder::new(header, None, None, first_settlement)
             .build()
             .expect("first envelope should be valid")
             .envelope()

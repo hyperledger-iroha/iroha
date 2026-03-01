@@ -261,7 +261,7 @@ fn main() -> Result<()> {
 
     let json =
         norito::json::to_json_pretty(&transfer).wrap_err("failed to encode transfer as JSON")?;
-    fs::write(&args.output, format!("{}\n", json))
+    fs::write(&args.output, format!("{json}\n"))
         .wrap_err_with(|| format!("failed to write {}", args.output.display()))?;
 
     println!("decoded_bundle_id={}", transfer.bundle_id);
