@@ -97,8 +97,6 @@ tempfile = "3.23.0"
 path-absolutize = "3.1.1"
 bytes = "1.10.1"
 
-vergen = { version = "9.0.6", default-features = false }
-"vergen-git2" = { version = "1.0.7", default-features = false }
 trybuild = "1.0.114"
 impls = "1.0.3"
 
@@ -307,12 +305,26 @@ exclude = [
 [profile.dev]
 incremental = true
 split-debuginfo = "packed"
+debug = "line-tables-only"
+
+[profile.dev.build-override]
+debug = 0
+codegen-units = 256
 
 [profile.test]
 # Avoid long dsymutil phases on macOS test binaries.
 split-debuginfo = "unpacked"
+debug = "line-tables-only"
+incremental = true
+
+[profile.test.build-override]
+debug = 0
+codegen-units = 256
 
 [profile.dev.package."*"]
+debug = 0
+
+[profile.test.package."*"]
 debug = 0
 
 [profile.deploy]

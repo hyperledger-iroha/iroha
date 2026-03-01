@@ -149,7 +149,7 @@ zstd = { workspace = true }
 futures-util = "0.3.31"
 
 [build-dependencies]
-build-support = { path = "../build-support" }
+build-support = { path = "../build-support", default-features = false }
 
 [dev-dependencies]
 criterion = { workspace = true }
