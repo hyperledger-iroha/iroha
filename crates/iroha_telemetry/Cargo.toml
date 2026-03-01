@@ -54,7 +54,7 @@ thiserror = { workspace = true }
 hex = { workspace = true }
 
 [build-dependencies]
-build-support = { path = "../build-support" }
+build-support = { path = "../build-support", default-features = false }
 
 [dev-dependencies]
 expect-test = { workspace = true }

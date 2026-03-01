@@ -97,8 +97,6 @@ tempfile = "3.23.0"
 path-absolutize = "3.1.1"
 bytes = "1.10.1"
 
-vergen = { version = "9.0.6", default-features = false }
-"vergen-git2" = { version = "1.0.7", default-features = false }
 trybuild = "1.0.114"
 impls = "1.0.3"
 
