@@ -9,26 +9,39 @@ use std::{
 };
 
 const VERGEN_GIT_SHA_ENV: &str = "VERGEN_GIT_SHA";
+const VERGEN_CARGO_FEATURES_ENV: &str = "VERGEN_CARGO_FEATURES";
+const VERGEN_CARGO_TARGET_TRIPLE_ENV: &str = "VERGEN_CARGO_TARGET_TRIPLE";
 
-/// Emit git and cargo-related information using `vergen`.
+/// Emit git and cargo-related metadata expected by workspace crates.
 ///
 /// # Errors
-/// Fails if `vergen` cannot extract the required metadata.
+/// This function currently does not return errors, but keeps the fallible
+/// signature to preserve compatibility with existing build scripts.
 pub fn emit_git_info() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-    use vergen::{CargoBuilder, Emitter as CargoEmitter};
-
-    // Emit only the metadata the workspace exposes today.
-    let cargo_instructions = CargoBuilder::default()
-        .target_triple(true)
-        .features(true)
-        .build()?;
-
-    CargoEmitter::default()
-        .add_instructions(&cargo_instructions)?
-        .emit()?;
+    emit_cargo_target_triple();
+    emit_cargo_features();
     emit_git_sha();
     emit_git_rerun_hints();
     Ok(())
+}
+
+fn emit_cargo_target_triple() {
+    let target = env::var("TARGET").unwrap_or_else(|_| "unknown".to_owned());
+    println!("cargo:rustc-env={VERGEN_CARGO_TARGET_TRIPLE_ENV}={target}");
+}
+
+fn emit_cargo_features() {
+    let parsed_features = env::var("CARGO_CFG_FEATURE")
+        .ok()
+        .as_deref()
+        .map(parse_cfg_features)
+        .unwrap_or_default();
+    let feature_list = if parsed_features.is_empty() {
+        "unknown".to_owned()
+    } else {
+        parsed_features.join(",")
+    };
+    println!("cargo:rustc-env={VERGEN_CARGO_FEATURES_ENV}={feature_list}");
 }
 
 fn emit_git_sha() {
@@ -155,6 +168,18 @@ fn parse_packed_ref_hash<'a>(contents: &'a str, reference: &str) -> Option<&'a s
     None
 }
 
+fn parse_cfg_features(contents: &str) -> Vec<String> {
+    let mut features: Vec<String> = contents
+        .split(',')
+        .map(str::trim)
+        .filter(|feature| !feature.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    features.sort_unstable();
+    features.dedup();
+    features
+}
+
 fn emit_rerun_if_changed(path: &Path) {
     println!("cargo:rerun-if-changed={}", path.display());
 }
@@ -249,6 +274,19 @@ mod tests {
 ^1111111111111111111111111111111111111111\n\
 ";
         assert_eq!(parse_packed_ref_hash(packed_refs, "refs/heads/main"), None);
+    }
+
+    #[test]
+    fn parse_cfg_features_sorts_and_deduplicates() {
+        assert_eq!(
+            parse_cfg_features("telemetry,zk,telemetry,"),
+            vec!["telemetry".to_owned(), "zk".to_owned()]
+        );
+    }
+
+    #[test]
+    fn parse_cfg_features_skips_empty_entries() {
+        assert_eq!(parse_cfg_features(" , ,"), Vec::<String>::new());
     }
 
     #[test]

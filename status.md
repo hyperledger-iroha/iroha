@@ -1,6 +1,27 @@
 # Status
 
-Last update: 2026-02-28
+Last update: 2026-03-01
+- Build acceleration helper script (`scripts/cargo_fast.sh`, `scripts/AGENTS.md`): added a new local wrapper for Cargo that auto-enables `sccache` when available and probes fast-linker support (`mold`/`lld`/`ld.lld` on Linux, `zld`/`ld64.lld`/`lld` on macOS via `-fuse-ld`) before setting `RUSTFLAGS`, with safe fallback to system defaults when unavailable or unsupported. The linker auto-mode now probes only discovered linker binaries (avoids unnecessary failed probes when none are installed). Supports `--target-dir`, `--no-sccache`, `--zero-debug`, `--linker`, and `--print-env` for deterministic local workflows without changing runtime features.
+- Validation:
+  - `bash -n scripts/cargo_fast.sh` (ok).
+  - `scripts/cargo_fast.sh --print-env -- check -p build-support --no-default-features` (ok; graceful fallback reported).
+  - `scripts/cargo_fast.sh -- check -p build-support --no-default-features` (ok; cargo command executed successfully).
+  - `scripts/cargo_fast.sh --linker lld --print-env -- check -p build-support --no-default-features` (ok; explicit unsupported linker request gracefully fell back to system default).
+  - `scripts/cargo_fast.sh --zero-debug --print-env -- check -p build-support --no-default-features` (ok; emits `CARGO_PROFILE_{DEV,TEST}_DEBUG=0` in opt-in fast-build mode).
+  - `scripts/cargo_fast.sh --zero-debug -- check -p build-support --no-default-features` (ok).
+  - Cold A/B check (`irohad`): baseline `CARGO_TARGET_DIR=/tmp/iroha_ab_plain cargo check -p irohad` finished `real 154.91s`; helper path `/usr/bin/time -p scripts/cargo_fast.sh --target-dir /tmp/iroha_ab_fast -- check -p irohad` finished `real 154.60s` on this host (`sccache=not-found`, `linker=system-default`), confirming the helper keeps parity and benefits appear only when accelerators are installed/detected.
+- Compilation graph cleanup for unchanged feature/runtime surface (`crates/iroha_crypto/Cargo.toml`): removed a redundant `build-support` build-dependency from `iroha_crypto`. The crate has no `build.rs`/`build = ...`, so this edge was unused and only added dependency-resolution overhead.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha_opt_pass9_crypto cargo check -p iroha_crypto` (ok; finished in `51.36s`).
+  - `CARGO_TARGET_DIR=/tmp/iroha_opt_pass9_irohad cargo check -p irohad` (ok; finished in `2m52s`).
+  - `cargo tree -p iroha_crypto -i build-support` now fails with `package ID specification 'build-support' did not match any packages` (expected; edge removed).
+  - Post-wrapper/metadata follow-up sanity: `CARGO_TARGET_DIR=/tmp/iroha_opt_pass11_irohad cargo check -p irohad` (ok; finished in `2m30s`).
+- Compilation speed-up follow-up for unchanged feature surface (`Cargo.toml`, `crates/build-support/Cargo.toml`, `crates/build-support/src/lib.rs`, `crates/{irohad,iroha_cli,iroha_telemetry,iroha_torii}/Cargo.toml`): removed `vergen` from `build-support` and replaced its remaining `VERGEN_CARGO_*` emission with direct Cargo-env emission (`TARGET`, `CARGO_CFG_FEATURE`) while preserving `VERGEN_GIT_SHA` behavior. Also split `build-support` so `norito` is an optional feature (`norito-json`) and set `build-support` build-dependency edges to `default-features = false` for `irohad`/`iroha_cli`/`iroha_telemetry`/`iroha_torii`, avoiding unnecessary tool-only dependency activation in build-script paths. Added `required-features = ["norito-json"]` on `build-support` bins so no-default-feature builds remain valid for build-script usage.
+- Validation + timings (post-change):
+  - `cargo fmt --all` (ok).
+  - `CARGO_TARGET_DIR=/tmp/iroha_opt_pass8b_build_support cargo test -p build-support` (ok; `13 + 3 + 6` unit tests passed, doc-tests passed).
+  - `CARGO_TARGET_DIR=/tmp/iroha_opt_pass8c_check_irohad cargo check -p irohad` (ok; finished in `2m54s`).
+  - Timed `irohad` cold-build passes remained high-variance under this session load (examples: `check --timings` `2m36s` to `2m37s`; `test --no-run --timings` `3m34s` to `3m45s`; `build --timings` `3m57s`), so this tranche is retained for dependency-graph reduction and build-script-path simplification rather than a single stable wall-clock delta claim.
 - Compilation speed-up for unchanged feature surface (`Cargo.toml`, `crates/build-support/Cargo.toml`, `crates/build-support/src/lib.rs`): removed `vergen-git2` and replaced git metadata collection with file-based `.git` discovery/ref parsing that still exports `VERGEN_GIT_SHA` and emits deterministic `rerun-if-changed` hints for `.git/HEAD`, `.git/packed-refs`, and the active symbolic ref file. This removes per-build-script git process spawning while keeping IVM/ZK behavior unchanged (no feature/opcode/syscall gating changes).
 - Dev/test profile tuning for faster local compile turnaround (same runtime features): set `debug = "line-tables-only"` for `[profile.dev]`/`[profile.test]`; added `[profile.dev.build-override]`/`[profile.test.build-override]` with `debug = 0`, `codegen-units = 256`; enabled `[profile.test] incremental = true`; and added `[profile.test.package."*"] debug = 0` to reduce dependency debug-info cost in test builds.
 - Validation + timings (post-change, isolated targets):
