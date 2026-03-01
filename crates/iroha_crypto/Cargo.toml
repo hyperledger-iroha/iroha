@@ -137,9 +137,6 @@ num-bigint = "0.4.6"
 lazy_static = "1.5.0"
 tempfile = "3.23.0"
 
-[build-dependencies]
-build-support = { path = "../build-support" }
-
 # Utility binary used to detect the available BLS backend at build time.
 [[bin]]
 name = "bls-variant-detect"

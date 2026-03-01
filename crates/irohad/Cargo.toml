@@ -119,7 +119,7 @@ iroha_config_base = { workspace = true }
 iroha_test_samples = { workspace = true }
 
 [build-dependencies]
-build-support = { path = "../build-support" }
+build-support = { path = "../build-support", default-features = false }
 
 [package.metadata.cargo-all-features]
 denylist = [

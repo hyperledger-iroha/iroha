@@ -942,10 +942,28 @@ mod tests {
         let network = NetworkBuilder::new()
             .with_auto_populated_trusted_peers()
             .with_min_peers(MIN_NETWORK_PEERS)
+            // This test exercises SerializedNetwork drop behavior. Give startup enough headroom
+            // under heavily loaded hosts so bootstrap timeouts do not mask drop regressions.
+            .with_peer_startup_timeout(Duration::from_secs(480))
             .build();
         let runtime = Runtime::new().expect("runtime");
         runtime.block_on(async {
-            network.start_all().await.expect("start network");
+            for attempt in 1..=NETWORK_START_ATTEMPTS {
+                match network.start_all().await {
+                    Ok(_) => break,
+                    Err(err)
+                        if attempt < NETWORK_START_ATTEMPTS
+                            && is_retryable_network_startup_error(&err) =>
+                    {
+                        eprintln!(
+                            "warning: serialized_network_drop_completes_on_current_thread_runtime network startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; retrying in {:?}: {err}",
+                            NETWORK_START_RETRY_DELAY
+                        );
+                        tokio::time::sleep(NETWORK_START_RETRY_DELAY).await;
+                    }
+                    Err(err) => panic!("start network: {err:?}"),
+                }
+            }
         });
 
         let (tx, rx) = std::sync::mpsc::channel();

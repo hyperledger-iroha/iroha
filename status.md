@@ -1,6 +1,26 @@
 # Status
 
 Last update: 2026-03-01
+- Latest sync (2026-03-01 missing-QC split-vote root-cause fix: commit vote conflict domain scoped to round):
+  - Implemented in `crates/iroha_core/src/sumeragi/main_loop/{commit.rs,votes.rs}`:
+    - `emit_precommit_vote(...)` no longer suppresses cross-view same-height commit votes for the local validator; conflict checks are now same-round only (`phase,height,view,epoch,signer`) with the existing `sent_key` duplicate guard preserved.
+    - `validate_and_record_vote_with_signature_result(...)` no longer drops commit votes across views for the same signer peer; conflicting vote rejection remains keyed by the existing per-round vote-log key collision path.
+    - Lock-extension checks (`qc_extends_locked_with_lookup`), quorum logic, QC verification, and commit-safety paths are unchanged.
+  - Test updates in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+    - added `emit_precommit_vote_allows_higher_view_different_block_same_height_when_lock_extends`,
+    - added `validate_and_record_vote_accepts_cross_view_commit_vote_for_same_signer`,
+    - added `validate_and_record_vote_rejects_same_view_conflicting_commit_vote_and_records_evidence`,
+    - added `split_view_commit_votes_accept_higher_view_and_form_qc`,
+    - updated prior cross-view-drop expectations to match round-scoped equivocation semantics.
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core --lib emit_precommit_vote_allows_higher_view_different_block_same_height_when_lock_extends -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib validate_and_record_vote_accepts_cross_view_commit_vote_for_same_signer -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib validate_and_record_vote_rejects_same_view_conflicting_commit_vote_and_records_evidence -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib split_view_commit_votes_accept_higher_view_and_form_qc -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib conflicting_commit_vote_across_views_is_accepted_for_same_signer_peer -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core main_loop -- --nocapture` (order-sensitive/flaky in this tree across reruns: one-test failures varied between `new_view_vote_accepts_prepare_highest_next_height` and `tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown`; both pass in isolated reruns)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; `4 passed`)
 - Latest sync (2026-03-01 missing-QC storm follow-up v2.2 balanced: fresh full-soak rerun + bottleneck readout):
   - Acceptance rerun command (unchanged envelope, explicit capture):
     - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo run -p izanami -- --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 3600 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable 2>&1 | tee /tmp/izanami_acceptance_3600_gate_v22r3_20260301T091543Z.log`
@@ -377,6 +397,37 @@ Last update: 2026-03-01
     - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok)
     - `cargo test -p iroha_core main_loop -- --nocapture --test-threads=1` (ok; `1295 passed`, `0 failed`, `2 ignored`)
     - `cargo test -p iroha_core main_loop -- --nocapture` remains order/concurrency-sensitive in this tree (isolated failing tests pass when run alone).
+- Build acceleration helper script (`scripts/cargo_fast.sh`, `scripts/AGENTS.md`): added a new local wrapper for Cargo that auto-enables `sccache` when available and probes fast-linker support (`mold`/`lld`/`ld.lld` on Linux, `zld`/`ld64.lld`/`lld` on macOS via `-fuse-ld`) before setting `RUSTFLAGS`, with safe fallback to system defaults when unavailable or unsupported. The linker auto-mode now probes only discovered linker binaries (avoids unnecessary failed probes when none are installed). Supports `--target-dir`, `--no-sccache`, `--zero-debug`, `--linker`, and `--print-env` for deterministic local workflows without changing runtime features.
+- Validation:
+  - `bash -n scripts/cargo_fast.sh` (ok).
+  - `scripts/cargo_fast.sh --print-env -- check -p build-support --no-default-features` (ok; graceful fallback reported).
+  - `scripts/cargo_fast.sh -- check -p build-support --no-default-features` (ok; cargo command executed successfully).
+  - `scripts/cargo_fast.sh --linker lld --print-env -- check -p build-support --no-default-features` (ok; explicit unsupported linker request gracefully fell back to system default).
+  - `scripts/cargo_fast.sh --zero-debug --print-env -- check -p build-support --no-default-features` (ok; emits `CARGO_PROFILE_{DEV,TEST}_DEBUG=0` in opt-in fast-build mode).
+  - `scripts/cargo_fast.sh --zero-debug -- check -p build-support --no-default-features` (ok).
+  - Cold A/B check (`irohad`): baseline `CARGO_TARGET_DIR=/tmp/iroha_ab_plain cargo check -p irohad` finished `real 154.91s`; helper path `/usr/bin/time -p scripts/cargo_fast.sh --target-dir /tmp/iroha_ab_fast -- check -p irohad` finished `real 154.60s` on this host (`sccache=not-found`, `linker=system-default`), confirming the helper keeps parity and benefits appear only when accelerators are installed/detected.
+- Compilation graph cleanup for unchanged feature/runtime surface (`crates/iroha_crypto/Cargo.toml`): removed a redundant `build-support` build-dependency from `iroha_crypto`. The crate has no `build.rs`/`build = ...`, so this edge was unused and only added dependency-resolution overhead.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha_opt_pass9_crypto cargo check -p iroha_crypto` (ok; finished in `51.36s`).
+  - `CARGO_TARGET_DIR=/tmp/iroha_opt_pass9_irohad cargo check -p irohad` (ok; finished in `2m52s`).
+  - `cargo tree -p iroha_crypto -i build-support` now fails with `package ID specification 'build-support' did not match any packages` (expected; edge removed).
+  - Post-wrapper/metadata follow-up sanity: `CARGO_TARGET_DIR=/tmp/iroha_opt_pass11_irohad cargo check -p irohad` (ok; finished in `2m30s`).
+- Compilation speed-up follow-up for unchanged feature surface (`Cargo.toml`, `crates/build-support/Cargo.toml`, `crates/build-support/src/lib.rs`, `crates/{irohad,iroha_cli,iroha_telemetry,iroha_torii}/Cargo.toml`): removed `vergen` from `build-support` and replaced its remaining `VERGEN_CARGO_*` emission with direct Cargo-env emission (`TARGET`, `CARGO_CFG_FEATURE`) while preserving `VERGEN_GIT_SHA` behavior. Also split `build-support` so `norito` is an optional feature (`norito-json`) and set `build-support` build-dependency edges to `default-features = false` for `irohad`/`iroha_cli`/`iroha_telemetry`/`iroha_torii`, avoiding unnecessary tool-only dependency activation in build-script paths. Added `required-features = ["norito-json"]` on `build-support` bins so no-default-feature builds remain valid for build-script usage.
+- Validation + timings (post-change):
+  - `cargo fmt --all` (ok).
+  - `CARGO_TARGET_DIR=/tmp/iroha_opt_pass8b_build_support cargo test -p build-support` (ok; `13 + 3 + 6` unit tests passed, doc-tests passed).
+  - `CARGO_TARGET_DIR=/tmp/iroha_opt_pass8c_check_irohad cargo check -p irohad` (ok; finished in `2m54s`).
+  - Timed `irohad` cold-build passes remained high-variance under this session load (examples: `check --timings` `2m36s` to `2m37s`; `test --no-run --timings` `3m34s` to `3m45s`; `build --timings` `3m57s`), so this tranche is retained for dependency-graph reduction and build-script-path simplification rather than a single stable wall-clock delta claim.
+- Compilation speed-up for unchanged feature surface (`Cargo.toml`, `crates/build-support/Cargo.toml`, `crates/build-support/src/lib.rs`): removed `vergen-git2` and replaced git metadata collection with file-based `.git` discovery/ref parsing that still exports `VERGEN_GIT_SHA` and emits deterministic `rerun-if-changed` hints for `.git/HEAD`, `.git/packed-refs`, and the active symbolic ref file. This removes per-build-script git process spawning while keeping IVM/ZK behavior unchanged (no feature/opcode/syscall gating changes).
+- Dev/test profile tuning for faster local compile turnaround (same runtime features): set `debug = "line-tables-only"` for `[profile.dev]`/`[profile.test]`; added `[profile.dev.build-override]`/`[profile.test.build-override]` with `debug = 0`, `codegen-units = 256`; enabled `[profile.test] incremental = true`; and added `[profile.test.package."*"] debug = 0` to reduce dependency debug-info cost in test builds.
+- Validation + timings (post-change, isolated targets):
+  - `CARGO_TARGET_DIR=/tmp/iroha_opt_pass2_build_support cargo test -p build-support` (ok; `11 + 3 + 6` unit tests passed across binaries, doc-tests passed).
+  - Dev/check timing runs remained stable (noise-level deltas): `cargo check -p irohad --timings` `2m33s` (`/tmp/iroha_opt_after_check_irohad/...`) vs `2m37s` (`/tmp/iroha_opt_pass2_check_irohad/...`), `cargo build -p irohad --timings` `3m33s` vs `3m34s`, `cargo check --workspace --timings` `3m08s` vs `3m09s`.
+  - Test compile throughput improved on comparable no-run build:
+    - baseline: `CARGO_TARGET_DIR=/tmp/iroha_opt_test_baseline_irohad cargo test -p irohad --no-run --timings` -> `3m37s` (`/tmp/iroha_opt_test_baseline_irohad/cargo-timings/cargo-timing-20260228T140430.915148Z.html`)
+    - after test-profile tuning: `CARGO_TARGET_DIR=/tmp/iroha_opt_test_pass3_irohad cargo test -p irohad --no-run --timings` -> `3m29s` (`/tmp/iroha_opt_test_pass3_irohad/cargo-timings/cargo-timing-20260228T140817.229664Z.html`)
+- Sandbox serialized-network drop startup-timeout flake hardening (`integration_tests/src/sandbox.rs`): stabilized `sandbox::tests::serialized_network_drop_completes_on_current_thread_runtime` by setting an explicit per-test peer startup timeout override (`with_peer_startup_timeout(Duration::from_secs(480))`). This keeps the test focused on current-thread runtime drop semantics instead of failing on startup timeout under host contention; local verification on this host observed a passing runtime of `862.22s`, confirming the previous 240s floor was insufficient for this scenario.
+- Tests: `cargo fmt --all` (ok), `cargo test -p integration_tests serialized_network_drop_completes_on_current_thread_runtime -- --nocapture` (ok; `1 passed`, `0 failed`; filtered targets also completed).
 - Offline allowance lineage/build-claim follow-up closure (`crates/iroha_core/src/smartcontracts/isi/offline.rs`, `crates/iroha_torii/tests/offline_app_api.rs`, `crates/iroha_torii/tests/offline_certificates_app_api.rs`): completed the remaining gap fixes after newest-first lineage and build-claim enforcement by updating register/reissue/renew test fixtures to carry valid lineage metadata (`scope`, `epoch`, `prev_certificate_id_hex`, `min_build_number`), ensuring future-certificate rejection coverage is isolated from lineage checks, and updating Torii offline app/certificate fixtures to include valid lineage drafts plus signed Apple build claims (and iOS metadata bindings) so settlement/certificate API tests match the new validation contract.
 - Tests: `cargo fmt --all` (ok), `cargo test -p iroha_core register_allowance_ -- --nocapture` (ok; `11 passed`, `0 failed`), `cargo test -p iroha_core submit_transfer_ -- --nocapture` (ok; `8 passed`, `0 failed`), `cargo test -p iroha_torii --test offline_certificates_app_api -- --nocapture` (ok; `5 passed`, `0 failed`), `cargo test -p iroha_torii offline_ -- --nocapture` (ok).
 - Sumeragi adversarial RBC flake hardening (`integration_tests/tests/sumeragi_adversarial.rs`): stabilized `sumeragi_adversarial_chunk_drop` and `sumeragi_adversarial_locked_qc_gate_rejects_conflicting_proposal` by evaluating delivery from post-wait RBC session snapshots (all sessions for the target height) and committed height, instead of relying on a single early session snapshot that can lag view/session recovery. Also added unit coverage for the new height-wide delivery helper (`delivered_height_check_scans_all_sessions_for_the_height`).
