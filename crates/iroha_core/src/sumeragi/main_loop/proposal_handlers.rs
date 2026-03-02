@@ -409,9 +409,24 @@ impl Actor {
             incoming > existing || promotes_phase
         });
         if should_update_highest {
-            self.highest_qc = Some(highest_qc);
-            super::status::set_highest_qc(highest_qc.height, highest_qc.view);
-            super::status::set_highest_qc_hash(highest_qc.subject_block_hash);
+            if self.defer_highest_qc_update_for_lock_catchup(
+                height,
+                view,
+                highest_qc,
+                "proposal_hint",
+            ) {
+                debug!(
+                    height,
+                    view,
+                    highest_height = highest_qc.height,
+                    highest_view = highest_qc.view,
+                    "deferring highest QC update for proposal hint under lock-lag catch-up"
+                );
+            } else {
+                self.highest_qc = Some(highest_qc);
+                super::status::set_highest_qc(highest_qc.height, highest_qc.view);
+                super::status::set_highest_qc_hash(highest_qc.subject_block_hash);
+            }
         } else {
             debug!(
                 height,
@@ -452,6 +467,39 @@ impl Actor {
                 self.telemetry.set_prf_context(Some(seed), height, view);
             }
         }
+    }
+
+    fn defer_highest_qc_update_for_lock_catchup(
+        &mut self,
+        height: u64,
+        view: u64,
+        highest_qc: super::consensus::QcHeaderRef,
+        source: &'static str,
+    ) -> bool {
+        let Some(catchup_height) = self.lock_lag_catchup_frontier_for_highest(highest_qc) else {
+            return false;
+        };
+        let marked = self.mark_highest_qc_missing_defer_for_round(height, view, highest_qc);
+        let requested_highest = self.request_missing_block_for_highest_qc_force(highest_qc, source);
+        let requested_range = self.request_range_pull_from_anchor(
+            catchup_height,
+            "lock_lag_highest_qc_defer",
+            Instant::now(),
+        );
+        debug!(
+            height,
+            view,
+            highest_height = highest_qc.height,
+            highest_view = highest_qc.view,
+            highest_hash = %highest_qc.subject_block_hash,
+            catchup_height,
+            marked,
+            requested_highest,
+            requested_range,
+            source,
+            "deferring highest QC update while locked ancestry catch-up is unresolved"
+        );
+        true
     }
 
     pub(super) fn ensure_highest_qc_extends_locked(
@@ -683,9 +731,10 @@ impl Actor {
                 payload = %proposal.payload_hash,
                 "caching proposal without local highest QC block; awaiting sync"
             );
-            self.observe_new_view_highest_qc(highest_qc);
             if self.should_force_missing_highest_fetch(highest_qc.subject_block_hash) {
                 self.request_missing_block_for_highest_qc_force(highest_qc, "proposal");
+            } else {
+                self.request_missing_block_for_highest_qc(highest_qc, "proposal");
             }
         }
         if let Some((local_height, local_view)) =
@@ -758,9 +807,19 @@ impl Actor {
             incoming > existing || promotes_phase
         });
         if should_update_highest {
-            self.highest_qc = Some(highest_qc);
-            super::status::set_highest_qc(highest_qc.height, highest_qc.view);
-            super::status::set_highest_qc_hash(highest_qc.subject_block_hash);
+            if self.defer_highest_qc_update_for_lock_catchup(height, view, highest_qc, "proposal") {
+                debug!(
+                    height,
+                    view,
+                    highest_height = highest_qc.height,
+                    highest_view = highest_qc.view,
+                    "deferring highest QC update for proposal under lock-lag catch-up"
+                );
+            } else {
+                self.highest_qc = Some(highest_qc);
+                super::status::set_highest_qc(highest_qc.height, highest_qc.view);
+                super::status::set_highest_qc_hash(highest_qc.subject_block_hash);
+            }
         } else {
             debug!(
                 height,
