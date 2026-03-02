@@ -95,7 +95,7 @@ image = { version = "0.25.9", default-features = false, features = ["png", "gif"
 png = "0.18.0"
 
 [build-dependencies]
-build-support = { path = "../build-support" }
+build-support = { path = "../build-support", default-features = false }
 
 [dev-dependencies]
 tempfile = { workspace = true }

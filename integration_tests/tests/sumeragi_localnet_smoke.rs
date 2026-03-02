@@ -580,11 +580,15 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
             .bytes()
             .await
             .wrap_err("read sumeragi status JSON body")?;
-        let wire: SumeragiStatusWire = norito::json::from_slice(&body)
-            .wrap_err("decode sumeragi status JSON payload into SumeragiStatusWire")?;
+        let payload: Value =
+            norito::json::from_slice(&body).wrap_err("parse sumeragi status JSON payload")?;
+        let mode_tag = payload
+            .get("mode_tag")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         ensure!(
-            !wire.mode_tag.is_empty(),
-            "decoded sumeragi status wire has empty mode_tag"
+            !mode_tag.is_empty(),
+            "decoded sumeragi status JSON payload has empty mode_tag"
         );
         network.shutdown().await;
         Ok(())

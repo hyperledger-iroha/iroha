@@ -9,6 +9,7 @@ These guidelines apply to the `scripts/` directory.
 
 ## Development workflow
 - Keep scripts idempotent and portable across macOS/Linux. Prefer POSIX shell or Python 3.11+; for long workflows use Python so we can add tests.
+- For faster local Rust iteration, prefer `scripts/cargo_fast.sh -- <cargo args...>`; it auto-enables `sccache` and a supported fast linker when available, supports `--zero-debug` for opt-in compile-throughput mode (`CARGO_PROFILE_{DEV,TEST}_DEBUG=0`), and safely falls back to defaults when not.
 - Every script must document:
   - Purpose and prerequisites at the top of the file.
   - Required environment variables or paths (e.g., `BIN_IROHAD` overrides in `test_env.py`).
