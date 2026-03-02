@@ -1,6 +1,27 @@
 # Status
 
-Last update: 2026-03-01
+Last update: 2026-03-02
+- Latest sync (2026-03-02 Tranche 4 backoff-true hash-miss accounting):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/qc.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/votes.rs`
+  - Changes:
+    - added `note_missing_block_height_backoff(...)` to keep backoff events tracked without incrementing `attempts` or `range_pull.hash_misses`,
+    - rewired all missing-block `MissingBlockFetchDecision::Backoff` recovery callsites to use backoff bookkeeping instead of hash-miss bookkeeping,
+    - preserved hard-cap/no-progress/view-change escalation semantics and all lock-lag tranche-3 behavior.
+  - Test updates:
+    - `missing_block_backoff_does_not_increment_hash_miss_or_attempt_streak`
+    - `missing_block_backoff_waits_for_no_progress_window_before_escalation`
+    - `missing_block_attempt_streak_escalates_with_no_target_kind`
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core missing_block_backoff_does_not_increment_hash_miss_or_attempt_streak -- --nocapture` (ok)
+    - `cargo test -p iroha_core missing_block_backoff_waits_for_no_progress_window_before_escalation -- --nocapture` (ok)
+    - `cargo test -p iroha_core missing_block_attempt_streak_escalates_with_no_target_kind -- --nocapture` (ok)
+    - `cargo test -p iroha_core plan_missing_block_fetch_respects_backoff_window -- --nocapture` (ok)
+    - `cargo test -p iroha_core missing_block_hash_miss_streak_escalates_to_range_pull -- --nocapture` (ok)
+    - `cargo test -p iroha_core missing_block_hash_miss_under_lock_lag_inflight_waits_for_no_progress_window -- --nocapture` (ok)
 - Latest sync (2026-03-02 Tranche 3 full-soak rerun, unchanged envelope):
   - Reran soak:
     - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo run -p izanami -- --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 3600 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable 2>&1 | tee /tmp/izanami_tranche3_soak_rerun_20260302T003248.log`

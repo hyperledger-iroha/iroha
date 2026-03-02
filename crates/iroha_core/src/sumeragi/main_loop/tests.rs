@@ -36962,6 +36962,141 @@ async fn missing_block_hash_miss_under_lock_lag_inflight_waits_for_no_progress_w
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn missing_block_backoff_does_not_increment_hash_miss_or_attempt_streak() {
+    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let actor = &mut harness.actor;
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0_u64;
+    let now = Instant::now();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE8; Hash::LENGTH]));
+    actor.note_missing_block_height_attempt(
+        block_hash,
+        height,
+        view,
+        super::MissingBlockRecoveryStage::HashFetch,
+        Some(super::MissingBlockFetchTargetKind::Signers),
+        now,
+    );
+    let key = actor.missing_block_recovery_key_for_height(height);
+    {
+        let budget = actor
+            .missing_block_height_recovery
+            .get_mut(&key)
+            .expect("height budget should exist");
+        budget.range_pull.hash_misses = 1;
+    }
+    let before = actor
+        .missing_block_height_recovery
+        .get(&key)
+        .copied()
+        .expect("height budget should be tracked");
+
+    actor.note_missing_block_height_backoff(
+        block_hash,
+        height,
+        view,
+        super::MissingBlockRecoveryStage::HashFetch,
+        now + Duration::from_millis(1),
+    );
+
+    let after = actor
+        .missing_block_height_recovery
+        .get(&key)
+        .copied()
+        .expect("height budget should remain tracked");
+    assert_eq!(
+        after.attempts, before.attempts,
+        "backoff bookkeeping must not increment attempt streak"
+    );
+    assert_eq!(
+        after.range_pull.hash_misses, before.range_pull.hash_misses,
+        "backoff bookkeeping must not increment hash-miss streak"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_block_backoff_waits_for_no_progress_window_before_escalation() {
+    let _missing_block_guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let actor = &mut harness.actor;
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed anchor block");
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(committed_block.hash());
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0_u64;
+    let now = Instant::now();
+    let ttl = actor
+        .recovery_missing_block_height_ttl()
+        .max(Duration::from_millis(1));
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE9; Hash::LENGTH]));
+    actor.note_missing_block_height_attempt(
+        block_hash,
+        height,
+        view,
+        super::MissingBlockRecoveryStage::HashFetch,
+        Some(super::MissingBlockFetchTargetKind::Signers),
+        now,
+    );
+
+    let before = super::status::snapshot();
+    for offset in [1_u64, 2, 3] {
+        let at = now + Duration::from_millis(offset);
+        actor.note_missing_block_height_backoff(
+            block_hash,
+            height,
+            view,
+            super::MissingBlockRecoveryStage::HashFetch,
+            at,
+        );
+        assert!(
+            !actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, at),
+            "backoff-only churn should not escalate before a full no-progress window elapses"
+        );
+    }
+    let after_fresh = super::status::snapshot();
+    assert_eq!(
+        after_fresh.blocksync_range_pull_escalation_total,
+        before.blocksync_range_pull_escalation_total,
+        "backoff-only churn must not trigger range-pull escalation while progress window is fresh"
+    );
+
+    let after_window = now + ttl + Duration::from_millis(1);
+    let key = actor.missing_block_recovery_key_for_height(height);
+    {
+        let budget = actor
+            .missing_block_height_recovery
+            .get_mut(&key)
+            .expect("height budget should remain tracked");
+        budget.first_seen = after_window - ttl / 2;
+        budget.last_seen = after_window - ttl / 2;
+    }
+    assert!(
+        actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, after_window),
+        "no-progress escalation should still trigger after the progress window expires"
+    );
+    let after_stale = super::status::snapshot();
+    assert!(
+        after_stale.blocksync_range_pull_escalation_total
+            >= after_fresh
+                .blocksync_range_pull_escalation_total
+                .saturating_add(1),
+        "post-window no-progress should trigger a range-pull escalation"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn missing_block_attempt_streak_under_lock_lag_inflight_waits_for_no_progress_window() {
     let _missing_block_guard = super::status::missing_block_fetch_test_guard();
     super::status::reset_missing_block_fetch_counters_for_tests();
@@ -37051,6 +37186,56 @@ async fn missing_block_attempt_streak_under_lock_lag_inflight_waits_for_no_progr
         actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, after_window),
         "attempt-streak escalation should resume once the no-progress window expires"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_block_attempt_streak_escalates_with_no_target_kind() {
+    let _missing_block_guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    let mut config = test_sumeragi_config();
+    config.recovery.missing_block_height_attempt_cap = 12;
+    config.recovery.range_pull_escalation_after_hash_misses = u32::MAX;
+    let mut harness = test_actor_harness_with_config(4, config, None).await;
+    let actor = &mut harness.actor;
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed anchor block");
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(committed_block.hash());
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0_u64;
+    let now = Instant::now();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xEA; Hash::LENGTH]));
+
+    let attempt_cap = actor.recovery_missing_block_height_attempt_cap().max(1);
+    let range_pull_attempt_threshold = (attempt_cap / 2).max(2);
+    for idx in 0..range_pull_attempt_threshold {
+        let at = now + Duration::from_millis(u64::from(idx) + 1);
+        actor.note_missing_block_height_attempt(
+            block_hash,
+            height,
+            view,
+            super::MissingBlockRecoveryStage::HashFetch,
+            None,
+            at,
+        );
+        let escalated =
+            actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, at);
+        if idx + 1 < range_pull_attempt_threshold {
+            assert!(!escalated, "attempt streak should wait for threshold");
+        } else {
+            assert!(
+                escalated,
+                "attempt streak should escalate even when target kind is absent"
+            );
+        }
+    }
 
     harness.shutdown.send();
 }

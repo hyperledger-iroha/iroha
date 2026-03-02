@@ -1351,7 +1351,7 @@ impl Actor {
                 );
             }
             MissingBlockFetchDecision::Backoff => {
-                self.note_missing_block_height_hash_miss(
+                self.note_missing_block_height_backoff(
                     highest.subject_block_hash,
                     highest.height,
                     highest.view,
