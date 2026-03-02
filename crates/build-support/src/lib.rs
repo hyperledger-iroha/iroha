@@ -104,19 +104,18 @@ fn parse_gitdir_declaration(contents: &str) -> Option<&str> {
 
 fn read_head_commit_hash(git_dir: &Path) -> Option<String> {
     let head_contents = fs::read_to_string(git_dir.join("HEAD")).ok()?;
-    if let Some(reference) = parse_head_reference(&head_contents) {
-        read_reference_hash(git_dir, reference)
-    } else {
-        parse_commit_hash(&head_contents).map(ToOwned::to_owned)
-    }
+    parse_head_reference(&head_contents).map_or_else(
+        || parse_commit_hash(&head_contents).map(ToOwned::to_owned),
+        |reference| read_reference_hash(git_dir, reference),
+    )
 }
 
 fn read_reference_hash(git_dir: &Path, reference: &str) -> Option<String> {
     let loose_ref_path = git_dir.join(reference);
-    if let Ok(contents) = fs::read_to_string(loose_ref_path) {
-        if let Some(hash) = parse_commit_hash(&contents) {
-            return Some(hash.to_owned());
-        }
+    if let Ok(contents) = fs::read_to_string(loose_ref_path)
+        && let Some(hash) = parse_commit_hash(&contents)
+    {
+        return Some(hash.to_owned());
     }
 
     read_packed_reference_hash(git_dir, reference)

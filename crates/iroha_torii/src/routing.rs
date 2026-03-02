@@ -4568,17 +4568,11 @@ fn decode_and_validate_evidence(
                 iroha_core::sumeragi::consensus::NPOS_TAG
             }
         };
-        let prf_seed = matches!(
-            consensus_mode,
-            iroha_config::parameters::actual::ConsensusMode::Npos
-        )
-        .then(|| {
-            iroha_core::sumeragi::npos_seed_for_height_from_world(
-                &world,
-                state.chain_id_ref(),
-                height,
-            )
-        });
+        let prf_seed = Some(iroha_core::sumeragi::npos_seed_for_height_from_world(
+            &world,
+            state.chain_id_ref(),
+            height,
+        ));
         let context = iroha_core::sumeragi::EvidenceValidationContext {
             topology: &topology,
             chain_id,
@@ -4595,9 +4589,11 @@ fn decode_and_validate_evidence(
         };
     }
 
-    let npos_seed = world.sumeragi_npos_parameters().is_some().then(|| {
-        iroha_core::sumeragi::npos_seed_for_height_from_world(&world, state.chain_id_ref(), height)
-    });
+    let prf_seed = Some(iroha_core::sumeragi::npos_seed_for_height_from_world(
+        &world,
+        state.chain_id_ref(),
+        height,
+    ));
     let mut errors = Vec::new();
     for mode_tag in [
         iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
@@ -4607,11 +4603,7 @@ fn decode_and_validate_evidence(
             topology: &topology,
             chain_id,
             mode_tag,
-            prf_seed: if mode_tag == iroha_core::sumeragi::consensus::NPOS_TAG {
-                npos_seed
-            } else {
-                None
-            },
+            prf_seed,
         };
         match iroha_core::sumeragi::validate_evidence(&evidence, &context) {
             Ok(()) => return Ok(evidence),
@@ -4984,6 +4976,283 @@ mod evidence_submit_tests {
         let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
         let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
             .expect("evidence should validate with subject-height seed");
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
+
+        iroha_core::sumeragi::status::set_mode_tags(
+            &prev_mode,
+            prev_staged.as_deref(),
+            prev_activation,
+        );
+    }
+
+    #[test]
+    fn decode_and_validate_evidence_permissioned_uses_prf_seed() {
+        let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
+        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
+        let (prev_mode, prev_staged, prev_activation, _) =
+            iroha_core::sumeragi::status::mode_tags();
+        iroha_core::sumeragi::status::set_mode_tags(
+            iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
+            None,
+            None,
+        );
+
+        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer0 = PeerId::new(keypair0.public_key().clone());
+        let peer1 = PeerId::new(keypair1.public_key().clone());
+        let mut peer_list = vec![peer0.clone(), peer1.clone()];
+        peer_list.sort();
+        let topology = iroha_core::sumeragi::network_topology::Topology::new(peer_list.clone());
+
+        let height = 1_u64;
+        let view = 0_u64;
+        let canonical_leader = topology
+            .as_ref()
+            .first()
+            .expect("topology should have at least one peer")
+            .clone();
+        let mut seed_epoch1 = None;
+        for byte in 0u8..=u8::MAX {
+            let seed = [byte; 32];
+            let mut rotated = topology.clone();
+            rotated.shuffle_prf(seed, height);
+            rotated.nth_rotation(view);
+            let leader = rotated
+                .as_ref()
+                .first()
+                .expect("rotated topology should have at least one peer");
+            if leader != &canonical_leader {
+                seed_epoch1 = Some(seed);
+                break;
+            }
+        }
+        let seed_epoch1 = seed_epoch1.expect("must find a seed that changes permissioned leader");
+        let mut rotated = topology.clone();
+        rotated.shuffle_prf(seed_epoch1, height);
+        rotated.nth_rotation(view);
+        let signer_peer = rotated
+            .as_ref()
+            .first()
+            .expect("rotated topology should have at least one peer");
+        let signer_keypair = if signer_peer == &peer0 {
+            &keypair0
+        } else {
+            &keypair1
+        };
+
+        let world = iroha_core::state::World::default();
+        {
+            let mut block = world.block();
+            let params = SumeragiNposParameters {
+                epoch_length_blocks: 1,
+                ..SumeragiNposParameters::default()
+            };
+            block.parameters.get_mut().custom.insert(
+                SumeragiNposParameters::parameter_id(),
+                params.into_custom_parameter(),
+            );
+            block.vrf_epochs_mut_for_testing().insert(
+                0,
+                VrfEpochRecord {
+                    epoch: 0,
+                    seed: seed_epoch1,
+                    epoch_length: 1,
+                    commit_deadline_offset: 0,
+                    reveal_deadline_offset: 0,
+                    roster_len: 2,
+                    finalized: false,
+                    updated_at_height: 0,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            block.vrf_epochs_mut_for_testing().insert(
+                1,
+                VrfEpochRecord {
+                    epoch: 1,
+                    seed: [0x00; 32],
+                    epoch_length: 1,
+                    commit_deadline_offset: 0,
+                    reveal_deadline_offset: 0,
+                    roster_len: 2,
+                    finalized: false,
+                    updated_at_height: 1,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            block.commit();
+        }
+        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
+        let query = iroha_core::query::store::LiveQueryStore::start_test();
+        let state = iroha_core::state::State::new_for_testing(world, kura, query);
+        {
+            let mut block = state.commit_topology.block();
+            block.push(peer0);
+            block.push(peer1);
+            block.commit();
+        }
+
+        let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
+        let mut v1 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x11);
+        v1.signer = 0;
+        let mut v2 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x22);
+        v2.signer = 0;
+        let ev = Evidence {
+            kind: EvidenceKind::DoublePrepare,
+            payload: EvidencePayload::DoubleVote { v1, v2 },
+        };
+        let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
+        let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
+            .expect("permissioned evidence should validate with PRF-seeded topology");
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
+
+        iroha_core::sumeragi::status::set_mode_tags(
+            &prev_mode,
+            prev_staged.as_deref(),
+            prev_activation,
+        );
+    }
+
+    #[test]
+    fn decode_and_validate_evidence_unknown_mode_uses_dual_mode_prf_seed() {
+        let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
+        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
+        let (prev_mode, prev_staged, prev_activation, _) =
+            iroha_core::sumeragi::status::mode_tags();
+        // Force the fallback_mode == None branch.
+        iroha_core::sumeragi::status::set_mode_tags("", None, None);
+
+        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer0 = PeerId::new(keypair0.public_key().clone());
+        let peer1 = PeerId::new(keypair1.public_key().clone());
+        let mut peer_list = vec![peer0.clone(), peer1.clone()];
+        peer_list.sort();
+        let topology = iroha_core::sumeragi::network_topology::Topology::new(peer_list.clone());
+
+        let height = 1_u64;
+        let view = 0_u64;
+        let canonical_leader = topology
+            .as_ref()
+            .first()
+            .expect("topology should have at least one peer")
+            .clone();
+        let mut seed_epoch1 = None;
+        for byte in 0u8..=u8::MAX {
+            let seed = [byte; 32];
+            let mut rotated = topology.clone();
+            rotated.shuffle_prf(seed, height);
+            rotated.nth_rotation(view);
+            let leader = rotated
+                .as_ref()
+                .first()
+                .expect("rotated topology should have at least one peer");
+            if leader != &canonical_leader {
+                seed_epoch1 = Some(seed);
+                break;
+            }
+        }
+        let seed_epoch1 = seed_epoch1.expect("must find a seed that changes permissioned leader");
+        let mut rotated = topology.clone();
+        rotated.shuffle_prf(seed_epoch1, height);
+        rotated.nth_rotation(view);
+        let signer_peer = rotated
+            .as_ref()
+            .first()
+            .expect("rotated topology should have at least one peer");
+        let signer_keypair = if signer_peer == &peer0 {
+            &keypair0
+        } else {
+            &keypair1
+        };
+
+        let world = iroha_core::state::World::default();
+        {
+            let mut block = world.block();
+            let params = SumeragiNposParameters {
+                epoch_length_blocks: 1,
+                ..SumeragiNposParameters::default()
+            };
+            block.parameters.get_mut().custom.insert(
+                SumeragiNposParameters::parameter_id(),
+                params.into_custom_parameter(),
+            );
+            block.vrf_epochs_mut_for_testing().insert(
+                0,
+                VrfEpochRecord {
+                    epoch: 0,
+                    seed: seed_epoch1,
+                    epoch_length: 1,
+                    commit_deadline_offset: 0,
+                    reveal_deadline_offset: 0,
+                    roster_len: 2,
+                    finalized: false,
+                    updated_at_height: 0,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            block.vrf_epochs_mut_for_testing().insert(
+                1,
+                VrfEpochRecord {
+                    epoch: 1,
+                    seed: [0x00; 32],
+                    epoch_length: 1,
+                    commit_deadline_offset: 0,
+                    reveal_deadline_offset: 0,
+                    roster_len: 2,
+                    finalized: false,
+                    updated_at_height: 1,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            block.commit();
+        }
+        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
+        let query = iroha_core::query::store::LiveQueryStore::start_test();
+        let state = iroha_core::state::State::new_for_testing(world, kura, query);
+        {
+            let mut block = state.commit_topology.block();
+            block.push(peer0);
+            block.push(peer1);
+            block.commit();
+        }
+
+        let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
+        let mut v1 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x11);
+        v1.signer = 0;
+        let mut v2 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x22);
+        v2.signer = 0;
+        let ev = Evidence {
+            kind: EvidenceKind::DoublePrepare,
+            payload: EvidencePayload::DoubleVote { v1, v2 },
+        };
+        let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
+        let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
+            .expect("unknown-mode fallback should still validate with PRF-seeded topology");
         assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
 
         iroha_core::sumeragi::status::set_mode_tags(
@@ -21859,6 +22128,17 @@ fn settlement_snapshot_value(
     json_object(vec![json_entry("dvp", dvp), json_entry("pvp", pvp)])
 }
 
+fn hash_with_prefix<H>(hash: H) -> String
+where
+    H: norito::json::JsonSerialize,
+{
+    json::to_value(&hash)
+        .expect("serialize hash for status snapshot json")
+        .as_str()
+        .expect("serialized hash should be a JSON string")
+        .to_owned()
+}
+
 fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value {
     let highest_qc = json_object(vec![
         json_entry("height", snap.highest_qc_height),
@@ -21866,7 +22146,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "subject_block_hash",
             snap.highest_qc_subject
-                .map(|h| Value::from(format!("{h}")))
+                .map(|h| Value::from(hash_with_prefix(h)))
                 .unwrap_or(Value::Null),
         ),
     ]);
@@ -21876,7 +22156,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "subject_block_hash",
             snap.locked_qc_subject
-                .map(|h| Value::from(format!("{h}")))
+                .map(|h| Value::from(hash_with_prefix(h)))
                 .unwrap_or(Value::Null),
         ),
     ]);
@@ -21888,14 +22168,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "block_hash",
             snap.commit_qc
                 .block_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry(
             "validator_set_hash",
             snap.commit_qc
                 .validator_set_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry("validator_set_len", snap.commit_qc.validator_set_len),
@@ -21908,7 +22188,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "block_hash",
             snap.commit_quorum
                 .block_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry("signatures_present", snap.commit_quorum.signatures_present),
@@ -22004,11 +22284,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                         "roster_hash",
                         entry
                             .roster_hash
-                            .map(|hash| Value::from(format!("{hash}")))
+                            .map(|hash| Value::from(hash_with_prefix(hash)))
                             .unwrap_or(Value::Null),
                     ),
                     json_entry("roster_len", entry.roster_len),
-                    json_entry("block_hash", Value::from(format!("{}", entry.block_hash))),
+                    json_entry(
+                        "block_hash",
+                        Value::from(hash_with_prefix(entry.block_hash)),
+                    ),
                     json_entry("timestamp_ms", entry.timestamp_ms),
                 ])
             })
@@ -22037,7 +22320,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                         "roster_hash",
                         entry
                             .roster_hash
-                            .map(|hash| Value::from(format!("{hash}")))
+                            .map(|hash| Value::from(hash_with_prefix(hash)))
                             .unwrap_or(Value::Null),
                     ),
                     json_entry("roster_len", entry.roster_len),
@@ -22120,7 +22403,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "block_hash",
             snap.commit_inflight
                 .block_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry("started_ms", snap.commit_inflight.started_ms),
@@ -22144,7 +22427,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "last_timeout_block_hash",
             snap.commit_inflight
                 .last_timeout_block_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry("pause_total", snap.commit_inflight.pause_total),
@@ -22267,7 +22550,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "last_block",
             snap.validation_rejects
                 .last_block
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry(
@@ -22368,7 +22651,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "stage_last_hash",
             snap.kura_store
                 .stage_last_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry("rollback_last_height", snap.kura_store.rollback_last_height),
@@ -22377,7 +22660,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "rollback_last_hash",
             snap.kura_store
                 .rollback_last_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry(
@@ -22397,7 +22680,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "lock_reset_last_hash",
             snap.kura_store
                 .lock_reset_last_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry(
@@ -22418,7 +22701,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "last_hash",
             snap.kura_store
                 .last_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
     ]);
@@ -22504,7 +22787,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                     json_entry("total_chunks", entry.total_chunks),
                     json_entry("rbc_bytes_total", entry.rbc_bytes_total),
                     json_entry("teu_total", entry.teu_total),
-                    json_entry("block_hash", format!("{}", entry.block_hash)),
+                    json_entry("block_hash", hash_with_prefix(entry.block_hash)),
                 ])
             })
             .collect(),
@@ -22590,9 +22873,12 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                             json_entry("height", qc.height),
                             json_entry("view", qc.view),
                             json_entry("epoch", qc.epoch),
-                            json_entry("subject_block_hash", format!("{}", qc.subject_block_hash)),
-                            json_entry("parent_state_root", format!("{}", qc.parent_state_root)),
-                            json_entry("post_state_root", format!("{}", qc.post_state_root)),
+                            json_entry(
+                                "subject_block_hash",
+                                hash_with_prefix(qc.subject_block_hash),
+                            ),
+                            json_entry("parent_state_root", hash_with_prefix(qc.parent_state_root)),
+                            json_entry("post_state_root", hash_with_prefix(qc.post_state_root)),
                             json_entry(
                                 "signers_bitmap",
                                 Value::Array(
@@ -22615,12 +22901,12 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                     json_entry("lane_id", entry.lane_id),
                     json_entry("dataspace_id", entry.dataspace_id),
                     json_entry("block_height", entry.block_height),
-                    json_entry("block_hash", format!("{}", entry.block_header.hash())),
+                    json_entry("block_hash", hash_with_prefix(entry.block_header.hash())),
                     json_entry(
                         "da_commitment_hash",
                         entry
                             .da_commitment_hash
-                            .map(|hash| Value::from(format!("{hash}")))
+                            .map(|hash| Value::from(hash_with_prefix(hash)))
                             .unwrap_or(Value::Null),
                     ),
                     json_entry("commit_qc", commit_qc),
@@ -22629,7 +22915,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                         json::to_value(&entry.settlement_commitment)
                             .expect("serialize settlement commitment for status"),
                     ),
-                    json_entry("settlement_hash", format!("{}", entry.settlement_hash)),
+                    json_entry("settlement_hash", hash_with_prefix(entry.settlement_hash)),
                     json_entry("rbc_bytes_total", entry.rbc_bytes_total),
                 ])
             })
@@ -22647,7 +22933,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                     json_entry("total_chunks", entry.total_chunks),
                     json_entry("rbc_bytes_total", entry.rbc_bytes_total),
                     json_entry("teu_total", entry.teu_total),
-                    json_entry("block_hash", format!("{}", entry.block_hash)),
+                    json_entry("block_hash", hash_with_prefix(entry.block_hash)),
                 ])
             })
             .collect(),
@@ -22854,7 +23140,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             .iter()
             .map(|ev| {
                 json_object(vec![
-                    json_entry("block_hash", Value::from(hex::encode(ev.block_hash))),
+                    json_entry(
+                        "block_hash",
+                        Value::from(hash_with_prefix(Hash::prehashed(ev.block_hash))),
+                    ),
                     json_entry("height", ev.height),
                     json_entry("view", ev.view),
                 ])
@@ -22901,7 +23190,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             .iter()
             .map(|entry| {
                 json_object(vec![
-                    json_entry("block_hash", format!("{}", entry.block_hash)),
+                    json_entry("block_hash", hash_with_prefix(entry.block_hash)),
                     json_entry("height", entry.height),
                     json_entry("view", entry.view),
                     json_entry("chunks", entry.chunks),
@@ -23585,13 +23874,15 @@ mod status_tests {
             .get("commit_qc")
             .and_then(Value::as_object)
             .expect("commit_qc object");
+        let block_hash = hash_with_prefix(block_hash);
+        let validator_set_hash = hash_with_prefix(validator_set_hash);
         assert_eq!(
             commit_qc.get("block_hash").and_then(Value::as_str),
-            Some(format!("{block_hash}").as_str())
+            Some(block_hash.as_str())
         );
         assert_eq!(
             commit_qc.get("validator_set_hash").and_then(Value::as_str),
-            Some(format!("{validator_set_hash}").as_str())
+            Some(validator_set_hash.as_str())
         );
         assert_eq!(
             commit_qc.get("signatures_total").and_then(Value::as_u64),
@@ -23737,7 +24028,7 @@ mod status_tests {
             .get("validation_rejects")
             .and_then(Value::as_object)
             .expect("validation_rejects object");
-        let last_block_hex = format!("{last_block}");
+        let last_block_hex = hash_with_prefix(last_block);
         assert_eq!(validation.get("total").and_then(Value::as_u64), Some(3));
         assert_eq!(
             validation.get("stateless_total").and_then(Value::as_u64),
@@ -24245,7 +24536,7 @@ mod status_tests {
                 .get("settlement_hash")
                 .and_then(Value::as_str)
                 .expect("settlement hash field"),
-            format!("{}", envelope.settlement_hash)
+            hash_with_prefix(envelope.settlement_hash)
         );
         let settlement_json = relay
             .get("settlement_commitment")
@@ -24304,7 +24595,7 @@ mod status_tests {
         let entry = recent.first().and_then(Value::as_object).unwrap();
         assert_eq!(
             entry.get("block_hash").and_then(Value::as_str).unwrap(),
-            hex::encode(evicted.block_hash)
+            hash_with_prefix(Hash::prehashed(evicted.block_hash))
         );
         assert_eq!(
             entry.get("height").and_then(Value::as_u64).unwrap(),
@@ -24499,7 +24790,7 @@ mod status_tests {
     fn status_snapshot_json_includes_pending_rbc_stash_counters() {
         let hash = Hash::prehashed([0x11; Hash::LENGTH]);
         let hash_typed = HashOf::from_untyped_unchecked(hash);
-        let hash_str = format!("{hash_typed}");
+        let hash_str = hash_with_prefix(hash_typed);
         let entry = status::PendingRbcEntrySnapshot {
             block_hash: hash_typed,
             height: 9,
@@ -24667,7 +24958,7 @@ mod status_tests {
             kura.get("last_hash")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
-            Some(format!("{last_hash}"))
+            Some(hash_with_prefix(last_hash))
         );
     }
 
