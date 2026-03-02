@@ -1094,17 +1094,12 @@ fn decode_and_validate_evidence(
     let topology_peers = state.commit_topology_snapshot();
     let (subject_height, _) = iroha_core::sumeragi::evidence_subject_height_view(&evidence);
     let world = state.world_view();
-    let npos_seed = if world.sumeragi_npos_parameters().is_some() {
-        let height =
-            subject_height.unwrap_or_else(|| u64::try_from(state.committed_height()).unwrap_or(0));
-        Some(iroha_core::sumeragi::npos_seed_for_height_from_world(
-            &world,
-            state.chain_id_ref(),
-            height,
-        ))
-    } else {
-        None
-    };
+    let height = subject_height.unwrap_or_else(|| u64::try_from(state.committed_height()).unwrap_or(0));
+    let prf_seed = Some(iroha_core::sumeragi::npos_seed_for_height_from_world(
+        &world,
+        state.chain_id_ref(),
+        height,
+    ));
     if topology_peers.is_empty() {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
@@ -1122,11 +1117,7 @@ fn decode_and_validate_evidence(
             topology: &topology,
             chain_id,
             mode_tag,
-            prf_seed: if mode_tag == iroha_core::sumeragi::consensus::NPOS_TAG {
-                npos_seed
-            } else {
-                None
-            },
+            prf_seed,
         };
         match iroha_core::sumeragi::validate_evidence(&evidence, &context) {
             Ok(()) => return Ok(evidence),
@@ -1414,6 +1405,131 @@ mod evidence_submit_tests {
         let encoded = hex::encode(ev.encode());
         let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
             .expect("evidence should validate with subject-height seed");
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
+    }
+
+    #[test]
+    fn decode_and_validate_evidence_permissioned_uses_prf_seed() {
+        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
+        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer0 = PeerId::new(keypair0.public_key().clone());
+        let peer1 = PeerId::new(keypair1.public_key().clone());
+        let mut peers = vec![peer0.clone(), peer1.clone()];
+        peers.sort();
+        let topology = iroha_core::sumeragi::network_topology::Topology::new(peers.clone());
+        let height = 1_u64;
+        let view = 0_u64;
+
+        let canonical_leader = topology
+            .as_ref()
+            .first()
+            .expect("topology should have at least one peer")
+            .clone();
+        let mut seed_epoch1 = None;
+        for byte in 0u8..=u8::MAX {
+            let seed = [byte; 32];
+            let mut rotated = topology.clone();
+            rotated.shuffle_prf(seed, height);
+            rotated.nth_rotation(view);
+            let leader = rotated
+                .as_ref()
+                .first()
+                .expect("rotated topology should have at least one peer");
+            if leader != &canonical_leader {
+                seed_epoch1 = Some(seed);
+                break;
+            }
+        }
+        let seed_epoch1 = seed_epoch1.expect("must find a seed that changes permissioned leader");
+        let mut rotated = topology.clone();
+        rotated.shuffle_prf(seed_epoch1, height);
+        rotated.nth_rotation(view);
+        let signer_peer = rotated
+            .as_ref()
+            .first()
+            .expect("rotated topology should have at least one peer");
+        let signer_keypair = if signer_peer == &peer0 {
+            &keypair0
+        } else {
+            &keypair1
+        };
+
+        let world = iroha_core::state::World::default();
+        {
+            let mut block = world.block();
+            let params = SumeragiNposParameters {
+                epoch_length_blocks: 1,
+                ..SumeragiNposParameters::default()
+            };
+            block.parameters.get_mut().custom.insert(
+                SumeragiNposParameters::parameter_id(),
+                params.into_custom_parameter(),
+            );
+            block.vrf_epochs_mut_for_testing().insert(
+                0,
+                VrfEpochRecord {
+                    epoch: 0,
+                    seed: seed_epoch1,
+                    epoch_length: 1,
+                    commit_deadline_offset: 0,
+                    reveal_deadline_offset: 0,
+                    roster_len: 2,
+                    finalized: false,
+                    updated_at_height: 0,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            block.vrf_epochs_mut_for_testing().insert(
+                1,
+                VrfEpochRecord {
+                    epoch: 1,
+                    seed: [0x00; 32],
+                    epoch_length: 1,
+                    commit_deadline_offset: 0,
+                    reveal_deadline_offset: 0,
+                    roster_len: 2,
+                    finalized: false,
+                    updated_at_height: 1,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            block.commit();
+        }
+        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
+        let query = iroha_core::query::store::LiveQueryStore::start_test();
+        let state = iroha_core::state::State::new_for_testing(world, kura, query);
+        {
+            let mut block = state.commit_topology.block();
+            block.push(peer0);
+            block.push(peer1);
+            block.commit();
+        }
+
+        let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
+        let mut v1 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x11);
+        v1.signer = 0;
+        let mut v2 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x22);
+        v2.signer = 0;
+        let ev = Evidence {
+            kind: EvidenceKind::DoublePrepare,
+            payload: EvidencePayload::DoubleVote { v1, v2 },
+        };
+        let encoded = hex::encode(ev.encode());
+        let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
+            .expect("permissioned evidence should validate with PRF-seeded topology");
         assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
     }
 }

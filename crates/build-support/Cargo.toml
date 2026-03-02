@@ -9,8 +9,11 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-vergen = { workspace = true, features = ["cargo"] }
-norito = { workspace = true }
+norito = { workspace = true, optional = true }
+
+[features]
+default = ["norito-json"]
+norito-json = ["dep:norito"]
 
 [lib]
 bench = false
@@ -18,3 +21,14 @@ bench = false
 [[bin]]
 name = "clippy-inventory"
 path = "src/bin/clippy_inventory.rs"
+required-features = ["norito-json"]
+
+[[bin]]
+name = "sumeragi_baseline_report"
+path = "src/bin/sumeragi_baseline_report.rs"
+required-features = ["norito-json"]
+
+[[bin]]
+name = "sumeragi_da_report"
+path = "src/bin/sumeragi_da_report.rs"
+required-features = ["norito-json"]

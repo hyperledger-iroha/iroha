@@ -460,6 +460,10 @@ fn should_resubmit_tx(allow_resubmit: bool, now: Instant, next_resubmit_at: Inst
     allow_resubmit && now >= next_resubmit_at
 }
 
+fn allow_supply_resubmit(faulty_peers: usize, force_soft_fork: bool) -> bool {
+    faulty_peers > 0 || force_soft_fork
+}
+
 fn permissioned_prf_seed(chain_id: &ChainId) -> [u8; 32] {
     let hash = Hash::new(chain_id.as_str().as_bytes());
     <[u8; 32]>::from(hash)
@@ -1380,7 +1384,7 @@ impl UnstableNetwork {
         let supply_deadline = supply_start + sync_timeout;
         let initial_resubmit_at =
             supply_start + initial_resubmit_delay(sync_timeout, network.pipeline_time());
-        let allow_resubmit = self.n_faulty_peers > 0;
+        let allow_resubmit = allow_supply_resubmit(self.n_faulty_peers, self.force_soft_fork);
         let supply_peers: Vec<_> = peers
             .iter()
             .filter(|peer| !faulty_ids.contains(&peer.id()))
@@ -1675,6 +1679,13 @@ mod tests {
         assert!(!should_resubmit_tx(false, now, now));
         assert!(should_resubmit_tx(true, now, now));
         assert!(!should_resubmit_tx(true, now, now + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn supply_resubmit_allowed_for_faults_or_soft_fork() {
+        assert!(!allow_supply_resubmit(0, false));
+        assert!(allow_supply_resubmit(1, false));
+        assert!(allow_supply_resubmit(0, true));
     }
 
     #[test]
