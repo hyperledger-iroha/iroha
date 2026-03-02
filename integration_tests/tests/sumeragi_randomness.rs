@@ -65,7 +65,7 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
         .join("v1/sumeragi/telemetry")
         .wrap_err("compose telemetry URL")?;
 
-    let target_signer = 1_u32;
+    let target_signer = 0_u32;
 
     let reveal = random_bytes();
     let commitment = commitment_from_reveal(&reveal);
@@ -73,7 +73,7 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
     submit_vrf_commit(&client, &http, epoch, target_signer, commitment).await?;
     client.submit_blocking(Log::new(Level::INFO, "vrf commit flush".to_owned()))?;
 
-    // Wait until the epoch record reflects the commitment.
+    // Wait until the epoch record is available with participant entries.
     let snapshot_before = wait_for_epoch_record(&client, epoch, |json| {
         json.get("participants")
             .and_then(Value::as_array)
@@ -109,16 +109,8 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
         .saturating_add(1);
     wait_for_height_total_at_least(&client, reveal_cutoff_height).await?;
 
-    submit_vrf_reveal(&client, &http, epoch, target_signer, reveal).await?;
-    client.submit_blocking(Log::new(Level::INFO, "vrf reveal flush".to_owned()))?;
-
-    let snapshot_after = wait_for_epoch_record(&client, epoch, |json| {
-        json.get("late_reveals_total")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            >= 1
-    })
-    .await?;
+    let snapshot_after =
+        submit_late_reveal_until_recorded(&client, &http, epoch, target_signer, reveal).await?;
 
     let seed_after = snapshot_after
         .get("seed_hex")
@@ -507,6 +499,54 @@ async fn submit_vrf_reveal(
         response.status()
     );
     Ok(())
+}
+
+async fn submit_late_reveal_until_recorded(
+    client: &Client,
+    http: &HttpClient,
+    epoch: u64,
+    signer: u32,
+    reveal: [u8; 32],
+) -> Result<Value> {
+    const RETRY_INTERVAL: Duration = Duration::from_millis(200);
+    const RETRIES: usize = 60;
+
+    let mut last_snapshot = None;
+    for attempt in 0..RETRIES {
+        submit_vrf_reveal(client, http, epoch, signer, reveal).await?;
+        client.submit_blocking(Log::new(
+            Level::INFO,
+            format!("vrf reveal flush attempt {attempt}"),
+        ))?;
+
+        let snapshot = client.get_sumeragi_vrf_epoch_json(epoch)?;
+        if snapshot
+            .get("late_reveals_total")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            >= 1
+        {
+            return Ok(snapshot);
+        }
+
+        let finalized = snapshot
+            .get("finalized")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        last_snapshot = Some(snapshot);
+        if finalized {
+            break;
+        }
+
+        sleep(RETRY_INTERVAL).await;
+    }
+
+    let last_payload = last_snapshot.as_ref().map_or_else(String::new, |value| {
+        json::to_string_pretty(value).unwrap_or_default()
+    });
+    eyre::bail!(
+        "late reveal was not recorded for epoch {epoch}; signer={signer}; last_payload={last_payload}"
+    )
 }
 
 fn operator_signature_headers(

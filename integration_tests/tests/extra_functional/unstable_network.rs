@@ -449,6 +449,13 @@ fn initial_resubmit_delay(sync_timeout: Duration, pipeline_time: Duration) -> Du
     early.min(half)
 }
 
+fn recovered_submit_window(sync_timeout: Duration, pipeline_time: Duration) -> Duration {
+    pipeline_time
+        .saturating_mul(2)
+        .max(Duration::from_secs(5))
+        .min(sync_timeout)
+}
+
 fn stagger_recovery_gap(pipeline_time: Duration) -> Duration {
     pipeline_time
         .checked_div(2)
@@ -1318,10 +1325,9 @@ impl UnstableNetwork {
                     }
                 }
             };
-        let mut submitted_during_partition = false;
         if submit_while_partitioned {
             match submit_tx("partitioned", partition_submit_window, candidates.clone()).await {
-                Ok(()) => submitted_during_partition = true,
+                Ok(()) => {}
                 Err(err) => {
                     iroha_logger::warn!(
                         ?err,
@@ -1376,8 +1382,17 @@ impl UnstableNetwork {
                 .max(network.pipeline_time().saturating_mul(2))
         };
         sleep(recovery_delay).await;
-        if !submitted_during_partition {
-            submit_tx("recovered", sync_timeout, recovered_candidates.clone()).await?;
+        if let Err(err) = submit_tx(
+            "recovered",
+            recovered_submit_window(sync_timeout, network.pipeline_time()),
+            recovered_candidates.clone(),
+        )
+        .await
+        {
+            iroha_logger::warn!(
+                ?err,
+                "recovered submit failed before supply wait; continuing with supply retries"
+            );
         }
         let expected_supply = Numeric::new((round_index + 1) as u128, 0);
         let supply_start = Instant::now();
@@ -1698,6 +1713,18 @@ mod tests {
     fn initial_resubmit_delay_prefers_pipeline_multiple() {
         let delay = initial_resubmit_delay(Duration::from_secs(600), Duration::from_secs(6));
         assert_eq!(delay, Duration::from_secs(24));
+    }
+
+    #[test]
+    fn recovered_submit_window_has_minimum_probe_delay() {
+        let delay = recovered_submit_window(Duration::from_secs(600), Duration::from_secs(2));
+        assert_eq!(delay, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn recovered_submit_window_caps_at_sync_timeout() {
+        let delay = recovered_submit_window(Duration::from_secs(3), Duration::from_secs(10));
+        assert_eq!(delay, Duration::from_secs(3));
     }
 
     #[test]
