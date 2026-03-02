@@ -1278,7 +1278,8 @@ impl Executor {
             bytes.copy_from_slice(tx_hash.as_ref());
             bytes
         };
-        // Disallow direct signing with multisig accounts; multisig flows must route through propose/approve.
+        // Disallow direct signing with multisig accounts; only explicit multisig
+        // proposal/approval envelopes with bundled multisig signatures are allowed.
         {
             let spec_key =
                 iroha_data_model::name::Name::from_str("multisig/spec").expect("static key valid");
@@ -1287,15 +1288,28 @@ impl Executor {
             })?;
             let metadata = account.metadata();
             if metadata.contains(&spec_key) {
-                #[cfg(feature = "telemetry")]
-                crate::telemetry::record_social_rejection(
-                    state_transaction.telemetry,
-                    "multisig_direct_sign",
+                let has_multisig_bundle = transaction.multisig_signatures().is_some();
+                let only_multisig_proposal_instructions = matches!(
+                    transaction.instructions(),
+                    Executable::Instructions(items)
+                        if !items.is_empty()
+                            && items.iter().all(|instruction| {
+                                MultisigInstructionBox::try_from(instruction).is_ok()
+                            })
                 );
-                return Err(ValidationFail::NotPermitted(
+                if has_multisig_bundle && only_multisig_proposal_instructions {
+                    // Allowed: this is a multisig proposal/approval envelope, not a direct ISI submit.
+                } else {
+                    #[cfg(feature = "telemetry")]
+                    crate::telemetry::record_social_rejection(
+                        state_transaction.telemetry,
+                        "multisig_direct_sign",
+                    );
+                    return Err(ValidationFail::NotPermitted(
                     "direct signing with multisig accounts is forbidden; use multisig propose/approve"
                         .to_owned(),
                 ));
+                }
             }
         }
         // Refresh pipeline gas settings from on-chain parameters (genesis/governance updates)
