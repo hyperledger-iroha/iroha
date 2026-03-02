@@ -36210,6 +36210,377 @@ async fn frontier_stall_reset_prunes_far_future_state_and_reanchors_range_pull()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn lock_lag_prune_prunes_far_future_state_and_reanchors_range_pull() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_height = actor.state.view().height() as u64;
+    actor.locked_qc = Some(QcHeaderRef {
+        height: locked_height,
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    let highest_height = locked_height.saturating_add(5);
+    actor.highest_qc = Some(QcHeaderRef {
+        height: highest_height,
+        view: 0,
+        epoch: actor.epoch_for_height(highest_height),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xD6; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    });
+
+    let keep_through = locked_height.saturating_add(2);
+    let far_height = keep_through.saturating_add(3);
+    let now = Instant::now();
+    let old = now.checked_sub(Duration::from_secs(5)).unwrap_or(now);
+
+    let far_missing_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD7; Hash::LENGTH]));
+    actor.pending.missing_block_requests.insert(
+        far_missing_hash,
+        super::MissingBlockRequest {
+            height: far_height,
+            view: 0,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(5),
+            view_change_window: Some(Duration::from_millis(20)),
+            first_seen: old,
+            last_requested: old,
+            last_dependency_progress: old,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 2,
+        },
+    );
+    let far_parent =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD8; Hash::LENGTH]));
+    let far_pending = sample_block(far_height, 0, Some(far_parent));
+    let far_pending_hash = far_pending.hash();
+    actor.pending.pending_blocks.insert(
+        far_pending_hash,
+        PendingBlock::new(
+            far_pending.clone(),
+            Hash::new(super::proposals::block_payload_bytes(&far_pending)),
+            far_height,
+            0,
+        ),
+    );
+    let deferred_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD9; Hash::LENGTH]));
+    actor.deferred_block_sync_updates.insert(
+        (far_height, 0, deferred_hash),
+        super::DeferredBlockSyncUpdate {
+            update: super::message::BlockSyncUpdate::from(&sample_block(
+                far_height,
+                0,
+                Some(far_pending_hash),
+            )),
+            sender: None,
+        },
+    );
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_hint(sample_hint(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDA; Hash::LENGTH])),
+            far_height,
+            0,
+            Some(far_parent),
+        ));
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_proposal(sample_proposal(far_parent, far_height, 0));
+    actor
+        .subsystems
+        .propose
+        .proposals_seen
+        .insert((far_height, 0));
+
+    let before = super::status::snapshot();
+    assert!(
+        actor.prune_lock_lag_future_consensus_state(now, "test_lock_lag"),
+        "lock-lag prune should evict far-future state when lock ancestry is unresolved"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .values()
+            .all(|pending| pending.height <= keep_through),
+        "lock-lag prune should evict far-future pending blocks"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .values()
+            .all(|request| request.height <= keep_through),
+        "lock-lag prune should evict far-future missing requests"
+    );
+    assert!(
+        actor
+            .deferred_block_sync_updates
+            .keys()
+            .all(|(height, _, _)| *height <= keep_through),
+        "lock-lag prune should evict far-future deferred block-sync updates"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .hints
+            .keys()
+            .all(|(height, _)| *height <= keep_through),
+        "lock-lag prune should evict far-future proposal hints"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .proposals
+            .keys()
+            .all(|(height, _)| *height <= keep_through),
+        "lock-lag prune should evict far-future proposals"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposals_seen
+            .iter()
+            .all(|(height, _)| *height <= keep_through),
+        "lock-lag prune should evict far-future proposals-seen markers"
+    );
+    assert!(
+        actor
+            .range_pull_escalation_cooldowns
+            .keys()
+            .any(|(_, _, height)| *height == locked_height.saturating_add(1)),
+        "lock-lag prune should reanchor range pull to lock catch-up height"
+    );
+    let after = super::status::snapshot();
+    assert!(
+        after.pending_queue_evictions_total
+            >= before.pending_queue_evictions_total.saturating_add(1),
+        "lock-lag prune should count deterministic evictions"
+    );
+
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lock_lag_prune_cooldown_suppresses_repeated_prune_without_dependency_progress() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_height = actor.state.view().height() as u64;
+    actor.locked_qc = Some(QcHeaderRef {
+        height: locked_height,
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    actor.highest_qc = Some(QcHeaderRef {
+        height: locked_height.saturating_add(5),
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height.saturating_add(5)),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xDB; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    });
+
+    let keep_through = locked_height.saturating_add(2);
+    let far_height = keep_through.saturating_add(3);
+    let now = Instant::now();
+    let old = now.checked_sub(Duration::from_secs(5)).unwrap_or(now);
+
+    let far_missing_hash_a =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDC; Hash::LENGTH]));
+    actor.pending.missing_block_requests.insert(
+        far_missing_hash_a,
+        super::MissingBlockRequest {
+            height: far_height,
+            view: 0,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(5),
+            view_change_window: Some(Duration::from_millis(20)),
+            first_seen: old,
+            last_requested: old,
+            last_dependency_progress: old,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 2,
+        },
+    );
+
+    assert!(
+        actor.prune_lock_lag_future_consensus_state(now, "test_lock_lag_cooldown"),
+        "first lock-lag prune should run and set cooldown"
+    );
+
+    let far_missing_hash_b =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDD; Hash::LENGTH]));
+    actor.pending.missing_block_requests.insert(
+        far_missing_hash_b,
+        super::MissingBlockRequest {
+            height: far_height.saturating_add(1),
+            view: 0,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(5),
+            view_change_window: Some(Duration::from_millis(20)),
+            first_seen: old,
+            last_requested: old,
+            last_dependency_progress: old,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    let second = now + Duration::from_millis(1);
+    assert!(
+        !actor.prune_lock_lag_future_consensus_state(second, "test_lock_lag_cooldown"),
+        "repeated lock-lag prune should be suppressed while frontier and dependency sequence are unchanged"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&far_missing_hash_b),
+        "suppressed repeated prune must keep far-future state until cooldown bypass conditions are met"
+    );
+
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lock_lag_prune_cooldown_allows_prune_after_dependency_progress() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_height = actor.state.view().height() as u64;
+    actor.locked_qc = Some(QcHeaderRef {
+        height: locked_height,
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    actor.highest_qc = Some(QcHeaderRef {
+        height: locked_height.saturating_add(5),
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height.saturating_add(5)),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xDE; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    });
+
+    let keep_through = locked_height.saturating_add(2);
+    let far_height = keep_through.saturating_add(3);
+    let now = Instant::now();
+    let old = now.checked_sub(Duration::from_secs(5)).unwrap_or(now);
+
+    let far_missing_hash_a =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDF; Hash::LENGTH]));
+    actor.pending.missing_block_requests.insert(
+        far_missing_hash_a,
+        super::MissingBlockRequest {
+            height: far_height,
+            view: 0,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(5),
+            view_change_window: Some(Duration::from_millis(20)),
+            first_seen: old,
+            last_requested: old,
+            last_dependency_progress: old,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+    assert!(
+        actor.prune_lock_lag_future_consensus_state(now, "test_lock_lag_progress"),
+        "first lock-lag prune should run and establish cooldown"
+    );
+
+    let far_missing_hash_b =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE0; Hash::LENGTH]));
+    actor.pending.missing_block_requests.insert(
+        far_missing_hash_b,
+        super::MissingBlockRequest {
+            height: far_height.saturating_add(1),
+            view: 0,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(5),
+            view_change_window: Some(Duration::from_millis(20)),
+            first_seen: old,
+            last_requested: old,
+            last_dependency_progress: old,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    let second = now + Duration::from_millis(1);
+    assert!(
+        !actor.prune_lock_lag_future_consensus_state(second, "test_lock_lag_progress"),
+        "second lock-lag prune should be suppressed without dependency progress"
+    );
+
+    actor.note_missing_block_dependency_event(second + Duration::from_millis(1));
+    let third = second + Duration::from_millis(2);
+    assert!(
+        actor.prune_lock_lag_future_consensus_state(third, "test_lock_lag_progress"),
+        "dependency progress should bypass cooldown and allow lock-lag prune"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .values()
+            .all(|request| request.height <= keep_through),
+        "dependency progress bypass should let lock-lag prune clear far-future requests again"
+    );
+
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn deterministic_fanout_committee_uses_formula_and_key_tiebreak() {
     let _guard = super::status::missing_block_fetch_test_guard();
     super::status::reset_missing_block_fetch_counters_for_tests();
@@ -36334,6 +36705,351 @@ async fn missing_block_hash_miss_streak_escalates_to_range_pull() {
         after.consensus_missing_block_height_escalation_total,
         before.consensus_missing_block_height_escalation_total,
         "hash-miss range pull should not count as hard-cap view-change escalation"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_block_hash_miss_streak_under_lock_lag_uses_wider_threshold() {
+    let _missing_block_guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    let mut config = test_sumeragi_config();
+    config.recovery.range_pull_escalation_after_hash_misses = 2;
+    config.recovery.missing_block_height_attempt_cap = 12;
+    let mut harness = test_actor_harness_with_config(4, config, None).await;
+    let actor = &mut harness.actor;
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed anchor block");
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(committed_block.hash());
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_height = actor.state.view().height() as u64;
+    actor.locked_qc = Some(QcHeaderRef {
+        height: locked_height,
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    actor.highest_qc = Some(QcHeaderRef {
+        height: locked_height.saturating_add(5),
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height.saturating_add(5)),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xE1; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    });
+
+    let height = locked_height.saturating_add(1);
+    let view = 0_u64;
+    let now = Instant::now();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE2; Hash::LENGTH]));
+    let base_cap = actor
+        .recovery_range_pull_escalation_after_hash_misses()
+        .max(1);
+    let widened_cap = actor.effective_hash_miss_escalation_cap(
+        height,
+        base_cap,
+        actor.recovery_missing_block_height_attempt_cap().max(1),
+    );
+    assert!(
+        widened_cap > base_cap,
+        "lock-lag hash-miss threshold should widen above the baseline cap"
+    );
+
+    for idx in 0..widened_cap {
+        let at = now + Duration::from_millis(u64::from(idx) + 1);
+        actor.note_missing_block_height_hash_miss(
+            block_hash,
+            height,
+            view,
+            super::MissingBlockRecoveryStage::HashFetch,
+            at,
+        );
+        let escalated =
+            actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, at);
+        if idx + 1 < widened_cap {
+            assert!(
+                !escalated,
+                "lock-lag hash-miss escalation should wait for widened threshold"
+            );
+            if idx + 1 == base_cap {
+                assert!(
+                    !escalated,
+                    "baseline threshold should no longer trigger range-pull escalation during lock-lag"
+                );
+            }
+        } else {
+            assert!(
+                escalated,
+                "lock-lag hash-miss escalation should still trigger once widened threshold is reached"
+            );
+        }
+    }
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn effective_hash_miss_cap_under_lock_lag_scales_by_frontier_distance() {
+    let mut config = test_sumeragi_config();
+    config.recovery.range_pull_escalation_after_hash_misses = 2;
+    config.recovery.missing_block_height_attempt_cap = 12;
+    let mut harness = test_actor_harness_with_config(4, config, None).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_height = actor.state.view().height() as u64;
+    actor.locked_qc = Some(QcHeaderRef {
+        height: locked_height,
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    actor.highest_qc = Some(QcHeaderRef {
+        height: locked_height.saturating_add(6),
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height.saturating_add(6)),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xE3; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    });
+
+    let frontier = locked_height.saturating_add(1);
+    let near_height = frontier.saturating_add(1);
+    let far_height = frontier.saturating_add(3);
+    let base_cap = actor
+        .recovery_range_pull_escalation_after_hash_misses()
+        .max(1);
+    let attempt_cap = actor.recovery_missing_block_height_attempt_cap().max(1);
+    let max_cap = base_cap.max(attempt_cap);
+    let near_expected = base_cap
+        .saturating_add(2)
+        .max(attempt_cap.div_ceil(3))
+        .min(max_cap);
+    let far_expected = near_expected.max(attempt_cap.div_ceil(2)).min(max_cap);
+
+    assert_eq!(
+        actor.effective_hash_miss_escalation_cap(locked_height, base_cap, attempt_cap),
+        base_cap,
+        "lock-lag widening should not apply below the catch-up frontier"
+    );
+    assert_eq!(
+        actor.effective_hash_miss_escalation_cap(near_height, base_cap, attempt_cap),
+        near_expected,
+        "near-frontier lock-lag cap should use the balanced near widening rule"
+    );
+    assert_eq!(
+        actor.effective_hash_miss_escalation_cap(far_height, base_cap, attempt_cap),
+        far_expected,
+        "far-future lock-lag cap should use the stronger distance-aware widening rule"
+    );
+    assert!(
+        far_expected >= near_expected && near_expected > base_cap,
+        "distance-aware widening should strictly increase above baseline and grow for far-future heights"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_block_hash_miss_under_lock_lag_inflight_waits_for_no_progress_window() {
+    let _missing_block_guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    let mut config = test_sumeragi_config();
+    config.recovery.range_pull_escalation_after_hash_misses = 2;
+    config.recovery.missing_block_height_attempt_cap = 12;
+    let mut harness = test_actor_harness_with_config(4, config, None).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_height = actor.state.view().height() as u64;
+    actor.locked_qc = Some(QcHeaderRef {
+        height: locked_height,
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    actor.highest_qc = Some(QcHeaderRef {
+        height: locked_height.saturating_add(5),
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height.saturating_add(5)),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xE4; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    });
+
+    let height = locked_height.saturating_add(1);
+    let view = 0_u64;
+    let now = Instant::now();
+    let ttl = actor
+        .recovery_missing_block_height_ttl()
+        .max(Duration::from_millis(1));
+    let fresh_progress = now - ttl / 2;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE5; Hash::LENGTH]));
+    actor.note_missing_block_height_attempt(
+        block_hash,
+        height,
+        view,
+        super::MissingBlockRecoveryStage::HashFetch,
+        Some(super::MissingBlockFetchTargetKind::Signers),
+        fresh_progress,
+    );
+    let key = actor.missing_block_recovery_key_for_height(height);
+    let hash_miss_cap = actor.effective_hash_miss_escalation_cap(
+        height,
+        actor
+            .recovery_range_pull_escalation_after_hash_misses()
+            .max(1),
+        actor.recovery_missing_block_height_attempt_cap().max(1),
+    );
+    {
+        let budget = actor
+            .missing_block_height_recovery
+            .get_mut(&key)
+            .expect("height budget should exist");
+        budget.first_seen = fresh_progress;
+        budget.last_seen = now;
+        budget.attempts = 0;
+        budget.range_pull.inflight = true;
+        budget.range_pull.last_progress = fresh_progress;
+        budget.range_pull.last_requested = Some(fresh_progress);
+        budget.range_pull.hash_misses = hash_miss_cap;
+    }
+
+    let before = super::status::snapshot();
+    let escalated_while_fresh =
+        actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, now);
+    assert!(
+        !escalated_while_fresh,
+        "hash-miss escalation should wait while lock-lag range pull is in-flight and still fresh"
+    );
+    let after_fresh = super::status::snapshot();
+    assert_eq!(
+        after_fresh.blocksync_range_pull_escalation_total,
+        before.blocksync_range_pull_escalation_total,
+        "fresh in-flight lock-lag range pulls must suppress duplicate hash-miss range pulls"
+    );
+
+    let after_window = now + ttl + Duration::from_millis(1);
+    {
+        let budget = actor
+            .missing_block_height_recovery
+            .get_mut(&key)
+            .expect("height budget should remain tracked");
+        budget.first_seen = after_window - ttl / 2;
+        budget.last_seen = after_window - ttl / 2;
+    }
+    assert!(
+        actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, after_window),
+        "hash-miss escalation should resume once the no-progress window expires"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_block_attempt_streak_under_lock_lag_inflight_waits_for_no_progress_window() {
+    let _missing_block_guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    let mut config = test_sumeragi_config();
+    config.recovery.range_pull_escalation_after_hash_misses = u32::MAX;
+    config.recovery.missing_block_height_attempt_cap = 12;
+    let mut harness = test_actor_harness_with_config(4, config, None).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_height = actor.state.view().height() as u64;
+    actor.locked_qc = Some(QcHeaderRef {
+        height: locked_height,
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    actor.highest_qc = Some(QcHeaderRef {
+        height: locked_height.saturating_add(5),
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height.saturating_add(5)),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xE6; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    });
+
+    let height = locked_height.saturating_add(1);
+    let view = 0_u64;
+    let now = Instant::now();
+    let ttl = actor
+        .recovery_missing_block_height_ttl()
+        .max(Duration::from_millis(1));
+    let fresh_progress = now - ttl / 2;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE7; Hash::LENGTH]));
+    actor.note_missing_block_height_attempt(
+        block_hash,
+        height,
+        view,
+        super::MissingBlockRecoveryStage::HashFetch,
+        Some(super::MissingBlockFetchTargetKind::Signers),
+        fresh_progress,
+    );
+    let key = actor.missing_block_recovery_key_for_height(height);
+    let attempt_cap = actor.recovery_missing_block_height_attempt_cap().max(1);
+    let range_pull_attempt_threshold = (attempt_cap / 2).max(2);
+    {
+        let budget = actor
+            .missing_block_height_recovery
+            .get_mut(&key)
+            .expect("height budget should exist");
+        budget.first_seen = fresh_progress;
+        budget.last_seen = now;
+        budget.attempts = range_pull_attempt_threshold;
+        budget.range_pull.inflight = true;
+        budget.range_pull.last_progress = fresh_progress;
+        budget.range_pull.last_requested = Some(fresh_progress);
+        budget.range_pull.hash_misses = 0;
+    }
+
+    let before = super::status::snapshot();
+    let escalated_while_fresh =
+        actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, now);
+    assert!(
+        !escalated_while_fresh,
+        "attempt-streak escalation should wait while lock-lag range pull is in-flight and still fresh"
+    );
+    let after_fresh = super::status::snapshot();
+    assert_eq!(
+        after_fresh.blocksync_range_pull_escalation_total,
+        before.blocksync_range_pull_escalation_total,
+        "fresh in-flight lock-lag range pulls must suppress duplicate attempt-streak range pulls"
+    );
+
+    let after_window = now + ttl + Duration::from_millis(1);
+    {
+        let budget = actor
+            .missing_block_height_recovery
+            .get_mut(&key)
+            .expect("height budget should remain tracked");
+        budget.first_seen = after_window - ttl / 2;
+        budget.last_seen = after_window - ttl / 2;
+    }
+    assert!(
+        actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, after_window),
+        "attempt-streak escalation should resume once the no-progress window expires"
     );
 
     harness.shutdown.send();
@@ -36748,6 +37464,277 @@ async fn proposal_gated_by_missing_dependencies_requires_recent_range_pull_progr
     assert!(
         !actor.proposal_gated_by_missing_dependencies(height),
         "stale range-pull state without fresh progress must not starve proposals"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn idle_missing_qc_reacquire_reanchors_range_pull_to_lock_catchup_height() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_height = actor.state.view().height() as u64;
+    actor.locked_qc = Some(QcHeaderRef {
+        height: locked_height,
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    let highest_height = locked_height.saturating_add(5);
+    actor.highest_qc = Some(QcHeaderRef {
+        height: highest_height,
+        view: 0,
+        epoch: actor.epoch_for_height(highest_height),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xE9; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    });
+    actor.range_pull_escalation_cooldowns.clear();
+
+    assert!(
+        actor.reacquire_missing_qc_dependencies(
+            highest_height.saturating_add(1),
+            0,
+            Instant::now()
+        ),
+        "idle missing-QC reacquire should trigger dependency recovery"
+    );
+
+    let requested_heights: BTreeSet<_> = actor
+        .range_pull_escalation_cooldowns
+        .keys()
+        .map(|(_, _, height)| *height)
+        .collect();
+    assert!(
+        requested_heights.contains(&locked_height.saturating_add(1)),
+        "lock-lag reacquire should target the lock catch-up height"
+    );
+    assert!(
+        !requested_heights.contains(&highest_height.saturating_add(1)),
+        "lock-lag reacquire should avoid chasing far-future requested heights"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn idle_missing_qc_reacquire_range_pull_uses_lock_lag_cooldown_floor() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_height = actor.state.view().height() as u64;
+    actor.locked_qc = Some(QcHeaderRef {
+        height: locked_height,
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    actor.highest_qc = Some(QcHeaderRef {
+        height: locked_height.saturating_add(4),
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height.saturating_add(4)),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xEA; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    });
+    actor.range_pull_escalation_cooldowns.clear();
+
+    let now = Instant::now();
+    assert!(
+        actor.request_range_pull_from_anchor_with_tier(
+            locked_height.saturating_add(4),
+            "idle_missing_qc_reacquire",
+            now,
+            None,
+        ),
+        "idle missing-QC reacquire range pull should be emitted"
+    );
+
+    let min_cooldown = actor
+        .commit_quorum_timeout()
+        .max(actor.recovery_missing_qc_reacquire_window())
+        .max(Duration::from_secs(1));
+    let earliest_expiry = actor
+        .range_pull_escalation_cooldowns
+        .values()
+        .min()
+        .copied()
+        .expect("range-pull cooldown entries should be recorded");
+    assert!(
+        earliest_expiry.saturating_duration_since(now) >= min_cooldown,
+        "lock-lag idle reacquire should apply the widened cooldown floor"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn range_pull_lock_lag_floor_applies_to_hash_miss_reason() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_height = actor.state.view().height() as u64;
+    actor.locked_qc = Some(QcHeaderRef {
+        height: locked_height,
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    actor.highest_qc = Some(QcHeaderRef {
+        height: locked_height.saturating_add(4),
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height.saturating_add(4)),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xEB; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    });
+    actor.range_pull_escalation_cooldowns.clear();
+
+    let now = Instant::now();
+    assert!(
+        actor.request_range_pull_from_anchor_with_tier(
+            locked_height.saturating_add(2),
+            "missing_block_hash_miss_streak",
+            now,
+            None,
+        ),
+        "hash-miss range pull should be emitted under lock-lag"
+    );
+
+    let min_cooldown = actor.lock_lag_range_pull_cooldown_floor();
+    let earliest_expiry = actor
+        .range_pull_escalation_cooldowns
+        .values()
+        .min()
+        .copied()
+        .expect("range-pull cooldown entries should be recorded");
+    assert!(
+        earliest_expiry.saturating_duration_since(now) >= min_cooldown,
+        "lock-lag range pulls should enforce cooldown floor for hash-miss reasons too"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn range_pull_lock_lag_coalesces_far_future_height_to_frontier_bucket() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_height = actor.state.view().height() as u64;
+    actor.locked_qc = Some(QcHeaderRef {
+        height: locked_height,
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    actor.highest_qc = Some(QcHeaderRef {
+        height: locked_height.saturating_add(6),
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height.saturating_add(6)),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xEC; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    });
+    actor.range_pull_escalation_cooldowns.clear();
+
+    let now = Instant::now();
+    let frontier_height = locked_height.saturating_add(1);
+    let far_future_height = frontier_height.saturating_add(4);
+    assert!(
+        actor.request_range_pull_from_anchor_with_tier(
+            frontier_height,
+            "missing_block_hash_miss_streak",
+            now,
+            Some(super::RangePullCandidateTier::TrustedPeers),
+        ),
+        "frontier request should emit range-pull messages"
+    );
+    assert!(
+        !actor.request_range_pull_from_anchor_with_tier(
+            far_future_height,
+            "missing_block_hash_miss_streak",
+            now + Duration::from_millis(1),
+            Some(super::RangePullCandidateTier::TrustedPeers),
+        ),
+        "far-future request should dedup into the active lock-lag frontier bucket"
+    );
+    assert!(
+        !actor.range_pull_escalation_cooldowns.is_empty(),
+        "coalesced lock-lag dedup should retain cooldown entries"
+    );
+    assert!(
+        actor
+            .range_pull_escalation_cooldowns
+            .keys()
+            .all(|(_, _, dedup_height)| *dedup_height == frontier_height),
+        "all dedup keys should collapse to the canonical lock-lag frontier height"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn range_pull_lock_lag_far_future_uses_extended_cooldown() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_height = actor.state.view().height() as u64;
+    actor.locked_qc = Some(QcHeaderRef {
+        height: locked_height,
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    actor.highest_qc = Some(QcHeaderRef {
+        height: locked_height.saturating_add(6),
+        view: 0,
+        epoch: actor.epoch_for_height(locked_height.saturating_add(6)),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xED; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    });
+    actor.range_pull_escalation_cooldowns.clear();
+
+    let frontier_height = locked_height.saturating_add(1);
+    let far_future_height = frontier_height.saturating_add(3);
+    let now = Instant::now();
+    assert!(
+        actor.request_range_pull_from_anchor_with_tier(
+            far_future_height,
+            "missing_block_hash_miss_streak",
+            now,
+            Some(super::RangePullCandidateTier::TrustedPeers),
+        ),
+        "far-future lock-lag request should emit range-pull messages"
+    );
+
+    let min_cooldown = super::saturating_mul_duration(actor.recovery_missing_block_height_ttl(), 2);
+    let earliest_expiry = actor
+        .range_pull_escalation_cooldowns
+        .values()
+        .min()
+        .copied()
+        .expect("range-pull cooldown entries should be recorded");
+    assert!(
+        earliest_expiry.saturating_duration_since(now) >= min_cooldown,
+        "far-future lock-lag range pulls should apply the balanced 2x TTL cooldown floor"
     );
 
     harness.shutdown.send();
@@ -58179,6 +59166,118 @@ async fn proposal_hint_promotes_highest_qc_phase() {
         highest.phase,
         crate::sumeragi::consensus::Phase::Commit,
         "proposal hints should promote highest QC phase when height/view match"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_hint_defers_highest_qc_update_when_lock_lag_catchup_unresolved() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    actor.locked_qc = Some(QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch: actor.epoch_for_height(1),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    actor.highest_qc = None;
+
+    let highest_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xF3; Hash::LENGTH]));
+    let hint = sample_hint(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xF4; Hash::LENGTH])),
+        4,
+        0,
+        Some(highest_hash),
+    );
+
+    actor
+        .handle_proposal_hint(hint)
+        .expect("handle proposal hint");
+
+    assert!(
+        actor.highest_qc.is_none(),
+        "highest QC should not advance while lock ancestry to the incoming highest QC is unresolved"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&highest_hash),
+        "proposal hint should still trigger missing-highest dependency fetch"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .contains(&(4, 0, highest_hash)),
+        "lock-lag defer marker should be recorded for this proposal round"
+    );
+    assert!(
+        actor.subsystems.propose.proposals_seen.contains(&(4, 0)),
+        "proposal hint should still mark the round as observed"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_defers_highest_qc_update_when_lock_lag_catchup_unresolved() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    actor.locked_qc = Some(QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch: actor.epoch_for_height(1),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    actor.highest_qc = None;
+
+    let highest_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xF5; Hash::LENGTH]));
+    let proposal = sample_proposal(highest_hash, 4, 0);
+
+    actor.handle_proposal(proposal).expect("handle proposal");
+
+    assert!(
+        actor.highest_qc.is_none(),
+        "highest QC should not advance while lock ancestry to the incoming proposal highest QC is unresolved"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&highest_hash),
+        "proposal should still trigger missing-highest dependency fetch"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .contains(&(4, 0, highest_hash)),
+        "lock-lag defer marker should be recorded for this proposal round"
+    );
+    assert!(
+        actor.subsystems.propose.proposals_seen.contains(&(4, 0)),
+        "proposal should still mark the round as observed"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(4, 0)
+            .is_some(),
+        "proposal should still be cached while waiting for catch-up dependencies"
     );
 
     harness.shutdown.send();

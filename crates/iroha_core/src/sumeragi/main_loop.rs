@@ -4886,6 +4886,7 @@ const ROSTER_SIDECAR_MISMATCH_LOG_COOLDOWN: Duration = Duration::from_secs(5);
 const RANGE_PULL_DEDUP_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
 const QC_MISSING_PAYLOAD_RANGE_PULL_DEDUP_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
 const SIDECAR_MISMATCH_RECOVERY_ACTION_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
+const LOCK_LAG_PRUNE_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
 const NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR: u64 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5031,6 +5032,13 @@ impl RangePullEscalationState {
             last_progress: now,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LockLagPruneCooldownState {
+    catchup_frontier_height: u64,
+    dependency_event_seq: u64,
+    expires_at: Instant,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -5328,6 +5336,7 @@ pub(super) struct Actor {
     sidecar_observation_suppression_depth: u32,
     qc_missing_payload_range_pull_cooldowns: BTreeMap<(u64, u64, HashOf<BlockHeader>), Instant>,
     range_pull_escalation_cooldowns: BTreeMap<(PeerId, u64, u64), Instant>,
+    lock_lag_prune_cooldown: Option<LockLagPruneCooldownState>,
     deferred_qcs: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     deferred_qc_roster_state: BTreeMap<QcVoteKey, DeferredRosterQcEntry>,
     deferred_missing_payload_qcs: BTreeMap<QcVoteKey, DeferredQcEntry>,
@@ -9429,6 +9438,35 @@ impl Actor {
         )
     }
 
+    fn lock_lag_catchup_frontier_for_highest(
+        &self,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+    ) -> Option<u64> {
+        let lock = self.locked_qc?;
+        if !self.block_known_for_lock(lock.subject_block_hash) {
+            return None;
+        }
+        if highest_qc.height <= lock.height.saturating_add(1) {
+            return None;
+        }
+        matches!(
+            chain_extends_tip(
+                highest_qc.subject_block_hash,
+                highest_qc.height,
+                lock.height,
+                lock.subject_block_hash,
+                |hash, height| self.parent_hash_for(hash, height),
+            ),
+            None
+        )
+        .then_some(lock.height.saturating_add(1))
+    }
+
+    fn lock_lag_catchup_frontier_height(&self) -> Option<u64> {
+        let highest_qc = self.highest_qc.or(self.latest_committed_qc())?;
+        self.lock_lag_catchup_frontier_for_highest(highest_qc)
+    }
+
     fn maybe_realign_locked_to_committed_tip(&mut self) -> bool {
         let Some(committed_qc) = self.latest_committed_qc() else {
             return false;
@@ -10211,6 +10249,7 @@ impl Actor {
             sidecar_observation_suppression_depth: 0,
             qc_missing_payload_range_pull_cooldowns: BTreeMap::new(),
             range_pull_escalation_cooldowns: BTreeMap::new(),
+            lock_lag_prune_cooldown: None,
             deferred_qcs: BTreeMap::new(),
             deferred_qc_roster_state: BTreeMap::new(),
             deferred_missing_payload_qcs: BTreeMap::new(),
@@ -15264,6 +15303,59 @@ impl Actor {
             .missing_qc_reacquire_window
     }
 
+    fn lock_lag_range_pull_cooldown_floor(&self) -> Duration {
+        self.commit_quorum_timeout()
+            .max(self.recovery_missing_qc_reacquire_window())
+            .max(Duration::from_secs(1))
+    }
+
+    fn lock_lag_range_pull_scope_for_height(&self, height: u64) -> (Option<u64>, bool, bool, u64) {
+        let frontier = self.lock_lag_catchup_frontier_height();
+        let lock_lag_active = frontier.is_some_and(|frontier| height >= frontier);
+        let far_future = frontier.is_some_and(|frontier| height > frontier.saturating_add(1));
+        let canonical_height = if lock_lag_active {
+            frontier.unwrap_or(height)
+        } else {
+            height
+        };
+        (frontier, lock_lag_active, far_future, canonical_height)
+    }
+
+    fn lock_lag_range_pull_active_for_height(&self, height: u64) -> bool {
+        let (_, lock_lag_active, _, _) = self.lock_lag_range_pull_scope_for_height(height);
+        lock_lag_active
+    }
+
+    fn lock_lag_prune_cooldown_window(&self) -> Duration {
+        self.lock_lag_range_pull_cooldown_floor()
+            .max(self.rebroadcast_cooldown())
+            .max(LOCK_LAG_PRUNE_COOLDOWN_FLOOR)
+    }
+
+    fn effective_hash_miss_escalation_cap(
+        &self,
+        height: u64,
+        base_cap: u32,
+        attempt_cap: u32,
+    ) -> u32 {
+        let (frontier, lock_lag_active, far_future, _) =
+            self.lock_lag_range_pull_scope_for_height(height);
+        if !lock_lag_active {
+            return base_cap;
+        }
+        let Some(frontier_height) = frontier else {
+            return base_cap;
+        };
+        let max_cap = attempt_cap.max(base_cap);
+        let near_frontier_cap = base_cap.saturating_add(2).max(attempt_cap.div_ceil(3));
+        let selected_cap = if far_future && height > frontier_height.saturating_add(1) {
+            near_frontier_cap.max(attempt_cap.div_ceil(2))
+        } else {
+            near_frontier_cap
+        };
+        selected_cap.min(max_cap)
+    }
+
     fn recovery_max_forced_proposal_attempts_per_view(&self) -> u32 {
         self.deterministic_recovery_profile()
             .max_forced_proposal_attempts_per_view
@@ -15370,6 +15462,7 @@ impl Actor {
 
     fn note_missing_block_dependency_event(&mut self, now: Instant) {
         self.dependency_event_seq = self.dependency_event_seq.saturating_add(1);
+        self.lock_lag_prune_cooldown = None;
         for budget in self.missing_block_height_recovery.values_mut() {
             budget.range_pull.last_progress = now;
             budget.range_pull.candidate_tier = RangePullCandidateTier::VoteRoster;
@@ -16156,6 +16249,8 @@ impl Actor {
         now: Instant,
         tier: Option<RangePullCandidateTier>,
     ) -> bool {
+        let (lock_lag_frontier, lock_lag_active, lock_lag_far_future, canonical_height) =
+            self.lock_lag_range_pull_scope_for_height(height);
         let local_height = self.committed_height_snapshot();
         let Some(anchor_hash) = self.state.latest_block_hash_fast() else {
             return false;
@@ -16178,10 +16273,21 @@ impl Actor {
                     .max(Duration::from_secs(1)),
             );
         }
+        if lock_lag_active {
+            // Under lock-lag catch-up, bound anchor range-pull dedup by the
+            // consensus timeout envelope to avoid per-view pull storms.
+            cooldown = cooldown.max(self.lock_lag_range_pull_cooldown_floor());
+        }
+        if lock_lag_far_future {
+            cooldown = cooldown.max(saturating_mul_duration(
+                self.recovery_missing_block_height_ttl(),
+                2,
+            ));
+        }
         let expires = now.checked_add(cooldown).unwrap_or(now);
         let mut sent = 0usize;
         for peer in targets {
-            let dedup_key = (peer.clone(), local_height, height);
+            let dedup_key = (peer.clone(), local_height, canonical_height);
             if self
                 .range_pull_escalation_cooldowns
                 .get(&dedup_key)
@@ -16218,7 +16324,11 @@ impl Actor {
         }
         info!(
             height,
+            canonical_height,
             local_height,
+            lock_lag_active,
+            lock_lag_far_future,
+            lock_lag_frontier = ?lock_lag_frontier,
             anchor = %anchor_hash,
             targets = sent,
             tier = tier_label,
@@ -16302,9 +16412,12 @@ impl Actor {
             .max(Duration::from_millis(1));
         let attempt_cap = self.recovery_missing_block_height_attempt_cap().max(1);
         let range_pull_attempt_threshold = (attempt_cap / 2).max(2);
-        let range_pull_hash_miss_cap = self
-            .recovery_range_pull_escalation_after_hash_misses()
-            .max(1);
+        let range_pull_hash_miss_cap = self.effective_hash_miss_escalation_cap(
+            height,
+            self.recovery_range_pull_escalation_after_hash_misses()
+                .max(1),
+            attempt_cap,
+        );
         let request_progress = self
             .pending
             .missing_block_requests
@@ -16376,9 +16489,16 @@ impl Actor {
             self.missing_block_height_recovery.insert(key, budget);
             return false;
         }
-        let attempt_streak_due = budget.attempts >= range_pull_attempt_threshold;
-        let hash_miss_due = budget.range_pull.hash_misses >= range_pull_hash_miss_cap;
+        let mut attempt_streak_due = budget.attempts >= range_pull_attempt_threshold;
+        let mut hash_miss_due = budget.range_pull.hash_misses >= range_pull_hash_miss_cap;
         let no_progress_due = now.saturating_duration_since(budget.range_pull.last_progress) >= ttl;
+        if self.lock_lag_range_pull_active_for_height(height)
+            && budget.range_pull.inflight
+            && !no_progress_due
+        {
+            attempt_streak_due = false;
+            hash_miss_due = false;
+        }
         let range_pull_due = attempt_streak_due || hash_miss_due || no_progress_due;
         if !hard_cap_due && !range_pull_due {
             self.missing_block_height_recovery.insert(key, budget);
@@ -16912,6 +17032,120 @@ impl Actor {
             seen_removed,
             requested_pull,
             "deterministic frontier-stall recovery reset pruned future consensus state"
+        );
+        true
+    }
+
+    fn prune_lock_lag_future_consensus_state(
+        &mut self,
+        now: Instant,
+        trigger: &'static str,
+    ) -> bool {
+        let Some(catchup_height) = self.lock_lag_catchup_frontier_height() else {
+            return false;
+        };
+        let dependency_event_seq = self.dependency_event_seq;
+        let keep_through_height = catchup_height.saturating_add(1);
+        let has_far_future_state = self
+            .pending
+            .pending_blocks
+            .values()
+            .any(|pending| pending.height > keep_through_height)
+            || self
+                .pending
+                .missing_block_requests
+                .values()
+                .any(|request| request.height > keep_through_height)
+            || self
+                .deferred_block_sync_updates
+                .keys()
+                .any(|(height, _, _)| *height > keep_through_height)
+            || self
+                .deferred_missing_payload_qcs
+                .keys()
+                .any(|(_, _, height, _, _)| *height > keep_through_height)
+            || self
+                .subsystems
+                .propose
+                .proposal_cache
+                .hints
+                .keys()
+                .any(|(height, _)| *height > keep_through_height)
+            || self
+                .subsystems
+                .propose
+                .proposal_cache
+                .proposals
+                .keys()
+                .any(|(height, _)| *height > keep_through_height);
+        if !has_far_future_state {
+            return false;
+        }
+        if self.lock_lag_prune_cooldown.is_some_and(|cooldown| {
+            cooldown.catchup_frontier_height == catchup_height
+                && cooldown.dependency_event_seq == dependency_event_seq
+                && now < cooldown.expires_at
+        }) {
+            debug!(
+                trigger,
+                catchup_height,
+                dependency_event_seq,
+                "suppressing repeated lock-lag prune while dependency frontier is unchanged"
+            );
+            return false;
+        }
+
+        let (
+            pending_removed,
+            missing_removed,
+            deferred_updates_removed,
+            deferred_qcs_removed,
+            hints_removed,
+            proposals_removed,
+            seen_removed,
+        ) = self.prune_future_consensus_state_above_height(keep_through_height, now);
+        if missing_removed > 0 {
+            super::status::inc_missing_request_pruned_stale_height(
+                u64::try_from(missing_removed).unwrap_or(u64::MAX),
+            );
+            self.update_missing_block_gauges();
+        }
+        let evicted_total = pending_removed
+            .saturating_add(deferred_updates_removed)
+            .saturating_add(deferred_qcs_removed)
+            .saturating_add(hints_removed)
+            .saturating_add(proposals_removed)
+            .saturating_add(seen_removed);
+        if evicted_total > 0 {
+            super::status::inc_pending_queue_evictions_total(
+                u64::try_from(evicted_total).unwrap_or(u64::MAX),
+            );
+        }
+        let requested_pull =
+            self.request_range_pull_from_anchor(catchup_height, "lock_lag_future_prune", now);
+        if evicted_total == 0 && missing_removed == 0 && !requested_pull {
+            return false;
+        }
+        let cooldown = self.lock_lag_prune_cooldown_window();
+        let expires_at = now.checked_add(cooldown).unwrap_or(now);
+        self.lock_lag_prune_cooldown = Some(LockLagPruneCooldownState {
+            catchup_frontier_height: catchup_height,
+            dependency_event_seq,
+            expires_at,
+        });
+        warn!(
+            trigger,
+            catchup_height,
+            keep_through_height,
+            pending_removed,
+            missing_removed,
+            deferred_updates_removed,
+            deferred_qcs_removed,
+            hints_removed,
+            proposals_removed,
+            seen_removed,
+            requested_pull,
+            "pruned far-future consensus state while lock catch-up dependencies are unresolved"
         );
         true
     }
@@ -17862,7 +18096,15 @@ impl Actor {
             requested |= self
                 .request_missing_block_for_highest_qc_force(highest, "idle_missing_qc_reacquire");
         }
-        requested |= self.request_range_pull_from_anchor(height, "idle_missing_qc_reacquire", now);
+        let range_pull_height = self
+            .lock_lag_catchup_frontier_height()
+            .filter(|catchup_height| *catchup_height < height)
+            .unwrap_or(height);
+        requested |= self.request_range_pull_from_anchor(
+            range_pull_height,
+            "idle_missing_qc_reacquire",
+            now,
+        );
         if requested || triggered {
             super::status::inc_consensus_missing_qc_reacquire_success();
         }
@@ -18347,6 +18589,13 @@ impl Actor {
         if stalled_pending == 0 && !inflight_stalled {
             return false;
         }
+        if self.prune_lock_lag_future_consensus_state(now, "stalled_pending") {
+            debug!(
+                stalled_pending,
+                inflight_stalled, "deferred forced view change after lock-lag catch-up pruning"
+            );
+            return false;
+        }
         let effective_timeout = effective_timeout.unwrap_or(base_timeout);
 
         let height = stalled_height.unwrap_or_else(|| self.active_consensus_round_height());
@@ -18699,6 +18948,15 @@ impl Actor {
                 view = current_view,
                 committed_height,
                 "deferred idle view-change after deterministic frontier stall reset"
+            );
+            return false;
+        }
+        if self.prune_lock_lag_future_consensus_state(now, "idle_missing_qc") {
+            debug!(
+                height,
+                view = current_view,
+                committed_height,
+                "deferred idle view-change after lock-lag catch-up pruning"
             );
             return false;
         }

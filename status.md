@@ -1,6 +1,97 @@
 # Status
 
 Last update: 2026-03-01
+- Latest sync (2026-03-02 Tranche 3 full-soak rerun, unchanged envelope):
+  - Reran soak:
+    - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo run -p izanami -- --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 3600 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable 2>&1 | tee /tmp/izanami_tranche3_soak_rerun_20260302T003248.log`
+  - Artifacts:
+    - soak log: `/tmp/izanami_tranche3_soak_rerun_20260302T003248.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_elnrAh`
+  - Outcome:
+    - run ended at duration horizon before target (`successes=7082`, `failures=8`, `izanami_ingress_failover_total=12`, `izanami_ingress_endpoint_unhealthy_total=2`)
+    - strict/quorum remained tightly coupled (`quorum_min_height=1459`, `strict_min_height=1459`, max observed gap `2`)
+  - Bottleneck readout:
+    - recovery churn still high but not split-frontier (`missing_block_hash_miss_streak=1445`, `idle_missing_qc_reacquire=29`, `qc_missing_payload_quorum_fast_recovery=4`)
+    - view-change pressure is relatively low (`stake_quorum_timeout=26`, `missing_qc=22`, `quorum_timeout=21`)
+    - dominant throughput limiter is RBC readiness churn:
+      - `deferring RBC DELIVER: READY quorum not yet satisfied=15662`
+      - `deferring local RBC READY: awaiting chunks or READY quorum=5593`
+      - `requested missing BlockCreated while awaiting RBC INIT=6278`
+      - `sending targeted RBC payload to peers missing READY=13248`
+    - final-height logs repeatedly show RBC READY quorum not closing at heights `1458-1462` across peers.
+  - Interpretation:
+    - compared with the prior rerun (`strict 496` plateau), this run removed the hard divergence mode and advanced materially further, but throughput is now bottlenecked by sustained RBC READY/DELIVER completion latency rather than lock-lag split-frontier thrash.
+- Latest sync (2026-03-01 Tranche 3 full-soak execution + bottleneck readout):
+  - Ran unchanged-envelope soak:
+    - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo run -p izanami -- --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 3600 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable 2>&1 | tee /tmp/izanami_tranche3_soak_20260301T231415.log`
+  - Artifacts:
+    - soak log: `/tmp/izanami_tranche3_soak_20260301T231415.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_fb0Z20`
+  - Outcome:
+    - run stopped before target (`successes=3238`, `failures=127`, `izanami_ingress_failover_total=624`, `izanami_ingress_endpoint_unhealthy_total=336`)
+    - strict/quorum split persisted (`strict_min_height=496` plateau while `quorum_min_height` advanced to `803`; max gap `307`)
+  - Bottleneck readout (peer-log aggregate):
+    - range-pull reasons: `missing_block_hash_miss_streak=489`, `lock_lag_future_prune=87`, `idle_missing_qc_reacquire=83`, `frontier_gap_realign=8`, `missing_block_height_hard_cap=6`
+    - view-change causes: `missing_qc=266`, `quorum_timeout=14`, `stake_quorum_timeout=7`
+    - lock-lag churn collapsed to single frontier bucket (`lock_lag_future_prune` concentrated at height `497`, count `87`), indicating tranche-3 coalescing worked (no dominant 581/785 dual-peak loop)
+    - remaining dominant churn on healthy peers is missing-QC/reacquire around higher heights (`missing_qc` top heights: `706(12)`, `592(10)`, `787(9)`, `583(9)`, `497(9)`)
+    - secondary pressure: `requested missing block payload from highest QC=111`, `commit quorum missing past timeout; rescheduling block for reassembly=9`
+    - ingress path remains noisy late-run (`transaction queued for too long=534`, `tx confirmation timed out=276`, `marking ingress endpoint unhealthy=341`, `Connection refused (os error 61)=445`)
+  - Interpretation:
+    - Tranche 3 removed split-frontier far-future lock-lag thrash as intended, but one peer still hard-stalls near frontier while the rest advance; cluster-level bottleneck is now mixed (single-peer frontier stall + missing-QC reacquire churn + ingress endpoint instability), not the prior 581/785 dedup failure mode.
+- Latest sync (2026-03-01 Tranche 3 lock-lag frontier-coalesced recovery, balanced damping):
+  - Implemented in `crates/iroha_core/src/sumeragi/main_loop.rs`:
+    - added lock-lag scope derivation (`lock_lag_range_pull_scope_for_height`) to compute frontier activity, far-future classification, and canonical dedup height,
+    - coalesced lock-lag range-pull dedup keys to canonical frontier height in `request_range_pull_from_anchor_with_tier(...)` (wire request semantics unchanged),
+    - added far-future lock-lag cooldown shaping (`>= 2 * recovery_missing_block_height_ttl()`), while keeping existing lock-lag cooldown floor behavior,
+    - suppressed lock-lag hash-miss/attempt-streak re-escalation while an in-flight range pull is still fresh (`!no_progress_due`),
+    - replaced lock-lag hash-miss widening with bounded distance-aware near/far frontier formulas in `effective_hash_miss_escalation_cap(...)`.
+  - Test updates in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+    - added `range_pull_lock_lag_coalesces_far_future_height_to_frontier_bucket`,
+    - added `missing_block_hash_miss_under_lock_lag_inflight_waits_for_no_progress_window`,
+    - added `missing_block_attempt_streak_under_lock_lag_inflight_waits_for_no_progress_window`,
+    - added `effective_hash_miss_cap_under_lock_lag_scales_by_frontier_distance`,
+    - added `range_pull_lock_lag_far_future_uses_extended_cooldown`.
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core --lib range_pull_lock_lag_coalesces_far_future_height_to_frontier_bucket -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib missing_block_hash_miss_under_lock_lag_inflight_waits_for_no_progress_window -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib missing_block_attempt_streak_under_lock_lag_inflight_waits_for_no_progress_window -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib effective_hash_miss_cap_under_lock_lag_scales_by_frontier_distance -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib range_pull_lock_lag_far_future_uses_extended_cooldown -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib emit_precommit_vote_allows_higher_view_different_block_same_height_when_lock_extends -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib validate_and_record_vote_accepts_cross_view_commit_vote_for_same_signer -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib validate_and_record_vote_rejects_same_view_conflicting_commit_vote_and_records_evidence -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib trigger_view_change_with_cause_ignores_stale_view_input -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib maybe_force_view_change_for_stalled_pending_uses_backlog_timeout_when_view_age_lags_pending_stall -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib frontier_stall_reset_prunes_far_future_state_and_reanchors_range_pull -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib lock_lag_prune_prunes_far_future_state_and_reanchors_range_pull -- --nocapture` (ok; `1 passed`)
+- Latest sync (2026-03-01 missing-QC lock-lag bottleneck hardening, safety-preserving):
+  - Implemented in `crates/iroha_core/src/sumeragi/main_loop.rs` and `crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`:
+    - added lock-lag catch-up detection (`lock_lag_catchup_frontier_*`) based on unresolved ancestry between `locked_qc` and incoming/current highest QC,
+    - defer (not drop) highest-QC promotion from `ProposalHint`/`Proposal` when lock catch-up ancestry is unresolved; dependency recovery is triggered via bounded missing-block fetch and anchor range-pull,
+    - removed eager `observe_new_view_highest_qc(...)` promotion on proposal-missing-parent path and switched to fetch-only behavior there,
+    - added deterministic lock-lag future-state pruning/reanchor pass (`prune_lock_lag_future_consensus_state`) and wired it into both stalled-pending and idle missing-QC forcing paths,
+    - retargeted idle missing-QC range-pull reacquire to lock catch-up height and added lock-lag-aware cooldown floor for `idle_missing_qc_reacquire`.
+  - Test updates in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+    - added `proposal_hint_defers_highest_qc_update_when_lock_lag_catchup_unresolved`,
+    - added `proposal_defers_highest_qc_update_when_lock_lag_catchup_unresolved`,
+    - added `lock_lag_prune_prunes_far_future_state_and_reanchors_range_pull`,
+    - added `idle_missing_qc_reacquire_reanchors_range_pull_to_lock_catchup_height`,
+    - added `idle_missing_qc_reacquire_range_pull_uses_lock_lag_cooldown_floor`.
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core --lib proposal_hint_defers_highest_qc_update_when_lock_lag_catchup_unresolved -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib proposal_defers_highest_qc_update_when_lock_lag_catchup_unresolved -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib lock_lag_prune_prunes_far_future_state_and_reanchors_range_pull -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib idle_missing_qc_reacquire_reanchors_range_pull_to_lock_catchup_height -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib idle_missing_qc_reacquire_range_pull_uses_lock_lag_cooldown_floor -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib trigger_view_change_with_cause_ignores_stale_view_input -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib maybe_force_view_change_for_stalled_pending_uses_backlog_timeout_when_view_age_lags_pending_stall -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib proposal_missing_highest_qc_triggers_missing_block_fetch -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib proposal_hint_missing_highest_qc_triggers_missing_block_fetch -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib proposal_hint_does_not_regress_highest_qc -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib frontier_stall_reset_prunes_far_future_state_and_reanchors_range_pull -- --nocapture` (ok; `1 passed`)
 - Latest sync (2026-03-01 missing-QC split-vote root-cause fix: commit vote conflict domain scoped to round):
   - Implemented in `crates/iroha_core/src/sumeragi/main_loop/{commit.rs,votes.rs}`:
     - `emit_precommit_vote(...)` no longer suppresses cross-view same-height commit votes for the local validator; conflict checks are now same-round only (`phase,height,view,epoch,signer`) with the existing `sent_key` duplicate guard preserved.
