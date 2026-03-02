@@ -3507,7 +3507,7 @@ impl Actor {
                 );
             }
             MissingBlockFetchDecision::Backoff => {
-                self.note_missing_block_height_hash_miss(
+                self.note_missing_block_height_backoff(
                     parent_hash,
                     parent_height,
                     block_view,
@@ -15562,6 +15562,25 @@ impl Actor {
         entry.range_pull.hash_misses = entry.range_pull.hash_misses.saturating_add(1);
     }
 
+    fn note_missing_block_height_backoff(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        stage: MissingBlockRecoveryStage,
+        now: Instant,
+    ) {
+        let key = self.missing_block_recovery_key_for_height(height);
+        let entry = self
+            .missing_block_height_recovery
+            .entry(key)
+            .or_insert_with(|| MissingBlockHeightRecoveryBudget::new(now, block_hash, view, stage));
+        entry.last_seen = now;
+        entry.last_view = view;
+        entry.last_hash = block_hash;
+        entry.range_pull.stage = stage;
+    }
+
     fn clear_missing_block_recovery_for_height(&mut self, height: u64, now: Instant) {
         let mut cleared_any = false;
         self.missing_block_height_recovery.retain(|key, _| {
@@ -17453,7 +17472,7 @@ impl Actor {
                 );
             }
             MissingBlockFetchDecision::Backoff => {
-                self.note_missing_block_height_hash_miss(
+                self.note_missing_block_height_backoff(
                     canonical_hash,
                     height,
                     stale_view,
@@ -17589,7 +17608,7 @@ impl Actor {
                 );
             }
             MissingBlockFetchDecision::Backoff => {
-                self.note_missing_block_height_hash_miss(
+                self.note_missing_block_height_backoff(
                     target_hash,
                     request.height,
                     request.view,
