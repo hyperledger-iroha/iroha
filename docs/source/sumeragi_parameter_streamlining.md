@@ -80,7 +80,7 @@ When advanced overrides are unset (0/None), derive values deterministically:
 
 ### Commit quorum timeout
 - Use the canonical function:
-  - DA enabled: `(block_time + 4 * commit_time) * quorum_timeout_multiplier`
+  - DA enabled: `(block_time + 3 * commit_time) * quorum_timeout_multiplier`
   - DA disabled: `max(block_time, commit_time, 2s)`
 
 ### Availability timeout (DA mode)

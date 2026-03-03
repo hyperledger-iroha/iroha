@@ -34,7 +34,7 @@ visibility and fetched via RBC or block sync.
 The availability deadline is derived from the configured block/commit times and the
 DA timeout tuning knobs; it is used to classify missing payloads as "stale" for logging
 and rebroadcast heuristics:
-- `sumeragi.advanced.da.quorum_timeout_multiplier` scales `block_time + 4 * commit_time`
+- `sumeragi.advanced.da.quorum_timeout_multiplier` scales `block_time + 3 * commit_time`
   when DA is enabled (default `3`).
 - `sumeragi.advanced.da.availability_timeout_multiplier` scales the availability timeout
   window in DA mode (default `2`).

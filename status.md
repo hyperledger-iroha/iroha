@@ -1,6 +1,67 @@
 # Status
 
 Last update: 2026-03-02
+- Latest sync (2026-03-02 Tranche 5B strict/quorum recovery damping follow-up):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/mode.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - Changes:
+    - preserved lock-lag prune cooldown across dependency-event churn (removed unconditional cooldown reset in `note_missing_block_dependency_event(...)`),
+    - extended lock-lag stall dampening scope in `request_range_pull_from_anchor_with_tier(...)` to include `frontier_gap_realign` and frontier-canonicalized `idle_missing_qc_reacquire`,
+    - added bounded no-signal missing-QC reacquire throttling (per-height window from existing `recovery_missing_qc_reacquire_window()`), while preserving dependency-signal reacquire and hard-cap fail-closed behavior,
+    - added internal no-signal reacquire tracking map to `ProposeState` and mode-flip reset wiring.
+  - Test updates:
+    - `lock_lag_frontier_stall_mode_prune_cooldown_survives_dependency_event_churn`
+    - `lock_lag_frontier_stall_mode_frontier_and_idle_reanchors_do_not_bypass_window_dedup`
+    - `missing_qc_reacquire_without_dependency_signals_is_height_window_throttled`
+    - `missing_qc_reacquire_with_dependency_signals_bypasses_height_window_throttle`
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core --lib lock_lag_frontier_stall_mode_ -- --nocapture` (ok; `9 passed`)
+    - `cargo test -p iroha_core --lib missing_qc_reacquire_ -- --nocapture` (ok; `5 passed`)
+    - `cargo test -p iroha_core --lib lock_lag_frontier_stall_mode_prune_cooldown_survives_dependency_event_churn -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib lock_lag_frontier_stall_mode_frontier_and_idle_reanchors_do_not_bypass_window_dedup -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib missing_qc_reacquire_without_dependency_signals_is_height_window_throttled -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib missing_qc_reacquire_with_dependency_signals_bypasses_height_window_throttle -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib idle_missing_qc_reacquire_reanchors_range_pull_to_lock_catchup_height -- --nocapture` (ok)
+- Latest sync (2026-03-02 Tranche 5 single-peer frontier stall escape, safety/liveness neutral):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+    - `crates/izanami/src/chaos.rs`
+  - Changes:
+    - added internal lock-lag frontier stall tracking state (`LockLagFrontierStallState`) with derived timings only (`ttl = max(recovery_missing_block_height_ttl, 1ms)`, `stall_window = max(lock_lag_range_pull_cooldown_floor, ttl)`), no public config/API changes,
+    - entered stall mode after 3 consecutive no-progress windows on the active lock-lag frontier and clear stall mode when the frontier disappears or local commit reaches the frontier,
+    - while stalled, throttled `prune_lock_lag_future_consensus_state(...)` to one prune/reanchor cycle per stall window (prune semantics unchanged),
+    - for `reason=\"lock_lag_future_prune\"`, added deterministic stalled reanchor targeting from sorted peers: 2-peer rotating cohort per stalled window and all-peer sweep every 3rd stalled window,
+    - while stalled, enforced widened range-pull dedup floor (`max(existing cooldown, 2 * recovery_missing_block_height_ttl())`) without changing consensus safety checks, hard-cap logic, or fail-closed escalation rules,
+    - added contiguous frontier reanchor behavior for far-future missing-parent fetch attempts (`frontier_gap_realign`) to avoid direct far-future parent chasing,
+    - reduced DA commit quorum base window from `block_time + 4 * commit_time` to `block_time + 3 * commit_time` (multiplier semantics unchanged), and aligned shared-host soak profile constants in `izanami` to tighter DA/recovery windows.
+  - Test updates:
+    - `lock_lag_frontier_stall_mode_enters_after_three_no_progress_windows`
+    - `lock_lag_frontier_stall_mode_enters_without_explicit_frontier_request_progress`
+    - `lock_lag_frontier_stall_mode_persists_across_frontier_request_churn`
+    - `lock_lag_frontier_stall_mode_throttles_prune_reanchor_to_one_per_window`
+    - `lock_lag_frontier_stall_mode_reanchor_uses_deterministic_peer_subset_and_periodic_all_peers`
+    - `lock_lag_frontier_stall_mode_exits_on_frontier_progress`
+    - `lock_lag_frontier_stall_mode_preserves_hard_cap_fail_closed_behavior`
+    - `request_missing_parent_far_future_skips_direct_fetch_and_reanchors_frontier`
+    - `request_missing_parent_near_frontier_keeps_parent_fetch_behavior`
+    - `commit_quorum_timeout_tracks_block_time`
+    - `commit_quorum_timeout_tracks_sumeragi_parameters`
+    - `chaos::tests::shared_host_stable_soak_profile_*`
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core --lib lock_lag_frontier_stall_mode_ -- --nocapture` (ok; `7 passed`)
+    - `cargo test -p iroha_core --lib lock_lag_prune_ -- --nocapture` (ok; `3 passed`)
+    - `cargo test -p iroha_core --lib range_pull_lock_lag_ -- --nocapture` (ok; `3 passed`)
+    - `cargo test -p iroha_core --lib missing_block_height_hard_cap_ -- --nocapture` (ok; `9 passed`)
+    - `cargo test -p iroha_core --lib request_missing_parent_far_future_skips_direct_fetch_and_reanchors_frontier -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib request_missing_parent_near_frontier_keeps_parent_fetch_behavior -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib commit_quorum_timeout_tracks_block_time -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib commit_quorum_timeout_tracks_sumeragi_parameters -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p izanami shared_host_stable_soak_profile_ -- --nocapture` (ok; `4 passed`)
 - Latest sync (2026-03-02 Tranche 4 backoff-true hash-miss accounting):
   - Implemented in:
     - `crates/iroha_core/src/sumeragi/main_loop.rs`
