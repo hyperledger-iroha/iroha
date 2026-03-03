@@ -971,7 +971,10 @@ fn offline_build_claim_issue_operation() -> Map {
         "operationId".into(),
         Value::String("offlineBuildClaimIssue".to_owned()),
     );
-    operation.insert("requestBody".into(), offline_build_claim_issue_request_body());
+    operation.insert(
+        "requestBody".into(),
+        offline_build_claim_issue_request_body(),
+    );
     operation.insert(
         "responses".into(),
         Value::Object(offline_build_claim_issue_responses()),
