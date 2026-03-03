@@ -204,17 +204,19 @@ public final class OfflineWallet {
     /// preserving the current allowance amount and policy.
     @discardableResult
     public func reprovisionAllowance(certificateIdHex: String,
-                                     currentCertificate: OfflineWalletCertificate,
+                                     currentCertificateRecordData: Data,
                                      newCommitment: Data,
                                      authority: String,
                                      privateKey: String,
+                                     lineage: OfflineCertificateLineage,
                                      recordVerdict: Bool = true,
                                      recordedAt timestampMs: UInt64? = nil) async throws -> ToriiOfflineTopUpResponse {
         let response = try await toriiClient.reprovisionOfflineAllowance(certificateIdHex: certificateIdHex,
-                                                                         currentCertificate: currentCertificate,
+                                                                         currentCertificateRecordData: currentCertificateRecordData,
                                                                          newCommitment: newCommitment,
                                                                          authority: authority,
-                                                                         privateKey: privateKey)
+                                                                         privateKey: privateKey,
+                                                                         lineage: lineage)
         if recordVerdict {
             try recordVerdictMetadata(from: response.certificate, recordedAt: timestampMs)
         }

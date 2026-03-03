@@ -13,7 +13,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use http_body_util::BodyExt as _;
-use iroha_config::parameters::actual::Queue as QueueConfig;
+use iroha_config::parameters::actual::{Queue as QueueConfig, ToriiOfflineIssuer};
 use iroha_core::{
     kiso::KisoHandle,
     kura::Kura,
@@ -73,7 +73,12 @@ const IOS_ENVIRONMENT_KEY: &str = "ios.app_attest.environment";
 const ANDROID_PROVISIONED_DEVICE_ID_KEY: &str = "android.provisioned.device_id";
 
 fn build_harness() -> Harness {
-    let cfg = test_utils::mk_minimal_root_cfg();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    let issuer_keys = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
+    cfg.torii.offline_issuer = Some(ToriiOfflineIssuer {
+        operator_private_key: iroha_crypto::ExposedPrivateKey(issuer_keys.private_key().clone()),
+        allowed_controllers: vec![],
+    });
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -493,6 +498,104 @@ async fn offline_allowances_issue_returns_certificate_id() {
         json_body["certificate_id_hex"].as_str(),
         Some(expected_id.as_str())
     );
+}
+
+#[tokio::test]
+async fn offline_build_claims_issue_returns_signed_claim_accepted_by_settlement() {
+    let harness = build_harness();
+    seed_allowance(&harness.state, harness.fixtures.certificate.clone());
+
+    let mut claim_request = json::Map::new();
+    claim_request.insert(
+        "certificate_id_hex".into(),
+        Value::from(hex::encode(
+            harness.fixtures.certificate.certificate_id().as_ref(),
+        )),
+    );
+    claim_request.insert(
+        "tx_id_hex".into(),
+        Value::from(hex::encode(harness.fixtures.receipt.tx_id.as_ref())),
+    );
+    claim_request.insert("platform".into(), Value::from("apple"));
+    claim_request.insert("app_id".into(), Value::from("com.example.merchants"));
+    let claim_body = json::to_vec(&Value::Object(claim_request)).expect("serialize claim request");
+
+    let claim_resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/build-claims/issue")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(claim_body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(claim_resp.status(), StatusCode::OK);
+    let claim_bytes = claim_resp
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let claim_json: Value = json::from_slice(&claim_bytes).expect("json");
+    assert!(claim_json["claim_id_hex"].as_str().is_some());
+
+    let build_claim: OfflineBuildClaim =
+        json::from_value(claim_json["build_claim"].clone()).expect("build claim");
+    assert_eq!(build_claim.nonce, harness.fixtures.receipt.tx_id);
+    assert_eq!(build_claim.platform, OfflineBuildClaimPlatform::Apple);
+    let operator_key = harness
+        .fixtures
+        .certificate
+        .operator
+        .try_signatory()
+        .expect("single-signature operator");
+    build_claim
+        .operator_signature
+        .verify(
+            operator_key,
+            &build_claim.signing_bytes().expect("claim signing bytes"),
+        )
+        .expect("valid operator signature");
+
+    let mut transfer = harness.fixtures.transfer.clone();
+    transfer.receipts[0].build_claim = Some(build_claim);
+
+    let mut submit = json::Map::new();
+    submit.insert(
+        "authority".into(),
+        json::to_value(&harness.fixtures.receiver).expect("authority value"),
+    );
+    submit.insert(
+        "private_key".into(),
+        Value::from(
+            iroha_crypto::ExposedPrivateKey(harness.fixtures.receiver_keys.private_key().clone())
+                .to_string(),
+        ),
+    );
+    submit.insert(
+        "transfer".into(),
+        json::to_value(&transfer).expect("transfer value"),
+    );
+    let submit_body = json::to_vec(&Value::Object(submit)).expect("serialize settlement request");
+
+    let submit_resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/settlements")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(submit_body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(submit_resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]

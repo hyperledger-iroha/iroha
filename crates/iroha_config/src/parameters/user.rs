@@ -9318,6 +9318,9 @@ pub struct Offline {
     /// Skip platform attestation verification (for local testing only).
     #[config(default = "defaults::settlement::offline::SKIP_PLATFORM_ATTESTATION")]
     pub skip_platform_attestation: bool,
+    /// Skip build claim verification (for local testing only).
+    #[config(default = "defaults::settlement::offline::SKIP_BUILD_CLAIM_VERIFICATION")]
+    pub skip_build_claim_verification: bool,
 }
 
 impl Default for Offline {
@@ -9335,6 +9338,8 @@ impl Default for Offline {
             escrow_accounts: BTreeMap::new(),
             android_trust_anchor_files: Vec::new(),
             skip_platform_attestation: defaults::settlement::offline::SKIP_PLATFORM_ATTESTATION,
+            skip_build_claim_verification:
+                defaults::settlement::offline::SKIP_BUILD_CLAIM_VERIFICATION,
         }
     }
 }
@@ -9564,6 +9569,7 @@ impl Offline {
             escrow_accounts,
             android_trust_anchor_files,
             skip_platform_attestation,
+            skip_build_claim_verification,
         } = self;
         if hot_retention_blocks == 0 {
             emitter.emit(ParseError::InvalidSettlementConfig.into());
@@ -9644,6 +9650,7 @@ impl Offline {
             escrow_accounts: escrow_bindings,
             android_trust_anchors: anchors,
             skip_platform_attestation,
+            skip_build_claim_verification,
         }
     }
 }
