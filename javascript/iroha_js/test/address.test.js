@@ -699,6 +699,13 @@ test("native codec propagates IH58 errors", () => {
   );
 });
 
+test("parseAny accepts extended IH58 literals when native codec cannot materialize canonical bytes", () => {
+  const literal =
+    "34mSYn4nMg3BgfL1zuxFV3ikfCrVFzEjWsSzQeJtj1gXsHiYjkrUTuF6bySUzjZuH2PPbWgvG";
+  const parsed = AccountAddress.parseAny(literal);
+  assert.equal(parsed.address.toIH58(), literal);
+});
+
 test("inspectAccountId enforces option shape", () => {
   const address = AccountAddress.fromAccount({
     domain: "default",

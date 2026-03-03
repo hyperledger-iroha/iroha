@@ -253,4 +253,41 @@ public extension OfflineWalletCertificate {
     init(toriiValue: ToriiJSONValue) throws {
         self = try OfflineToriiDecoding.decodeCertificate(from: toriiValue)
     }
+
+    /// Parse all metadata from the certificate into typed platform-agnostic models.
+    func parsedMetadata() -> OfflineCertificateParsedMetadata {
+        OfflineCertificateParsedMetadata(from: metadata)
+    }
+}
+
+extension OfflineWalletCertificate {
+    /// Decode a certificate from raw JSON record data (as stored in `ToriiOfflineAllowanceItem`).
+    /// Handles both `{"certificate": {...}}` wrapper and bare certificate objects.
+    /// Internal — clients should use typed SDK methods instead.
+    init(recordData: Data) throws {
+        let value = try JSONDecoder().decode(ToriiJSONValue.self, from: recordData)
+        if case let .object(object) = value, let certValue = object["certificate"] {
+            self = try OfflineToriiDecoding.decodeCertificate(from: certValue)
+        } else {
+            self = try OfflineToriiDecoding.decodeCertificate(from: value)
+        }
+    }
+}
+
+// MARK: - ToriiOfflineAllowanceItem typed accessors
+
+public extension ToriiOfflineAllowanceItem {
+    /// Decode the certificate from the record payload.
+    /// Handles both `{"certificate": {...}}` wrapper and bare certificate objects.
+    func decodeCertificate() throws -> OfflineWalletCertificate {
+        if case let .object(object) = record, let certificateValue = object["certificate"] {
+            return try OfflineWalletCertificate(toriiValue: certificateValue)
+        }
+        return try OfflineWalletCertificate(toriiValue: record)
+    }
+
+    /// Returns the raw JSON-encoded Data of the record payload.
+    func recordData() throws -> Data {
+        try record.encodedData()
+    }
 }

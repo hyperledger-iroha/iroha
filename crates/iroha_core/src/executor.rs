@@ -1278,7 +1278,8 @@ impl Executor {
             bytes.copy_from_slice(tx_hash.as_ref());
             bytes
         };
-        // Disallow direct signing with multisig accounts; multisig flows must route through propose/approve.
+        // Disallow direct signing with multisig accounts; only explicit multisig
+        // proposal/approval envelopes with bundled multisig signatures are allowed.
         {
             let spec_key =
                 iroha_data_model::name::Name::from_str("multisig/spec").expect("static key valid");
@@ -1287,15 +1288,28 @@ impl Executor {
             })?;
             let metadata = account.metadata();
             if metadata.contains(&spec_key) {
-                #[cfg(feature = "telemetry")]
-                crate::telemetry::record_social_rejection(
-                    state_transaction.telemetry,
-                    "multisig_direct_sign",
+                let has_multisig_bundle = transaction.multisig_signatures().is_some();
+                let only_multisig_proposal_instructions = matches!(
+                    transaction.instructions(),
+                    Executable::Instructions(items)
+                        if !items.is_empty()
+                            && items.iter().all(|instruction| {
+                                MultisigInstructionBox::try_from(instruction).is_ok()
+                            })
                 );
-                return Err(ValidationFail::NotPermitted(
+                if has_multisig_bundle && only_multisig_proposal_instructions {
+                    // Allowed: this is a multisig proposal/approval envelope, not a direct ISI submit.
+                } else {
+                    #[cfg(feature = "telemetry")]
+                    crate::telemetry::record_social_rejection(
+                        state_transaction.telemetry,
+                        "multisig_direct_sign",
+                    );
+                    return Err(ValidationFail::NotPermitted(
                     "direct signing with multisig accounts is forbidden; use multisig propose/approve"
                         .to_owned(),
                 ));
+                }
             }
         }
         // Refresh pipeline gas settings from on-chain parameters (genesis/governance updates)
@@ -3414,6 +3428,14 @@ fn can_transfer_asset(
         return Ok(true);
     }
 
+    let source_domain_owner = world
+        .domain(transfer.source().account().domain())
+        .map(|domain| domain.owned_by().clone())
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
+    if &source_domain_owner == authority {
+        return Ok(true);
+    }
+
     let asset = transfer.source().clone();
     let specific: Permission = executor_permission::asset::CanTransferAsset {
         asset: asset.clone(),
@@ -4217,6 +4239,55 @@ mod tests {
         assert!(
             matches!(res, Err(ValidationFail::NotPermitted(_))),
             "initial executor should deny domain transfer from another account, got: {res:?}"
+        );
+    }
+
+    #[test]
+    fn initial_executor_allows_transfer_asset_by_source_domain_owner() {
+        let alice_id = ALICE_ID.clone();
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id).build(&alice_id);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+
+        let world = World::with(
+            [users_domain],
+            [alice_account, user1_account, user2_account],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(genesis_header)
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let transfer_asset_id = AssetId::new(
+            "coin#users".parse().expect("asset definition id"),
+            user1.clone(),
+        );
+        let instruction = InstructionBox::from(Transfer::asset_numeric(
+            transfer_asset_id,
+            1_u32,
+            user2.clone(),
+        ));
+        let transfer = extract_transfer_asset(&instruction)
+            .expect("expected to extract asset transfer from instruction");
+
+        let stx = block.transaction();
+        let allowed = can_transfer_asset(&stx.world, &alice_id, &transfer)
+            .expect("asset transfer permission check");
+        assert!(
+            allowed,
+            "source domain owner should be allowed to transfer account assets"
         );
     }
 

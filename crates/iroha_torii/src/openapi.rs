@@ -619,6 +619,10 @@ fn offline_paths() -> Map {
         Value::Object(offline_certificate_issue_operation()),
     );
     paths.insert(
+        "/v1/offline/build-claims/issue".to_owned(),
+        Value::Object(offline_build_claim_issue_operation()),
+    );
+    paths.insert(
         "/v1/offline/certificates/{certificate_id_hex}".to_owned(),
         Value::Object(offline_allowance_detail_operation()),
     );
@@ -922,7 +926,9 @@ fn offline_certificate_issue_operation() -> Map {
         "description".into(),
         Value::String(
             "Accepts an unsigned OfflineWalletCertificate draft and returns the operator-signed \
-             certificate payload without registering it on-ledger."
+             certificate payload without registering it on-ledger. Torii derives `operator` from \
+             its configured offline issuer keypair; client-supplied draft `operator` values are \
+             optional and ignored."
                 .to_owned(),
         ),
     );
@@ -943,6 +949,41 @@ fn offline_certificate_issue_operation() -> Map {
     methods
 }
 
+fn offline_build_claim_issue_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Offline".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Issue an offline build claim.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Signs an OfflineBuildClaim bound to a receipt tx id using Torii's configured \
+             offline issuer key."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("offlineBuildClaimIssue".to_owned()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        offline_build_claim_issue_request_body(),
+    );
+    operation.insert(
+        "responses".into(),
+        Value::Object(offline_build_claim_issue_responses()),
+    );
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
 fn offline_certificate_renew_issue_operation() -> Map {
     let mut operation = Map::new();
     operation.insert(
@@ -957,7 +998,8 @@ fn offline_certificate_renew_issue_operation() -> Map {
         "description".into(),
         Value::String(
             "Signs a refreshed OfflineWalletCertificate draft after confirming the referenced \
-             allowance exists on-ledger."
+             allowance exists on-ledger. Torii derives `operator` from its configured offline \
+             issuer keypair; client-supplied draft `operator` values are optional and ignored."
                 .to_owned(),
         ),
     );
@@ -1952,6 +1994,42 @@ fn offline_certificate_issue_responses() -> Map {
         "400".to_owned(),
         json_response_with_headers(
             "Invalid certificate payload.",
+            error_schema_reference(),
+            offline_reject_headers(),
+        ),
+    );
+    responses
+}
+
+fn offline_build_claim_issue_request_body() -> Value {
+    let mut media = Map::new();
+    media.insert(
+        "application/json".into(),
+        Value::Object({
+            let mut schema = Map::new();
+            schema.insert("schema".into(), schema_ref("OfflineBuildClaimIssueRequest"));
+            schema
+        }),
+    );
+    let mut body = Map::new();
+    body.insert("required".into(), Value::Bool(true));
+    body.insert("content".into(), Value::Object(media));
+    Value::Object(body)
+}
+
+fn offline_build_claim_issue_responses() -> Map {
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "Offline build claim issued.",
+            schema_ref("OfflineBuildClaimIssueResponse"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response_with_headers(
+            "Invalid build-claim payload.",
             error_schema_reference(),
             offline_reject_headers(),
         ),
@@ -7871,7 +7949,7 @@ fn openapi_schemas() -> Map {
         "OfflineWalletCertificateDraft".to_owned(),
         norito::json!({
             "type": "object",
-            "description": "OfflineWalletCertificate payload without the operator signature."
+            "description": "OfflineWalletCertificate payload without the operator signature. Torii derives `operator` from its configured offline issuer keypair; client-supplied draft `operator` values are optional and ignored."
         }),
     );
     schemas.insert(
@@ -7899,6 +7977,67 @@ fn openapi_schemas() -> Map {
                 "certificate": {
                     "type": "object",
                     "description": "Operator-signed OfflineWalletCertificate payload."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "OfflineBuildClaimIssueRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["certificate_id_hex", "tx_id_hex", "platform"],
+            "properties": {
+                "certificate_id_hex": {
+                    "type": "string",
+                    "description": "Registered offline certificate identifier rendered as hex."
+                },
+                "tx_id_hex": {
+                    "type": "string",
+                    "description": "Receipt tx id rendered as hex. Used as build-claim nonce."
+                },
+                "platform": {
+                    "type": "string",
+                    "description": "Build-claim platform slug (`apple` or `android`)."
+                },
+                "app_id": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Optional application identifier override."
+                },
+                "build_number": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "nullable": true,
+                    "description": "Optional build number override. Defaults to the certificate minimum."
+                },
+                "issued_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "nullable": true,
+                    "description": "Optional issuance timestamp override."
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "nullable": true,
+                    "description": "Optional expiry timestamp override."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "OfflineBuildClaimIssueResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["claim_id_hex", "build_claim"],
+            "properties": {
+                "claim_id_hex": {
+                    "type": "string",
+                    "description": "Deterministic build-claim identifier rendered as hex."
+                },
+                "build_claim": {
+                    "type": "object",
+                    "description": "Operator-signed OfflineBuildClaim payload."
                 }
             }
         }),

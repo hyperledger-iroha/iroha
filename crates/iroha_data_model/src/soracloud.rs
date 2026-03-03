@@ -3045,9 +3045,9 @@ pub fn encode_decryption_request_provenance_payload(
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
 pub fn encode_ciphertext_query_provenance_payload(
-    query: CiphertextQuerySpecV1,
+    query: &CiphertextQuerySpecV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&query)
+    norito::to_bytes(query)
 }
 
 /// Re-export commonly used `SoraCloud` schema types.
@@ -3482,8 +3482,7 @@ mod tests {
     #[test]
     fn ciphertext_query_provenance_payload_encodes_canonical_layout() {
         let query = sample_ciphertext_query_spec();
-        let encoded =
-            encode_ciphertext_query_provenance_payload(query.clone()).expect("encode payload");
+        let encoded = encode_ciphertext_query_provenance_payload(&query).expect("encode payload");
         let expected = norito::to_bytes(&query).expect("encode query");
         assert_eq!(encoded, expected);
     }

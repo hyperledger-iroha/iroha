@@ -3256,7 +3256,6 @@ export interface ToriiOfflineAllowanceListResponse {
 
 export interface ToriiOfflineWalletCertificateDraft {
   controller: string;
-  operator: string;
   allowance: {
     asset: string;
     amount: string;
@@ -3277,7 +3276,27 @@ export interface ToriiOfflineWalletCertificateDraft {
   refresh_at_ms?: number | null;
 }
 
-export interface ToriiOfflineWalletCertificate extends ToriiOfflineWalletCertificateDraft {
+export interface ToriiOfflineWalletCertificate {
+  controller: string;
+  operator: string;
+  allowance: {
+    asset: string;
+    amount: string;
+    commitment: ReadonlyArray<number>;
+  };
+  spend_public_key: string;
+  attestation_report: ReadonlyArray<number>;
+  issued_at_ms: number;
+  expires_at_ms: number;
+  policy: {
+    max_balance: string;
+    max_tx_value: string;
+    expires_at_ms: number;
+  };
+  metadata?: Record<string, unknown>;
+  verdict_id?: string | null;
+  attestation_nonce?: string | null;
+  refresh_at_ms?: number | null;
   operator_signature: string;
 }
 
@@ -7110,6 +7129,10 @@ export function hashSignedTransaction(
 export function resignSignedTransaction(
   signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+): Buffer;
+
+export function encodeSignedTransactionNorito(
+  signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
 ): Buffer;
 
 export interface OfflineEnvelope {

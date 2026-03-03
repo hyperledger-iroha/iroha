@@ -180,12 +180,107 @@ async fn offline_certificates_issue_returns_signed_certificate() {
         certificate_id_hex,
         hex::encode(certificate.certificate_id().as_ref())
     );
+    assert_eq!(certificate.operator, harness.fixtures.controller);
 
     let payload = certificate.operator_signing_bytes().expect("payload");
     certificate
         .operator_signature
         .verify(harness.fixtures.controller_keys.public_key(), &payload)
         .expect("operator signature");
+}
+
+#[tokio::test]
+async fn offline_certificates_issue_ignores_client_supplied_operator() {
+    let harness = build_cert_harness();
+    let mut draft_value = certificate_draft_json(&harness.fixtures.certificate);
+    let wrong_operator_keys = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
+    let wrong_operator = AccountId::of(
+        harness.fixtures.controller.domain().clone(),
+        wrong_operator_keys.public_key().clone(),
+    );
+    match &mut draft_value {
+        Value::Object(map) => {
+            map.insert(
+                "operator".into(),
+                json::to_value(&wrong_operator).expect("operator value"),
+            );
+        }
+        _ => panic!("certificate json must be object"),
+    }
+
+    let mut map = Map::new();
+    map.insert("certificate".into(), draft_value);
+    let body = json::to_vec(&Value::Object(map)).expect("serialize issue request");
+
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/certificates/issue")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+    let json_body: Value = json::from_slice(&bytes).expect("json");
+
+    let certificate: OfflineWalletCertificate =
+        json::from_value(json_body["certificate"].clone()).expect("certificate");
+    assert_eq!(certificate.operator, harness.fixtures.controller);
+}
+
+#[tokio::test]
+async fn offline_certificates_renew_issue_ignores_client_supplied_operator() {
+    let harness = build_cert_harness();
+    let mut draft_value = certificate_draft_json(&harness.fixtures.renewed_certificate);
+    let wrong_operator_keys = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
+    let wrong_operator = AccountId::of(
+        harness.fixtures.controller.domain().clone(),
+        wrong_operator_keys.public_key().clone(),
+    );
+    match &mut draft_value {
+        Value::Object(map) => {
+            map.insert(
+                "operator".into(),
+                json::to_value(&wrong_operator).expect("operator value"),
+            );
+        }
+        _ => panic!("certificate json must be object"),
+    }
+
+    let mut map = Map::new();
+    map.insert("certificate".into(), draft_value);
+    let body = json::to_vec(&Value::Object(map)).expect("serialize renew issue request");
+
+    let uri = format!(
+        "/v1/offline/certificates/{}/renew/issue",
+        harness.fixtures.certificate_hex
+    );
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(uri)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+    let json_body: Value = json::from_slice(&bytes).expect("json");
+
+    let certificate: OfflineWalletCertificate =
+        json::from_value(json_body["certificate"].clone()).expect("certificate");
+    assert_eq!(certificate.operator, harness.fixtures.controller);
 }
 
 #[tokio::test]
@@ -229,6 +324,7 @@ async fn offline_certificates_renew_issue_returns_signed_certificate() {
         certificate_id_hex,
         hex::encode(certificate.certificate_id().as_ref())
     );
+    assert_eq!(certificate.operator, harness.fixtures.controller);
 
     let payload = certificate.operator_signing_bytes().expect("payload");
     certificate
@@ -430,6 +526,7 @@ fn certificate_draft_json(certificate: &OfflineWalletCertificate) -> Value {
     match &mut value {
         Value::Object(map) => {
             map.remove("operator_signature");
+            map.remove("operator");
         }
         _ => panic!("certificate json must be object"),
     }

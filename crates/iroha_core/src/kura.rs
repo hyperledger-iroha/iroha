@@ -1009,8 +1009,8 @@ impl Kura {
         let index_len = u64::try_from(persisted)?.saturating_mul(BlockIndex::SIZE);
         index_tmp_file.try_io(|file| {
             for entry in &new_indices {
-                file.write_all(&entry.start.to_le_bytes())?;
-                file.write_all(&entry.length.to_le_bytes())?;
+                let bytes = (*entry).encode();
+                file.write_all(&bytes)?;
             }
             file.flush()?;
             file.set_len(index_len)?;
@@ -3171,6 +3171,14 @@ impl BlockIndex {
 
 impl BlockIndex {
     const SIZE: u64 = core::mem::size_of::<Self>() as u64;
+    const SIZE_USIZE: usize = core::mem::size_of::<Self>();
+
+    fn encode(self) -> [u8; Self::SIZE_USIZE] {
+        let mut out = [0u8; Self::SIZE_USIZE];
+        out[..core::mem::size_of::<u64>()].copy_from_slice(&self.start.to_le_bytes());
+        out[core::mem::size_of::<u64>()..].copy_from_slice(&self.length.to_le_bytes());
+        out
+    }
 
     fn read(
         file: &mut std::fs::File,
@@ -5694,8 +5702,8 @@ impl BlockStore {
         }
         index_file.try_io(|file| {
             file.seek(SeekFrom::Start(start_location))?;
-            file.write_all(&start.to_le_bytes())?;
-            file.write_all(&length.to_le_bytes())
+            let bytes = BlockIndex { start, length }.encode();
+            file.write_all(&bytes)
         })?;
         self.schedule_fsync_after_write()?;
         Ok(())
@@ -6015,8 +6023,12 @@ impl BlockStore {
         index_file.try_io(|file| {
             file.seek(SeekFrom::Start(start_height * BlockIndex::SIZE))?;
             for (start, len) in offsets.iter().zip(lengths.iter()) {
-                file.write_all(&start.to_le_bytes())?;
-                file.write_all(&len.to_le_bytes())?;
+                let bytes = BlockIndex {
+                    start: *start,
+                    length: *len,
+                }
+                .encode();
+                file.write_all(&bytes)?;
             }
             file.flush()?;
             file.set_len(new_index_len)?;
@@ -6835,6 +6847,25 @@ mod tests {
         assert_eq!(block_store.read_index_count().unwrap(), 0);
         block_store.write_index_count(12).unwrap();
         assert_eq!(block_store.read_index_count().unwrap(), 12);
+    }
+
+    #[test]
+    fn block_index_encoding_is_fixed_little_endian_layout() {
+        let entry = BlockIndex {
+            start: 0x0102_0304_0506_0708,
+            length: 0x1112_1314_1516_1718,
+        };
+        let bytes = entry.encode();
+
+        assert_eq!(bytes.len() as u64, BlockIndex::SIZE);
+        assert_eq!(
+            &bytes[..core::mem::size_of::<u64>()],
+            &entry.start.to_le_bytes()
+        );
+        assert_eq!(
+            &bytes[core::mem::size_of::<u64>()..],
+            &entry.length.to_le_bytes()
+        );
     }
 
     #[test]

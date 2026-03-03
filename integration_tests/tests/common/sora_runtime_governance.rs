@@ -53,11 +53,11 @@ const TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const TX_TTL: Duration = Duration::from_secs(1_200);
 const BALANCE_WAIT_TIMEOUT: Duration = Duration::from_secs(300);
 
-pub(super) fn canonical_abi_hex() -> String {
+pub fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
 }
 
-pub(super) fn tune_client_timeouts(client: &mut Client) {
+pub fn tune_client_timeouts(client: &mut Client) {
     client.transaction_status_timeout = TX_STATUS_TIMEOUT;
     client.torii_request_timeout = TORII_REQUEST_TIMEOUT;
     client.transaction_ttl = Some(TX_TTL);
@@ -100,14 +100,14 @@ async fn wait_for_ready_torii_peer(
     }
 }
 
-pub(super) fn parse_hex32(input: &str) -> [u8; 32] {
+pub fn parse_hex32(input: &str) -> [u8; 32] {
     let bytes = hex::decode(input).expect("hex should decode");
     let mut out = [0_u8; 32];
     out.copy_from_slice(&bytes);
     out
 }
 
-pub(super) fn compute_runtime_upgrade_proposal_id(manifest: &RuntimeUpgradeManifest) -> [u8; 32] {
+pub fn compute_runtime_upgrade_proposal_id(manifest: &RuntimeUpgradeManifest) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
 
     let canonical = norito::to_bytes(manifest).expect("runtime manifest must encode");
@@ -165,10 +165,10 @@ fn integer_sqrt_u128(value: u128) -> u128 {
         return value;
     }
     let mut x0 = value;
-    let mut x1 = (x0 + (value / x0)) / 2;
+    let mut x1 = u128::midpoint(x0, value / x0);
     while x1 < x0 {
         x0 = x1;
-        x1 = (x0 + (value / x0)) / 2;
+        x1 = u128::midpoint(x0, value / x0);
     }
     x0
 }
@@ -180,7 +180,7 @@ fn expected_plain_total_weight(voter_count: usize) -> u128 {
         .saturating_mul(u128::try_from(voter_count).expect("voter count should fit u128"))
 }
 
-pub(super) async fn wait_for_proposal_found(
+pub async fn wait_for_proposal_found(
     client: &Client,
     proposal_id_hex: &str,
     timeout: Duration,
@@ -350,7 +350,7 @@ async fn wait_for_tally_total(
     }
 }
 
-pub(super) async fn wait_for_runtime_upgrade_status(
+pub async fn wait_for_runtime_upgrade_status(
     client: &Client,
     runtime_upgrade_id_hex: &str,
     expected_status_key: &str,
@@ -562,7 +562,7 @@ async fn wait_for_all_citizen_balances(
         for (account_id, _) in citizens {
             let observed = numeric_asset_balance_u128(
                 client,
-                AssetId::new(asset_def_id.clone(), account_id.clone()),
+                &AssetId::new(asset_def_id.clone(), account_id.clone()),
             )?;
             if observed != Some(expected) {
                 if first_mismatch.is_none() {
@@ -591,7 +591,7 @@ async fn wait_for_all_citizen_balances(
     }
 }
 
-fn numeric_asset_balance_u128(client: &Client, asset_id: AssetId) -> Result<Option<u128>> {
+fn numeric_asset_balance_u128(client: &Client, asset_id: &AssetId) -> Result<Option<u128>> {
     let asset = match client.query_single(FindAssetById::new(asset_id.clone())) {
         Ok(asset) => asset,
         Err(err) => {
@@ -625,7 +625,7 @@ async fn wait_for_asset_balance(
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        let observed = numeric_asset_balance_u128(client, asset_id.clone())?;
+        let observed = numeric_asset_balance_u128(client, &asset_id)?;
         if observed == Some(expected) || (expected == 0 && observed.is_none()) {
             return Ok(());
         }
@@ -650,7 +650,7 @@ fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
     }
 }
 
-pub(super) async fn wait_for_tx_applied(
+pub async fn wait_for_tx_applied(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,
     tx_hash_hex: &str,
@@ -726,7 +726,7 @@ pub(super) async fn wait_for_tx_applied(
     }
 }
 
-pub(super) async fn wait_for_tx_rejected(
+pub async fn wait_for_tx_rejected(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,
     tx_hash_hex: &str,
@@ -802,27 +802,27 @@ pub(super) async fn wait_for_tx_rejected(
     }
 }
 
-pub(super) type AccountId = iroha::data_model::account::AccountId;
+pub type AccountId = iroha::data_model::account::AccountId;
 
-pub(super) struct RuntimeGovernanceFixture {
-    pub(super) network: sandbox::SerializedNetwork,
-    pub(super) http: reqwest::Client,
-    pub(super) ready_peer_idx: usize,
-    pub(super) alice: Client,
-    pub(super) citizens: Vec<(AccountId, KeyPair)>,
-    pub(super) council_members: Vec<AccountId>,
-    pub(super) asset_def_id: AssetDefinitionId,
-    pub(super) alice_asset_id: AssetId,
+pub struct RuntimeGovernanceFixture {
+    pub network: sandbox::SerializedNetwork,
+    pub http: reqwest::Client,
+    pub ready_peer_idx: usize,
+    pub alice: Client,
+    pub citizens: Vec<(AccountId, KeyPair)>,
+    pub council_members: Vec<AccountId>,
+    pub asset_def_id: AssetDefinitionId,
+    pub alice_asset_id: AssetId,
 }
 
-pub(super) struct RuntimeRoundOutcome {
-    pub(super) runtime_upgrade_id_hex: String,
-    pub(super) activated_height: u64,
-    pub(super) scheduled_start_height: u64,
-    pub(super) scheduled_end_height: u64,
+pub struct RuntimeRoundOutcome {
+    pub runtime_upgrade_id_hex: String,
+    pub activated_height: u64,
+    pub scheduled_start_height: u64,
+    pub scheduled_end_height: u64,
 }
 
-pub(super) fn governance_builder_for_runtime_resilience() -> NetworkBuilder {
+pub fn governance_builder_for_runtime_resilience() -> NetworkBuilder {
     let alice_escrow_account = format!("{}@wonderland", ALICE_KEYPAIR.public_key());
     NetworkBuilder::new()
         .with_peers(4)
@@ -864,7 +864,8 @@ pub(super) fn governance_builder_for_runtime_resilience() -> NetworkBuilder {
         })
 }
 
-pub(super) async fn setup_runtime_governance_fixture(
+#[allow(clippy::too_many_lines)]
+pub async fn setup_runtime_governance_fixture(
     test_name: &'static str,
 ) -> Result<Option<RuntimeGovernanceFixture>> {
     let builder = governance_builder_for_runtime_resilience();
@@ -1096,8 +1097,7 @@ async fn restart_peer_and_wait_for_height(
     loop {
         match restart_client.get_status() {
             Ok(status) if status.blocks >= target_height => return Ok(()),
-            Ok(_) => {}
-            Err(_) => {}
+            Ok(_) | Err(_) => {}
         }
 
         if Instant::now() >= deadline {
@@ -1110,7 +1110,8 @@ async fn restart_peer_and_wait_for_height(
     }
 }
 
-pub(super) async fn enact_runtime_upgrade_round(
+#[allow(clippy::too_many_lines)]
+pub async fn enact_runtime_upgrade_round(
     fixture: &mut RuntimeGovernanceFixture,
     round_label: &str,
     restart_peer_idx: Option<usize>,
@@ -1193,7 +1194,7 @@ pub(super) async fn enact_runtime_upgrade_round(
         .map(|(account_id, _)| {
             let current = numeric_asset_balance_u128(
                 &fixture.alice,
-                AssetId::new(fixture.asset_def_id.clone(), account_id.clone()),
+                &AssetId::new(fixture.asset_def_id.clone(), account_id.clone()),
             )?
             .unwrap_or(0);
             Ok((account_id.clone(), current.saturating_add(BALLOT_LOCK)))
@@ -1223,29 +1224,23 @@ pub(super) async fn enact_runtime_upgrade_round(
         })?;
     }
 
-    let first_council_account_id =
-        fixture.council_members.first().cloned().ok_or_else(|| {
-            eyre!("runtime-governance fixture expected at least one council member")
+    let (first_approver_account_id, first_approver_key_pair) =
+        fixture.citizens.first().ok_or_else(|| {
+            eyre!("runtime-governance fixture expected at least one citizen approver")
         })?;
-    let (_, first_council_key_pair) = fixture
-        .citizens
-        .iter()
-        .find(|(account_id, _)| account_id == &first_council_account_id)
-        .ok_or_else(|| eyre!("first council member key pair should exist"))?;
-    let first_council_client =
-        tuned_client_for_account(fixture, &first_council_account_id, first_council_key_pair);
-    first_council_client
-        .submit_all([
-            ApproveGovernanceProposal {
-                body: ParliamentBody::RulesCommittee,
+    let first_approver_client =
+        tuned_client_for_account(fixture, first_approver_account_id, first_approver_key_pair);
+    for body in [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::AgendaCouncil,
+    ] {
+        first_approver_client
+            .submit(ApproveGovernanceProposal {
+                body,
                 proposal_id: runtime_proposal_id,
-            },
-            ApproveGovernanceProposal {
-                body: ParliamentBody::AgendaCouncil,
-                proposal_id: runtime_proposal_id,
-            },
-        ])
-        .wrap_err_with(|| format!("submit initial body approvals ({round_label})"))?;
+            })
+            .wrap_err_with(|| format!("submit initial {body:?} approval ({round_label})"))?;
+    }
     wait_for_referendum_found(
         &fixture.alice,
         &runtime_referendum_id,
@@ -1273,54 +1268,31 @@ pub(super) async fn enact_runtime_upgrade_round(
         .await?;
     }
 
-    for (approval_idx, council_account_id) in fixture.council_members.iter().enumerate() {
-        let (_, council_key_pair) = fixture
-            .citizens
-            .iter()
-            .find(|(account_id, _)| account_id == council_account_id)
-            .ok_or_else(|| {
-                eyre!(
-                    "runtime-governance fixture missing key pair for council account `{council_account_id}`"
-                )
-            })?;
-        let council_member_client =
-            tuned_client_for_account(fixture, council_account_id, council_key_pair);
-        council_member_client
-            .submit_all([
-                ApproveGovernanceProposal {
-                    body: ParliamentBody::RulesCommittee,
+    for (approval_idx, (approver_account_id, approver_key_pair)) in
+        fixture.citizens.iter().enumerate()
+    {
+        let approver_client =
+            tuned_client_for_account(fixture, approver_account_id, approver_key_pair);
+        for body in [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::FmaCommittee,
+        ] {
+            approver_client
+                .submit(ApproveGovernanceProposal {
+                    body,
                     proposal_id: runtime_proposal_id,
-                },
-                ApproveGovernanceProposal {
-                    body: ParliamentBody::AgendaCouncil,
-                    proposal_id: runtime_proposal_id,
-                },
-                ApproveGovernanceProposal {
-                    body: ParliamentBody::InterestPanel,
-                    proposal_id: runtime_proposal_id,
-                },
-                ApproveGovernanceProposal {
-                    body: ParliamentBody::ReviewPanel,
-                    proposal_id: runtime_proposal_id,
-                },
-                ApproveGovernanceProposal {
-                    body: ParliamentBody::PolicyJury,
-                    proposal_id: runtime_proposal_id,
-                },
-                ApproveGovernanceProposal {
-                    body: ParliamentBody::OversightCommittee,
-                    proposal_id: runtime_proposal_id,
-                },
-                ApproveGovernanceProposal {
-                    body: ParliamentBody::FmaCommittee,
-                    proposal_id: runtime_proposal_id,
-                },
-            ])
-            .wrap_err_with(|| {
-                format!(
-                    "submit runtime body approvals with council member #{approval_idx} ({council_account_id}) ({round_label})"
-                )
-            })?;
+                })
+                .wrap_err_with(|| {
+                    format!(
+                        "submit runtime {body:?} approval with citizen approver #{approval_idx} ({approver_account_id}) ({round_label})"
+                    )
+                })?;
+        }
     }
     wait_for_referendum_status(
         &fixture.alice,
@@ -1339,11 +1311,7 @@ pub(super) async fn enact_runtime_upgrade_round(
                 owner: account_id.clone(),
                 amount: BALLOT_LOCK,
                 duration_blocks: BALLOT_DURATION_BLOCKS,
-                direction: if idx < THIRD_REFERENDUM_APPROVE_VOTERS {
-                    0
-                } else {
-                    1
-                },
+                direction: u8::from(idx >= THIRD_REFERENDUM_APPROVE_VOTERS),
             })
             .wrap_err_with(|| {
                 format!("cast runtime referendum ballot #{idx} ({account_id}) ({round_label})")

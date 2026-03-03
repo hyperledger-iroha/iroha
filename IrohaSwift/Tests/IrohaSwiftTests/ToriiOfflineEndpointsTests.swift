@@ -40,6 +40,35 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         super.tearDown()
     }
 
+    private func makeCertificateObject(from cert: OfflineWalletCertificate) -> [String: Any] {
+        [
+            "controller": cert.controller,
+            "operator": cert.operatorId,
+            "allowance": [
+                "asset": cert.allowance.assetId,
+                "amount": cert.allowance.amount,
+                "commitment": cert.allowance.commitment.map(Int.init)
+            ] as [String: Any],
+            "spend_public_key": cert.spendPublicKey,
+            "attestation_report": cert.attestationReport.map(Int.init),
+            "issued_at_ms": cert.issuedAtMs,
+            "expires_at_ms": cert.expiresAtMs,
+            "policy": [
+                "max_balance": cert.policy.maxBalance,
+                "max_tx_value": cert.policy.maxTxValue,
+                "expires_at_ms": cert.policy.expiresAtMs
+            ] as [String: Any],
+            "operator_signature": cert.operatorSignature.map { String(format: "%02X", $0) }.joined(),
+            "metadata": [:] as [String: Any]
+        ]
+    }
+
+    private func makeRecordData(for certificate: OfflineWalletCertificate) throws -> Data {
+        try JSONSerialization.data(
+            withJSONObject: ["certificate": makeCertificateObject(from: certificate)],
+            options: [.sortedKeys])
+    }
+
     private func makeClient() -> ToriiClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [OfflineStubURLProtocol.self]
@@ -191,7 +220,6 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
                                                             counterCheckpoint: 1)
         let draft = OfflineWalletCertificateDraft(
             controller: accountId,
-            operatorId: accountId,
             allowance: OfflineAllowanceCommitment(assetId: assetId,
                                                   amount: "10",
                                                   commitment: Data([0x01, 0x02])),
@@ -221,6 +249,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
                 let body = try XCTUnwrap(data)
                 let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
                 let certificate = try XCTUnwrap(json["certificate"] as? [String: Any])
+                XCTAssertNil(certificate["operator"])
                 XCTAssertNil(certificate["operator_signature"])
                 XCTAssertNotNil(certificate["allowance"] as? [String: Any])
                 XCTAssertNotNil(certificate["attestation_report"] as? [Any])
@@ -365,7 +394,6 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
 
         let draft = OfflineWalletCertificateDraft(
             controller: accountId,
-            operatorId: accountId,
             allowance: OfflineAllowanceCommitment(assetId: assetId,
                                                   amount: "25",
                                                   commitment: Data([0x01, 0x02])),
@@ -381,6 +409,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
                 let body = try XCTUnwrap(data)
                 let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
                 let certificate = try XCTUnwrap(json["certificate"] as? [String: Any])
+                XCTAssertNil(certificate["operator"])
                 XCTAssertNil(certificate["operator_signature"])
                 XCTAssertNotNil(certificate["allowance"] as? [String: Any])
             }),
@@ -456,7 +485,6 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
 
         let draft = OfflineWalletCertificateDraft(
             controller: accountId,
-            operatorId: accountId,
             allowance: OfflineAllowanceCommitment(assetId: assetId,
                                                   amount: "30",
                                                   commitment: Data([0x07, 0x08])),
@@ -471,7 +499,8 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
             ExpectedRequest(method: "POST", path: "/v1/offline/certificates/deadbeef/renew/issue", responseBody: issuePayload, assertBody: { data in
                 let body = try XCTUnwrap(data)
                 let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
-                XCTAssertNotNil(json["certificate"] as? [String: Any])
+                let certificate = try XCTUnwrap(json["certificate"] as? [String: Any])
+                XCTAssertNil(certificate["operator"])
             }),
             ExpectedRequest(method: "POST", path: "/v1/offline/allowances/deadbeef/renew", responseBody: renewPayload, assertBody: { data in
                 let body = try XCTUnwrap(data)
@@ -610,13 +639,15 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
             return (response, expected.responseBody)
         }
 
+        let existingRecordData = try makeRecordData(for: existingCertificate)
         let client = makeClient()
         let result = try await client.reprovisionOfflineAllowance(
             certificateIdHex: "deadbeef",
-            currentCertificate: existingCertificate,
+            currentCertificateRecordData: existingRecordData,
             newCommitment: newCommitment,
             authority: accountId,
-            privateKey: "ed0120cafebabe"
+            privateKey: "ed0120cafebabe",
+            lineage: OfflineCertificateLineage(scope: "test", epoch: 2, prevCertificateIdHex: "deadbeef")
         )
         XCTAssertEqual(result.certificate.certificateIdHex.lowercased(), renewedCertificateIdHex)
         XCTAssertEqual(result.registration.certificateIdHex.lowercased(), renewedCertificateIdHex)
@@ -642,14 +673,16 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
             operatorSignature: Data(repeating: 0xCD, count: 64)
         )
 
+        let existingRecordData = try makeRecordData(for: existingCertificate)
         let client = makeClient()
         do {
             _ = try await client.reprovisionOfflineAllowance(
                 certificateIdHex: "deadbeef",
-                currentCertificate: existingCertificate,
+                currentCertificateRecordData: existingRecordData,
                 newCommitment: Data([0x01, 0x02, 0x03]),
                 authority: accountId,
-                privateKey: "ed0120cafebabe"
+                privateKey: "ed0120cafebabe",
+                lineage: OfflineCertificateLineage(scope: "test", epoch: 2, prevCertificateIdHex: "deadbeef")
             )
             XCTFail("expected invalid payload error")
         } catch let error as ToriiClientError {
@@ -743,14 +776,16 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
             return (response, expected.responseBody)
         }
 
+        let existingRecordData = try makeRecordData(for: existingCertificate)
         let client = makeClient()
         let result = try await withCheckedThrowingContinuation { continuation in
             _ = client.reprovisionOfflineAllowance(
                 certificateIdHex: "deadbeef",
-                currentCertificate: existingCertificate,
+                currentCertificateRecordData: existingRecordData,
                 newCommitment: newCommitment,
                 authority: accountId,
-                privateKey: "ed0120cafebabe"
+                privateKey: "ed0120cafebabe",
+                lineage: OfflineCertificateLineage(scope: "test", epoch: 2, prevCertificateIdHex: "deadbeef")
             ) { completion in
                 continuation.resume(with: completion)
             }

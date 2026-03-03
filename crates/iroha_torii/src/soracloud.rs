@@ -7302,7 +7302,7 @@ fn encode_decryption_request_signature_payload(
 fn encode_ciphertext_query_signature_payload(
     payload: &CiphertextQuerySpecV1,
 ) -> Result<Vec<u8>, SoracloudError> {
-    encode_ciphertext_query_provenance_payload(payload.clone()).map_err(|err| {
+    encode_ciphertext_query_provenance_payload(payload).map_err(|err| {
         SoracloudError::internal(format!("failed to encode ciphertext query payload: {err}"))
     })
 }
