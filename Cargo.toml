@@ -323,9 +323,11 @@ codegen-units = 256
 
 [profile.dev.package."*"]
 debug = 0
+codegen-units = 256
 
 [profile.test.package."*"]
 debug = 0
+codegen-units = 256
 
 [profile.deploy]
 inherits = "release"

@@ -86,7 +86,6 @@ soranet_pq = { workspace = true }
 time = { workspace = true }
 zeroize = { version = "1.8.2", default-features = false, features = ["std"] }
 blake3 = { workspace = true }
-once_cell = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 toml = { workspace = true }
 tiny-keccak = { workspace = true }
