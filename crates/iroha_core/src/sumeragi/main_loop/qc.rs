@@ -406,7 +406,10 @@ impl Actor {
         &mut self,
         qc: &crate::sumeragi::consensus::Qc,
         reason: &'static str,
-    ) {
+    ) -> bool {
+        let now = Instant::now();
+        let stall_snapshot =
+            self.missing_payload_fetch_window_snapshot(qc.height, qc.subject_block_hash, now);
         let (consensus_mode, _, _) = self.consensus_context_for_height(qc.height);
         let mut roster = if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
             self.roster_for_new_view_with_mode(
@@ -428,16 +431,71 @@ impl Actor {
             roster = self.effective_commit_topology();
         }
         if roster.is_empty() {
-            return;
+            return false;
         }
         let topology = super::network_topology::Topology::new(roster);
         let signer_set =
             super::qc_signer_indices(qc, topology.as_ref().len(), topology.as_ref().len())
                 .map(|parsed| parsed.voting.into_iter().collect::<BTreeSet<_>>())
                 .unwrap_or_default();
-        let targets = Self::build_fetch_targets(&signer_set, &topology);
+        let mut targets = Self::build_fetch_targets(&signer_set, &topology);
+        let mut stall_all_peers = false;
+        let mut stall_window_index = 0_u64;
+        let mut stall_dwell_ms = 0_u128;
+        let mut last_targeted_fetch_at_ms: Option<u128> = None;
+        if let Some(stall) = stall_snapshot {
+            stall_window_index = stall.window_index;
+            stall_dwell_ms = now.saturating_duration_since(stall.entered_at).as_millis();
+            last_targeted_fetch_at_ms = stall
+                .last_targeted_fetch_at
+                .map(|at| now.saturating_duration_since(at).as_millis());
+            if self.missing_payload_fetch_window_already_emitted(
+                stall.height,
+                stall.block_hash,
+                stall.window_index,
+            ) {
+                debug!(
+                    phase = ?qc.phase,
+                    height = qc.height,
+                    view = qc.view,
+                    block = %qc.subject_block_hash,
+                    reason,
+                    window_index = stall.window_index,
+                    stall_window_ms = stall.stall_window.as_millis(),
+                    stall_dwell_ms = now.saturating_duration_since(stall.entered_at).as_millis(),
+                    last_targeted_fetch_at_ms,
+                    "suppressing repeated deferred-QC targeted fetch in same-height stall window"
+                );
+                return false;
+            }
+            targets.sort_by(|lhs, rhs| {
+                lhs.public_key()
+                    .cmp(rhs.public_key())
+                    .then_with(|| lhs.cmp(rhs))
+            });
+            targets.dedup();
+            let peer_count = targets.len();
+            if peer_count > 2 {
+                if stall.window_index % 3 == 2 {
+                    stall_all_peers = true;
+                } else {
+                    let peer_count_u64 = u64::try_from(peer_count).unwrap_or(u64::MAX).max(1);
+                    let start_idx =
+                        usize::try_from(stall.window_index % peer_count_u64).unwrap_or(0);
+                    let second_idx = (start_idx + 1) % peer_count;
+                    let mut cohort = Vec::with_capacity(2);
+                    cohort.push(targets[start_idx].clone());
+                    if second_idx != start_idx {
+                        cohort.push(targets[second_idx].clone());
+                    }
+                    targets = cohort;
+                }
+            } else {
+                stall_all_peers = true;
+            }
+        }
         if targets.is_empty() {
-            return;
+            return false;
         }
         self.request_missing_block(
             qc.subject_block_hash,
@@ -446,15 +504,29 @@ impl Actor {
             super::MissingBlockPriority::Consensus,
             &targets,
         );
+        if let Some(stall) = stall_snapshot {
+            self.mark_missing_payload_fetch_window_emitted(
+                stall.height,
+                stall.block_hash,
+                stall.window_index,
+                now,
+            );
+        }
         info!(
             phase = ?qc.phase,
             height = qc.height,
             view = qc.view,
             block = %qc.subject_block_hash,
             targets = targets.len(),
+            same_height_stall_mode = stall_snapshot.is_some(),
+            same_height_stall_window_index = stall_window_index,
+            same_height_stall_all_peers = stall_all_peers,
+            same_height_stall_dwell_ms = stall_dwell_ms,
+            same_height_stall_last_targeted_fetch_at_ms = last_targeted_fetch_at_ms,
             reason,
             "forcing targeted missing-block fetch for deferred QC"
         );
+        true
     }
 
     pub(super) fn try_replay_deferred_qcs(&mut self) -> bool {
@@ -493,6 +565,9 @@ impl Actor {
             let Some(qc) = self.deferred_qcs.get(&key).cloned() else {
                 continue;
             };
+            let stall_window = self
+                .missing_payload_fetch_window_snapshot(qc.height, qc.subject_block_hash, now)
+                .map(|snapshot| snapshot.stall_window);
             let (consensus_mode, _, _) = self.consensus_context_for_height(qc.height);
             let roster = if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
                 self.roster_for_new_view_with_mode(
@@ -521,6 +596,11 @@ impl Actor {
             let Some(state) = self.deferred_qc_roster_state.get(&key) else {
                 continue;
             };
+            if let Some(stall_window) = stall_window
+                && now.saturating_duration_since(state.last_attempt) < stall_window
+            {
+                continue;
+            }
             let age = now.saturating_duration_since(state.first_seen);
             if age < self.recovery_deferred_qc_ttl() {
                 continue;
@@ -562,19 +642,32 @@ impl Actor {
                     }
                 }
                 ReplayAction::Escalate { key, qc, reason } => {
-                    if let Some(state) = self.deferred_qc_roster_state.get_mut(&key) {
-                        state.escalated_fetch = true;
-                        state.attempts = state.attempts.saturating_add(1);
-                        state.first_seen = now;
-                        state.last_attempt = now;
+                    let fetched = self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
+                    if fetched {
+                        if let Some(state) = self.deferred_qc_roster_state.get_mut(&key) {
+                            state.escalated_fetch = true;
+                            state.attempts = state.attempts.saturating_add(1);
+                            state.first_seen = now;
+                            state.last_attempt = now;
+                        }
+                        progress = true;
                     }
-                    self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
-                    progress = true;
                 }
                 ReplayAction::Expire { key, qc, reason } => {
+                    let fetched = self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
+                    if !self.try_reserve_missing_qc_height_stall_rotation_window(
+                        qc.height,
+                        super::ViewChangeCause::MissingQc,
+                        now,
+                    ) {
+                        if let Some(state) = self.deferred_qc_roster_state.get_mut(&key) {
+                            state.last_attempt = now;
+                        }
+                        progress |= fetched;
+                        continue;
+                    }
                     self.deferred_qcs.remove(&key);
                     self.deferred_qc_roster_state.remove(&key);
-                    self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
                     super::status::inc_qc_deferred_expired();
                     #[cfg(feature = "telemetry")]
                     if let Some(telemetry) = self.telemetry_handle() {
@@ -618,21 +711,34 @@ impl Actor {
         }
 
         let mut actions = Vec::new();
-        for key in self
+        let deferred_keys: Vec<_> = self
             .deferred_missing_payload_qcs
             .keys()
             .cloned()
             .take(DEFERRED_MISSING_PAYLOAD_QC_PER_TICK)
-        {
-            let Some(entry) = self.deferred_missing_payload_qcs.get(&key) else {
+            .collect();
+        for key in deferred_keys {
+            let Some(entry) = self.deferred_missing_payload_qcs.get(&key).cloned() else {
                 continue;
             };
+            let stall_window = self
+                .missing_payload_fetch_window_snapshot(
+                    entry.qc.height,
+                    entry.qc.subject_block_hash,
+                    now,
+                )
+                .map(|snapshot| snapshot.stall_window);
             if self.block_known_locally(entry.qc.subject_block_hash) {
                 actions.push(ReplayAction::Replay {
                     key,
                     qc: entry.qc.clone(),
                     reason: entry.reason,
                 });
+                continue;
+            }
+            if let Some(stall_window) = stall_window
+                && now.saturating_duration_since(entry.last_attempt) < stall_window
+            {
                 continue;
             }
             let age = now.saturating_duration_since(entry.first_seen);
@@ -672,6 +778,7 @@ impl Actor {
                         progress = true;
                     }
                     Err(err) => {
+                        let mut branch_progress = false;
                         warn!(?err, reason, "failed to replay deferred missing-payload QC");
                         if self.should_defer_missing_block_view_change(
                             &qc.subject_block_hash,
@@ -682,7 +789,8 @@ impl Actor {
                                 entry.first_seen = now;
                                 entry.last_attempt = now;
                             }
-                            self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
+                            branch_progress |=
+                                self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
                             debug!(
                                 phase = ?qc.phase,
                                 height = qc.height,
@@ -692,6 +800,73 @@ impl Actor {
                                 "deferring MissingPayload escalation for deferred QC replay failure while dependencies are converging"
                             );
                         } else {
+                            if self.try_reserve_missing_qc_height_stall_rotation_window(
+                                qc.height,
+                                super::ViewChangeCause::MissingPayload,
+                                now,
+                            ) {
+                                self.deferred_missing_payload_qcs.remove(&key);
+                                super::status::inc_qc_deferred_expired();
+                                #[cfg(feature = "telemetry")]
+                                if let Some(telemetry) = self.telemetry_handle() {
+                                    telemetry.inc_qc_deferred_expired();
+                                }
+                                let current_view =
+                                    self.phase_tracker.current_view(qc.height).unwrap_or(0);
+                                self.trigger_view_change_with_cause(
+                                    qc.height,
+                                    current_view,
+                                    super::ViewChangeCause::MissingPayload,
+                                );
+                                branch_progress = true;
+                            } else if let Some(entry) =
+                                self.deferred_missing_payload_qcs.get_mut(&key)
+                            {
+                                entry.last_attempt = now;
+                            }
+                        }
+                        progress |= branch_progress;
+                    }
+                },
+                ReplayAction::Escalate { key, qc, reason } => {
+                    let fetched = self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
+                    if fetched {
+                        if let Some(entry) = self.deferred_missing_payload_qcs.get_mut(&key) {
+                            entry.escalated_fetch = true;
+                            entry.attempts = entry.attempts.saturating_add(1);
+                            entry.first_seen = now;
+                            entry.last_attempt = now;
+                        }
+                        progress = true;
+                    }
+                }
+                ReplayAction::Expire { key, qc, reason } => {
+                    let mut branch_progress = false;
+                    let fetched = self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
+                    if self.should_defer_missing_block_view_change(
+                        &qc.subject_block_hash,
+                        qc.height,
+                        qc.view,
+                    ) {
+                        if let Some(entry) = self.deferred_missing_payload_qcs.get_mut(&key) {
+                            entry.first_seen = now;
+                            entry.last_attempt = now;
+                        }
+                        branch_progress |= fetched;
+                        debug!(
+                            phase = ?qc.phase,
+                            height = qc.height,
+                            view = qc.view,
+                            block = %qc.subject_block_hash,
+                            reason,
+                            "deferring MissingPayload escalation for expired deferred QC while dependencies are converging"
+                        );
+                    } else {
+                        if self.try_reserve_missing_qc_height_stall_rotation_window(
+                            qc.height,
+                            super::ViewChangeCause::MissingPayload,
+                            now,
+                        ) {
                             self.deferred_missing_payload_qcs.remove(&key);
                             super::status::inc_qc_deferred_expired();
                             #[cfg(feature = "telemetry")]
@@ -705,54 +880,14 @@ impl Actor {
                                 current_view,
                                 super::ViewChangeCause::MissingPayload,
                             );
-                        }
-                        progress = true;
-                    }
-                },
-                ReplayAction::Escalate { key, qc, reason } => {
-                    if let Some(entry) = self.deferred_missing_payload_qcs.get_mut(&key) {
-                        entry.escalated_fetch = true;
-                        entry.attempts = entry.attempts.saturating_add(1);
-                        entry.first_seen = now;
-                        entry.last_attempt = now;
-                    }
-                    self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
-                    progress = true;
-                }
-                ReplayAction::Expire { key, qc, reason } => {
-                    self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
-                    if self.should_defer_missing_block_view_change(
-                        &qc.subject_block_hash,
-                        qc.height,
-                        qc.view,
-                    ) {
-                        if let Some(entry) = self.deferred_missing_payload_qcs.get_mut(&key) {
-                            entry.first_seen = now;
+                            branch_progress = true;
+                        } else if let Some(entry) = self.deferred_missing_payload_qcs.get_mut(&key)
+                        {
                             entry.last_attempt = now;
+                            branch_progress |= fetched;
                         }
-                        debug!(
-                            phase = ?qc.phase,
-                            height = qc.height,
-                            view = qc.view,
-                            block = %qc.subject_block_hash,
-                            reason,
-                            "deferring MissingPayload escalation for expired deferred QC while dependencies are converging"
-                        );
-                    } else {
-                        self.deferred_missing_payload_qcs.remove(&key);
-                        super::status::inc_qc_deferred_expired();
-                        #[cfg(feature = "telemetry")]
-                        if let Some(telemetry) = self.telemetry_handle() {
-                            telemetry.inc_qc_deferred_expired();
-                        }
-                        let current_view = self.phase_tracker.current_view(qc.height).unwrap_or(0);
-                        self.trigger_view_change_with_cause(
-                            qc.height,
-                            current_view,
-                            super::ViewChangeCause::MissingPayload,
-                        );
                     }
-                    progress = true;
+                    progress |= branch_progress;
                 }
             }
         }
@@ -1034,11 +1169,17 @@ impl Actor {
                         attempts = stats.attempts,
                         "missing block dwell exceeded retry window; forcing view change"
                     );
-                    self.trigger_view_change_with_cause(
+                    if self.try_reserve_missing_qc_height_stall_rotation_window(
                         height,
-                        view,
                         ViewChangeCause::MissingPayload,
-                    );
+                        now,
+                    ) {
+                        self.trigger_view_change_with_cause(
+                            height,
+                            view,
+                            ViewChangeCause::MissingPayload,
+                        );
+                    }
                 }
             }
         }
@@ -1249,8 +1390,18 @@ impl Actor {
             {
                 stats.retry_window = retry_window;
             }
-            let effective_retry_window =
+            let mut effective_retry_window =
                 self.missing_block_retry_window_with_backoff(retry_window, stats_snapshot.attempts);
+            if matches!(
+                stats_snapshot.priority,
+                super::MissingBlockPriority::Consensus
+            ) && self
+                .missing_qc_height_stall_snapshot(stats_snapshot.height, now)
+                .is_some_and(|stall| stall.mode_active && stall.height == stats_snapshot.height)
+            {
+                effective_retry_window =
+                    effective_retry_window.max(self.missing_qc_height_stall_window());
+            }
             let mut view_change_window = self
                 .pending
                 .missing_block_requests
@@ -1526,13 +1677,19 @@ impl Actor {
                         attempts,
                         "missing block dwell exceeded view-change window; forcing view change"
                     );
-                    self.trigger_view_change_with_cause(
+                    if self.try_reserve_missing_qc_height_stall_rotation_window(
                         height,
-                        view,
                         ViewChangeCause::MissingPayload,
-                    );
-                    progress = true;
-                    break;
+                        now,
+                    ) {
+                        self.trigger_view_change_with_cause(
+                            height,
+                            view,
+                            ViewChangeCause::MissingPayload,
+                        );
+                        progress = true;
+                        break;
+                    }
                 }
             }
         }
@@ -1727,6 +1884,7 @@ impl Actor {
         let now = Instant::now();
         if let Some(stats) = stats {
             let dwell = stats.first_seen.elapsed();
+            self.clear_missing_payload_fetch_window_gate_for_block(stats.height, *block_hash);
             debug!(
                 ?block_hash,
                 reason = reason.as_str(),

@@ -5111,6 +5111,27 @@ struct MissingQcHeightStallSnapshot {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct MissingPayloadFetchWindowGateState {
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    entered_at: Instant,
+    last_window_at: Instant,
+    window_index: u64,
+    last_targeted_fetch_window_index: Option<u64>,
+    last_targeted_fetch_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MissingPayloadFetchWindowSnapshot {
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    entered_at: Instant,
+    stall_window: Duration,
+    window_index: u64,
+    last_targeted_fetch_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy)]
 struct MissingBlockHeightRecoveryBudget {
     first_seen: Instant,
     last_seen: Instant,
@@ -5408,6 +5429,8 @@ pub(super) struct Actor {
     lock_lag_prune_cooldown: Option<LockLagPruneCooldownState>,
     lock_lag_frontier_stall: Option<LockLagFrontierStallState>,
     missing_qc_height_stall: Option<MissingQcHeightStallState>,
+    missing_payload_fetch_window_gates:
+        BTreeMap<(u64, HashOf<BlockHeader>), MissingPayloadFetchWindowGateState>,
     deferred_qcs: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     deferred_qc_roster_state: BTreeMap<QcVoteKey, DeferredRosterQcEntry>,
     deferred_missing_payload_qcs: BTreeMap<QcVoteKey, DeferredQcEntry>,
@@ -10327,6 +10350,7 @@ impl Actor {
             lock_lag_prune_cooldown: None,
             lock_lag_frontier_stall: None,
             missing_qc_height_stall: None,
+            missing_payload_fetch_window_gates: BTreeMap::new(),
             deferred_qcs: BTreeMap::new(),
             deferred_qc_roster_state: BTreeMap::new(),
             deferred_missing_payload_qcs: BTreeMap::new(),
@@ -15676,6 +15700,153 @@ impl Actor {
         }
     }
 
+    fn try_reserve_missing_qc_height_stall_rotation_window(
+        &mut self,
+        height: u64,
+        cause: ViewChangeCause,
+        now: Instant,
+    ) -> bool {
+        let Some(stall) = self
+            .missing_qc_height_stall_snapshot(height, now)
+            .filter(|stall| stall.mode_active && stall.height == height)
+        else {
+            return true;
+        };
+        let rotation_suppressed = self.missing_qc_height_stall.as_ref().is_some_and(|state| {
+            state.height == stall.height
+                && state.mode_active
+                && state.last_rotation_window_index == Some(stall.window_index)
+        });
+        if rotation_suppressed {
+            debug!(
+                height,
+                cause = cause.as_str(),
+                window_index = stall.window_index,
+                stall_window_ms = stall.stall_window.as_millis(),
+                stall_dwell_ms = now.saturating_duration_since(stall.entered_at).as_millis(),
+                last_rotation_at_ms = stall
+                    .last_rotation_at
+                    .map(|at| now.saturating_duration_since(at).as_millis()),
+                "suppressing repeated same-height stall rotation in the current window"
+            );
+            return false;
+        }
+        self.mark_missing_qc_height_stall_rotation_window(height, stall.window_index, now);
+        true
+    }
+
+    fn missing_payload_fetch_has_unresolved_dependency(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> bool {
+        self.pending
+            .missing_block_requests
+            .get(&block_hash)
+            .is_some_and(|request| {
+                request.height == height && !self.block_payload_available_locally(block_hash)
+            })
+            || self
+                .deferred_missing_payload_qcs
+                .values()
+                .any(|entry| entry.qc.height == height && entry.qc.subject_block_hash == block_hash)
+    }
+
+    fn missing_payload_fetch_window_snapshot(
+        &mut self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        now: Instant,
+    ) -> Option<MissingPayloadFetchWindowSnapshot> {
+        let key = (height, block_hash);
+        if self.active_consensus_round_height() != height {
+            self.missing_payload_fetch_window_gates.remove(&key);
+            return None;
+        }
+        let Some(stall) = self
+            .missing_qc_height_stall_snapshot(height, now)
+            .filter(|stall| stall.mode_active && stall.height == height)
+        else {
+            self.missing_payload_fetch_window_gates.remove(&key);
+            return None;
+        };
+        if !self.missing_payload_fetch_has_unresolved_dependency(height, block_hash) {
+            self.missing_payload_fetch_window_gates.remove(&key);
+            return None;
+        }
+        let gate = self
+            .missing_payload_fetch_window_gates
+            .entry(key)
+            .or_insert(MissingPayloadFetchWindowGateState {
+                height,
+                block_hash,
+                entered_at: now,
+                last_window_at: now,
+                window_index: stall.window_index,
+                last_targeted_fetch_window_index: None,
+                last_targeted_fetch_at: None,
+            });
+        if stall.window_index < gate.window_index {
+            gate.entered_at = now;
+            gate.last_window_at = now;
+            gate.window_index = stall.window_index;
+            gate.last_targeted_fetch_window_index = None;
+            gate.last_targeted_fetch_at = None;
+        } else if stall.window_index > gate.window_index {
+            gate.last_window_at = now;
+            gate.window_index = stall.window_index;
+        }
+        Some(MissingPayloadFetchWindowSnapshot {
+            height: gate.height,
+            block_hash: gate.block_hash,
+            entered_at: gate.entered_at,
+            stall_window: stall.stall_window,
+            window_index: gate.window_index,
+            last_targeted_fetch_at: gate.last_targeted_fetch_at,
+        })
+    }
+
+    fn missing_payload_fetch_window_already_emitted(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        window_index: u64,
+    ) -> bool {
+        self.missing_payload_fetch_window_gates
+            .get(&(height, block_hash))
+            .is_some_and(|state| state.last_targeted_fetch_window_index == Some(window_index))
+    }
+
+    fn mark_missing_payload_fetch_window_emitted(
+        &mut self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        window_index: u64,
+        now: Instant,
+    ) {
+        if let Some(state) = self
+            .missing_payload_fetch_window_gates
+            .get_mut(&(height, block_hash))
+        {
+            state.last_targeted_fetch_window_index = Some(window_index);
+            state.last_targeted_fetch_at = Some(now);
+        }
+    }
+
+    fn clear_missing_payload_fetch_window_gate_for_height(&mut self, height: u64) {
+        self.missing_payload_fetch_window_gates
+            .retain(|(entry_height, _), _| *entry_height != height);
+    }
+
+    fn clear_missing_payload_fetch_window_gate_for_block(
+        &mut self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) {
+        self.missing_payload_fetch_window_gates
+            .remove(&(height, block_hash));
+    }
+
     fn effective_hash_miss_escalation_cap(
         &self,
         height: u64,
@@ -15933,6 +16104,7 @@ impl Actor {
             }
             retain
         });
+        self.clear_missing_payload_fetch_window_gate_for_height(height);
         let had_no_roster = self
             .no_roster_fallback_recovery
             .keys()
@@ -15969,6 +16141,7 @@ impl Actor {
             }
             pruned = pruned.saturating_add(1);
             cleared_heights.insert(request_height);
+            self.clear_missing_payload_fetch_window_gate_for_block(request_height, hash);
             self.pending.pending_fetch_requests.remove(&hash);
 
             if self
@@ -16043,6 +16216,25 @@ impl Actor {
             key.height > committed_height
                 && now.saturating_duration_since(entry.last_seen) <= ttl.saturating_mul(8)
         });
+        let unresolved_payload_fetch_keys = self
+            .pending
+            .missing_block_requests
+            .iter()
+            .filter_map(|(hash, request)| {
+                (!self.block_payload_available_locally(*hash)).then_some((request.height, *hash))
+            })
+            .chain(
+                self.deferred_missing_payload_qcs
+                    .values()
+                    .map(|entry| (entry.qc.height, entry.qc.subject_block_hash)),
+            )
+            .collect::<BTreeSet<_>>();
+        self.missing_payload_fetch_window_gates
+            .retain(|(height, block_hash), entry| {
+                *height > committed_height
+                    && now.saturating_duration_since(entry.last_window_at) <= ttl.saturating_mul(8)
+                    && unresolved_payload_fetch_keys.contains(&(*height, *block_hash))
+            });
     }
 
     fn clear_no_roster_fallback_for_height(&mut self, height: u64) {
@@ -17096,47 +17288,68 @@ impl Actor {
                 .is_some_and(|current| current > view)
             && budget.escalated_view != Some(view)
         {
-            let (pending_removed, missing_removed, hints_removed, proposals_removed, seen_removed) =
-                self.prune_consensus_state_for_missing_block_height(height);
-            if pending_removed > 0
-                || missing_removed > 0
-                || hints_removed > 0
-                || proposals_removed > 0
-                || seen_removed > 0
-            {
-                info!(
-                    height,
-                    view,
-                    block = %block_hash,
+            if self.try_reserve_missing_qc_height_stall_rotation_window(
+                height,
+                ViewChangeCause::MissingPayload,
+                now,
+            ) {
+                let (
                     pending_removed,
                     missing_removed,
                     hints_removed,
                     proposals_removed,
                     seen_removed,
-                    "cleared stale consensus state for missing-block hard-cap recovery"
+                ) = self.prune_consensus_state_for_missing_block_height(height);
+                if pending_removed > 0
+                    || missing_removed > 0
+                    || hints_removed > 0
+                    || proposals_removed > 0
+                    || seen_removed > 0
+                {
+                    info!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        pending_removed,
+                        missing_removed,
+                        hints_removed,
+                        proposals_removed,
+                        seen_removed,
+                        "cleared stale consensus state for missing-block hard-cap recovery"
+                    );
+                }
+                self.clear_missing_block_recovery_for_height(height, now);
+                budget.escalated_view = Some(view);
+                super::status::inc_consensus_missing_block_height_escalation();
+                #[cfg(feature = "telemetry")]
+                if let Some(telemetry) = self.telemetry_handle() {
+                    telemetry.inc_consensus_missing_block_height_escalation();
+                }
+                if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
+                    stats.view_change_triggered_view = Some(view);
+                }
+                warn!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    attempts = budget.attempts,
+                    attempt_cap,
+                    dwell_ms = dwell.as_millis(),
+                    "missing-block height recovery hard cap tripped; escalating deterministically"
+                );
+                self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingPayload);
+                progressed = true;
+            } else {
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    attempts = budget.attempts,
+                    attempt_cap,
+                    dwell_ms = dwell.as_millis(),
+                    "suppressing missing-block hard-cap escalation in same-height stall window"
                 );
             }
-            self.clear_missing_block_recovery_for_height(height, now);
-            budget.escalated_view = Some(view);
-            super::status::inc_consensus_missing_block_height_escalation();
-            #[cfg(feature = "telemetry")]
-            if let Some(telemetry) = self.telemetry_handle() {
-                telemetry.inc_consensus_missing_block_height_escalation();
-            }
-            if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
-                stats.view_change_triggered_view = Some(view);
-            }
-            warn!(
-                height,
-                view,
-                block = %block_hash,
-                attempts = budget.attempts,
-                attempt_cap,
-                dwell_ms = dwell.as_millis(),
-                "missing-block height recovery hard cap tripped; escalating deterministically"
-            );
-            self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingPayload);
-            progressed = true;
         } else if hard_cap_due && view_change_already_triggered {
             budget.escalated_view = Some(view);
             debug!(
@@ -18532,6 +18745,13 @@ impl Actor {
                 true
             }
             RecoveryAction::EscalateViewChange => {
+                if !self.try_reserve_missing_qc_height_stall_rotation_window(
+                    height,
+                    ViewChangeCause::MissingQc,
+                    now,
+                ) {
+                    return false;
+                }
                 self.clear_consensus_recovery_for_round(height, view);
                 let _ = self.request_range_pull_from_anchor(
                     height,
@@ -19283,7 +19503,6 @@ impl Actor {
             );
             height = commit_horizon_height;
         }
-        let missing_qc_stall_snapshot = self.missing_qc_height_stall_snapshot(height, now);
         let backlog_signals = self.idle_backlog_signals_for_height(height, queue_depths);
         let IdleBacklogSignals {
             existing_worker_backlog,
@@ -19802,31 +20021,14 @@ impl Actor {
             );
             return false;
         }
-        if let Some(stall) =
-            missing_qc_stall_snapshot.filter(|stall| stall.mode_active && stall.height == height)
-        {
-            let rotation_suppressed = self.missing_qc_height_stall.as_ref().is_some_and(|state| {
-                state.height == stall.height
-                    && state.mode_active
-                    && state.last_rotation_window_index == Some(stall.window_index)
-            });
-            if rotation_suppressed {
-                debug!(
-                    height,
-                    view = current_view,
-                    window_index = stall.window_index,
-                    stall_window_ms = stall.stall_window.as_millis(),
-                    stall_dwell_ms = now.saturating_duration_since(stall.entered_at).as_millis(),
-                    last_rotation_at_ms = stall
-                        .last_rotation_at
-                        .map(|at| now.saturating_duration_since(at).as_millis()),
-                    "suppressing repeated missing-QC rotation in same-height stall window"
-                );
-                return false;
-            }
-        }
-
         let next_view = current_view.saturating_add(1);
+        if !self.try_reserve_missing_qc_height_stall_rotation_window(
+            height,
+            ViewChangeCause::MissingQc,
+            now,
+        ) {
+            return false;
+        }
         if !proposal_seen {
             self.subsystems.propose.last_missing_qc_timeout_trigger =
                 Some(CachedSlotTimeoutTrigger {
@@ -19874,11 +20076,6 @@ impl Actor {
                 consensus_rx_depth = queue_depths.consensus_rx,
                 "no proposal observed before cutoff; rotating leader via view change"
             );
-        }
-        if let Some(stall) =
-            missing_qc_stall_snapshot.filter(|stall| stall.mode_active && stall.height == height)
-        {
-            self.mark_missing_qc_height_stall_rotation_window(height, stall.window_index, now);
         }
         self.trigger_view_change_with_cause(height, current_view, ViewChangeCause::MissingQc);
         true

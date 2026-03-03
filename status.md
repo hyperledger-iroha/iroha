@@ -1,6 +1,30 @@
 # Status
 
-Last update: 2026-03-02
+Last update: 2026-03-03
+- Latest sync (2026-03-03 Tranche 6 missing-QC same-height stall damping, safety/liveness neutral):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/qc.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - Changes:
+    - added internal same-height missing-QC stall-window gating for missing-payload fetches with no public config/CLI/telemetry schema changes,
+    - shared one-rotation-per-window budget across missing-QC causes (`force_view_change_if_idle`, missing-block-height hard-cap escalation, empty-commit-topology escalation),
+    - throttled same-height deferred missing-payload fetch replay to one fetch per `(height, block_hash, stall_window)` and paced deferred replay/expiry attempts to stall-window cadence,
+    - added deterministic peer fanout in same-height stall mode for missing-payload recovery (2-peer rotating cohort, every 3rd window all-peer sweep),
+    - preserved fail-closed hard-cap behavior by deferring suppressed rotations/fetch retries to the next eligible stall window instead of dropping escalation paths,
+    - kept lock-lag tranche behavior and safety-domain semantics unchanged.
+  - Test updates:
+    - `missing_qc_height_stall_mode_shares_rotation_budget_across_causes`
+    - `missing_qc_height_stall_mode_throttles_deferred_qc_targeted_fetch_to_one_per_window`
+    - `deferred_missing_payload_qc_replay_respects_same_height_stall_window_pacing`
+    - `missing_qc_height_stall_mode_hard_cap_suppression_retries_next_window`
+  - Validation commands (current tree):
+    - `cargo test -p iroha_core --lib missing_qc_height_stall_mode_ -- --nocapture` (ok; `9 passed`)
+    - `cargo test -p iroha_core --lib deferred_missing_payload_qc_ -- --nocapture` (ok; `3 passed`)
+    - `cargo test -p iroha_core --lib proposal_seen_without_progress_does_not_reset_missing_qc_timeout_streak -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core --lib lock_lag_frontier_stall_mode_preserves_hard_cap_fail_closed_behavior -- --nocapture` (ok; `1 passed`)
+  - Open follow-up:
+    - execute unchanged-envelope 3600s soak and compare strict/quorum progression and same-height missing-QC churn reduction against tranche-5 baselines.
 - Latest sync (2026-03-02 Tranche 5B strict/quorum recovery damping follow-up):
   - Implemented in:
     - `crates/iroha_core/src/sumeragi/main_loop.rs`
