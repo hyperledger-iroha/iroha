@@ -16,6 +16,8 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.PlatformHttpTransportExecutor;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceList;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceRegisterResponse;
+import org.hyperledger.iroha.android.offline.OfflineBuildClaimIssueRequest;
+import org.hyperledger.iroha.android.offline.OfflineBuildClaimIssueResponse;
 import org.hyperledger.iroha.android.offline.OfflineBundleProofStatus;
 import org.hyperledger.iroha.android.offline.OfflineCertificateIssueResponse;
 import org.hyperledger.iroha.android.offline.OfflineJsonParser;
@@ -24,6 +26,7 @@ import org.hyperledger.iroha.android.offline.OfflineQueryEnvelope;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestParams;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestResult;
 import org.hyperledger.iroha.android.offline.OfflineRevocationList;
+import org.hyperledger.iroha.android.offline.OfflineSettlementBuildClaimOverride;
 import org.hyperledger.iroha.android.offline.OfflineSettlementSubmitResponse;
 import org.hyperledger.iroha.android.offline.OfflineSummaryList;
 import org.hyperledger.iroha.android.offline.OfflineTopUpResponse;
@@ -53,6 +56,7 @@ public final class OfflineToriiClient {
   private static final String TRANSFER_PROOF_PATH = "/v1/offline/transfers/proof";
   private static final String BUNDLE_PROOF_STATUS_PATH = "/v1/offline/bundle/proof_status";
   private static final String CERTIFICATE_ISSUE_PATH = "/v1/offline/certificates/issue";
+  private static final String BUILD_CLAIM_ISSUE_PATH = "/v1/offline/build-claims/issue";
   private static final String CERTIFICATE_RENEW_ISSUE_PATH = "/v1/offline/certificates";
 
   private final HttpTransportExecutor executor;
@@ -117,17 +121,138 @@ public final class OfflineToriiClient {
   /** Submit an offline settlement bundle for on-ledger settlement. */
   public CompletableFuture<OfflineSettlementSubmitResponse> submitSettlement(
       final Map<String, Object> transferPayload, final String authority, final String privateKeyHex) {
+    return submitSettlement(transferPayload, authority, privateKeyHex, List.of(), false);
+  }
+
+  /**
+   * Submit an offline settlement bundle and wait for the corresponding transaction to reach a
+   * terminal pipeline status.
+   *
+   * <p>This helper reduces boilerplate for clients that always want submit + status polling in one
+   * call. Any terminal rejection is surfaced via {@link TransactionStatusException} (or {@link
+   * TransactionStatusHttpException} when the polling endpoint itself fails).
+   */
+  public CompletableFuture<OfflineSettlementSubmitResponse> submitSettlementAndWait(
+      final Map<String, Object> transferPayload,
+      final String authority,
+      final String privateKeyHex,
+      final IrohaClient statusClient) {
+    return submitSettlementAndWait(
+        transferPayload,
+        authority,
+        privateKeyHex,
+        List.of(),
+        false,
+        statusClient,
+        null);
+  }
+
+  /**
+   * Submit an offline settlement bundle and wait for the corresponding transaction to reach a
+   * terminal pipeline status.
+   */
+  public CompletableFuture<OfflineSettlementSubmitResponse> submitSettlementAndWait(
+      final Map<String, Object> transferPayload,
+      final String authority,
+      final String privateKeyHex,
+      final IrohaClient statusClient,
+      final PipelineStatusOptions statusOptions) {
+    return submitSettlementAndWait(
+        transferPayload,
+        authority,
+        privateKeyHex,
+        List.of(),
+        false,
+        statusClient,
+        statusOptions);
+  }
+
+  /**
+   * Submit an offline settlement bundle with optional per-receipt build-claim overrides.
+   *
+   * <p>Set {@code repairExistingBuildClaims} when Torii should re-issue receipts that already have
+   * a build claim.
+   */
+  public CompletableFuture<OfflineSettlementSubmitResponse> submitSettlement(
+      final Map<String, Object> transferPayload,
+      final String authority,
+      final String privateKeyHex,
+      final List<OfflineSettlementBuildClaimOverride> buildClaimOverrides,
+      final boolean repairExistingBuildClaims) {
     Objects.requireNonNull(transferPayload, "transferPayload");
     Objects.requireNonNull(authority, "authority");
     Objects.requireNonNull(privateKeyHex, "privateKeyHex");
+    final List<OfflineSettlementBuildClaimOverride> overrides =
+        buildClaimOverrides == null ? List.of() : List.copyOf(buildClaimOverrides);
     final Map<String, Object> body = new LinkedHashMap<>();
     body.put("authority", authority);
     body.put("private_key", privateKeyHex);
     body.put("transfer", transferPayload);
+    if (!overrides.isEmpty()) {
+      final List<Map<String, Object>> overridePayloads = new ArrayList<>(overrides.size());
+      for (final OfflineSettlementBuildClaimOverride override : overrides) {
+        overridePayloads.add(
+            Objects.requireNonNull(
+                    override,
+                    "buildClaimOverrides entries must be non-null")
+                .toJsonMap());
+      }
+      body.put("build_claim_overrides", overridePayloads);
+    }
+    if (repairExistingBuildClaims) {
+      body.put("repair_existing_build_claims", true);
+    }
     final TransportRequest request =
         buildPostRequest(SETTLEMENTS_PATH, JsonEncoder.encode(body).getBytes(StandardCharsets.UTF_8));
     notifyRequest(request);
     return executeHttpRequest(request, OfflineJsonParser::parseSettlementSubmitResponse);
+  }
+
+  /**
+   * Submit an offline settlement bundle with optional build-claim overrides and wait for terminal
+   * transaction status.
+   */
+  public CompletableFuture<OfflineSettlementSubmitResponse> submitSettlementAndWait(
+      final Map<String, Object> transferPayload,
+      final String authority,
+      final String privateKeyHex,
+      final List<OfflineSettlementBuildClaimOverride> buildClaimOverrides,
+      final boolean repairExistingBuildClaims,
+      final IrohaClient statusClient) {
+    return submitSettlementAndWait(
+        transferPayload,
+        authority,
+        privateKeyHex,
+        buildClaimOverrides,
+        repairExistingBuildClaims,
+        statusClient,
+        null);
+  }
+
+  /**
+   * Submit an offline settlement bundle with optional build-claim overrides and wait for terminal
+   * transaction status.
+   */
+  public CompletableFuture<OfflineSettlementSubmitResponse> submitSettlementAndWait(
+      final Map<String, Object> transferPayload,
+      final String authority,
+      final String privateKeyHex,
+      final List<OfflineSettlementBuildClaimOverride> buildClaimOverrides,
+      final boolean repairExistingBuildClaims,
+      final IrohaClient statusClient,
+      final PipelineStatusOptions statusOptions) {
+    Objects.requireNonNull(statusClient, "statusClient");
+    return submitSettlement(
+            transferPayload,
+            authority,
+            privateKeyHex,
+            buildClaimOverrides,
+            repairExistingBuildClaims)
+        .thenCompose(
+            settlement ->
+                statusClient
+                    .waitForTransactionStatus(settlement.transactionHashHex(), statusOptions)
+                    .thenApply(ignored -> settlement));
   }
 
   /** Fetch one offline settlement bundle detail (alias for offline transfer detail). */
@@ -184,6 +309,18 @@ public final class OfflineToriiClient {
     final TransportRequest request = buildPostRequest(CERTIFICATE_ISSUE_PATH, body);
     notifyRequest(request);
     return executeHttpRequest(request, OfflineJsonParser::parseCertificateIssueResponse);
+  }
+
+  /** Issue an operator-signed build claim for a receipt transaction id. */
+  public CompletableFuture<OfflineBuildClaimIssueResponse> issueBuildClaim(
+      final OfflineBuildClaimIssueRequest requestBody) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    final byte[] body =
+        org.hyperledger.iroha.android.client.JsonEncoder.encode(requestBody.toJsonMap())
+            .getBytes(StandardCharsets.UTF_8);
+    final TransportRequest request = buildPostRequest(BUILD_CLAIM_ISSUE_PATH, body);
+    notifyRequest(request);
+    return executeHttpRequest(request, OfflineJsonParser::parseBuildClaimIssueResponse);
   }
 
   /** Register a signed certificate on-ledger as an offline allowance. */
@@ -476,19 +613,33 @@ public final class OfflineToriiClient {
                         ? throwable.getCause()
                         : throwable;
                 final OfflineToriiException error =
-                    new OfflineToriiException("Offline request failed", cause);
+                    new OfflineToriiException(
+                        "Offline request failed: " + summarizeCauseMessage(cause),
+                        cause,
+                        null,
+                        null,
+                        null);
                 notifyFailure(request, error);
                 future.completeExceptionally(error);
                 return;
               }
+              final String rejectCode = extractRejectCode(response.headers());
+              final String bodyPreview = decodeBodyPreview(response.body());
               final ClientResponse clientResponse =
-                  new ClientResponse(response.statusCode(), response.body());
+                  new ClientResponse(
+                      response.statusCode(),
+                      response.body(),
+                      response.message(),
+                      null,
+                      rejectCode);
               if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                final String bodyStr =
-                    new String(response.body(), java.nio.charset.StandardCharsets.UTF_8);
                 final OfflineToriiException error =
                     new OfflineToriiException(
-                        "Offline request failed with status " + response.statusCode() + ": " + bodyStr);
+                        buildHttpFailureMessage(
+                            request, response.statusCode(), response.message(), rejectCode, bodyPreview),
+                        response.statusCode(),
+                        rejectCode,
+                        bodyPreview);
                 notifyFailure(request, error);
                 future.completeExceptionally(error);
                 return;
@@ -499,12 +650,99 @@ public final class OfflineToriiClient {
                 future.complete(parsed);
               } catch (final RuntimeException ex) {
                 final OfflineToriiException error =
-                    new OfflineToriiException("Failed to parse offline response", ex);
+                    new OfflineToriiException(
+                        buildParseFailureMessage(request, response.statusCode(), bodyPreview),
+                        ex,
+                        response.statusCode(),
+                        rejectCode,
+                        bodyPreview);
                 notifyFailure(request, error);
                 future.completeExceptionally(error);
               }
             });
     return future;
+  }
+
+  private static String extractRejectCode(final Map<String, List<String>> headers) {
+    if (headers == null || headers.isEmpty()) {
+      return null;
+    }
+    final List<String> values = headers.get("x-iroha-reject-code");
+    if (values == null || values.isEmpty()) {
+      return null;
+    }
+    for (final String value : values) {
+      if (value != null && !value.isBlank()) {
+        return value.trim();
+      }
+    }
+    return null;
+  }
+
+  private static String decodeBodyPreview(final byte[] payload) {
+    if (payload == null || payload.length == 0) {
+      return null;
+    }
+    final String text = new String(payload, StandardCharsets.UTF_8).trim();
+    if (text.isEmpty()) {
+      return null;
+    }
+    final int maxLength = 512;
+    if (text.length() <= maxLength) {
+      return text;
+    }
+    return text.substring(0, maxLength) + "...";
+  }
+
+  private static String summarizeCauseMessage(final Throwable cause) {
+    if (cause == null) {
+      return "unknown transport error";
+    }
+    final String detail = cause.getMessage();
+    if (detail == null || detail.isBlank()) {
+      return cause.getClass().getSimpleName();
+    }
+    return detail;
+  }
+
+  private static String buildHttpFailureMessage(
+      final TransportRequest request,
+      final int statusCode,
+      final String statusMessage,
+      final String rejectCode,
+      final String bodyPreview) {
+    final StringBuilder message = new StringBuilder("Offline request failed with HTTP ")
+        .append(statusCode);
+    if (statusMessage != null && !statusMessage.isBlank()) {
+      message.append(" (").append(statusMessage).append(")");
+    }
+    final URI uri = request == null ? null : request.uri();
+    if (uri != null) {
+      message.append(" on ").append(uri.getPath());
+    }
+    if (rejectCode != null && !rejectCode.isBlank()) {
+      message.append(". reject_code=").append(rejectCode);
+    }
+    if (bodyPreview != null && !bodyPreview.isBlank()) {
+      message.append(". body=").append(bodyPreview);
+    }
+    return message.toString();
+  }
+
+  private static String buildParseFailureMessage(
+      final TransportRequest request, final int statusCode, final String bodyPreview) {
+    final StringBuilder message =
+        new StringBuilder("Failed to parse offline response (HTTP ")
+            .append(statusCode)
+            .append(")");
+    final URI uri = request == null ? null : request.uri();
+    if (uri != null) {
+      message.append(" for ").append(uri.getPath());
+    }
+    if (bodyPreview != null && !bodyPreview.isBlank()) {
+      message.append(". body=").append(bodyPreview);
+    }
+    return message.toString();
   }
 
   @FunctionalInterface

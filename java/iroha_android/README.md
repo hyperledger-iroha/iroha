@@ -326,6 +326,15 @@ bash ci/check_android_transport_guard.sh /path/to/classes.jar
 Tests rely on Java assertions (enabled in the Gradle test tasks). Make sure `JAVA_HOME` points to a
 JDK 21 or newer installation before running the harness.
 
+If your environment does not provide `/usr/libexec/java_home`, set `JAVA_HOME` explicitly (for
+example on Homebrew-based macOS hosts):
+
+```bash
+JAVA_HOME="$(brew --prefix openjdk@21)/libexec/openjdk.jdk/Contents/Home" \
+ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.OfflineToriiClientTests \
+./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks
+```
+
 Android Foundations pins this workspace to **JDK 21 LTS**. Possible upgrades are only evaluated after
 Oracle’s quarterly CPU releases: stage the candidate by setting `ANDROID_JDK_NEXT=1` in Buildkite
 so the Gradle harness and `scripts/android_fixture_regen.sh` soak the alternate toolchain. Capture
@@ -1057,6 +1066,86 @@ transport
 transport
     .offlineToriiClient()
     .topUpAllowanceRenewal(existingCertificateIdHex, draft, authorityId, authorityPrivateKeyHex);
+```
+
+If you need Torii to sign a receipt build claim directly (for example before
+submitting settlement), call `issueBuildClaim`:
+
+```java
+OfflineBuildClaimIssueRequest buildClaimRequest =
+    OfflineBuildClaimIssueRequest.builder()
+        .certificateIdHex(existingCertificateIdHex)
+        .txIdHex(receiptTxIdHex)
+        .platform("apple") // or "android"
+        .appId("com.example.ios")
+        .buildNumber(77L)
+        .build();
+
+transport
+    .offlineToriiClient()
+    .issueBuildClaim(buildClaimRequest)
+    .thenAccept(
+        response -> {
+          System.out.println(response.claimIdHex());
+          System.out.println(response.typedBuildClaim().platform()); // Apple / Android
+        });
+```
+
+When settling offline bundles, you can optionally request per-receipt build-claim
+overrides (for example, Android multi-package certificates) and repair existing claims:
+
+```java
+OfflineSettlementBuildClaimOverride claimOverride =
+    OfflineSettlementBuildClaimOverride.builder()
+        .txIdHex("ab".repeat(32))
+        .appId("com.example.android")
+        .buildNumber(77L)
+        .build();
+
+transport
+    .offlineToriiClient()
+    .submitSettlement(
+        transferPayload,
+        authorityId,
+        authorityPrivateKeyHex,
+        List.of(claimOverride),
+        true);
+```
+
+For operational debugging, use `submitSettlementAndWait(...)` so settlement submission and
+pipeline-status polling happen together, and inspect structured error details when Torii rejects:
+
+```java
+transport
+    .offlineToriiClient()
+    .submitSettlementAndWait(
+        transferPayload,
+        authorityId,
+        authorityPrivateKeyHex,
+        transport,
+        PipelineStatusOptions.builder().intervalMillis(250L).maxAttempts(40).build())
+    .whenComplete(
+        (settlement, error) -> {
+          if (error == null) {
+            System.out.println("bundle=" + settlement.bundleIdHex());
+            System.out.println("tx_hash=" + settlement.transactionHashHex());
+            return;
+          }
+          Throwable cause = error instanceof java.util.concurrent.CompletionException
+              ? error.getCause()
+              : error;
+          if (cause instanceof OfflineToriiException offline) {
+            offline.statusCode().ifPresent(code -> System.err.println("status=" + code));
+            offline.rejectCode().ifPresent(code -> System.err.println("reject_code=" + code));
+            offline.responseBody().ifPresent(body -> System.err.println("body=" + body));
+          } else if (cause instanceof TransactionStatusHttpException txHttp) {
+            System.err.println("status=" + txHttp.statusCode());
+            txHttp.rejectCode().ifPresent(code -> System.err.println("reject_code=" + code));
+            txHttp.responseBody().ifPresent(body -> System.err.println("body=" + body));
+          } else if (cause instanceof TransactionStatusException tx) {
+            tx.rejectionReason().ifPresent(reason -> System.err.println("reason=" + reason));
+          }
+        });
 ```
 
 For jurisdictions that require offline spend logs, use the shared audit logger

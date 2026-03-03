@@ -27900,6 +27900,33 @@ pub struct OfflineCertificateRenewResponse {
 
 /// Request payload for POST `/v1/offline/settlements`.
 #[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    Debug,
+    Clone,
+)]
+pub struct OfflineSettlementBuildClaimOverride {
+    /// Receipt transaction identifier (hex, case-insensitive) targeted by this override.
+    pub tx_id_hex: String,
+    /// Optional application identifier override (`bundle_id` on iOS, package name on Android).
+    #[norito(default)]
+    pub app_id: Option<String>,
+    /// Optional certified build number override.
+    #[norito(default)]
+    pub build_number: Option<u64>,
+    /// Optional issuance timestamp override (unix ms).
+    #[norito(default)]
+    pub issued_at_ms: Option<u64>,
+    /// Optional expiry timestamp override (unix ms).
+    #[norito(default)]
+    pub expires_at_ms: Option<u64>,
+}
+
+/// Request payload for POST `/v1/offline/settlements`.
+#[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineSettlementSubmitRequest {
     /// Account authorizing the settlement transaction.
@@ -27908,6 +27935,12 @@ pub struct OfflineSettlementSubmitRequest {
     pub private_key: ExposedPrivateKey,
     /// Prepared offline-to-online transfer bundle.
     pub transfer: OfflineToOnlineTransfer,
+    /// Optional per-receipt overrides used when issuing/repairing build claims.
+    #[norito(default)]
+    pub build_claim_overrides: Vec<OfflineSettlementBuildClaimOverride>,
+    /// Re-issue and replace existing receipt build claims server-side.
+    #[norito(default)]
+    pub repair_existing_build_claims: bool,
 }
 
 /// Response payload for POST `/v1/offline/settlements`.
@@ -39352,6 +39385,18 @@ fn build_claim_issue_error(
 }
 
 #[cfg(feature = "app_api")]
+fn build_claim_platform_from_receipt_proof(
+    proof: &OfflinePlatformProof,
+) -> OfflineBuildClaimPlatform {
+    match proof {
+        OfflinePlatformProof::AppleAppAttest(_) => OfflineBuildClaimPlatform::Apple,
+        OfflinePlatformProof::AndroidMarkerKey(_) | OfflinePlatformProof::Provisioned(_) => {
+            OfflineBuildClaimPlatform::Android
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn parse_build_claim_platform(value: &str) -> Result<OfflineBuildClaimPlatform> {
     match value.trim().to_ascii_lowercase().as_str() {
         "apple" | "ios" => Ok(OfflineBuildClaimPlatform::Apple),
@@ -39512,6 +39557,253 @@ fn resolve_build_claim_app_id(
 }
 
 #[cfg(feature = "app_api")]
+#[allow(clippy::too_many_arguments)]
+fn issue_offline_build_claim(
+    state: &CoreState,
+    issuer: &crate::OfflineIssuerSigner,
+    certificate_id: Hash,
+    nonce: Hash,
+    platform: OfflineBuildClaimPlatform,
+    requested_app_id: Option<&str>,
+    build_number: Option<u64>,
+    issued_at_ms: Option<u64>,
+    expires_at_ms: Option<u64>,
+) -> Result<OfflineBuildClaim> {
+    let world = state.world_view();
+    let record = world
+        .offline_allowances()
+        .get(&certificate_id)
+        .cloned()
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}allowance_not_found:offline allowance not found"
+            ))
+        })?;
+
+    if !issuer.allowed_controllers.is_empty()
+        && !issuer
+            .allowed_controllers
+            .iter()
+            .any(|controller| controller == &record.certificate.controller)
+    {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}unauthorized_controller:controller is not permitted"
+        )));
+    }
+
+    let operator_key = record.certificate.operator.try_signatory().ok_or_else(|| {
+        build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            "certificate operator account must be single-signature for build claims",
+        )
+    })?;
+    let signer_keypair = issuer.keypair_for_operator(operator_key).ok_or_else(|| {
+        build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            "no configured offline issuer key matches certificate operator",
+        )
+    })?;
+
+    let lineage = parse_offline_draft_lineage(&record.certificate.metadata)?;
+    if lineage.min_build_number == 0 {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:offline.build_claim.min_build_number must be greater than zero"
+        )));
+    }
+
+    let app_id = resolve_build_claim_app_id(&record.certificate, platform, requested_app_id)?;
+
+    let build_number = build_number.unwrap_or(lineage.min_build_number);
+    if build_number < lineage.min_build_number {
+        return Err(build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimBuildTooLow,
+            "build-claim build number is lower than certificate minimum",
+        ));
+    }
+
+    let issued_at_ms = issued_at_ms.unwrap_or(record.certificate.issued_at_ms);
+    let expires_at_ms = expires_at_ms.unwrap_or(record.certificate.expires_at_ms);
+    if issued_at_ms > expires_at_ms
+        || issued_at_ms < record.certificate.issued_at_ms
+        || expires_at_ms > record.certificate.expires_at_ms
+    {
+        return Err(build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimExpired,
+            "build-claim timestamp window must fit within certificate lifetime",
+        ));
+    }
+
+    let platform_slug = match platform {
+        OfflineBuildClaimPlatform::Apple => "apple",
+        OfflineBuildClaimPlatform::Android => "android",
+    };
+    let claim_seed = format!(
+        "{}:{}:{}:{}:{}:{}:{}:{}",
+        hex::encode(certificate_id.as_ref()),
+        hex::encode(nonce.as_ref()),
+        platform_slug,
+        app_id,
+        build_number,
+        issued_at_ms,
+        expires_at_ms,
+        lineage.scope
+    );
+    let claim_id = Hash::new(claim_seed.as_bytes());
+    if world
+        .offline_consumed_build_claim_ids()
+        .get(&claim_id)
+        .is_some()
+    {
+        return Err(build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimReplayed,
+            "build-claim id was already consumed",
+        ));
+    }
+
+    let mut build_claim = OfflineBuildClaim {
+        claim_id,
+        platform,
+        app_id,
+        build_number,
+        issued_at_ms,
+        expires_at_ms,
+        lineage_scope: lineage.scope,
+        nonce,
+        operator_signature: Signature::from_bytes(&[]),
+    };
+    let payload = build_claim.signing_bytes().map_err(|err| {
+        build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            format!("failed to encode build-claim payload: {err}"),
+        )
+    })?;
+    build_claim.operator_signature = Signature::new(signer_keypair.private_key(), &payload);
+    Ok(build_claim)
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+struct SettlementBuildClaimOverrideValues {
+    app_id: Option<String>,
+    build_number: Option<u64>,
+    issued_at_ms: Option<u64>,
+    expires_at_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+fn settlement_build_claim_override_map(
+    overrides: &[OfflineSettlementBuildClaimOverride],
+) -> Result<BTreeMap<Hash, SettlementBuildClaimOverrideValues>> {
+    let mut by_tx_id: BTreeMap<Hash, SettlementBuildClaimOverrideValues> = BTreeMap::new();
+    for override_entry in overrides {
+        let tx_id = parse_hash_hex(&override_entry.tx_id_hex, "tx_id_hex")?;
+        if by_tx_id.contains_key(&tx_id) {
+            return Err(build_claim_issue_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                format!(
+                    "duplicate build-claim override for receipt tx_id {}",
+                    override_entry.tx_id_hex
+                ),
+            ));
+        }
+        by_tx_id.insert(
+            tx_id,
+            SettlementBuildClaimOverrideValues {
+                app_id: override_entry.app_id.clone(),
+                build_number: override_entry.build_number,
+                issued_at_ms: override_entry.issued_at_ms,
+                expires_at_ms: override_entry.expires_at_ms,
+            },
+        );
+    }
+    Ok(by_tx_id)
+}
+
+#[cfg(feature = "app_api")]
+fn attach_missing_receipt_build_claims(
+    state: &CoreState,
+    offline_issuer: Option<&crate::OfflineIssuerSigner>,
+    transfer: &mut OfflineToOnlineTransfer,
+    build_claim_overrides: &[OfflineSettlementBuildClaimOverride],
+    repair_existing_build_claims: bool,
+) -> Result<()> {
+    if state.settlement.offline.skip_build_claim_verification {
+        return Ok(());
+    }
+
+    let overrides_by_tx = settlement_build_claim_override_map(build_claim_overrides)?;
+    let mut receipts_by_tx: BTreeMap<Hash, bool> = BTreeMap::new();
+    for receipt in &transfer.receipts {
+        receipts_by_tx.insert(receipt.tx_id, receipt.build_claim.is_some());
+    }
+    for (tx_id, _) in &overrides_by_tx {
+        let Some(has_claim) = receipts_by_tx.get(tx_id) else {
+            return Err(build_claim_issue_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                format!(
+                    "build-claim override references unknown receipt tx_id {}",
+                    hex::encode(tx_id.as_ref())
+                ),
+            ));
+        };
+        if *has_claim && !repair_existing_build_claims {
+            return Err(build_claim_issue_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                format!(
+                    "build-claim override for tx_id {} requires `repair_existing_build_claims=true`",
+                    hex::encode(tx_id.as_ref())
+                ),
+            ));
+        }
+    }
+
+    let should_issue_any = repair_existing_build_claims
+        || transfer
+            .receipts
+            .iter()
+            .any(|receipt| receipt.build_claim.is_none());
+    if !should_issue_any {
+        return Ok(());
+    }
+
+    let issuer = offline_issuer.ok_or_else(|| {
+        if repair_existing_build_claims {
+            build_claim_issue_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                "`repair_existing_build_claims` requires torii.offline_issuer",
+            )
+        } else {
+            build_claim_issue_error(
+                OfflineTransferRejectionReason::BuildClaimMissing,
+                "receipt is missing build claim and torii.offline_issuer is disabled",
+            )
+        }
+    })?;
+
+    for receipt in &mut transfer.receipts {
+        if receipt.build_claim.is_some() && !repair_existing_build_claims {
+            continue;
+        }
+        let platform = build_claim_platform_from_receipt_proof(&receipt.platform_proof);
+        let override_values = overrides_by_tx.get(&receipt.tx_id);
+        let build_claim = issue_offline_build_claim(
+            state,
+            issuer,
+            receipt.sender_certificate_id,
+            receipt.tx_id,
+            platform,
+            override_values.and_then(|override_values| override_values.app_id.as_deref()),
+            override_values.and_then(|override_values| override_values.build_number),
+            override_values.and_then(|override_values| override_values.issued_at_ms),
+            override_values.and_then(|override_values| override_values.expires_at_ms),
+        )?;
+        receipt.build_claim = Some(build_claim);
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
 fn sign_offline_certificate(
     issuer: &crate::OfflineIssuerSigner,
     draft: OfflineWalletCertificateDraft,
@@ -39665,119 +39957,18 @@ pub async fn handle_post_v1_offline_build_claims_issue(
 
     let certificate_id = parse_hash_hex(&req.certificate_id_hex, "certificate_id_hex")?;
     let nonce = parse_hash_hex(&req.tx_id_hex, "tx_id_hex")?;
-    let world = app.state.world_view();
-    let record = world
-        .offline_allowances()
-        .get(&certificate_id)
-        .cloned()
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "{OFFLINE_REJECTION_REASON_PREFIX}allowance_not_found:offline allowance not found"
-            ))
-        })?;
-
-    if !issuer.allowed_controllers.is_empty()
-        && !issuer
-            .allowed_controllers
-            .iter()
-            .any(|controller| controller == &record.certificate.controller)
-    {
-        return Err(conversion_error(format!(
-            "{OFFLINE_REJECTION_REASON_PREFIX}unauthorized_controller:controller is not permitted"
-        )));
-    }
-
-    let operator_key = record.certificate.operator.try_signatory().ok_or_else(|| {
-        build_claim_issue_error(
-            OfflineTransferRejectionReason::BuildClaimInvalid,
-            "certificate operator account must be single-signature for build claims",
-        )
-    })?;
-    if operator_key != issuer.operator_keypair.public_key() {
-        return Err(build_claim_issue_error(
-            OfflineTransferRejectionReason::BuildClaimInvalid,
-            "build-claim issuer key does not match certificate operator",
-        ));
-    }
-
-    let lineage = parse_offline_draft_lineage(&record.certificate.metadata)?;
-    if lineage.min_build_number == 0 {
-        return Err(conversion_error(format!(
-            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:offline.build_claim.min_build_number must be greater than zero"
-        )));
-    }
-
     let platform = parse_build_claim_platform(&req.platform)?;
-    let app_id = resolve_build_claim_app_id(&record.certificate, platform, req.app_id.as_deref())?;
-
-    let build_number = req.build_number.unwrap_or(lineage.min_build_number);
-    if build_number < lineage.min_build_number {
-        return Err(build_claim_issue_error(
-            OfflineTransferRejectionReason::BuildClaimBuildTooLow,
-            "build-claim build number is lower than certificate minimum",
-        ));
-    }
-
-    let issued_at_ms = req.issued_at_ms.unwrap_or(record.certificate.issued_at_ms);
-    let expires_at_ms = req
-        .expires_at_ms
-        .unwrap_or(record.certificate.expires_at_ms);
-    if issued_at_ms > expires_at_ms
-        || issued_at_ms < record.certificate.issued_at_ms
-        || expires_at_ms > record.certificate.expires_at_ms
-    {
-        return Err(build_claim_issue_error(
-            OfflineTransferRejectionReason::BuildClaimExpired,
-            "build-claim timestamp window must fit within certificate lifetime",
-        ));
-    }
-
-    let platform_slug = match platform {
-        OfflineBuildClaimPlatform::Apple => "apple",
-        OfflineBuildClaimPlatform::Android => "android",
-    };
-    let claim_seed = format!(
-        "{}:{}:{}:{}:{}:{}:{}:{}",
-        hex::encode(certificate_id.as_ref()),
-        hex::encode(nonce.as_ref()),
-        platform_slug,
-        app_id,
-        build_number,
-        issued_at_ms,
-        expires_at_ms,
-        lineage.scope
-    );
-    let claim_id = Hash::new(claim_seed.as_bytes());
-    if world
-        .offline_consumed_build_claim_ids()
-        .get(&claim_id)
-        .is_some()
-    {
-        return Err(build_claim_issue_error(
-            OfflineTransferRejectionReason::BuildClaimReplayed,
-            "build-claim id was already consumed",
-        ));
-    }
-
-    let mut build_claim = OfflineBuildClaim {
-        claim_id,
-        platform,
-        app_id,
-        build_number,
-        issued_at_ms,
-        expires_at_ms,
-        lineage_scope: lineage.scope,
+    let build_claim = issue_offline_build_claim(
+        app.state.as_ref(),
+        issuer,
+        certificate_id,
         nonce,
-        operator_signature: Signature::from_bytes(&[]),
-    };
-    let payload = build_claim.signing_bytes().map_err(|err| {
-        build_claim_issue_error(
-            OfflineTransferRejectionReason::BuildClaimInvalid,
-            format!("failed to encode build-claim payload: {err}"),
-        )
-    })?;
-    build_claim.operator_signature =
-        Signature::new(issuer.operator_keypair.private_key(), &payload);
+        platform,
+        req.app_id.as_deref(),
+        req.build_number,
+        req.issued_at_ms,
+        req.expires_at_ms,
+    )?;
 
     json_response(&OfflineBuildClaimIssueResponse {
         claim_id_hex: hex::encode(build_claim.claim_id.as_ref()),
@@ -39994,25 +40185,35 @@ pub async fn handle_post_v1_offline_settlements_submit(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
+    offline_issuer: Option<crate::OfflineIssuerSigner>,
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<OfflineSettlementSubmitRequest>,
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::{isi::offline, prelude as dm};
 
-    let bundle_id_hex = hex::encode(req.transfer.bundle_id.as_ref());
+    let repair_existing_build_claims = req.repair_existing_build_claims;
+    let build_claim_overrides = req.build_claim_overrides;
+    let mut transfer = req.transfer;
+    attach_missing_receipt_build_claims(
+        state.as_ref(),
+        offline_issuer.as_ref(),
+        &mut transfer,
+        &build_claim_overrides,
+        repair_existing_build_claims,
+    )?;
+
+    let bundle_id_hex = hex::encode(transfer.bundle_id.as_ref());
     if state
         .world_view()
         .offline_to_online_transfers()
-        .get(&req.transfer.bundle_id)
+        .get(&transfer.bundle_id)
         .is_some()
     {
         return Err(conversion_error(format!(
             "{OFFLINE_REJECTION_REASON_PREFIX}duplicate_bundle:offline transfer bundle already submitted"
         )));
     }
-    let isi = offline::SubmitOfflineToOnlineTransfer {
-        transfer: req.transfer,
-    };
+    let isi = offline::SubmitOfflineToOnlineTransfer { transfer };
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority)
         .with_instructions([dm::InstructionBox::from(isi)])
         .sign(&req.private_key.0);

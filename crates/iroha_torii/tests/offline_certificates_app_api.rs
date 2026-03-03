@@ -393,6 +393,7 @@ fn build_cert_harness() -> CertHarness {
         operator_private_key: iroha_crypto::ExposedPrivateKey(
             fixtures.controller_keys.private_key().clone(),
         ),
+        legacy_operator_private_keys: vec![],
         allowed_controllers: vec![fixtures.controller.clone()],
     });
     let (kiso, _child) = KisoHandle::start(cfg.clone());

@@ -55,11 +55,78 @@ final class ConnectViewModel: ObservableObject {
   private var webSocketTask: URLSessionWebSocketTask?
   private let session = URLSession(configuration: .default)
   private var nextSeq: UInt64 = 1
+  private let defaultsVerifiedKey = "NoritoDemo.VerifiedAccount"
   #if canImport(CryptoKit)
   private var localPriv: Curve25519.KeyAgreement.PrivateKey?
   private var keySend: SymmetricKey?
   private var keyRecv: SymmetricKey?
   #endif
+
+  init() {
+    loadVerifiedAccount()
+    applyEnvironmentDefaults()
+  }
+
+  private func loadVerifiedAccount() {
+    if let saved = UserDefaults.standard.string(forKey: defaultsVerifiedKey), !saved.isEmpty {
+      verifiedAccount = saved
+    }
+  }
+
+  private func persistVerifiedAccount(_ id: String) {
+    verifiedAccount = id
+    UserDefaults.standard.set(id, forKey: defaultsVerifiedKey)
+    log("Persisted verified account: \(id)")
+  }
+
+  private func applyEnvironmentDefaults() {
+    func value(for key: String) -> String? {
+      guard let cString = getenv(key) else { return nil }
+      let raw = String(cString: cString).trimmingCharacters(in: .whitespacesAndNewlines)
+      return raw.isEmpty ? nil : raw
+    }
+
+    if let url = value(for: "TORII_NODE_URL") {
+      baseURL = url
+    }
+    if let sessionId = value(for: "CONNECT_SESSION_ID") {
+      sid = sessionId
+    }
+    if let token = value(for: "CONNECT_TOKEN_APP") {
+      tokenApp = token
+    }
+    if let token = value(for: "CONNECT_TOKEN_WALLET") {
+      tokenWallet = token
+    }
+    if let chain = value(for: "CONNECT_CHAIN_ID") {
+      chainId = chain
+    }
+    if let roleRaw = value(for: "CONNECT_ROLE"),
+       let newRole = Role(rawValue: roleRaw.lowercased()) {
+      role = newRole
+    }
+    if let peer = value(for: "CONNECT_PEER_PUB_B64") {
+      peerPubB64 = peer
+    }
+    if let shared = value(for: "CONNECT_SHARED_KEY_B64") {
+      aeadKeyB64 = shared
+    }
+    if let approveAccount = value(for: "CONNECT_APPROVE_ACCOUNT_ID") {
+      approveAccountId = approveAccount
+    }
+    if let approvePriv = value(for: "CONNECT_APPROVE_PRIVATE_KEY_B64") {
+      approvePrivKeyB64 = approvePriv
+    }
+    if let approveSig = value(for: "CONNECT_APPROVE_SIGNATURE_B64") {
+      approveSigB64 = approveSig
+    }
+  }
+
+  var walletDeepLink: String {
+    guard !sid.isEmpty, !tokenWallet.isEmpty else { return "" }
+    let nodeEnc = baseURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? baseURL
+    return "iroha://connect?sid=\(sid)&chain_id=\(chainId)&node=\(nodeEnc)&v=1&role=wallet&token=\(tokenWallet)"
+  }
 
   func createSession() {
     // Ensure we have an app ephemeral key for sid computation when acting as app
@@ -73,11 +140,6 @@ final class ConnectViewModel: ObservableObject {
     let appPk = Data()
 #endif
 
-  var walletDeepLink: String {
-    guard !sid.isEmpty, !tokenWallet.isEmpty else { return "" }
-    let nodeEnc = baseURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? baseURL
-    return "iroha://connect?sid=\(sid)&chain_id=\(chainId)&node=\(nodeEnc)&v=1&role=wallet&token=\(tokenWallet)"
-  }
     // Compute sid = BLAKE2b-256("iroha-connect|sid|" || chain_id || app_pk || nonce16) with FFI when available; fallback to SHA256
     let sidBytes = computeSid(chainId: chainId, appPk: appPk)
     let sidB64 = base64url(sidBytes)
@@ -235,6 +297,38 @@ final class ConnectViewModel: ObservableObject {
   // MARK: Control frames (optional via bridge)
   private let ctrlKindOpen: UInt16 = 1
   private let ctrlKindApprove: UInt16 = 2
+
+  private func permsJson(request: Bool) -> Data? {
+    var methods = [String]()
+    var events = [String]()
+    if request {
+      if reqPermSignRaw { methods.append("SIGN_REQUEST_RAW") }
+      if reqPermSignTx { methods.append("SIGN_REQUEST_TX") }
+      if reqEventDisplay { events.append("DISPLAY_REQUEST") }
+    } else {
+      if reqPermSignRaw { methods.append("SIGN_REQUEST_RAW") }
+      if reqPermSignTx { methods.append("SIGN_REQUEST_TX") }
+      if reqEventDisplay { events.append("DISPLAY_REQUEST") }
+    }
+    if methods.isEmpty && events.isEmpty { return nil }
+    let obj: [String: Any] = ["methods": methods, "events": events]
+    return try? JSONSerialization.data(withJSONObject: obj)
+  }
+
+  private func proofJson() -> Data? {
+    if proofDomain.isEmpty && proofUri.isEmpty && proofStatement.isEmpty && proofNonce.isEmpty {
+      return nil
+    }
+    let issuedAt = ISO8601DateFormatter().string(from: Date())
+    let obj: [String: Any] = [
+      "domain": proofDomain,
+      "uri": proofUri,
+      "statement": proofStatement,
+      "issued_at": issuedAt,
+      "nonce": proofNonce
+    ]
+    return try? JSONSerialization.data(withJSONObject: obj)
+  }
 
   func sendControlOpen() {
     guard let task = webSocketTask else { return }
@@ -630,7 +724,6 @@ struct ContentView: View {
             ScrollView(.horizontal) {
               Text(vm.walletDeepLink)
                 .font(.system(.caption, design: .monospaced))
-                .textSelection(.enabled)
             }
             HStack(spacing: 12) {
               Button("Copy Deeplink") {
@@ -764,66 +857,6 @@ struct ContentView: View {
 
         Spacer(minLength: 0)
       }
-  private let defaultsVerifiedKey = "NoritoDemo.VerifiedAccount"
-
-  init() {
-    loadVerifiedAccount()
-    applyEnvironmentDefaults()
-  }
-
-  private func loadVerifiedAccount() {
-    if let saved = UserDefaults.standard.string(forKey: defaultsVerifiedKey), !saved.isEmpty {
-      self.verifiedAccount = saved
-    }
-  }
-
-  private func persistVerifiedAccount(_ id: String) {
-    self.verifiedAccount = id
-    UserDefaults.standard.set(id, forKey: defaultsVerifiedKey)
-    log("Persisted verified account: \(id)")
-  }
-
-  private func applyEnvironmentDefaults() {
-    func value(for key: String) -> String? {
-      guard let cString = getenv(key) else { return nil }
-      let raw = String(cString: cString).trimmingCharacters(in: .whitespacesAndNewlines)
-      return raw.isEmpty ? nil : raw
-    }
-
-    if let url = value(for: "TORII_NODE_URL") {
-      baseURL = url
-    }
-    if let sessionId = value(for: "CONNECT_SESSION_ID") {
-      sid = sessionId
-    }
-    if let token = value(for: "CONNECT_TOKEN_APP") {
-      tokenApp = token
-    }
-    if let token = value(for: "CONNECT_TOKEN_WALLET") {
-      tokenWallet = token
-    }
-    if let chain = value(for: "CONNECT_CHAIN_ID") {
-      chainId = chain
-    }
-    if let roleRaw = value(for: "CONNECT_ROLE"), let newRole = Role(rawValue: roleRaw.lowercased()) {
-      role = newRole
-    }
-    if let peer = value(for: "CONNECT_PEER_PUB_B64") {
-      peerPubB64 = peer
-    }
-    if let shared = value(for: "CONNECT_SHARED_KEY_B64") {
-      aeadKeyB64 = shared
-    }
-    if let approveAccount = value(for: "CONNECT_APPROVE_ACCOUNT_ID") {
-      approveAccountId = approveAccount
-    }
-    if let approvePriv = value(for: "CONNECT_APPROVE_PRIVATE_KEY_B64") {
-      approvePrivKeyB64 = approvePriv
-    }
-    if let approveSig = value(for: "CONNECT_APPROVE_SIGNATURE_B64") {
-      approveSigB64 = approveSig
-    }
-  }
       .padding()
       .navigationBarTitle("Norito Connect Demo")
       .sheet(isPresented: $showShareSheet) {
@@ -972,27 +1005,3 @@ struct TransferHistorySection: View {
 struct ContentView_Previews: PreviewProvider {
   static var previews: some View { ContentView() }
 }
-#if canImport(NoritoBridge)
-  private func permsJson(request: Bool) -> Data? {
-    var methods = [String]()
-    var events = [String]()
-    if request {
-      if reqPermSignRaw { methods.append("SIGN_REQUEST_RAW") }
-      if reqPermSignTx { methods.append("SIGN_REQUEST_TX") }
-      if reqEventDisplay { events.append("DISPLAY_REQUEST") }
-    } else {
-      if reqPermSignRaw { methods.append("SIGN_REQUEST_RAW") }
-      if reqPermSignTx { methods.append("SIGN_REQUEST_TX") }
-      if reqEventDisplay { events.append("DISPLAY_REQUEST") }
-    }
-    if methods.isEmpty && events.isEmpty { return nil }
-    let obj: [String: Any] = ["methods": methods, "events": events]
-    return try? JSONSerialization.data(withJSONObject: obj)
-  }
-  private func proofJson() -> Data? {
-    if proofDomain.isEmpty && proofUri.isEmpty && proofStatement.isEmpty && proofNonce.isEmpty { return nil }
-    let issuedAt = ISO8601DateFormatter().string(from: Date())
-    let obj: [String: Any] = ["domain": proofDomain, "uri": proofUri, "statement": proofStatement, "issued_at": issuedAt, "nonce": proofNonce]
-    return try? JSONSerialization.data(withJSONObject: obj)
-  }
-#endif

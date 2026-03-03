@@ -202,6 +202,21 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
           }
         }
         """.data(using: .utf8)!
+        let buildClaimIssuePayload = """
+        {
+          "claim_id_hex": "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface",
+          "build_claim": {
+            "claim_id": "hash:FEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACE#CD31",
+            "nonce": "hash:ABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCD#C9C5",
+            "platform": "Apple",
+            "app_id": "com.example.ios",
+            "build_number": 77,
+            "issued_at_ms": 1700000000000,
+            "expires_at_ms": 1700000100000,
+            "operator_signature": "AA"
+          }
+        }
+        """.data(using: .utf8)!
 
         let envelope = ToriiQueryEnvelope(
             filter: .object(["op": .string("eq"), "args": .array([.string("bundle_id_hex"), .string("aa")])]),
@@ -230,6 +245,15 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
             policy: OfflineWalletPolicy(maxBalance: "10", maxTxValue: "5", expiresAtMs: 200)
         )
         let issueRequest = try ToriiOfflineCertificateIssueRequest(certificate: draft)
+        let buildClaimIssueRequest = ToriiOfflineBuildClaimIssueRequest(
+            certificateIdHex: String(repeating: "ab", count: 32),
+            txIdHex: String(repeating: "cd", count: 32),
+            platform: "apple",
+            appId: "com.example.ios",
+            buildNumber: 77,
+            issuedAtMs: 1_700_000_000_000,
+            expiresAtMs: 1_700_000_100_000
+        )
         let renewRequest = try ToriiOfflineCertificateIssueRequest(certificate: draft)
 
         var queue: [ExpectedRequest] = [
@@ -253,6 +277,15 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
                 XCTAssertNil(certificate["operator_signature"])
                 XCTAssertNotNil(certificate["allowance"] as? [String: Any])
                 XCTAssertNotNil(certificate["attestation_report"] as? [Any])
+            }),
+            ExpectedRequest(method: "POST", path: "/v1/offline/build-claims/issue", responseBody: buildClaimIssuePayload, assertBody: { data in
+                let body = try XCTUnwrap(data)
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(json["certificate_id_hex"] as? String, buildClaimIssueRequest.certificateIdHex)
+                XCTAssertEqual(json["tx_id_hex"] as? String, buildClaimIssueRequest.txIdHex)
+                XCTAssertEqual(json["platform"] as? String, "apple")
+                XCTAssertEqual(json["app_id"] as? String, "com.example.ios")
+                XCTAssertEqual(json["build_number"] as? NSNumber, 77)
             }),
             ExpectedRequest(method: "POST", path: "/v1/offline/allowances", responseBody: registerPayload, assertBody: { data in
                 let body = try XCTUnwrap(data)
@@ -279,6 +312,8 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
                 XCTAssertEqual(json["authority"] as? String, accountId)
                 XCTAssertNotNil(json["private_key"] as? String)
                 XCTAssertNotNil(json["transfer"] as? [String: Any])
+                XCTAssertNil(json["build_claim_overrides"])
+                XCTAssertNil(json["repair_existing_build_claims"])
             }),
             ExpectedRequest(method: "GET", path: "/v1/offline/state", responseBody: statePayload, assertBody: nil),
             ExpectedRequest(method: "POST", path: "/v1/offline/transfers/proof", responseBody: proofPayload, assertBody: { data in
@@ -325,6 +360,10 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         let issueResponse = try await client.issueOfflineCertificate(issueRequest)
         let issuedCertificate = try issueResponse.decodeCertificate()
         XCTAssertEqual(issuedCertificate.controller, accountId)
+
+        let issuedBuildClaim = try await client.issueOfflineBuildClaim(buildClaimIssueRequest)
+        XCTAssertEqual(issuedBuildClaim.claimIdHex,
+                       "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface")
 
         let registerRequest = try ToriiOfflineAllowanceRegisterRequest(
             authority: accountId,
@@ -403,6 +442,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
             expiresAtMs: 200,
             policy: OfflineWalletPolicy(maxBalance: "25", maxTxValue: "5", expiresAtMs: 200)
         )
+        let attestationNonce = Data(repeating: 0xAB, count: 32)
 
         var queue: [ExpectedRequest] = [
             ExpectedRequest(method: "POST", path: "/v1/offline/certificates/issue", responseBody: issuePayload, assertBody: { data in
@@ -412,6 +452,10 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
                 XCTAssertNil(certificate["operator"])
                 XCTAssertNil(certificate["operator_signature"])
                 XCTAssertNotNil(certificate["allowance"] as? [String: Any])
+                let attestationNonceLiteral = try XCTUnwrap(certificate["attestation_nonce"] as? String)
+                let attestationNonceHex = attestationNonce.map { String(format: "%02X", $0) }.joined()
+                XCTAssertTrue(attestationNonceLiteral.hasPrefix("hash:"))
+                XCTAssertTrue(attestationNonceLiteral.contains(attestationNonceHex))
             }),
             ExpectedRequest(method: "POST", path: "/v1/offline/allowances", responseBody: registerPayload, assertBody: { data in
                 let body = try XCTUnwrap(data)
@@ -443,7 +487,8 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         let client = makeClient()
         let result = try await client.topUpOfflineAllowance(draft: draft,
                                                             authority: accountId,
-                                                            privateKey: "ed0120deadbeef")
+                                                            privateKey: "ed0120deadbeef",
+                                                            attestationNonce: attestationNonce)
         XCTAssertEqual(result.certificate.certificateIdHex, "cafe")
         XCTAssertEqual(result.registration.certificateIdHex, "cafe")
         XCTAssertTrue(queue.isEmpty)
@@ -494,6 +539,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
             expiresAtMs: 400,
             policy: OfflineWalletPolicy(maxBalance: "30", maxTxValue: "6", expiresAtMs: 400)
         )
+        let attestationNonce = Data(repeating: 0xCD, count: 32)
 
         var queue: [ExpectedRequest] = [
             ExpectedRequest(method: "POST", path: "/v1/offline/certificates/deadbeef/renew/issue", responseBody: issuePayload, assertBody: { data in
@@ -501,6 +547,10 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
                 let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
                 let certificate = try XCTUnwrap(json["certificate"] as? [String: Any])
                 XCTAssertNil(certificate["operator"])
+                let attestationNonceLiteral = try XCTUnwrap(certificate["attestation_nonce"] as? String)
+                let attestationNonceHex = attestationNonce.map { String(format: "%02X", $0) }.joined()
+                XCTAssertTrue(attestationNonceLiteral.hasPrefix("hash:"))
+                XCTAssertTrue(attestationNonceLiteral.contains(attestationNonceHex))
             }),
             ExpectedRequest(method: "POST", path: "/v1/offline/allowances/deadbeef/renew", responseBody: renewPayload, assertBody: { data in
                 let body = try XCTUnwrap(data)
@@ -532,10 +582,41 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         let result = try await client.topUpOfflineAllowanceRenewal(certificateIdHex: "deadbeef",
                                                                    draft: draft,
                                                                    authority: accountId,
-                                                                   privateKey: "ed0120cafebabe")
+                                                                   privateKey: "ed0120cafebabe",
+                                                                   attestationNonce: attestationNonce)
         XCTAssertEqual(result.certificate.certificateIdHex, "beadfeed")
         XCTAssertEqual(result.registration.certificateIdHex, "beadfeed")
         XCTAssertTrue(queue.isEmpty)
+    }
+
+    func testOfflineTopUpRejectsInvalidAttestationNonceLength() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let assetId = "rose#wonderland#\(accountId)"
+        let draft = OfflineWalletCertificateDraft(
+            controller: accountId,
+            allowance: OfflineAllowanceCommitment(assetId: assetId,
+                                                  amount: "25",
+                                                  commitment: Data([0x01, 0x02])),
+            spendPublicKey: "ed0120deadbeef",
+            attestationReport: Data([0xAA, 0xBB]),
+            issuedAtMs: 100,
+            expiresAtMs: 200,
+            policy: OfflineWalletPolicy(maxBalance: "25", maxTxValue: "5", expiresAtMs: 200)
+        )
+        let client = makeClient()
+        do {
+            _ = try await client.topUpOfflineAllowance(draft: draft,
+                                                       authority: accountId,
+                                                       privateKey: "ed0120deadbeef",
+                                                       attestationNonce: Data([0x01, 0x02, 0x03]))
+            XCTFail("expected invalid payload error")
+        } catch let error as ToriiClientError {
+            guard case .invalidPayload(let message) = error else {
+                XCTFail("unexpected ToriiClientError: \(error)")
+                return
+            }
+            XCTAssertTrue(message.contains("attestationNonce"))
+        }
     }
 
     func testOfflineReprovisionRequestsPreserveAmountAndPolicy() async throws {
@@ -894,6 +975,516 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         let status = try await client.getOfflineSettlementStatus(bundleIdHex: "aa")
         XCTAssertEqual(status, .pending)
         XCTAssertEqual(step, 2)
+    }
+
+    func testSubmitOfflineSettlementEncodesBuildClaimOverridesAndRepairFlag() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let txIdHex = "hash:\(String(repeating: "AB", count: 32))#B99E"
+        let submitPayload = """
+        {"bundle_id_hex": "aa"}
+        """.data(using: .utf8)!
+
+        OfflineStubURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/offline/settlements")
+            let body = try XCTUnwrap(self.requestBody(from: request))
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let overrides = try XCTUnwrap(json["build_claim_overrides"] as? [[String: Any]])
+            XCTAssertEqual(overrides.count, 1)
+            XCTAssertEqual(overrides.first?["tx_id_hex"] as? String, String(repeating: "ab", count: 32))
+            XCTAssertEqual(overrides.first?["app_id"] as? String, "com.example.ios")
+            XCTAssertEqual(overrides.first?["build_number"] as? NSNumber, 77)
+            XCTAssertEqual(json["repair_existing_build_claims"] as? Bool, true)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, submitPayload)
+        }
+
+        let request = ToriiOfflineSettlementSubmitRequest(
+            authority: accountId,
+            privateKey: "ed0120deadbeef",
+            transfer: .object(["bundle_id": .string("aa")]),
+            buildClaimOverrides: [
+                ToriiOfflineSettlementBuildClaimOverride(
+                    txIdHex: txIdHex,
+                    appId: "com.example.ios",
+                    buildNumber: 77
+                ),
+            ],
+            repairExistingBuildClaims: true
+        )
+        let client = makeClient()
+        let response = try await client.submitOfflineSettlement(request)
+        XCTAssertEqual(response.bundleIdHex, "aa")
+    }
+
+    func testSubmitOfflineSettlementAndWaitPollsPipelineStatus() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let txHashHex = String(repeating: "ca", count: 32)
+        var step = 0
+        OfflineStubURLProtocol.handler = { request in
+            step += 1
+            switch step {
+            case 1:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let payload = """
+                {"bundle_id_hex":"aa","transaction_hash_hex":"\(txHashHex)"}
+                """.data(using: .utf8)!
+                return (response, payload)
+            case 2:
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+                let hash = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                    .queryItems?
+                    .first(where: { $0.name == "hash" })?
+                    .value
+                XCTAssertEqual(hash, txHashHex)
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let payload = """
+                {
+                  "kind":"Transaction",
+                  "content":{"hash":"\(txHashHex)","status":{"kind":"Pending","content":null}}
+                }
+                """.data(using: .utf8)!
+                return (response, payload)
+            case 3:
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let payload = """
+                {
+                  "kind":"Transaction",
+                  "content":{"hash":"\(txHashHex)","status":{"kind":"Committed","content":"YQ=="}}
+                }
+                """.data(using: .utf8)!
+                return (response, payload)
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+
+        let request = ToriiOfflineSettlementSubmitRequest(
+            authority: accountId,
+            privateKey: "ed0120deadbeef",
+            transfer: .object(["bundle_id": .string("aa")])
+        )
+        var poll = PipelineStatusPollOptions.default
+        poll.pollInterval = 0
+        poll.maxAttempts = 5
+        poll.timeout = 5
+        let client = makeClient()
+        let response = try await client.submitOfflineSettlementAndWait(request, pollOptions: poll)
+        XCTAssertEqual(response.bundleIdHex, "aa")
+        XCTAssertEqual(response.txHashHex, txHashHex)
+        XCTAssertEqual(step, 3)
+    }
+
+    func testWaitForTransactionStatusSupportsTaskCancellation() async throws {
+        let txHashHex = String(repeating: "dd", count: 32)
+        let firstPollStarted = DispatchSemaphore(value: 0)
+        var statusCalls = 0
+        OfflineStubURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+            statusCalls += 1
+            if statusCalls == 1 {
+                firstPollStarted.signal()
+            }
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let payload = """
+            {
+              "kind":"Transaction",
+              "content":{"hash":"\(txHashHex)","status":{"kind":"Pending","content":null}}
+            }
+            """.data(using: .utf8)!
+            return (response, payload)
+        }
+
+        var poll = PipelineStatusPollOptions.default
+        poll.pollInterval = 30
+        poll.timeout = 120
+        let client = makeClient()
+        let task = Task {
+            try await client.waitForTransactionStatus(hashHex: txHashHex, pollOptions: poll)
+        }
+
+        XCTAssertEqual(firstPollStarted.wait(timeout: .now() + 1), .success, "first poll did not start")
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("expected cancellation")
+        } catch is CancellationError {
+            // expected
+        }
+        XCTAssertEqual(statusCalls, 1, "cancellation should stop subsequent polls")
+    }
+
+    func testSubmitOfflineSettlementAndWaitSupportsTaskCancellation() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let txHashHex = String(repeating: "de", count: 32)
+        let firstPollStarted = DispatchSemaphore(value: 0)
+        var step = 0
+        OfflineStubURLProtocol.handler = { request in
+            step += 1
+            switch step {
+            case 1:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let payload = """
+                {"bundle_id_hex":"aa","transaction_hash_hex":"\(txHashHex)"}
+                """.data(using: .utf8)!
+                return (response, payload)
+            case 2:
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+                firstPollStarted.signal()
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let payload = """
+                {
+                  "kind":"Transaction",
+                  "content":{"hash":"\(txHashHex)","status":{"kind":"Pending","content":null}}
+                }
+                """.data(using: .utf8)!
+                return (response, payload)
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+
+        let request = ToriiOfflineSettlementSubmitRequest(
+            authority: accountId,
+            privateKey: "ed0120deadbeef",
+            transfer: .object(["bundle_id": .string("aa")])
+        )
+        var poll = PipelineStatusPollOptions.default
+        poll.pollInterval = 30
+        poll.timeout = 120
+        let client = makeClient()
+        let task = Task {
+            try await client.submitOfflineSettlementAndWait(request, pollOptions: poll)
+        }
+
+        XCTAssertEqual(firstPollStarted.wait(timeout: .now() + 1), .success, "status poll did not start")
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("expected cancellation")
+        } catch is CancellationError {
+            // expected
+        }
+        XCTAssertEqual(step, 2, "cancellation should stop settlement polling loop")
+    }
+
+    func testSubmitOfflineSettlementAndWaitSurfacesRejectionReason() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let txHashHex = String(repeating: "cb", count: 32)
+        OfflineStubURLProtocol.handler = { request in
+            if request.url?.path == "/v1/offline/settlements" {
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let payload = """
+                {"bundle_id_hex":"aa","transaction_hash_hex":"\(txHashHex)"}
+                """.data(using: .utf8)!
+                return (response, payload)
+            }
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let payload = """
+            {
+              "kind":"Transaction",
+              "content":{
+                "hash":"\(txHashHex)",
+                "status":{"kind":"Rejected","content":null,"rejection_reason":"build_claim_missing"}
+              }
+            }
+            """.data(using: .utf8)!
+            return (response, payload)
+        }
+
+        let request = ToriiOfflineSettlementSubmitRequest(
+            authority: accountId,
+            privateKey: "ed0120deadbeef",
+            transfer: .object(["bundle_id": .string("aa")])
+        )
+        var poll = PipelineStatusPollOptions.default
+        poll.pollInterval = 0
+        poll.maxAttempts = 1
+        poll.timeout = 5
+        let client = makeClient()
+        do {
+            _ = try await client.submitOfflineSettlementAndWait(request, pollOptions: poll)
+            XCTFail("expected pipeline rejection")
+        } catch let error as PipelineStatusError {
+            guard case .failure(_, let status, _) = error else {
+                XCTFail("unexpected pipeline status error: \(error)")
+                return
+            }
+            XCTAssertEqual(status, "Rejected")
+            XCTAssertEqual(error.rejectionReason, "build_claim_missing")
+            XCTAssertTrue(error.localizedDescription.contains("build_claim_missing"))
+        }
+    }
+
+    func testSubmitOfflineSettlementAndWaitCachesRejectedStatusForBundle() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let txHashHex = String(repeating: "cc", count: 32)
+        var step = 0
+        OfflineStubURLProtocol.handler = { request in
+            step += 1
+            switch step {
+            case 1:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let payload = """
+                {"bundle_id_hex":"aa","transaction_hash_hex":"\(txHashHex)"}
+                """.data(using: .utf8)!
+                return (response, payload)
+            case 2:
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let payload = """
+                {
+                  "kind":"Transaction",
+                  "content":{
+                    "hash":"\(txHashHex)",
+                    "status":{"kind":"Rejected","content":null,"rejection_reason":"build_claim_missing"}
+                  }
+                }
+                """.data(using: .utf8)!
+                return (response, payload)
+            case 3:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/offline/settlements/query")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let payload = """
+                {"items":[],"total":0}
+                """.data(using: .utf8)!
+                return (response, payload)
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+
+        let request = ToriiOfflineSettlementSubmitRequest(
+            authority: accountId,
+            privateKey: "ed0120deadbeef",
+            transfer: .object(["bundle_id": .string("aa")])
+        )
+        var poll = PipelineStatusPollOptions.default
+        poll.pollInterval = 0
+        poll.maxAttempts = 1
+        poll.timeout = 5
+        let client = makeClient()
+        do {
+            _ = try await client.submitOfflineSettlementAndWait(request, pollOptions: poll)
+            XCTFail("expected pipeline rejection")
+        } catch {
+            // expected
+        }
+        let status = try await client.getSettlementStatus(bundleIdHex: "aa")
+        XCTAssertEqual(status, .rejected(reason: "build_claim_missing"))
+        XCTAssertEqual(step, 3)
+    }
+
+    func testSubmitOfflineSettlementAndWaitRejectsMissingTxHashBeforePolling() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        var calls = 0
+        OfflineStubURLProtocol.handler = { request in
+            calls += 1
+            XCTAssertEqual(request.url?.path, "/v1/offline/settlements")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let payload = """
+            {"bundle_id_hex":"aa"}
+            """.data(using: .utf8)!
+            return (response, payload)
+        }
+
+        let request = ToriiOfflineSettlementSubmitRequest(
+            authority: accountId,
+            privateKey: "ed0120deadbeef",
+            transfer: .object(["bundle_id": .string("aa")])
+        )
+        let client = makeClient()
+        do {
+            _ = try await client.submitOfflineSettlementAndWait(request)
+            XCTFail("expected invalid payload")
+        } catch let error as ToriiClientError {
+            guard case let .invalidPayload(message) = error else {
+                XCTFail("unexpected error: \(error)")
+                return
+            }
+            XCTAssertTrue(message.contains("transaction_hash_hex"))
+        }
+        XCTAssertEqual(calls, 1, "pipeline polling should not run without tx hash")
+    }
+
+    func testIssueOfflineBuildClaimPostsRequestAndParsesResponse() async throws {
+        let claimIdHex = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        let issuePayload = """
+        {
+          "claim_id_hex": "\(claimIdHex)",
+          "build_claim": {
+            "claim_id": "hash:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF#4A8E",
+            "nonce": "hash:ABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCD#C9C5",
+            "platform": "Apple",
+            "app_id": "com.example.ios",
+            "build_number": 77,
+            "issued_at_ms": 1700000000000,
+            "expires_at_ms": 1700000100000,
+            "operator_signature": "AA"
+          }
+        }
+        """.data(using: .utf8)!
+
+        let requestBody = ToriiOfflineBuildClaimIssueRequest(
+            certificateIdHex: String(repeating: "ab", count: 32),
+            txIdHex: String(repeating: "cd", count: 32),
+            platform: "apple",
+            appId: "com.example.ios",
+            buildNumber: 77
+        )
+
+        OfflineStubURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/offline/build-claims/issue")
+            let body = try XCTUnwrap(self.requestBody(from: request))
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            XCTAssertEqual(json["certificate_id_hex"] as? String, requestBody.certificateIdHex)
+            XCTAssertEqual(json["tx_id_hex"] as? String, requestBody.txIdHex)
+            XCTAssertEqual(json["platform"] as? String, "apple")
+            XCTAssertEqual(json["app_id"] as? String, "com.example.ios")
+            XCTAssertEqual(json["build_number"] as? NSNumber, 77)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, issuePayload)
+        }
+
+        let client = makeClient()
+        let response = try await client.issueOfflineBuildClaim(requestBody)
+        XCTAssertEqual(response.claimIdHex, claimIdHex)
+        XCTAssertFalse(try response.encodedBuildClaimData().isEmpty)
+        let buildClaim = try response.buildClaimObject()
+        XCTAssertEqual(buildClaim.platform, .apple)
+        XCTAssertEqual(buildClaim.appId, "com.example.ios")
+        XCTAssertEqual(buildClaim.buildNumber, 77)
+    }
+
+    func testOfflineBuildClaimDecodesLowercasePlatformVariant() throws {
+        let payload = """
+        {
+          "claim_id": "hash:FEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACE#CD31",
+          "nonce": "hash:ABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCD#C9C5",
+          "platform": "android",
+          "app_id": "com.example.android",
+          "build_number": 99,
+          "issued_at_ms": 1700000000000,
+          "expires_at_ms": 1700000100000,
+          "operator_signature": "AA"
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(ToriiOfflineBuildClaim.self, from: payload)
+        XCTAssertEqual(decoded.platform, .android)
+    }
+
+    func testIssueOfflineBuildClaimRejectsUnsupportedPlatformBeforeNetworkCall() async throws {
+        OfflineStubURLProtocol.handler = { _ in
+            XCTFail("network should not be called for invalid platform")
+            throw URLError(.badServerResponse)
+        }
+
+        let requestBody = ToriiOfflineBuildClaimIssueRequest(
+            certificateIdHex: String(repeating: "ab", count: 32),
+            txIdHex: String(repeating: "cd", count: 32),
+            platform: "windows-phone"
+        )
+
+        let client = makeClient()
+        do {
+            _ = try await client.issueOfflineBuildClaim(requestBody)
+            XCTFail("expected invalid payload error")
+        } catch let error as ToriiClientError {
+            guard case let .invalidPayload(message) = error else {
+                XCTFail("unexpected error: \(error)")
+                return
+            }
+            XCTAssertTrue(message.contains("platform"))
+        }
+    }
+
+    func testSubmitOfflineSettlementRejectsInvalidBuildClaimOverrideTxIdBeforeNetworkCall() async throws {
+        OfflineStubURLProtocol.handler = { _ in
+            XCTFail("network should not be called for invalid override tx id")
+            throw URLError(.badServerResponse)
+        }
+
+        let request = ToriiOfflineSettlementSubmitRequest(
+            authority: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+            privateKey: "ed0120deadbeef",
+            transfer: .object(["bundle_id": .string("aa")]),
+            buildClaimOverrides: [
+                ToriiOfflineSettlementBuildClaimOverride(
+                    txIdHex: "not-a-hash",
+                    appId: "com.example.ios"
+                ),
+            ]
+        )
+
+        let client = makeClient()
+        do {
+            _ = try await client.submitOfflineSettlement(request)
+            XCTFail("expected invalid payload error")
+        } catch let error as ToriiClientError {
+            guard case let .invalidPayload(message) = error else {
+                XCTFail("unexpected error: \(error)")
+                return
+            }
+            XCTAssertTrue(message.contains("tx_id_hex"))
+        }
     }
 
     func testGetSettlementStatusReturnsRejectedFromSubmitRejectCode() async throws {

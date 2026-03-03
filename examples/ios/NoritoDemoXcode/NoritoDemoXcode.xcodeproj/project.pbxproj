@@ -111,6 +111,7 @@
 			CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 			CODE_SIGN_STYLE = Automatic;
 			DEVELOPMENT_TEAM = "";
+			ENABLE_TESTABILITY = YES;
 			GCC_C_LANGUAGE_STANDARD = gnu11;
 			GENERATE_INFOPLIST_FILE = NO;
 			INFOPLIST_FILE = NoritoDemoXcode/Info.plist;
@@ -207,7 +208,7 @@
 			SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 			SWIFT_VERSION = 5.9;
 			TARGETED_DEVICE_FAMILY = "1";
-			TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NoritoDemoXcode.app/$(EXECUTABLE_NAME)";
+			TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NoritoDemoXcode.app/NoritoDemoXcode";
 		}; name = Debug; };
 		3F1C3ABB2C7F11B500C1C001 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
 			BUNDLE_LOADER = "$(TEST_HOST)";
@@ -226,7 +227,7 @@
 			SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 			SWIFT_VERSION = 5.9;
 			TARGETED_DEVICE_FAMILY = "1";
-			TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NoritoDemoXcode.app/$(EXECUTABLE_NAME)";
+			TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NoritoDemoXcode.app/NoritoDemoXcode";
 		}; name = Release; };
 /* End XCBuildConfiguration section */
 

@@ -42,6 +42,7 @@ const MAX_NUMERIC_BITS = 512;
 const DA_FETCH_ARTIFACT_PREFIX = "artifacts/da/fetch_";
 const DA_PROVE_ARTIFACT_PREFIX = "artifacts/da/prove_availability_";
 const TX_STATUS_POLL_OPTION_KEYS = new Set([
+  "signal",
   "intervalMs",
   "timeoutMs",
   "maxAttempts",
@@ -49,8 +50,13 @@ const TX_STATUS_POLL_OPTION_KEYS = new Set([
   "failureStatuses",
   "onStatus",
 ]);
+const OFFLINE_SETTLEMENT_AND_WAIT_OPTION_KEYS = new Set([
+  "signal",
+  ...TX_STATUS_POLL_OPTION_KEYS,
+]);
 const GET_METRICS_OPTION_KEYS = new Set(["asText", "signal"]);
 const CONNECT_APP_LIST_OPTION_KEYS = new Set(["limit", "cursor", "signal"]);
+const GET_TX_STATUS_OPTION_KEYS = new Set(["allowShortHash", "signal"]);
 
 const ISO_NON_TERMINAL_STATUS_VALUES = new Set(["pending", "accepted"]);
 const ISO_STATUS_VALUES = new Map([
@@ -410,11 +416,14 @@ const OFFLINE_SUMMARY_FILTER_RULES = Object.freeze({
 export class TransactionStatusError extends Error {
   constructor(hashHex, status, payload) {
     const statusLabel = status == null ? "unknown" : String(status);
-    super(`Transaction ${hashHex} reported failure status ${statusLabel}`);
+    const rejectionReason = extractPipelineRejectionReason(payload);
+    const reasonSuffix = rejectionReason ? ` (reason=${rejectionReason})` : "";
+    super(`Transaction ${hashHex} reported failure status ${statusLabel}${reasonSuffix}`);
     this.name = "TransactionStatusError";
     this.hashHex = hashHex;
     this.status = status;
     this.payload = payload;
+    this.rejectionReason = rejectionReason;
   }
 }
 
@@ -514,6 +523,64 @@ export function extractPipelineStatusKind(payload) {
   return null;
 }
 
+/**
+ * Extract a rejection reason string from a Torii pipeline payload when available.
+ * @param {unknown} payload
+ * @returns {string | null}
+ */
+export function extractPipelineRejectionReason(payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const direct = coerceRejectionReason(
+    payload.rejection_reason
+      ?? payload.rejectionReason
+      ?? payload.reason
+      ?? payload.reject_code
+      ?? payload.rejectCode,
+  );
+  if (direct) {
+    return direct;
+  }
+  const content = payload.content;
+  if (!content || typeof content !== "object") {
+    return null;
+  }
+  const nested = coerceRejectionReason(
+    content.rejection_reason
+      ?? content.rejectionReason
+      ?? content.reason
+      ?? content.reject_code
+      ?? content.rejectCode,
+  );
+  if (nested) {
+    return nested;
+  }
+  const status = content.status;
+  if (!status || typeof status !== "object") {
+    return null;
+  }
+  const fromStatus = coerceRejectionReason(
+    status.rejection_reason
+      ?? status.rejectionReason
+      ?? status.reason
+      ?? status.reject_code
+      ?? status.rejectCode,
+  );
+  if (fromStatus) {
+    return fromStatus;
+  }
+  const statusKind = status.kind == null ? null : String(status.kind);
+  if (
+    statusKind &&
+    statusKind.toLowerCase() === "rejected" &&
+    typeof status.content === "string"
+  ) {
+    return coerceRejectionReason(status.content);
+  }
+  return null;
+}
+
 export function decodePdpCommitmentHeader(headers) {
   const raw = readHeaderValue(headers, HEADER_SORA_PDP_COMMITMENT);
   if (raw == null) {
@@ -540,6 +607,14 @@ function coerceStatusKind(value) {
     return kind == null ? null : String(kind);
   }
   return String(value);
+}
+
+function coerceRejectionReason(value) {
+  if (value == null) {
+    return null;
+  }
+  const text = String(value).trim();
+  return text ? text : null;
 }
 
 function normalizeStatusSet(input, fallback) {
@@ -2911,10 +2986,35 @@ export class ToriiClient {
   /**
    * Query pipeline status for a transaction hash (hex encoded).
    * @param {string} hashHex
+   * @param {{allowShortHash?: boolean, signal?: AbortSignal}} [options]
    * @returns {Promise<any>} Parsed JSON if present; otherwise null.
   */
   async getTransactionStatus(hashHex, options = {}) {
-    const allowShortHash = options && options.allowShortHash === true;
+    const optionRecord =
+      options === undefined || options === null
+        ? {}
+        : requirePlainObjectOption(options, "getTransactionStatus options");
+    assertSupportedOptionKeys(
+      optionRecord,
+      GET_TX_STATUS_OPTION_KEYS,
+      "getTransactionStatus options",
+    );
+    if (
+      optionRecord.allowShortHash !== undefined &&
+      optionRecord.allowShortHash !== null &&
+      typeof optionRecord.allowShortHash !== "boolean"
+    ) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "getTransactionStatus options.allowShortHash must be a boolean when provided",
+        "getTransactionStatus.options.allowShortHash",
+      );
+    }
+    const allowShortHash = optionRecord.allowShortHash === true;
+    const { signal } = normalizeSignalOption(
+      optionRecord,
+      "getTransactionStatus",
+    );
     const normalizedHash = normalizeHashLike32(
       hashHex,
       "getTransactionStatus.hashHex",
@@ -2923,7 +3023,11 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       "/v1/pipeline/transactions/status",
-      { params: { hash: normalizedHash }, retryProfile: "pipeline" },
+      {
+        params: { hash: normalizedHash },
+        retryProfile: "pipeline",
+        signal,
+      },
     );
     if (response.status === 404) {
       return null;
@@ -2960,6 +3064,7 @@ export class ToriiClient {
    * Poll pipeline status until the transaction reaches a terminal state.
    * @param {string} hashHex
    * @param {{
+   *   signal?: AbortSignal,
    *   intervalMs?: number,
    *   timeoutMs?: number | null,
    *   maxAttempts?: number | null,
@@ -2980,6 +3085,7 @@ export class ToriiClient {
       intervalMs,
       timeoutMs,
       maxAttempts,
+      signal,
       successSet,
       failureSet,
       onStatus,
@@ -2996,12 +3102,14 @@ export class ToriiClient {
     let lastPayload = null;
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      throwIfAborted(signal);
       attempts += 1;
-      lastPayload = await this.getTransactionStatus(normalizedHash);
+      lastPayload = await this.getTransactionStatus(normalizedHash, { signal });
       const status = extractPipelineStatusKind(lastPayload);
       if (onStatus) {
         await onStatus(status, lastPayload, attempts);
       }
+      throwIfAborted(signal);
       if (status !== null) {
         if (successSet.has(status)) {
           return lastPayload;
@@ -3030,7 +3138,7 @@ export class ToriiClient {
       }
 
       if (intervalMs > 0) {
-        await delay(intervalMs);
+        await delay(intervalMs, signal);
       }
     }
   }
@@ -6410,6 +6518,112 @@ export class ToriiClient {
   }
 
   /**
+   * Submit an offline settlement bundle (`POST /v1/offline/settlements`).
+   * @param {ToriiOfflineSettlementSubmitRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineSettlementSubmitResponse>}
+   */
+  async submitOfflineSettlement(request, options = {}) {
+    const payload = normalizeOfflineSettlementSubmitRequest(
+      request,
+      "submitOfflineSettlement",
+    );
+    const { signal } = normalizeSignalOnlyOption(options, "submitOfflineSettlement");
+    const response = await this._request("POST", "/v1/offline/settlements", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("offline settlement submit response missing JSON body");
+    }
+    return normalizeOfflineSettlementSubmitResponse(
+      body,
+      "offline settlement submit response",
+    );
+  }
+
+  /**
+   * Submit an offline settlement bundle and wait for terminal pipeline status.
+   * @param {ToriiOfflineSettlementSubmitRequest} request
+   * @param {{
+   *   signal?: AbortSignal,
+   *   intervalMs?: number,
+   *   timeoutMs?: number | null,
+   *   maxAttempts?: number | null,
+   *   successStatuses?: Iterable<string>,
+   *   failureStatuses?: Iterable<string>,
+   *   onStatus?: (status: string | null, payload: any, attempt: number) => (void | Promise<void>)
+   * }} [options]
+   * @returns {Promise<ToriiOfflineSettlementSubmitResponse>}
+   */
+  async submitOfflineSettlementAndWait(request, options = {}) {
+    const record = requirePlainObjectOption(
+      options,
+      "submitOfflineSettlementAndWait options",
+    );
+    assertSupportedOptionKeys(
+      record,
+      OFFLINE_SETTLEMENT_AND_WAIT_OPTION_KEYS,
+      "submitOfflineSettlementAndWait options",
+    );
+    const { signal } = normalizeSignalOption(record, "submitOfflineSettlementAndWait");
+    const settlement = await this.submitOfflineSettlement(request, { signal });
+    const txHashHex = settlement?.transaction_hash_hex;
+    if (typeof txHashHex !== "string" || txHashHex.length === 0) {
+      throw new Error(
+        "offline settlement submit response missing transaction_hash_hex; cannot poll transaction status",
+      );
+    }
+    await this.waitForTransactionStatus(txHashHex, {
+      signal,
+      intervalMs: record.intervalMs,
+      timeoutMs: record.timeoutMs,
+      maxAttempts: record.maxAttempts,
+      successStatuses: record.successStatuses,
+      failureStatuses: record.failureStatuses,
+      onStatus: record.onStatus,
+    });
+    return settlement;
+  }
+
+  /**
+   * Issue an operator-signed build claim (`POST /v1/offline/build-claims/issue`).
+   * @param {ToriiOfflineBuildClaimIssueRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineBuildClaimIssueResponse>}
+   */
+  async issueOfflineBuildClaim(request, options = {}) {
+    const payload = normalizeOfflineBuildClaimIssueRequest(
+      request,
+      "issueOfflineBuildClaim",
+    );
+    const { signal } = normalizeSignalOnlyOption(options, "issueOfflineBuildClaim");
+    const response = await this._request("POST", "/v1/offline/build-claims/issue", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("offline build claim issue response missing JSON body");
+    }
+    return normalizeOfflineBuildClaimIssueResponse(
+      body,
+      "offline build claim issue response",
+    );
+  }
+
+  /**
    * Issue a signed offline certificate (`POST /v1/offline/certificates/issue`).
    * @param {ToriiOfflineWalletCertificateDraft} certificateDraft
    * @param {{signal?: AbortSignal}} [options]
@@ -8659,6 +8873,7 @@ export class ToriiClient {
   static _normalizeTransactionStatusPollOptions(options, context = "transaction status options") {
     if (options === undefined || options === null) {
       return {
+        signal: undefined,
         intervalMs: DEFAULT_TX_STATUS_POLL_INTERVAL_MS,
         timeoutMs: DEFAULT_TX_STATUS_TIMEOUT_MS,
         maxAttempts: null,
@@ -8669,6 +8884,11 @@ export class ToriiClient {
     }
     const record = requirePlainObjectOption(options, context);
     assertSupportedOptionKeys(record, TX_STATUS_POLL_OPTION_KEYS, context);
+    const signalContext =
+      typeof context === "string" && context.endsWith(" options")
+        ? context.slice(0, -8)
+        : context;
+    const { signal } = normalizeSignalOption(record, signalContext);
     let intervalMs = DEFAULT_TX_STATUS_POLL_INTERVAL_MS;
     if (record.intervalMs !== undefined && record.intervalMs !== null) {
       intervalMs = ToriiClient._normalizeUnsignedInteger(
@@ -8708,6 +8928,7 @@ export class ToriiClient {
       onStatus = record.onStatus;
     }
     return {
+      signal,
       intervalMs,
       timeoutMs,
       maxAttempts,
@@ -14437,9 +14658,24 @@ function headersContainCredentials(headers) {
   );
 }
 
-function delay(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+function delay(ms, signal) {
+  if (!signal) {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  }
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason ?? new Error("The operation was aborted"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -20619,6 +20855,265 @@ function normalizeOfflineAllowanceRegisterResponse(payload, context) {
     `${context}.certificate_id_hex`,
   );
   return { certificate_id_hex: certificateIdHex };
+}
+
+function normalizeOfflineSettlementSubmitResponse(payload, context) {
+  const record = ensureRecord(payload, context);
+  const bundleIdHex = requireNonEmptyString(
+    record.bundle_id_hex,
+    `${context}.bundle_id_hex`,
+  );
+  const txHashRaw = record.transaction_hash_hex;
+  const transactionHashHex =
+    txHashRaw === undefined || txHashRaw === null
+      ? null
+      : requireNonEmptyString(txHashRaw, `${context}.transaction_hash_hex`);
+  return {
+    bundle_id_hex: bundleIdHex,
+    transaction_hash_hex: transactionHashHex,
+  };
+}
+
+function normalizeOfflineBuildClaimIssueRequest(input, context) {
+  const record = ensureRecord(input, context);
+  const certificateIdHex = normalizeHashLike32(
+    pickOverride(record, "certificate_id_hex", "certificateIdHex"),
+    `${context}.certificate_id_hex`,
+  );
+  const txIdHex = normalizeHashLike32(
+    pickOverride(record, "tx_id_hex", "txIdHex"),
+    `${context}.tx_id_hex`,
+  );
+  const platform = requireNonEmptyString(
+    record.platform,
+    `${context}.platform`,
+  ).toLowerCase();
+  if (platform !== "apple" && platform !== "android") {
+    throw new TypeError(`${context}.platform must be "apple" or "android"`);
+  }
+  const appIdRaw = pickOverride(record, "app_id", "appId");
+  const appId =
+    appIdRaw === undefined || appIdRaw === null
+      ? undefined
+      : requireNonEmptyString(appIdRaw, `${context}.app_id`);
+  const buildNumberRaw = pickOverride(record, "build_number", "buildNumber");
+  const buildNumber =
+    buildNumberRaw === undefined || buildNumberRaw === null
+      ? undefined
+      : ToriiClient._normalizeUnsignedInteger(buildNumberRaw, `${context}.build_number`, {
+          allowZero: true,
+        });
+  const issuedAtMsRaw = pickOverride(record, "issued_at_ms", "issuedAtMs");
+  const issuedAtMs =
+    issuedAtMsRaw === undefined || issuedAtMsRaw === null
+      ? undefined
+      : ToriiClient._normalizeUnsignedInteger(issuedAtMsRaw, `${context}.issued_at_ms`, {
+          allowZero: true,
+        });
+  const expiresAtMsRaw = pickOverride(record, "expires_at_ms", "expiresAtMs");
+  const expiresAtMs =
+    expiresAtMsRaw === undefined || expiresAtMsRaw === null
+      ? undefined
+      : ToriiClient._normalizeUnsignedInteger(expiresAtMsRaw, `${context}.expires_at_ms`, {
+          allowZero: true,
+        });
+  const normalized = {
+    certificate_id_hex: certificateIdHex,
+    tx_id_hex: txIdHex,
+    platform,
+  };
+  if (appId !== undefined) {
+    normalized.app_id = appId;
+  }
+  if (buildNumber !== undefined) {
+    normalized.build_number = buildNumber;
+  }
+  if (issuedAtMs !== undefined) {
+    normalized.issued_at_ms = issuedAtMs;
+  }
+  if (expiresAtMs !== undefined) {
+    normalized.expires_at_ms = expiresAtMs;
+  }
+  return normalized;
+}
+
+function normalizeOfflineBuildClaimIssueResponse(payload, context) {
+  const record = ensureRecord(payload, context);
+  const claimIdHex = normalizeHashLike32(
+    record.claim_id_hex,
+    `${context}.claim_id_hex`,
+  );
+  const buildClaim = normalizeOfflineBuildClaim(
+    ensureRecord(record.build_claim, `${context}.build_claim`),
+    `${context}.build_claim`,
+  );
+  return {
+    claim_id_hex: claimIdHex,
+    build_claim: buildClaim,
+  };
+}
+
+function normalizeOfflineBuildClaim(record, context) {
+  const claimIdLiteral = normalizeOptionalHashLiteral(
+    pickOverride(record, "claim_id", "claimId"),
+    `${context}.claim_id`,
+  );
+  if (!claimIdLiteral) {
+    throw new TypeError(`${context}.claim_id must be provided`);
+  }
+  const nonceLiteral = normalizeOptionalHashLiteral(
+    pickOverride(record, "nonce", "nonce"),
+    `${context}.nonce`,
+  );
+  if (!nonceLiteral) {
+    throw new TypeError(`${context}.nonce must be provided`);
+  }
+  const platform = normalizeOfflineBuildClaimResponsePlatform(
+    pickOverride(record, "platform", "platform"),
+    `${context}.platform`,
+  );
+  const appId = requireNonEmptyString(
+    pickOverride(record, "app_id", "appId"),
+    `${context}.app_id`,
+  );
+  const buildNumber = ToriiClient._normalizeUnsignedInteger(
+    pickOverride(record, "build_number", "buildNumber"),
+    `${context}.build_number`,
+    { allowZero: true },
+  );
+  const issuedAtMs = ToriiClient._normalizeUnsignedInteger(
+    pickOverride(record, "issued_at_ms", "issuedAtMs"),
+    `${context}.issued_at_ms`,
+    { allowZero: true },
+  );
+  const expiresAtMs = ToriiClient._normalizeUnsignedInteger(
+    pickOverride(record, "expires_at_ms", "expiresAtMs"),
+    `${context}.expires_at_ms`,
+    { allowZero: true },
+  );
+  const operatorSignature = requireNonEmptyString(
+    pickOverride(record, "operator_signature", "operatorSignature"),
+    `${context}.operator_signature`,
+  );
+  const lineageScopeRaw = pickOverride(record, "lineage_scope", "lineageScope");
+  const lineageScope =
+    lineageScopeRaw === undefined || lineageScopeRaw === null
+      ? undefined
+      : requireNonEmptyString(lineageScopeRaw, `${context}.lineage_scope`);
+  const normalized = {
+    claim_id: claimIdLiteral,
+    nonce: nonceLiteral,
+    platform,
+    app_id: appId,
+    build_number: buildNumber,
+    issued_at_ms: issuedAtMs,
+    expires_at_ms: expiresAtMs,
+    operator_signature: operatorSignature,
+  };
+  if (lineageScope !== undefined) {
+    normalized.lineage_scope = lineageScope;
+  }
+  return normalized;
+}
+
+function normalizeOfflineBuildClaimResponsePlatform(value, context) {
+  const normalized = requireNonEmptyString(value, context).trim().toLowerCase();
+  if (normalized === "apple" || normalized === "ios") {
+    return "Apple";
+  }
+  if (normalized === "android") {
+    return "Android";
+  }
+  throw new TypeError(`${context} must be either "Apple" or "Android"`);
+}
+
+function normalizeOfflineSettlementSubmitRequest(input, context) {
+  const record = ensureRecord(input, context);
+  const credentials = normalizeAuthorityCredentials(record, context);
+  const transfer = ensureRecord(record.transfer, `${context}.transfer`);
+  const repairRaw = pickOverride(
+    record,
+    "repair_existing_build_claims",
+    "repairExistingBuildClaims",
+  );
+  let repairExistingBuildClaims = false;
+  if (repairRaw !== undefined && repairRaw !== null) {
+    if (typeof repairRaw !== "boolean") {
+      throw new TypeError(
+        `${context}.repairExistingBuildClaims must be a boolean when provided`,
+      );
+    }
+    repairExistingBuildClaims = repairRaw;
+  }
+  const overrides = normalizeOfflineSettlementBuildClaimOverrides(
+    pickOverride(record, "build_claim_overrides", "buildClaimOverrides"),
+    `${context}.build_claim_overrides`,
+  );
+  const normalized = {
+    authority: credentials.authority,
+    private_key: credentials.private_key,
+    transfer,
+  };
+  if (overrides.length > 0) {
+    normalized.build_claim_overrides = overrides;
+  }
+  if (repairExistingBuildClaims) {
+    normalized.repair_existing_build_claims = true;
+  }
+  return normalized;
+}
+
+function normalizeOfflineSettlementBuildClaimOverrides(value, context) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array when provided`);
+  }
+  return value.map((entry, index) =>
+    normalizeOfflineSettlementBuildClaimOverride(entry, `${context}[${index}]`),
+  );
+}
+
+function normalizeOfflineSettlementBuildClaimOverride(value, context) {
+  const record = ensureRecord(value, context);
+  const txIdHex = normalizeHashLike32(
+    pickOverride(record, "tx_id_hex", "txIdHex"),
+    `${context}.tx_id_hex`,
+  );
+  const appIdRaw = pickOverride(record, "app_id", "appId");
+  const appId =
+    appIdRaw === undefined || appIdRaw === null
+      ? undefined
+      : requireNonEmptyString(appIdRaw, `${context}.app_id`);
+  const buildNumberRaw = pickOverride(record, "build_number", "buildNumber");
+  const buildNumber =
+    buildNumberRaw === undefined || buildNumberRaw === null
+      ? undefined
+      : ToriiClient._normalizeUnsignedInteger(buildNumberRaw, `${context}.build_number`, {
+          allowZero: true,
+        });
+  const issuedAtMsRaw = pickOverride(record, "issued_at_ms", "issuedAtMs");
+  const issuedAtMs =
+    issuedAtMsRaw === undefined || issuedAtMsRaw === null
+      ? undefined
+      : ToriiClient._normalizeUnsignedInteger(issuedAtMsRaw, `${context}.issued_at_ms`, {
+          allowZero: true,
+        });
+  const expiresAtMsRaw = pickOverride(record, "expires_at_ms", "expiresAtMs");
+  const expiresAtMs =
+    expiresAtMsRaw === undefined || expiresAtMsRaw === null
+      ? undefined
+      : ToriiClient._normalizeUnsignedInteger(expiresAtMsRaw, `${context}.expires_at_ms`, {
+          allowZero: true,
+        });
+  return {
+    tx_id_hex: txIdHex,
+    app_id: appId,
+    build_number: buildNumber,
+    issued_at_ms: issuedAtMs,
+    expires_at_ms: expiresAtMs,
+  };
 }
 
 function normalizeOfflineTopUpRequest(input, context) {

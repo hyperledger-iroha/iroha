@@ -24,6 +24,9 @@ public final class HttpClientTransportStatusTests {
     waitForTransactionStatusTreatsNotFoundAsPending();
     waitForTransactionStatusIgnoresNoritoBodyOnNotFound();
     waitForTransactionStatusThrowsOnFailure();
+    waitForTransactionStatusFailureIncludesRejectionReason();
+    waitForTransactionStatusFailureUsesRejectedStatusContentReason();
+    waitForTransactionStatusSurfacesUnexpectedHttpStatusDetails();
     waitForTransactionStatusHonoursMaxAttempts();
     waitForTransactionStatusFailsOnInvalidPayload();
     submitTransactionProvidesCanonicalHashForPolling();
@@ -128,6 +131,96 @@ public final class HttpClientTransportStatusTests {
     assert threw : "Expected waitForTransactionStatus to throw on failure status";
   }
 
+  private static void waitForTransactionStatusFailureIncludesRejectionReason() {
+    final String rejectionReason = "build_claim_missing";
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(
+        request -> CompletableFuture.completedFuture(
+            newResponse(200, statusPayloadWithRejectionReason("Rejected", rejectionReason))),
+        ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
+
+    boolean threw = false;
+    try {
+      transport
+          .waitForTransactionStatus(
+              "cafed00d", PipelineStatusOptions.builder().intervalMillis(0L).build())
+          .join();
+    } catch (final RuntimeException ex) {
+      threw = true;
+      final Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+      assert cause instanceof TransactionStatusException : "Expected TransactionStatusException";
+      final TransactionStatusException statusError = (TransactionStatusException) cause;
+      assert rejectionReason.equals(statusError.rejectionReason().orElse(null))
+          : "Expected rejection reason to be surfaced";
+      assert statusError.getMessage().contains("reason=" + rejectionReason)
+          : "Expected rejection reason in exception message";
+    }
+    assert threw : "Expected waitForTransactionStatus to throw on failure status";
+  }
+
+  private static void waitForTransactionStatusFailureUsesRejectedStatusContentReason() {
+    final String rejectionReason = "allowance_exceeded";
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(
+        request -> CompletableFuture.completedFuture(
+            newResponse(200, statusPayloadWithRejectedContent("Rejected", rejectionReason))),
+        ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
+
+    boolean threw = false;
+    try {
+      transport
+          .waitForTransactionStatus(
+              "cafe0001", PipelineStatusOptions.builder().intervalMillis(0L).build())
+          .join();
+    } catch (final RuntimeException ex) {
+      threw = true;
+      final Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+      assert cause instanceof TransactionStatusException : "Expected TransactionStatusException";
+      final TransactionStatusException statusError = (TransactionStatusException) cause;
+      assert rejectionReason.equals(statusError.rejectionReason().orElse(null))
+          : "Expected content rejection reason to be surfaced";
+    }
+    assert threw : "Expected waitForTransactionStatus to throw on failure status";
+  }
+
+  private static void waitForTransactionStatusSurfacesUnexpectedHttpStatusDetails() {
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(
+        request ->
+            CompletableFuture.completedFuture(
+                newResponse(
+                    429,
+                    "{\"error\":\"rate limited\"}".getBytes(StandardCharsets.UTF_8),
+                    Map.of("x-iroha-reject-code", java.util.List.of("rate_limited")))),
+        ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
+
+    boolean threw = false;
+    try {
+      transport
+          .waitForTransactionStatus(
+              "abcd", PipelineStatusOptions.builder().intervalMillis(0L).build())
+          .join();
+    } catch (final RuntimeException ex) {
+      threw = true;
+      final Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+      assert cause instanceof TransactionStatusHttpException
+          : "Expected TransactionStatusHttpException";
+      final TransactionStatusHttpException statusError = (TransactionStatusHttpException) cause;
+      assert "abcd".equals(statusError.hashHex())
+          : "Expected hash to propagate";
+      assert statusError.statusCode() == 429
+          : "Expected status code to propagate";
+      assert "rate_limited".equals(statusError.rejectCode().orElse(null))
+          : "Expected reject code to propagate";
+      assert statusError.responseBody().orElse("").contains("rate limited")
+          : "Expected response body to propagate";
+      assert cause.getMessage().contains("429")
+          : "Expected status code in exception message";
+      assert cause.getMessage().contains("reject_code=rate_limited")
+          : "Expected reject code in exception message";
+      assert cause.getMessage().contains("rate limited")
+          : "Expected body preview in exception message";
+    }
+    assert threw : "Expected waitForTransactionStatus to fail for unexpected HTTP status";
+  }
+
   private static void waitForTransactionStatusHonoursMaxAttempts() {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(
         request -> CompletableFuture.completedFuture(
@@ -202,9 +295,28 @@ public final class HttpClientTransportStatusTests {
     return new TransportResponse(status, body, "", Map.of());
   }
 
+  private static TransportResponse newResponse(
+      final int status, final byte[] body, final Map<String, java.util.List<String>> headers) {
+    return new TransportResponse(status, body, "", headers);
+  }
+
   private static byte[] statusPayload(final String kind) {
     final String json = "{\"kind\":\"Transaction\",\"content\":{\"status\":{\"kind\":\""
         + kind + "\"}}}";
+    return json.getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static byte[] statusPayloadWithRejectionReason(
+      final String kind, final String rejectionReason) {
+    final String json = "{\"kind\":\"Transaction\",\"content\":{\"status\":{\"kind\":\""
+        + kind + "\",\"rejection_reason\":\"" + rejectionReason + "\"}}}";
+    return json.getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static byte[] statusPayloadWithRejectedContent(
+      final String kind, final String statusContent) {
+    final String json = "{\"kind\":\"Transaction\",\"content\":{\"status\":{\"kind\":\""
+        + kind + "\",\"content\":\"" + statusContent + "\"}}}";
     return json.getBytes(StandardCharsets.UTF_8);
   }
 

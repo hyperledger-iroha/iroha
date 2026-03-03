@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonEncoder;
@@ -116,6 +117,16 @@ public final class OfflineJsonParser {
     return new OfflineCertificateIssueResponse(certificateIdHex, parsed);
   }
 
+  public static OfflineBuildClaimIssueResponse parseBuildClaimIssueResponse(final byte[] payload) {
+    final Object root = parse(payload);
+    final Map<String, Object> object = expectObject(root, "root");
+    final String claimIdHex =
+        OfflineHashLiteral.parseHex(asString(object.get("claim_id_hex"), "claim_id_hex"), "claim_id_hex");
+    final Map<String, Object> buildClaimRaw = expectObject(object.get("build_claim"), "build_claim");
+    final OfflineBuildClaim typedBuildClaim = parseBuildClaim(buildClaimRaw, "build_claim");
+    return new OfflineBuildClaimIssueResponse(claimIdHex, buildClaimRaw, typedBuildClaim);
+  }
+
   public static OfflineAllowanceRegisterResponse parseAllowanceRegisterResponse(final byte[] payload) {
     final Object root = parse(payload);
     final Map<String, Object> object = expectObject(root, "root");
@@ -206,6 +217,22 @@ public final class OfflineJsonParser {
     return value instanceof String string ? string : String.valueOf(value);
   }
 
+  private static String requireNonBlank(final String value, final String path) {
+    final String normalized = normalizeOptionalNonBlank(value);
+    if (normalized == null) {
+      throw new IllegalStateException(path + " must be a non-empty string");
+    }
+    return normalized;
+  }
+
+  private static String normalizeOptionalNonBlank(final String value) {
+    if (value == null) {
+      return null;
+    }
+    final String trimmed = value.trim();
+    return trimmed.isEmpty() ? null : trimmed;
+  }
+
   private static long asLong(final Object value, final String path) {
     if (!(value instanceof Number number)) {
       throw new IllegalStateException(path + " is not a number");
@@ -214,6 +241,14 @@ public final class OfflineJsonParser {
       throw new IllegalStateException(path + " must be an integer");
     }
     return number.longValue();
+  }
+
+  private static long asNonNegativeLong(final Object value, final String path) {
+    final long parsed = asLong(value, path);
+    if (parsed < 0) {
+      throw new IllegalStateException(path + " must be non-negative");
+    }
+    return parsed;
   }
 
   private static long asLongOrDefault(
@@ -335,6 +370,36 @@ public final class OfflineJsonParser {
         refreshAtMs);
   }
 
+  private static OfflineBuildClaim parseBuildClaim(
+      final Map<String, Object> entry, final String path) {
+    final String claimId =
+        OfflineHashLiteral.normalize(
+            asString(entry.get("claim_id"), path + ".claim_id"),
+            path + ".claim_id");
+    final String nonce =
+        OfflineHashLiteral.normalize(asString(entry.get("nonce"), path + ".nonce"), path + ".nonce");
+    final String platform = parseBuildClaimPlatform(entry.get("platform"), path + ".platform");
+    final String appId = requireNonBlank(asString(entry.get("app_id"), path + ".app_id"), path + ".app_id");
+    final long buildNumber = asNonNegativeLong(entry.get("build_number"), path + ".build_number");
+    final long issuedAtMs = asNonNegativeLong(entry.get("issued_at_ms"), path + ".issued_at_ms");
+    final long expiresAtMs = asNonNegativeLong(entry.get("expires_at_ms"), path + ".expires_at_ms");
+    final String lineageScope = normalizeOptionalNonBlank(asOptionalString(entry.get("lineage_scope")));
+    final String operatorSignature =
+        requireNonBlank(
+            asString(entry.get("operator_signature"), path + ".operator_signature"),
+            path + ".operator_signature");
+    return new OfflineBuildClaim(
+        claimId,
+        nonce,
+        platform,
+        appId,
+        buildNumber,
+        issuedAtMs,
+        expiresAtMs,
+        lineageScope,
+        operatorSignature);
+  }
+
   private static OfflineAllowanceCommitment parseAllowanceCommitment(
       final Map<String, Object> entry, final String path) {
     final String asset = asString(entry.get("asset"), path + ".asset");
@@ -363,6 +428,17 @@ public final class OfflineJsonParser {
       bytes[i] = (byte) (numeric & 0xff);
     }
     return bytes;
+  }
+
+  private static String parseBuildClaimPlatform(final Object value, final String path) {
+    final String normalized = requireNonBlank(asString(value, path), path).toLowerCase(Locale.ROOT);
+    if ("apple".equals(normalized) || "ios".equals(normalized)) {
+      return "Apple";
+    }
+    if ("android".equals(normalized)) {
+      return "Android";
+    }
+    throw new IllegalStateException(path + " must be either \"Apple\" or \"Android\"");
   }
 
   private static OfflineTransferList.OfflineTransferItem.PlatformTokenSnapshot

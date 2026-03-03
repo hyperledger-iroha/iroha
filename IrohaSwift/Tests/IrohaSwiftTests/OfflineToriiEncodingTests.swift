@@ -266,15 +266,56 @@ final class OfflineToriiEncodingTests: XCTestCase {
         let receiptsRequest = try ToriiOfflineSpendReceiptsSubmitRequest(receipts: [receipt])
         XCTAssertEqual(receiptsRequest.receipts.count, 1)
 
+        let claimOverride = ToriiOfflineSettlementBuildClaimOverride(
+            txIdHex: hashLiteral(receipt.txId),
+            appId: "com.example.ios",
+            buildNumber: 42,
+            issuedAtMs: 1_700_000_000_000,
+            expiresAtMs: 1_700_000_100_000
+        )
         let settlementRequest = try ToriiOfflineSettlementSubmitRequest(
             authority: "alice@wonderland",
             privateKey: "ed0120deadbeef",
-            transfer: transfer
+            transfer: transfer,
+            buildClaimOverrides: [claimOverride],
+            repairExistingBuildClaims: true
         )
         guard case let .object(object) = settlementRequest.transfer else {
             return XCTFail("expected transfer payload")
         }
         XCTAssertEqual(object["bundle_id"]?.normalizedString, hashLiteral(transfer.bundleId))
+        let encodedSettlement = try JSONEncoder().encode(settlementRequest)
+        let settlementObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encodedSettlement) as? [String: Any]
+        )
+        let overrides = try XCTUnwrap(settlementObject["build_claim_overrides"] as? [[String: Any]])
+        XCTAssertEqual(overrides.count, 1)
+        XCTAssertEqual(overrides.first?["tx_id_hex"] as? String, claimOverride.txIdHex)
+        XCTAssertEqual(overrides.first?["app_id"] as? String, claimOverride.appId)
+        let buildNumber = (overrides.first?["build_number"] as? NSNumber)?.uint64Value
+        XCTAssertEqual(buildNumber, claimOverride.buildNumber)
+        XCTAssertEqual(settlementObject["repair_existing_build_claims"] as? Bool, true)
+
+        let buildClaimIssue = ToriiOfflineBuildClaimIssueRequest(
+            certificateIdHex: String(repeating: "ab", count: 32),
+            txIdHex: String(repeating: "cd", count: 32),
+            platform: "apple",
+            appId: "com.example.ios",
+            buildNumber: 77,
+            issuedAtMs: 1_700_000_000_000,
+            expiresAtMs: 1_700_000_100_000
+        )
+        let encodedBuildClaimIssue = try JSONEncoder().encode(buildClaimIssue)
+        let buildClaimIssueObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encodedBuildClaimIssue) as? [String: Any]
+        )
+        XCTAssertEqual(buildClaimIssueObject["certificate_id_hex"] as? String, buildClaimIssue.certificateIdHex)
+        XCTAssertEqual(buildClaimIssueObject["tx_id_hex"] as? String, buildClaimIssue.txIdHex)
+        XCTAssertEqual(buildClaimIssueObject["platform"] as? String, "apple")
+        XCTAssertEqual(buildClaimIssueObject["app_id"] as? String, "com.example.ios")
+        XCTAssertEqual((buildClaimIssueObject["build_number"] as? NSNumber)?.uint64Value, 77)
+        XCTAssertEqual((buildClaimIssueObject["issued_at_ms"] as? NSNumber)?.uint64Value, 1_700_000_000_000)
+        XCTAssertEqual((buildClaimIssueObject["expires_at_ms"] as? NSNumber)?.uint64Value, 1_700_000_100_000)
 
         let registerRequest = try ToriiOfflineAllowanceRegisterRequest(
             authority: "alice@wonderland",

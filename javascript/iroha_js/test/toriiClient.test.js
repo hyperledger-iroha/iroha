@@ -5753,6 +5753,54 @@ test("getTransactionStatus queries pipeline endpoint", async () => {
     });
   });
 
+test("getTransactionStatus forwards signal to fetch", async () => {
+  const hashHex = "ab".repeat(32);
+  const controller = new AbortController();
+  let capturedSignal = null;
+  const fetchImpl = async (_url, init = {}) => {
+    capturedSignal = init.signal ?? null;
+    return createResponse({ status: 404 });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.getTransactionStatus(hashHex, { signal: controller.signal });
+  assert.equal(capturedSignal, controller.signal);
+});
+
+test("getTransactionStatus validates signal option type", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 404 }) });
+  await assert.rejects(
+    () =>
+      client.getTransactionStatus("ab".repeat(32), {
+        // @ts-expect-error runtime validation should reject incorrect signal
+        signal: {},
+      }),
+    /getTransactionStatus options\.signal must be an AbortSignal/,
+  );
+});
+
+test("getTransactionStatus rejects unsupported options", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 404 }) });
+  await assert.rejects(
+    () =>
+      client.getTransactionStatus("ab".repeat(32), {
+        extra: true,
+      }),
+    /getTransactionStatus options contains unsupported fields: extra/,
+  );
+});
+
+test("getTransactionStatus validates allowShortHash option type", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 404 }) });
+  await assert.rejects(
+    () =>
+      client.getTransactionStatus("ab".repeat(32), {
+        // @ts-expect-error runtime validation should reject non-boolean allowShortHash
+        allowShortHash: "yes",
+      }),
+    /getTransactionStatus options\.allowShortHash must be a boolean when provided/,
+  );
+});
+
   test("getTransactionStatus retries 425 via pipeline profile", async () => {
     const hash = "ab".repeat(32);
     let attempts = 0;
@@ -6044,6 +6092,19 @@ test("waitForTransactionStatus rejects unsupported options", async () => {
   );
 });
 
+test("waitForTransactionStatus validates signal option type", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
+  const hashHex = "cd".repeat(32);
+  await assert.rejects(
+    () =>
+      client.waitForTransactionStatus(hashHex, {
+        // @ts-expect-error runtime validation should reject incorrect signal
+        signal: {},
+      }),
+    /waitForTransactionStatus options\.signal must be an AbortSignal/,
+  );
+});
+
 test("waitForTransactionStatus enforces onStatus callback type", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
   await assert.rejects(
@@ -6086,6 +6147,36 @@ test("waitForTransactionStatus resolves on nested committed status", async () =>
   });
 });
 
+test("waitForTransactionStatus forwards signal and aborts polling", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
+  const txHash = "66".repeat(32);
+  const controller = new AbortController();
+  let attempts = 0;
+  let seenSignal = null;
+  client.getTransactionStatus = async (_hashHex, options = {}) => {
+    attempts += 1;
+    seenSignal = options.signal ?? null;
+    controller.abort(new Error("stop polling"));
+    return {
+      kind: "Transaction",
+      content: { hash: txHash, status: { kind: "Pending", content: null } },
+    };
+  };
+
+  await assert.rejects(
+    () =>
+      client.waitForTransactionStatus(txHash, {
+        signal: controller.signal,
+        intervalMs: 0,
+        timeoutMs: null,
+        maxAttempts: 10,
+      }),
+    (error) => error instanceof Error && error.message === "stop polling",
+  );
+  assert.equal(attempts, 1);
+  assert.equal(seenSignal, controller.signal);
+});
+
 test("waitForTransactionStatusTyped normalises payload", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
   const txHash = "11".repeat(32);
@@ -6109,6 +6200,32 @@ test("waitForTransactionStatus rejects on failure status", async () => {
   await assert.rejects(
     () => client.waitForTransactionStatus(rejectionHash, { intervalMs: 0, maxAttempts: 1 }),
     (error) => error instanceof TransactionStatusError && error.status === "Rejected",
+  );
+});
+
+test("waitForTransactionStatus surfaces rejection reason on failure status", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
+  const rejectionHash = "23".repeat(32);
+  const rejectionReason = "build_claim_missing";
+  client.getTransactionStatus = async () => ({
+    kind: "Transaction",
+    content: {
+      hash: rejectionHash,
+      status: {
+        kind: "Rejected",
+        content: null,
+        rejection_reason: rejectionReason,
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => client.waitForTransactionStatus(rejectionHash, { intervalMs: 0, maxAttempts: 1 }),
+    (error) =>
+      error instanceof TransactionStatusError
+      && error.status === "Rejected"
+      && error.rejectionReason === rejectionReason
+      && String(error.message).includes(`reason=${rejectionReason}`),
   );
 });
 
@@ -15271,7 +15388,6 @@ test("issueOfflineCertificate posts draft and parses response", async () => {
   const certId = "deadbeef".repeat(8);
   const draft = {
     controller: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
-    operator: FIXTURE_AUTHORITY_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "10",
@@ -15328,8 +15444,313 @@ test("issueOfflineCertificate posts draft and parses response", async () => {
   const body = JSON.parse(capturedRequest.init.body);
   assert.ok(body.certificate);
   assert.deepEqual(body.certificate.attestation_report, [4, 5, 6]);
+  assert.equal("operator" in body.certificate, false);
   assert.equal(response.certificate_id_hex, certId);
   assert.equal(response.certificate.controller, "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx");
+});
+
+test("submitOfflineSettlement posts transfer and parses response", async () => {
+  let capturedRequest = null;
+  const fetchImpl = async (url, init) => {
+    capturedRequest = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: {
+        bundle_id_hex: "deadbeef",
+        transaction_hash_hex:
+          "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const response = await client.submitOfflineSettlement({
+    authority: FIXTURE_AUTHORITY_ID,
+    privateKey: Buffer.alloc(32, 2),
+    transfer: {
+      bundle_id: "deadbeef",
+      receipts: [],
+    },
+  });
+  assert.ok(capturedRequest, "request not captured");
+  assert.equal(new URL(capturedRequest.url).pathname, "/v1/offline/settlements");
+  const body = JSON.parse(capturedRequest.init.body);
+  assert.equal(body.authority, FIXTURE_AUTHORITY_ID);
+  assert.ok(body.private_key.startsWith("ed25519:"));
+  assert.equal(body.transfer.bundle_id, "deadbeef");
+  assert.equal("build_claim_overrides" in body, false);
+  assert.equal("repair_existing_build_claims" in body, false);
+  assert.equal(response.bundle_id_hex, "deadbeef");
+  assert.equal(
+    response.transaction_hash_hex,
+    "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe",
+  );
+});
+
+test("submitOfflineSettlement accepts build claim overrides and repair flag", async () => {
+  const overrideTxIdHex = "ab".repeat(32);
+  let capturedRequest = null;
+  const fetchImpl = async (url, init) => {
+    capturedRequest = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: { bundle_id_hex: "deadbeef" },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.submitOfflineSettlement({
+    authority: FIXTURE_AUTHORITY_ID,
+    privateKey: "ed25519:deadbeef",
+    transfer: {
+      bundle_id: "deadbeef",
+      receipts: [],
+    },
+    buildClaimOverrides: [
+      {
+        txIdHex: overrideTxIdHex,
+        appId: "com.example.android",
+        buildNumber: 77,
+        issuedAtMs: 1700000000000,
+        expiresAtMs: 1700000100000,
+      },
+    ],
+    repairExistingBuildClaims: true,
+  });
+  assert.ok(capturedRequest, "request not captured");
+  const body = JSON.parse(capturedRequest.init.body);
+  assert.equal(body.repair_existing_build_claims, true);
+  assert.equal(Array.isArray(body.build_claim_overrides), true);
+  assert.equal(body.build_claim_overrides.length, 1);
+  assert.equal(body.build_claim_overrides[0].tx_id_hex, overrideTxIdHex);
+  assert.equal(body.build_claim_overrides[0].app_id, "com.example.android");
+  assert.equal(body.build_claim_overrides[0].build_number, 77);
+  assert.equal(body.build_claim_overrides[0].issued_at_ms, 1700000000000);
+  assert.equal(body.build_claim_overrides[0].expires_at_ms, 1700000100000);
+});
+
+test("submitOfflineSettlement validates build claim override shape", async () => {
+  let fetchCalled = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalled = true;
+      return createResponse({ status: 500 });
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.submitOfflineSettlement({
+        authority: FIXTURE_AUTHORITY_ID,
+        privateKey: "ed25519:deadbeef",
+        transfer: { bundle_id: "deadbeef", receipts: [] },
+        buildClaimOverrides: [{ appId: "com.example.android" }],
+      }),
+    /tx_id_hex/i,
+  );
+  assert.equal(fetchCalled, false);
+});
+
+test("submitOfflineSettlementAndWait delegates to submit + waitForTransactionStatus", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({ status: 200 }),
+  });
+  const settlement = {
+    bundle_id_hex: "deadbeef",
+    transaction_hash_hex: "ca".repeat(32),
+  };
+  let submitArgs = null;
+  let waitArgs = null;
+  client.submitOfflineSettlement = async (request, options) => {
+    submitArgs = { request, options };
+    return settlement;
+  };
+  client.waitForTransactionStatus = async (hashHex, pollOptions) => {
+    waitArgs = { hashHex, pollOptions };
+    return {
+      kind: "Transaction",
+      content: { hash: hashHex, status: { kind: "Committed", content: null } },
+    };
+  };
+  const controller = new AbortController();
+  const request = {
+    authority: FIXTURE_AUTHORITY_ID,
+    privateKey: "ed25519:deadbeef",
+    transfer: { bundle_id: "deadbeef", receipts: [] },
+  };
+
+  const response = await client.submitOfflineSettlementAndWait(request, {
+    signal: controller.signal,
+    intervalMs: 0,
+    timeoutMs: null,
+    maxAttempts: 4,
+  });
+
+  assert.equal(response, settlement);
+  assert.ok(submitArgs, "submitOfflineSettlement should be called");
+  assert.equal(submitArgs.request, request);
+  assert.equal(submitArgs.options.signal, controller.signal);
+  assert.ok(waitArgs, "waitForTransactionStatus should be called");
+  assert.equal(waitArgs.hashHex, settlement.transaction_hash_hex);
+  assert.equal(waitArgs.pollOptions.signal, controller.signal);
+  assert.equal(waitArgs.pollOptions.intervalMs, 0);
+  assert.equal(waitArgs.pollOptions.timeoutMs, null);
+  assert.equal(waitArgs.pollOptions.maxAttempts, 4);
+});
+
+test("submitOfflineSettlementAndWait rejects when settlement response lacks tx hash", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({ status: 200 }),
+  });
+  client.submitOfflineSettlement = async () => ({
+    bundle_id_hex: "deadbeef",
+    transaction_hash_hex: null,
+  });
+  let waitCalled = false;
+  client.waitForTransactionStatus = async () => {
+    waitCalled = true;
+    return null;
+  };
+
+  await assert.rejects(
+    () =>
+      client.submitOfflineSettlementAndWait({
+        authority: FIXTURE_AUTHORITY_ID,
+        privateKey: "ed25519:deadbeef",
+        transfer: { bundle_id: "deadbeef", receipts: [] },
+      }),
+    /missing transaction_hash_hex/i,
+  );
+  assert.equal(waitCalled, false);
+});
+
+test("issueOfflineBuildClaim posts request and parses response", async () => {
+  const certificateIdHex = "ab".repeat(32);
+  const txIdHex = "cd".repeat(32);
+  const claimIdHex = "ef".repeat(32);
+  let capturedRequest = null;
+  const fetchImpl = async (url, init) => {
+    capturedRequest = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: {
+        claim_id_hex: claimIdHex,
+        build_claim: {
+          claim_id:
+            "hash:FEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACE#CD31",
+          nonce:
+            "hash:ABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCD#C9C5",
+          platform: "Apple",
+          app_id: "com.example.ios",
+          build_number: 77,
+          issued_at_ms: 1_700_000_000_000,
+          expires_at_ms: 1_700_000_100_000,
+          operator_signature: "AA",
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const response = await client.issueOfflineBuildClaim({
+    certificateIdHex,
+    txIdHex,
+    platform: "apple",
+    appId: "com.example.ios",
+    buildNumber: 77,
+  });
+  assert.ok(capturedRequest, "request not captured");
+  assert.equal(new URL(capturedRequest.url).pathname, "/v1/offline/build-claims/issue");
+  const body = JSON.parse(capturedRequest.init.body);
+  assert.equal(body.certificate_id_hex, certificateIdHex);
+  assert.equal(body.tx_id_hex, txIdHex);
+  assert.equal(body.platform, "apple");
+  assert.equal(body.app_id, "com.example.ios");
+  assert.equal(body.build_number, 77);
+  assert.equal(response.claim_id_hex, claimIdHex);
+  assert.equal(
+    response.build_claim.claim_id,
+    "hash:FEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACE#CD31",
+  );
+  assert.equal(
+    response.build_claim.nonce,
+    "hash:ABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCD#C9C5",
+  );
+  assert.equal(response.build_claim.platform, "Apple");
+  assert.equal(response.build_claim.app_id, "com.example.ios");
+  assert.equal(response.build_claim.build_number, 77);
+});
+
+test("issueOfflineBuildClaim validates required ids before network call", async () => {
+  let fetchCalled = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalled = true;
+      return createResponse({ status: 500 });
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.issueOfflineBuildClaim({
+        certificateIdHex: "ab".repeat(32),
+        platform: "apple",
+      }),
+    /tx_id_hex/i,
+  );
+  assert.equal(fetchCalled, false);
+});
+
+test("issueOfflineBuildClaim validates platform before network call", async () => {
+  let fetchCalled = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalled = true;
+      return createResponse({ status: 500 });
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.issueOfflineBuildClaim({
+        certificateIdHex: "ab".repeat(32),
+        txIdHex: "cd".repeat(32),
+        platform: "windows-phone",
+      }),
+    /platform/i,
+  );
+  assert.equal(fetchCalled, false);
+});
+
+test("issueOfflineBuildClaim rejects malformed build-claim response", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          claim_id_hex: "ef".repeat(32),
+          build_claim: {
+            claim_id:
+              "hash:FEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACE#CD31",
+            nonce:
+              "hash:ABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCD#C9C5",
+            platform: "windows-phone",
+            app_id: "com.example.ios",
+            build_number: 77,
+            issued_at_ms: 1_700_000_000_000,
+            expires_at_ms: 1_700_000_100_000,
+            operator_signature: "AA",
+          },
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () =>
+      client.issueOfflineBuildClaim({
+        certificateIdHex: "ab".repeat(32),
+        txIdHex: "cd".repeat(32),
+        platform: "apple",
+      }),
+    /build_claim\.platform/i,
+  );
 });
 
 test("issueOfflineCertificate rejects invalid Numeric amounts", async () => {
@@ -15341,7 +15762,6 @@ test("issueOfflineCertificate rejects invalid Numeric amounts", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const draft = {
     controller: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
-    operator: FIXTURE_AUTHORITY_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "1e-3",
@@ -15403,7 +15823,6 @@ test("issueOfflineCertificateRenewal posts to renewal path", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await client.issueOfflineCertificateRenewal(certId.toUpperCase(), {
     controller: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
-    operator: FIXTURE_AUTHORITY_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "10",
@@ -15427,6 +15846,7 @@ test("issueOfflineCertificateRenewal posts to renewal path", async () => {
   );
   const body = JSON.parse(capturedRequest.init.body);
   assert.ok(body.certificate);
+  assert.equal("operator" in body.certificate, false);
 });
 
 test("registerOfflineAllowance posts certificate and parses response", async () => {
@@ -15577,7 +15997,6 @@ test("topUpOfflineAllowance chains issue and register", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const draft = {
     controller: FIXTURE_ALICE_ID,
-    operator: FIXTURE_AUTHORITY_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "10",
@@ -15602,6 +16021,8 @@ test("topUpOfflineAllowance chains issue and register", async () => {
   assert.equal(response.registration.certificate_id_hex, certId);
   assert.equal(requests.length, 2);
   assert.equal(new URL(requests[0].url).pathname, "/v1/offline/certificates/issue");
+  const issueBody = JSON.parse(requests[0].init.body);
+  assert.equal("operator" in issueBody.certificate, false);
   assert.equal(new URL(requests[1].url).pathname, "/v1/offline/allowances");
   const registerBody = JSON.parse(requests[1].init.body);
   assert.ok(registerBody.private_key.startsWith("ed25519:"));
@@ -15655,7 +16076,6 @@ test("topUpOfflineAllowanceRenewal chains issue and renew", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const draft = {
     controller: FIXTURE_ALICE_ID,
-    operator: FIXTURE_AUTHORITY_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "10",
@@ -15681,6 +16101,8 @@ test("topUpOfflineAllowanceRenewal chains issue and renew", async () => {
     new URL(requests[0].url).pathname,
     `/v1/offline/certificates/${certId}/renew/issue`,
   );
+  const renewIssueBody = JSON.parse(requests[0].init.body);
+  assert.equal("operator" in renewIssueBody.certificate, false);
   assert.equal(
     new URL(requests[1].url).pathname,
     `/v1/offline/allowances/${certId}/renew`,

@@ -732,9 +732,7 @@ public final class HttpClientTransport implements IrohaClient {
                     && statusCode != 204
                     && statusCode != 404) {
                   future.completeExceptionally(
-                      new RuntimeException(
-                          "Unexpected pipeline status code " + statusCode + " for transaction "
-                              + hashHex));
+                      buildPipelineStatusHttpException(hashHex, clientResponse));
                   return;
                 }
 
@@ -767,8 +765,14 @@ public final class HttpClientTransport implements IrohaClient {
                   return;
                 }
                 if (isFailure) {
+                  final String rejectionReason =
+                      PipelineStatusExtractor.extractRejectionReason(payload).orElse(null);
                   future.completeExceptionally(
-                      new TransactionStatusException(hashHex, statusLiteral, payload));
+                      new TransactionStatusException(
+                          hashHex,
+                          statusLiteral,
+                          rejectionReason,
+                          payload));
                   return;
                 }
 
@@ -858,6 +862,31 @@ public final class HttpClientTransport implements IrohaClient {
       return (Map<String, Object>) parsed;
     }
     throw new IllegalStateException("Pipeline status response must be a JSON object");
+  }
+
+  private static TransactionStatusHttpException buildPipelineStatusHttpException(
+      final String hashHex, final ClientResponse response) {
+    final String bodyPreview = decodeBodyPreview(response.body());
+    return new TransactionStatusHttpException(
+        hashHex,
+        response.statusCode(),
+        response.rejectCode().orElse(null),
+        bodyPreview);
+  }
+
+  private static String decodeBodyPreview(final byte[] body) {
+    if (body == null || body.length == 0) {
+      return null;
+    }
+    final String text = new String(body, StandardCharsets.UTF_8).trim();
+    if (text.isEmpty()) {
+      return null;
+    }
+    final int maxLength = 512;
+    if (text.length() <= maxLength) {
+      return text;
+    }
+    return text.substring(0, maxLength) + "...";
   }
 
   private void notifyRequest(final TransportRequest request) {

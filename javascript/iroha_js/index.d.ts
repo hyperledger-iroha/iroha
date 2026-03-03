@@ -2311,6 +2311,7 @@ export interface ToriiClientOptions extends ToriiClientRetryOptions {
 }
 
 export interface TransactionStatusPollOptions {
+  signal?: AbortSignal;
   intervalMs?: number;
   timeoutMs?: number | null;
   maxAttempts?: number | null;
@@ -3340,6 +3341,77 @@ export interface ToriiOfflineTopUpRequest {
 export interface ToriiOfflineTopUpResponse {
   certificate: ToriiOfflineCertificateIssueResponse;
   registration: ToriiOfflineAllowanceRegisterResponse;
+}
+
+export interface ToriiOfflineSettlementBuildClaimOverride {
+  tx_id_hex?: string;
+  txIdHex?: string;
+  app_id?: string | null;
+  appId?: string | null;
+  build_number?: number | null;
+  buildNumber?: number | null;
+  issued_at_ms?: number | null;
+  issuedAtMs?: number | null;
+  expires_at_ms?: number | null;
+  expiresAtMs?: number | null;
+}
+
+export interface ToriiOfflineSettlementSubmitRequest {
+  authority: string;
+  transfer: Record<string, unknown>;
+  build_claim_overrides?: ReadonlyArray<ToriiOfflineSettlementBuildClaimOverride>;
+  buildClaimOverrides?: ReadonlyArray<ToriiOfflineSettlementBuildClaimOverride>;
+  repair_existing_build_claims?: boolean;
+  repairExistingBuildClaims?: boolean;
+  privateKey?:
+    | ArrayBufferView
+    | ArrayBuffer
+    | Buffer
+    | ReadonlyArray<number>
+    | string;
+  privateKeyHex?: string;
+  privateKeyMultihash?: string;
+  privateKeyAlgorithm?: string;
+}
+
+export interface ToriiOfflineSettlementSubmitResponse {
+  bundle_id_hex: string;
+  transaction_hash_hex?: string | null;
+}
+
+export interface ToriiOfflineBuildClaimIssueRequest {
+  certificate_id_hex?: string;
+  certificateIdHex?: string;
+  tx_id_hex?: string;
+  txIdHex?: string;
+  platform: string;
+  app_id?: string | null;
+  appId?: string | null;
+  build_number?: number | null;
+  buildNumber?: number | null;
+  issued_at_ms?: number | null;
+  issuedAtMs?: number | null;
+  expires_at_ms?: number | null;
+  expiresAtMs?: number | null;
+}
+
+export type ToriiOfflineBuildClaimPlatform = "Apple" | "Android";
+
+export interface ToriiOfflineBuildClaim {
+  claim_id: string;
+  nonce: string;
+  platform: ToriiOfflineBuildClaimPlatform;
+  app_id: string;
+  build_number: number;
+  issued_at_ms: number;
+  expires_at_ms: number;
+  lineage_scope?: string;
+  operator_signature: string;
+}
+
+export interface ToriiOfflineBuildClaimIssueResponse {
+  claim_id_hex: string;
+  build_claim: ToriiOfflineBuildClaim;
 }
 
 export interface ToriiOfflineIntegrityMetadata {
@@ -5915,6 +5987,11 @@ export interface SubmitTransactionAndWaitOptions extends TransactionStatusPollOp
   hashHex: string;
 }
 
+export interface SubmitOfflineSettlementAndWaitOptions
+  extends TransactionStatusPollOptions {
+  signal?: AbortSignal;
+}
+
 export declare class ToriiHttpError extends Error {
   constructor(details: {
     status: number;
@@ -5945,6 +6022,7 @@ export declare class TransactionStatusError extends Error {
   readonly hashHex: string;
   readonly status: string | null;
   readonly payload: ToriiPipelineTransactionStatus | null;
+  readonly rejectionReason: string | null;
 }
 
 export declare class TransactionTimeoutError extends Error {
@@ -5978,6 +6056,7 @@ export declare class ToriiDataModelCompatibilityError extends Error {
 }
 
 export declare function extractPipelineStatusKind(payload: unknown): string | null;
+export declare function extractPipelineRejectionReason(payload: unknown): string | null;
 export declare function decodePdpCommitmentHeader(
   headers?:
     | Headers
@@ -6322,7 +6401,10 @@ export declare class ToriiClient {
     options?: { signal?: AbortSignal },
   ): Promise<unknown | null>;
   submitTransaction(payload: ArrayBufferView | ArrayBuffer | Buffer): Promise<unknown>;
-  getTransactionStatus(hashHex: string): Promise<ToriiPipelineTransactionStatus | null>;
+  getTransactionStatus(
+    hashHex: string,
+    options?: { allowShortHash?: boolean; signal?: AbortSignal },
+  ): Promise<ToriiPipelineTransactionStatus | null>;
   waitForTransactionStatus(
     hashHex: string,
     options?: TransactionStatusPollOptions,
@@ -6331,7 +6413,10 @@ export declare class ToriiClient {
     payload: ArrayBufferView | ArrayBuffer | Buffer,
     options: SubmitTransactionAndWaitOptions,
   ): Promise<ToriiPipelineTransactionStatus>;
-  getTransactionStatusTyped(hashHex: string): Promise<ToriiPipelineStatus | null>;
+  getTransactionStatusTyped(
+    hashHex: string,
+    options?: { allowShortHash?: boolean; signal?: AbortSignal },
+  ): Promise<ToriiPipelineStatus | null>;
   waitForTransactionStatusTyped(
     hashHex: string,
     options?: TransactionStatusPollOptions,
@@ -6860,6 +6945,18 @@ export declare class ToriiClient {
     certificate: ToriiOfflineWalletCertificateDraft,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiOfflineCertificateIssueResponse>;
+  submitOfflineSettlement(
+    request: ToriiOfflineSettlementSubmitRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineSettlementSubmitResponse>;
+  submitOfflineSettlementAndWait(
+    request: ToriiOfflineSettlementSubmitRequest,
+    options?: SubmitOfflineSettlementAndWaitOptions,
+  ): Promise<ToriiOfflineSettlementSubmitResponse>;
+  issueOfflineBuildClaim(
+    request: ToriiOfflineBuildClaimIssueRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineBuildClaimIssueResponse>;
   registerOfflineAllowance(
     request: ToriiOfflineAllowanceRegisterRequest,
     options?: { signal?: AbortSignal },

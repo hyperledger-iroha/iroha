@@ -4,7 +4,7 @@ Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Appl
 
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
-- Offline allowance top-up helpers (`ToriiClient.topUpOfflineAllowance`, `ToriiClient.topUpOfflineAllowanceRenewal`, `OfflineWallet.topUpAllowance`, `OfflineWallet.topUpAllowanceRenewal`) plus registration/renewal endpoints for `/v1/offline/allowances`
+- Offline allowance top-up helpers (`ToriiClient.topUpOfflineAllowance`, `ToriiClient.topUpOfflineAllowanceRenewal`, `OfflineWallet.topUpAllowance`, `OfflineWallet.topUpAllowanceRenewal`) plus registration/renewal endpoints for `/v1/offline/allowances`; top-up/renew helpers accept optional `attestationNonce` for iOS App Attest challenge-hash forwarding, direct build-claim issuance via `ToriiClient.issueOfflineBuildClaim` (`/v1/offline/build-claims/issue`), typed claim decoding via `ToriiOfflineBuildClaimIssueResponse.buildClaimObject()`, and settlement submit+poll convenience (`ToriiClient.submitOfflineSettlementAndWait`)
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Native NoritoBridge integration (required by default; set `IROHASWIFT_USE_BRIDGE=optional` for the Swift-only fallback) powering transfer/mint/burn builders and JSON inspection helpers
@@ -444,7 +444,9 @@ future values.
 
 Completion-based variants return a `Task<Void, Never>` so callers can cancel outstanding
 polls. Failures bubble up as `PipelineStatusError.failure` (rejected/expired) or
-`PipelineStatusError.timeout` when no terminal status arrives in time.
+`PipelineStatusError.timeout` when no terminal status arrives in time. When Torii includes
+`rejection_reason`, it is exposed via `PipelineStatusError.rejectionReason` and the localized
+error message.
 
 Need to monitor a transaction initiated elsewhere? Use the dedicated helper:
 
@@ -456,6 +458,25 @@ if #available(iOS 15, macOS 12, *) {
     } catch {
         print("pipeline error:", error)
     }
+}
+```
+
+For offline settlement flows, `ToriiClient.submitOfflineSettlementAndWait` combines
+`/v1/offline/settlements` submit with pipeline status polling and raises
+`PipelineStatusError.failure` on terminal rejection (including `rejectionReason` when present):
+
+```swift
+if #available(iOS 15, macOS 12, *) {
+    let request = ToriiOfflineSettlementSubmitRequest(
+        authority: authorityId,
+        privateKey: privateKeyHex,
+        transfer: transferPayload
+    )
+    var poll = PipelineStatusPollOptions.default
+    poll.pollInterval = 0.25
+    poll.maxAttempts = 40
+    let settlement = try await torii.submitOfflineSettlementAndWait(request, pollOptions: poll)
+    print("bundle", settlement.bundleIdHex, "tx", settlement.txHashHex ?? "<missing>")
 }
 ```
 

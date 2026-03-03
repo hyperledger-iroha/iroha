@@ -612,12 +612,11 @@ Offline escrow accounts are reserved for `RegisterOfflineAllowance`,
 4. **Generate the spend key.** Wallets generate the spend keypair locally and store the private
    spend key on-device. Only the `spend_public_key` is sent to the issuer along with the draft
    certificate payload.
-5. **Issue the certificate.** Serialize the `OfflineWalletCertificatePayload` (controller, operator,
-   allowance, spend key, attestation bytes, timestamps, policy, metadata) and sign it with the
-   operator’s private key corresponding to `certificate.operator`. This can be done with
-   `POST /v1/offline/certificates/issue` (or the renewal variant) when
-   `torii.offline_issuer.operator_private_key` is configured; the endpoint returns the signed
-   certificate and its id.
+5. **Issue the certificate.** Submit an `OfflineWalletCertificateDraft` (controller, allowance,
+   spend key, attestation bytes, timestamps, policy, metadata). Torii derives `certificate.operator`
+   from `torii.offline_issuer.operator_private_key`, signs the payload, and returns the signed
+   certificate + certificate id from `POST /v1/offline/certificates/issue` (or the renewal
+   variant).
 6. **Register on-ledger.** Submit `RegisterOfflineAllowance { certificate }` from the controller’s
    account. After this step, Torii exposes the record via `iroha_cli offline allowance {list,get}`.
 
@@ -806,7 +805,7 @@ CLI tools, and dashboards stay in sync with the roadmap requirements.
 | `GET`  | `/v1/offline/transfers/{bundle_id_hex}` | Fetch a bundle summary by id. |
 | `POST` | `/v1/offline/transfers/query` | Envelope-based queries for bundles. |
 | `GET`  | `/v1/offline/settlements` | Alias for `/v1/offline/transfers`. |
-| `POST` | `/v1/offline/settlements` | Submit a bundle for on-ledger settlement (submits `SubmitOfflineToOnlineTransfer`). |
+| `POST` | `/v1/offline/settlements` | Submit a bundle for on-ledger settlement (submits `SubmitOfflineToOnlineTransfer` and auto-issues missing build claims when issuer is configured). |
 | `GET`  | `/v1/offline/settlements/{bundle_id_hex}` | Alias bundle detail endpoint. |
 | `POST` | `/v1/offline/settlements/query` | Alias bundle query endpoint. |
 | `POST` | `/v1/offline/transfers/proof` | Build `{sum,counter,replay}` witness payloads from a transfer payload. |
@@ -827,13 +826,28 @@ via `/v1/offline/allowances` (or `/v1/offline/allowances/{certificate_id_hex}/re
 There is no single “top-up” endpoint; SDK helpers simply chain the two calls
 and verify the certificate ids match.
 
-When build-claim verification is enabled, settlement submitters can request a
-signed claim from `/v1/offline/build-claims/issue` after receiving a receipt
-(`tx_id`) and before posting `/v1/offline/settlements`.
+When build-claim verification is enabled and `torii.offline_issuer` is
+configured, `/v1/offline/settlements` auto-issues missing receipt build claims
+before submitting the transaction. Use `build_claim_overrides[]` on the
+settlement request for per-receipt overrides (`app_id`, `build_number`, or
+claim window), and set `repair_existing_build_claims=true` to re-issue already
+present claims.
+
+Android certificates may whitelist multiple package names (for example Play
+Integrity or marker-key metadata with more than one entry). In that case Torii
+cannot infer a single `app_id`; callers must provide `build_claim_overrides[]`
+for the affected receipt `tx_id_hex`.
+
+For controlled rollback/emergency migration windows, operators can set
+`settlement.offline.skip_build_claim_verification = true`. When enabled, Torii
+skips build-claim issuance/repair checks during `/v1/offline/settlements` and
+accepts receipts without build claims unchanged.
 
 Issuer endpoints (`/v1/offline/certificates/*/issue`) are only enabled when
 `torii.offline_issuer` is configured. Use `torii.offline_issuer.allowed_controllers` to restrict
-which controller accounts may request new certificates.
+which controller accounts may request new certificates. If you rotate the offline issuer key, keep
+prior keys in `torii.offline_issuer.legacy_operator_private_keys` so Torii can continue issuing
+build claims for allowances whose certificates were signed by older operator keys.
 
 When a request fails due to an offline validation rejection, Torii surfaces a stable error code in
 the `x-iroha-reject-code` response header (for example `certificate_expired`, `counter_conflict`,
@@ -1292,10 +1306,16 @@ recording the attempt in their journals.【IrohaSwift/Sources/IrohaSwift/Offline
 ## 15. Platform Proof Verification & Telemetry (OA8)
 
 - **App Attest verification.** `verify_apple_attestation` parses the operator-provided attestation
-  report, pins the Apple trust anchors, recomputes the nonce derived from the receipt payload, and
-  enforces that the monotonic counter advances exactly once per spend before accepting the
-  proof. Nonce-extension decoding accepts both Apple production DER wrappers and the legacy plain
-  OCTET STRING form used by older fixtures/tools.【crates/iroha_core/src/smartcontracts/isi/offline.rs:1034】
+  report, pins the Apple trust anchors, validates the top-up nonce from
+  `certificate.attestation_nonce` (must match the `attestKey()` clientDataHash), and enforces that
+  the monotonic counter advances exactly once per spend before accepting the proof. Settlement-time
+  assertion verification still binds the receipt-derived challenge hash. Nonce-extension decoding
+  accepts both Apple production DER wrappers and the legacy plain OCTET STRING form used by older
+  fixtures/tools. Signature verification keeps two non-strict compatibility paths for legacy iOS
+  clients: `authenticatorData || receipt_challenge_hash` and
+  `authenticatorData || SHA256(clientDataHash)`. Set
+  `settlement.offline.apple_app_attest_strict_signature = true` to disable compatibility fallbacks
+  and require canonical raw `clientDataHash` signatures only.【crates/iroha_core/src/smartcontracts/isi/offline.rs:1034】【crates/iroha_config/src/parameters/user.rs:9320】
 - **Android KeyMint verification.** `verify_android_attestation` decodes the X.509 chain, validates
   the KeyDescription (parsing `attestationApplicationId`, StrongBox/rollback flags, alias metadata),
   and optionally enforces marker-key signatures so marker series + counters remain bound to the
@@ -1313,7 +1333,9 @@ recording the attempt in their journals.【IrohaSwift/Sources/IrohaSwift/Offline
   `/v1/offline/rejections`, letting dashboards surface per-platform/per-reason trends without
   scraping Prometheus directly. The JavaScript SDK mirrors this surface through
   `ToriiClient.getOfflineRejectionStats`, so browser dashboards and CI agents can read the same
-  counters without bespoke HTTP plumbing.【crates/iroha_core/src/smartcontracts/isi/offline.rs:681】【crates/iroha_telemetry/src/metrics.rs:6001】【crates/iroha_torii/src/routing.rs:23427】【javascript/iroha_js/src/toriiClient.js:395】【javascript/iroha_js/index.d.ts:1950】
+  counters without bespoke HTTP plumbing. Additional counters now track Android integrity policy mix
+  (`iroha_offline_attestation_policy_total{policy}`) and iOS App Attest compatibility-signature
+  fallback usage (`iroha_offline_app_attest_signature_compat_total`).【crates/iroha_core/src/smartcontracts/isi/offline.rs:681】【crates/iroha_telemetry/src/metrics.rs:6001】【crates/iroha_torii/src/routing.rs:23427】【javascript/iroha_js/src/toriiClient.js:395】【javascript/iroha_js/index.d.ts:1950】
 
 ## 16. Offline-Only Bearer Mode Guidance (OA6)
 
