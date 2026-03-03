@@ -405,7 +405,6 @@ public final class OfflineToriiClientTests {
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
             "alice@wonderland",
-            "alice@wonderland",
             allowance,
             "ed0120deadbeef",
             new byte[] {3, 4},
@@ -423,6 +422,8 @@ public final class OfflineToriiClientTests {
     assert executor.lastRequest.uri().getPath().endsWith("/v1/offline/certificates/issue")
         : "certificate issue path mismatch";
     assert executor.lastBody.contains("\"certificate\"") : "certificate missing from body";
+    assert !executor.lastBody.contains("\"operator\"")
+        : "draft request must omit operator";
   }
 
   private static void issueCertificateRenewalUsesPath() {
@@ -460,7 +461,6 @@ public final class OfflineToriiClientTests {
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
             "alice@wonderland",
-            "alice@wonderland",
             allowance,
             "ed0120deadbeef",
             new byte[] {3, 4},
@@ -476,6 +476,8 @@ public final class OfflineToriiClientTests {
         : "renewal path missing";
     assert executor.lastRequest.uri().getPath().endsWith("/renew/issue")
         : "renewal path mismatch";
+    assert !executor.lastBody.contains("\"operator\"")
+        : "renew draft request must omit operator";
   }
 
   private static void registerAllowancePostsCertificate() {
@@ -614,7 +616,6 @@ public final class OfflineToriiClientTests {
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
             "alice@wonderland",
-            "alice@wonderland",
             allowance,
             "ed0120deadbeef",
             new byte[] {3, 4},
@@ -634,6 +635,8 @@ public final class OfflineToriiClientTests {
         : "issue path mismatch";
     assert executor.requests.get(1).uri().getPath().endsWith("/v1/offline/allowances")
         : "register path mismatch";
+    assert !executor.bodies.get(0).contains("\"operator\"")
+        : "top-up issue draft must omit operator";
     assert executor.bodies.get(1).contains("\"private_key\":\"deadbeef\"")
         : "private key missing in register body";
   }
@@ -682,7 +685,6 @@ public final class OfflineToriiClientTests {
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
             "alice@wonderland",
-            "alice@wonderland",
             allowance,
             "ed0120deadbeef",
             new byte[] {3, 4},
@@ -699,6 +701,8 @@ public final class OfflineToriiClientTests {
         : "renew issue path mismatch";
     assert executor.requests.get(1).uri().getPath().endsWith("/v1/offline/allowances/deadbeef/renew")
         : "renew register path mismatch";
+    assert !executor.bodies.get(0).contains("\"operator\"")
+        : "top-up renewal issue draft must omit operator";
   }
 
   private static final class StubExecutor implements HttpTransportExecutor {

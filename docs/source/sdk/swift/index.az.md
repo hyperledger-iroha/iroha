@@ -422,7 +422,6 @@ verifies that both responses reference the same certificate id:
 ```swift
 let draft = OfflineWalletCertificateDraft(
     controller: controllerId,
-    operatorId: controllerId,
     allowance: allowanceCommitment,
     spendPublicKey: spendPublicKey,
     attestationReport: attestationReport,

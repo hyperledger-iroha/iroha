@@ -19,7 +19,7 @@ public final class OfflineJsonParserTest {
     parsesCertificateIssueResponse();
     parsesSettlementSubmitResponse();
     parsesBundleProofStatusResponse();
-    serializesDraftOperator();
+    draftJsonOmitsOperator();
     rejectsFractionalTotals();
     rejectsFractionalOptionalTimestamp();
     System.out.println("[IrohaAndroid] OfflineJsonParserTest passed.");
@@ -348,14 +348,13 @@ public final class OfflineJsonParserTest {
     assert status.proofSummary() == null : "proof summary should be null";
   }
 
-  private static void serializesDraftOperator() {
+  private static void draftJsonOmitsOperator() {
     final OfflineAllowanceCommitment allowance =
         new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2, 3});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 1700500000000L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
             "alice@wonderland",
-            "ops@wonderland",
             allowance,
             "ed0120deadbeef",
             new byte[] {4, 5, 6},
@@ -366,8 +365,8 @@ public final class OfflineJsonParserTest {
             null,
             null,
             null);
-    assert "ops@wonderland".equals(draft.toJsonMap().get("operator"))
-        : "draft operator missing from JSON map";
+    assert !draft.toJsonMap().containsKey("operator")
+        : "draft operator must be derived by Torii and omitted from JSON map";
   }
 
   private static void rejectsFractionalTotals() {

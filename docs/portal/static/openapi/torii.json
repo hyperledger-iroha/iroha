@@ -1920,7 +1920,7 @@
         "type": "object"
       },
       "OfflineWalletCertificateDraft": {
-        "description": "OfflineWalletCertificate payload without the operator signature.",
+        "description": "OfflineWalletCertificate payload without the operator signature. Torii derives `operator` from its configured offline issuer keypair; client-supplied draft `operator` values are optional and ignored.",
         "type": "object"
       },
       "OperatorWebAuthnLoginResponse": {
@@ -8369,7 +8369,7 @@
     },
     "/v1/offline/certificates/issue": {
       "post": {
-        "description": "Accepts an unsigned OfflineWalletCertificate draft and returns the operator-signed certificate payload without registering it on-ledger.",
+        "description": "Accepts an unsigned OfflineWalletCertificate draft and returns the operator-signed certificate payload without registering it on-ledger. Torii derives `operator` from its configured offline issuer keypair; client-supplied draft `operator` values are optional and ignored.",
         "operationId": "offlineCertificateIssue",
         "requestBody": {
           "content": {
@@ -8636,7 +8636,7 @@
     },
     "/v1/offline/certificates/{certificate_id_hex}/renew/issue": {
       "post": {
-        "description": "Signs a refreshed OfflineWalletCertificate draft after confirming the referenced allowance exists on-ledger.",
+        "description": "Signs a refreshed OfflineWalletCertificate draft after confirming the referenced allowance exists on-ledger. Torii derives `operator` from its configured offline issuer keypair; client-supplied draft `operator` values are optional and ignored.",
         "operationId": "offlineCertificateRenewIssue",
         "parameters": [
           {

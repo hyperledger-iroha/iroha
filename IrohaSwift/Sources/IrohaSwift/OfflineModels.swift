@@ -72,7 +72,6 @@ public struct OfflineWalletPolicy: Codable, Sendable, Equatable {
 
 public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
     public let controller: String
-    public let operatorId: String
     public let allowance: OfflineAllowanceCommitment
     public let spendPublicKey: String
     public let attestationReport: Data
@@ -86,7 +85,7 @@ public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case controller
-        case operatorId = "operator"
+        case legacyOperatorId = "operator"
         case allowance
         case spendPublicKey = "spend_public_key"
         case attestationReportB64 = "attestation_report_b64"
@@ -99,8 +98,60 @@ public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
         case refreshAtMs = "refresh_at_ms"
     }
 
+    /// Typed metadata initializer — the primary public API.
+    public init(controller: String,
+                allowance: OfflineAllowanceCommitment,
+                spendPublicKey: String,
+                attestationReport: Data,
+                issuedAtMs: UInt64,
+                expiresAtMs: UInt64,
+                policy: OfflineWalletPolicy,
+                iosAppAttest: OfflineIOSAppAttestMetadata? = nil,
+                lineage: OfflineCertificateLineage? = nil,
+                verdictId: Data? = nil,
+                attestationNonce: Data? = nil,
+                refreshAtMs: UInt64? = nil) {
+        var metadata: [String: ToriiJSONValue] = [:]
+        iosAppAttest?.apply(to: &metadata)
+        lineage?.apply(to: &metadata)
+        self.init(controller: controller, allowance: allowance,
+                  spendPublicKey: spendPublicKey, attestationReport: attestationReport,
+                  issuedAtMs: issuedAtMs, expiresAtMs: expiresAtMs, policy: policy,
+                  metadata: metadata, verdictId: verdictId, attestationNonce: attestationNonce,
+                  refreshAtMs: refreshAtMs)
+    }
+
+    @available(*, deprecated, message: "operatorId is derived by Torii and ignored for drafts.")
     public init(controller: String,
                 operatorId: String,
+                allowance: OfflineAllowanceCommitment,
+                spendPublicKey: String,
+                attestationReport: Data,
+                issuedAtMs: UInt64,
+                expiresAtMs: UInt64,
+                policy: OfflineWalletPolicy,
+                iosAppAttest: OfflineIOSAppAttestMetadata? = nil,
+                lineage: OfflineCertificateLineage? = nil,
+                verdictId: Data? = nil,
+                attestationNonce: Data? = nil,
+                refreshAtMs: UInt64? = nil) {
+        let _ = operatorId
+        self.init(controller: controller,
+                  allowance: allowance,
+                  spendPublicKey: spendPublicKey,
+                  attestationReport: attestationReport,
+                  issuedAtMs: issuedAtMs,
+                  expiresAtMs: expiresAtMs,
+                  policy: policy,
+                  iosAppAttest: iosAppAttest,
+                  lineage: lineage,
+                  verdictId: verdictId,
+                  attestationNonce: attestationNonce,
+                  refreshAtMs: refreshAtMs)
+    }
+
+    /// Raw metadata initializer — for internal SDK use.
+    init(controller: String,
                 allowance: OfflineAllowanceCommitment,
                 spendPublicKey: String,
                 attestationReport: Data,
@@ -112,7 +163,6 @@ public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
                 attestationNonce: Data? = nil,
                 refreshAtMs: UInt64? = nil) {
         self.controller = controller
-        self.operatorId = operatorId
         self.allowance = allowance
         self.spendPublicKey = spendPublicKey
         self.attestationReport = attestationReport
@@ -125,10 +175,37 @@ public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
         self.refreshAtMs = refreshAtMs
     }
 
+    @available(*, deprecated, message: "operatorId is derived by Torii and ignored for drafts.")
+    init(controller: String,
+         operatorId: String,
+         allowance: OfflineAllowanceCommitment,
+         spendPublicKey: String,
+         attestationReport: Data,
+         issuedAtMs: UInt64,
+         expiresAtMs: UInt64,
+         policy: OfflineWalletPolicy,
+         metadata: [String: ToriiJSONValue] = [:],
+         verdictId: Data? = nil,
+         attestationNonce: Data? = nil,
+         refreshAtMs: UInt64? = nil) {
+        let _ = operatorId
+        self.init(controller: controller,
+                  allowance: allowance,
+                  spendPublicKey: spendPublicKey,
+                  attestationReport: attestationReport,
+                  issuedAtMs: issuedAtMs,
+                  expiresAtMs: expiresAtMs,
+                  policy: policy,
+                  metadata: metadata,
+                  verdictId: verdictId,
+                  attestationNonce: attestationNonce,
+                  refreshAtMs: refreshAtMs)
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         controller = try container.decode(String.self, forKey: .controller)
-        operatorId = try container.decode(String.self, forKey: .operatorId)
+        _ = try container.decodeIfPresent(String.self, forKey: .legacyOperatorId)
         allowance = try container.decode(OfflineAllowanceCommitment.self, forKey: .allowance)
         spendPublicKey = try container.decode(String.self, forKey: .spendPublicKey)
         let reportB64 = try container.decode(String.self, forKey: .attestationReportB64)
@@ -148,7 +225,6 @@ public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(controller, forKey: .controller)
-        try container.encode(operatorId, forKey: .operatorId)
         try container.encode(allowance, forKey: .allowance)
         try container.encode(spendPublicKey, forKey: .spendPublicKey)
         try container.encode(attestationReport.base64EncodedString(), forKey: .attestationReportB64)
@@ -170,6 +246,329 @@ public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
             return data
         }
         return nil
+    }
+}
+
+// MARK: - iOS App Attest Metadata
+
+/// Typed representation of `ios.app_attest.*` metadata fields.
+///
+///     let attest = OfflineIOSAppAttestMetadata(teamId: "ABCD1234", bundleId: "com.app", environment: "production")
+///     attest.apply(to: &metadata)
+public struct OfflineIOSAppAttestMetadata: Codable, Sendable, Equatable {
+    public let teamId: String
+    public let bundleId: String
+    public let environment: String
+
+    public init(teamId: String, bundleId: String, environment: String) {
+        self.teamId = teamId
+        self.bundleId = bundleId
+        self.environment = environment
+    }
+
+    /// Parse from an existing certificate's metadata dictionary.
+    init?(from metadata: [String: ToriiJSONValue]) {
+        guard case .string(let teamId) = metadata[Key.teamId] else { return nil }
+        let bundleId: String
+        if case .string(let s) = metadata[Key.bundleId] { bundleId = s } else { return nil }
+        let environment: String
+        if case .string(let s) = metadata[Key.environment] { environment = s } else { return nil }
+        self.init(teamId: teamId, bundleId: bundleId, environment: environment)
+    }
+
+    /// Write attest fields into a metadata dictionary, preserving other keys.
+    func apply(to metadata: inout [String: ToriiJSONValue]) {
+        metadata[Key.teamId] = .string(teamId)
+        metadata[Key.bundleId] = .string(bundleId)
+        metadata[Key.environment] = .string(environment)
+    }
+
+    private enum Key {
+        static let teamId = "ios.app_attest.team_id"
+        static let bundleId = "ios.app_attest.bundle_id"
+        static let environment = "ios.app_attest.environment"
+    }
+}
+
+// MARK: - Certificate Lineage
+
+/// Typed representation of `offline.lineage.*` and `offline.build_claim.*` metadata fields.
+///
+/// Use instead of manually constructing `[String: ToriiJSONValue]` entries with string keys.
+///
+///     // First issuance (no previous allowance):
+///     let lineage = OfflineCertificateLineage(scope: bundleId, epoch: 1, minBuildNumber: "28")
+///     lineage.apply(to: &metadata)
+///
+///     // Renewal / reprovision (previous allowance exists):
+///     let prev = OfflineCertificateLineage(from: oldCertificate.metadata)
+///     let lineage = OfflineCertificateLineage(
+///         scope: bundleId,
+///         epoch: (prev?.epoch ?? 0) + 1,
+///         prevCertificateIdHex: oldAllowance.certificateIdHex,
+///         minBuildNumber: "28"
+///     )
+///     lineage.apply(to: &metadata)
+public struct OfflineCertificateLineage: Codable, Sendable, Equatable {
+    public let scope: String
+    public let epoch: UInt64
+    public let prevCertificateIdHex: String?
+    public let minBuildNumber: String?
+
+    public init(scope: String, epoch: UInt64, prevCertificateIdHex: String? = nil, minBuildNumber: String? = nil) {
+        self.scope = scope
+        self.epoch = epoch
+        self.prevCertificateIdHex = prevCertificateIdHex
+        self.minBuildNumber = minBuildNumber
+    }
+
+    /// Parse lineage from an existing certificate's metadata dictionary.
+    /// Returns `nil` if `offline.lineage.epoch` is missing or unparseable.
+    init?(from metadata: [String: ToriiJSONValue]) {
+        guard let epochValue = metadata[Key.epoch] else { return nil }
+        let epochNum: UInt64
+        switch epochValue {
+        case .string(let s):
+            guard let parsed = UInt64(s) else { return nil }
+            epochNum = parsed
+        case .number(let n):
+            epochNum = UInt64(n)
+        default:
+            return nil
+        }
+        let scope: String
+        if case .string(let s) = metadata[Key.scope] {
+            scope = s
+        } else {
+            return nil
+        }
+        var prevHex: String?
+        if case .string(let s) = metadata[Key.prevCertificateIdHex] {
+            prevHex = s
+        }
+        var buildNum: String?
+        if case .string(let s) = metadata[Key.minBuildNumber] {
+            buildNum = s
+        }
+        self.init(scope: scope, epoch: epochNum, prevCertificateIdHex: prevHex, minBuildNumber: buildNum)
+    }
+
+    /// Write lineage fields into a metadata dictionary, preserving other keys.
+    func apply(to metadata: inout [String: ToriiJSONValue]) {
+        metadata[Key.scope] = .string(scope)
+        metadata[Key.epoch] = .string("\(epoch)")
+        if let prevCertificateIdHex {
+            metadata[Key.prevCertificateIdHex] = .string(prevCertificateIdHex)
+        } else {
+            metadata.removeValue(forKey: Key.prevCertificateIdHex)
+        }
+        if let minBuildNumber {
+            metadata[Key.minBuildNumber] = .string(minBuildNumber)
+        }
+    }
+
+    private enum Key {
+        static let scope = "offline.lineage.scope"
+        static let epoch = "offline.lineage.epoch"
+        static let prevCertificateIdHex = "offline.lineage.prev_certificate_id_hex"
+        static let minBuildNumber = "offline.build_claim.min_build_number"
+    }
+}
+
+// MARK: - Android Attestation Metadata
+
+public struct OfflineAndroidMarkerKeyMetadata: Codable, Sendable, Equatable {
+    public let packageNames: [String]
+    public let signingDigestsSha256: [String]
+    public let requireStrongbox: Bool
+    public let requireRollbackResistance: Bool
+
+    public init(packageNames: [String], signingDigestsSha256: [String],
+                requireStrongbox: Bool, requireRollbackResistance: Bool) {
+        self.packageNames = packageNames
+        self.signingDigestsSha256 = signingDigestsSha256
+        self.requireStrongbox = requireStrongbox
+        self.requireRollbackResistance = requireRollbackResistance
+    }
+
+    init?(from metadata: [String: ToriiJSONValue]) {
+        let packages = metadata[Key.packageNames]?.normalizedStringArray ?? []
+        let digests = metadata[Key.signingDigestsSha256]?.normalizedStringArray ?? []
+        guard !packages.isEmpty, !digests.isEmpty else { return nil }
+        self.init(
+            packageNames: packages,
+            signingDigestsSha256: digests,
+            requireStrongbox: metadata[Key.requireStrongbox]?.normalizedBool ?? false,
+            requireRollbackResistance: metadata[Key.requireRollbackResistance]?.normalizedBool ?? true
+        )
+    }
+
+    private enum Key {
+        static let packageNames = "android.attestation.package_names"
+        static let signingDigestsSha256 = "android.attestation.signing_digests_sha256"
+        static let requireStrongbox = "android.attestation.require_strongbox"
+        static let requireRollbackResistance = "android.attestation.require_rollback_resistance"
+    }
+}
+
+public struct OfflineAndroidPlayIntegrityMetadata: Codable, Sendable, Equatable {
+    public let cloudProjectNumber: UInt64?
+    public let environment: String?
+    public let packageNames: [String]
+    public let signingDigestsSha256: [String]
+    public let allowedAppVerdicts: [String]
+    public let allowedDeviceVerdicts: [String]
+    public let maxTokenAgeMs: UInt64?
+
+    public init(cloudProjectNumber: UInt64?, environment: String?,
+                packageNames: [String], signingDigestsSha256: [String],
+                allowedAppVerdicts: [String], allowedDeviceVerdicts: [String],
+                maxTokenAgeMs: UInt64?) {
+        self.cloudProjectNumber = cloudProjectNumber
+        self.environment = environment
+        self.packageNames = packageNames
+        self.signingDigestsSha256 = signingDigestsSha256
+        self.allowedAppVerdicts = allowedAppVerdicts
+        self.allowedDeviceVerdicts = allowedDeviceVerdicts
+        self.maxTokenAgeMs = maxTokenAgeMs
+    }
+
+    init?(from metadata: [String: ToriiJSONValue]) {
+        self.init(
+            cloudProjectNumber: metadata[Key.cloudProjectNumber]?.normalizedUInt64,
+            environment: metadata[Key.environment]?.normalizedString,
+            packageNames: metadata[Key.packageNames]?.normalizedStringArray ?? [],
+            signingDigestsSha256: metadata[Key.signingDigestsSha256]?.normalizedStringArray ?? [],
+            allowedAppVerdicts: metadata[Key.allowedAppVerdicts]?.normalizedStringArray ?? [],
+            allowedDeviceVerdicts: metadata[Key.allowedDeviceVerdicts]?.normalizedStringArray ?? [],
+            maxTokenAgeMs: metadata[Key.maxTokenAgeMs]?.normalizedUInt64
+        )
+    }
+
+    private enum Key {
+        static let cloudProjectNumber = "android.play_integrity.cloud_project_number"
+        static let environment = "android.play_integrity.environment"
+        static let packageNames = "android.play_integrity.package_names"
+        static let signingDigestsSha256 = "android.play_integrity.signing_digests_sha256"
+        static let allowedAppVerdicts = "android.play_integrity.allowed_app_verdicts"
+        static let allowedDeviceVerdicts = "android.play_integrity.allowed_device_verdicts"
+        static let maxTokenAgeMs = "android.play_integrity.max_token_age_ms"
+    }
+}
+
+public struct OfflineAndroidHmsSafetyDetectMetadata: Codable, Sendable, Equatable {
+    public let appId: String?
+    public let packageNames: [String]
+    public let signingDigestsSha256: [String]
+    public let requiredEvaluations: [String]
+    public let maxTokenAgeMs: UInt64?
+
+    public init(appId: String?, packageNames: [String], signingDigestsSha256: [String],
+                requiredEvaluations: [String], maxTokenAgeMs: UInt64?) {
+        self.appId = appId
+        self.packageNames = packageNames
+        self.signingDigestsSha256 = signingDigestsSha256
+        self.requiredEvaluations = requiredEvaluations
+        self.maxTokenAgeMs = maxTokenAgeMs
+    }
+
+    init?(from metadata: [String: ToriiJSONValue]) {
+        let packages = metadata[Key.packageNames]?.normalizedStringArray ?? []
+        let digests = metadata[Key.signingDigestsSha256]?.normalizedStringArray ?? []
+        guard !packages.isEmpty, !digests.isEmpty else { return nil }
+        self.init(
+            appId: metadata[Key.appId]?.normalizedString,
+            packageNames: packages,
+            signingDigestsSha256: digests,
+            requiredEvaluations: metadata[Key.requiredEvaluations]?.normalizedStringArray ?? [],
+            maxTokenAgeMs: metadata[Key.maxTokenAgeMs]?.normalizedUInt64
+        )
+    }
+
+    private enum Key {
+        static let appId = "android.hms_safety_detect.app_id"
+        static let packageNames = "android.hms_safety_detect.package_names"
+        static let signingDigestsSha256 = "android.hms_safety_detect.signing_digests_sha256"
+        static let requiredEvaluations = "android.hms_safety_detect.required_evaluations"
+        static let maxTokenAgeMs = "android.hms_safety_detect.max_token_age_ms"
+    }
+}
+
+public struct OfflineAndroidProvisionedMetadata: Codable, Sendable, Equatable {
+    public let inspectorPublicKey: String?
+    public let manifestSchema: String?
+    public let manifestVersion: Int?
+    public let maxManifestAgeMs: UInt64?
+    public let manifestDigestHex: String?
+
+    public init(inspectorPublicKey: String?, manifestSchema: String?,
+                manifestVersion: Int?, maxManifestAgeMs: UInt64?, manifestDigestHex: String?) {
+        self.inspectorPublicKey = inspectorPublicKey
+        self.manifestSchema = manifestSchema
+        self.manifestVersion = manifestVersion
+        self.maxManifestAgeMs = maxManifestAgeMs
+        self.manifestDigestHex = manifestDigestHex
+    }
+
+    init?(from metadata: [String: ToriiJSONValue]) {
+        self.init(
+            inspectorPublicKey: metadata[Key.inspectorPublicKey]?.normalizedString,
+            manifestSchema: metadata[Key.manifestSchema]?.normalizedString,
+            manifestVersion: metadata[Key.manifestVersion]?.normalizedInt,
+            maxManifestAgeMs: metadata[Key.maxManifestAgeMs]?.normalizedUInt64,
+            manifestDigestHex: metadata[Key.manifestDigest]?.normalizedString
+        )
+    }
+
+    private enum Key {
+        static let inspectorPublicKey = "android.provisioned.inspector_public_key"
+        static let manifestSchema = "android.provisioned.manifest_schema"
+        static let manifestVersion = "android.provisioned.manifest_version"
+        static let maxManifestAgeMs = "android.provisioned.max_manifest_age_ms"
+        static let manifestDigest = "android.provisioned.manifest_digest"
+    }
+}
+
+// MARK: - Parsed Certificate Metadata
+
+/// Complete parsed representation of a certificate's metadata dictionary.
+///
+/// Use this to parse a raw `[String: ToriiJSONValue]` metadata dict into typed fields.
+/// All Iroha protocol string keys are encapsulated here — callers never need raw key strings.
+public struct OfflineCertificateParsedMetadata: Sendable, Equatable {
+    public let platformPolicy: ToriiPlatformPolicy?
+    public let iosAppAttest: OfflineIOSAppAttestMetadata?
+    public let lineage: OfflineCertificateLineage?
+    public let androidMarkerKey: OfflineAndroidMarkerKeyMetadata?
+    public let androidPlayIntegrity: OfflineAndroidPlayIntegrityMetadata?
+    public let androidHmsSafetyDetect: OfflineAndroidHmsSafetyDetectMetadata?
+    public let androidProvisioned: OfflineAndroidProvisionedMetadata?
+
+    init(from metadata: [String: ToriiJSONValue]) {
+        let policy = metadata["android.integrity.policy"]?.normalizedString
+            .flatMap(ToriiPlatformPolicy.init(rawValue:))
+        self.platformPolicy = policy
+        self.iosAppAttest = OfflineIOSAppAttestMetadata(from: metadata)
+        self.lineage = OfflineCertificateLineage(from: metadata)
+        self.androidMarkerKey = OfflineAndroidMarkerKeyMetadata(from: metadata)
+        switch policy {
+        case .playIntegrity:
+            self.androidPlayIntegrity = OfflineAndroidPlayIntegrityMetadata(from: metadata)
+            self.androidHmsSafetyDetect = nil
+            self.androidProvisioned = nil
+        case .hmsSafetyDetect:
+            self.androidPlayIntegrity = nil
+            self.androidHmsSafetyDetect = OfflineAndroidHmsSafetyDetectMetadata(from: metadata)
+            self.androidProvisioned = nil
+        case .provisioned:
+            self.androidPlayIntegrity = nil
+            self.androidHmsSafetyDetect = nil
+            self.androidProvisioned = OfflineAndroidProvisionedMetadata(from: metadata)
+        case .markerKey, nil:
+            self.androidPlayIntegrity = nil
+            self.androidHmsSafetyDetect = nil
+            self.androidProvisioned = nil
+        }
     }
 }
 

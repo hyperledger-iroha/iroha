@@ -863,7 +863,7 @@ struct IosMetadata {
     environment: AppleEnvironment,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum AppleEnvironment {
     Production,
     Development,
@@ -6030,6 +6030,13 @@ pub mod isi {
         block_timestamp_ms: u64,
         claim_ids_in_bundle: &mut BTreeSet<Hash>,
     ) -> Result<(), Error> {
+        if state_transaction
+            .settlement
+            .offline
+            .skip_build_claim_verification
+        {
+            return Ok(());
+        }
         let claim = receipt.build_claim.as_ref().ok_or_else(|| {
             rejection_error(
                 OfflineTransferRejectionReason::BuildClaimMissing,
@@ -6491,6 +6498,7 @@ mod attestation {
     use der_parser::oid;
     use iroha_config::parameters::actual;
     use iroha_data_model::offline::{AndroidMarkerKeyProof, AppleAppAttestProof};
+    use iroha_logger::prelude::*;
     use norito::json::{Map as JsonMap, Value as JsonValue};
     #[cfg(test)]
     use once_cell::sync::OnceCell;
@@ -6788,7 +6796,12 @@ mod attestation {
         block_timestamp_ms: u64,
     ) -> Result<(), InstructionExecutionError> {
         let platform = OfflineTransferRejectionPlatform::Apple;
+        warn!(
+            "[AppAttest] verify_apple_attestation: report_len={}, block_ts={block_timestamp_ms}",
+            certificate.attestation_report.len()
+        );
         if certificate.attestation_report.is_empty() {
+            warn!("[AppAttest] FAIL: attestation report is empty");
             return Err(rejection_error(
                 OfflineTransferRejectionReason::PlatformAttestationMissing,
                 platform,
@@ -6796,13 +6809,26 @@ mod attestation {
             ));
         }
 
-        let metadata = extract_ios_metadata(&certificate.metadata)?;
+        let metadata = extract_ios_metadata(&certificate.metadata).inspect_err(|e| {
+            warn!("[AppAttest] FAIL: extract_ios_metadata: {e}");
+        })?;
+        warn!(
+            "[AppAttest] metadata: team_id={}, bundle_id={}, env={:?}",
+            metadata.team_id, metadata.bundle_id, metadata.environment
+        );
         let challenge = map_platform_err(
-            derive_receipt_challenge(receipt, chain_id),
+            derive_receipt_challenge(receipt, chain_id).inspect_err(|e| {
+                warn!("[AppAttest] FAIL: derive_receipt_challenge: {e}");
+            }),
             OfflineTransferRejectionReason::PlatformAttestationInvalid,
             platform,
         )?;
         if proof.challenge_hash != challenge.iroha_hash {
+            warn!(
+                "[AppAttest] FAIL: challenge hash mismatch: proof={} expected={}",
+                hex::encode(proof.challenge_hash.as_ref()),
+                hex::encode(challenge.iroha_hash.as_ref())
+            );
             return Err(rejection_error(
                 OfflineTransferRejectionReason::PlatformChallengeMismatch,
                 platform,
@@ -6811,36 +6837,70 @@ mod attestation {
         }
 
         let key_identifier = map_platform_err(
-            decode_key_id(&proof.key_id),
+            decode_key_id(&proof.key_id).inspect_err(|e| {
+                warn!("[AppAttest] FAIL: decode_key_id: {e}");
+            }),
             OfflineTransferRejectionReason::PlatformMetadataInvalid,
             platform,
         )?;
+        // The attestation certificate was created at top-up time with a
+        // clientDataHash different from the receipt-derived challenge.
+        // The certificate MUST carry attestation_nonce for verification.
+        let attest_cdh: [u8; 32] = certificate
+            .attestation_nonce
+            .as_ref()
+            .map(|n| {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(n.as_ref());
+                arr
+            })
+            .ok_or_else(|| {
+                warn!("[AppAttest] FAIL: certificate missing attestation_nonce");
+                rejection_error(
+                    OfflineTransferRejectionReason::PlatformAttestationInvalid,
+                    platform,
+                    "certificate missing attestation_nonce",
+                )
+            })?;
         let attestation = map_platform_err(
             AppleAttestation::from_certificate(
                 &certificate.attestation_report,
                 &metadata,
                 &key_identifier,
                 block_timestamp_ms,
-                &challenge,
-            ),
+                &attest_cdh,
+            )
+            .inspect_err(|e| {
+                warn!("[AppAttest] FAIL: from_certificate: {e}");
+            }),
             OfflineTransferRejectionReason::PlatformAttestationInvalid,
             platform,
         )?;
         let assertion = map_platform_err(
-            AppleAssertion::parse(&proof.assertion),
+            AppleAssertion::parse(&proof.assertion).inspect_err(|e| {
+                warn!("[AppAttest] FAIL: AppleAssertion::parse: {e}");
+            }),
+            OfflineTransferRejectionReason::PlatformAttestationInvalid,
+            platform,
+        )?;
+        let client_data_hash = map_platform_err(
+            assertion
+                .validate(&metadata, proof.counter, &challenge, &attestation)
+                .inspect_err(|e| {
+                    warn!("[AppAttest] FAIL: assertion.validate: {e}");
+                }),
             OfflineTransferRejectionReason::PlatformAttestationInvalid,
             platform,
         )?;
         map_platform_err(
-            assertion.validate(&metadata, proof.counter, &challenge, &attestation),
-            OfflineTransferRejectionReason::PlatformAttestationInvalid,
-            platform,
-        )?;
-        map_platform_err(
-            verify_apple_signature(attestation.verifying_key(), &assertion),
+            verify_apple_signature(attestation.verifying_key(), &assertion, &client_data_hash)
+                .inspect_err(|e| {
+                    warn!("[AppAttest] FAIL: verify_apple_signature: {e}");
+                }),
             OfflineTransferRejectionReason::PlatformSignatureInvalid,
             platform,
         )?;
+        warn!("[AppAttest] verify_apple_attestation: OK");
         Ok(())
     }
 
@@ -8020,17 +8080,33 @@ mod attestation {
     }
 
     impl AppleAttestation {
+        /// `attest_client_data_hash` — the clientDataHash that was passed to
+        /// `DCAppAttestService.attestKey()` at registration (top-up) time.
         fn from_certificate(
             report: &[u8],
             metadata: &IosMetadata,
             key_identifier: &[u8],
             block_timestamp_ms: u64,
-            challenge: &ReceiptChallenge,
+            attest_client_data_hash: &[u8; 32],
         ) -> Result<Self, InstructionExecutionError> {
-            let attestation_object = decode_attestation_object(report)?;
-            let auth_data = parse_attestation_auth_data(&attestation_object.auth_data)?;
+            let attestation_object = decode_attestation_object(report).inspect_err(|e| {
+                warn!("[AppAttest] FAIL: decode_attestation_object: {e}");
+            })?;
+            warn!(
+                "[AppAttest] from_certificate: certs={}, auth_data_len={}",
+                attestation_object.certificates.len(),
+                attestation_object.auth_data.len()
+            );
+            let auth_data = parse_attestation_auth_data(&attestation_object.auth_data)
+                .inspect_err(|e| {
+                    warn!("[AppAttest] FAIL: parse_attestation_auth_data: {e}");
+                })?;
 
             if auth_data.sign_count != 0 {
+                warn!(
+                    "[AppAttest] FAIL: sign_count={} (expected 0)",
+                    auth_data.sign_count
+                );
                 return Err(InstructionExecutionError::InvariantViolation(
                     "app attest registration counter must start at zero".into(),
                 ));
@@ -8038,12 +8114,23 @@ mod attestation {
 
             let expected_aaguid = expected_aaguid(metadata.environment);
             if auth_data.aaguid != *expected_aaguid {
+                warn!(
+                    "[AppAttest] FAIL: aaguid mismatch: got={} expected={} env={:?}",
+                    hex::encode(&auth_data.aaguid),
+                    hex::encode(expected_aaguid),
+                    metadata.environment
+                );
                 return Err(InstructionExecutionError::InvariantViolation(
                     "app attest aaguid does not match certificate environment".into(),
                 ));
             }
 
             if auth_data.credential_id != key_identifier {
+                warn!(
+                    "[AppAttest] FAIL: credential_id mismatch: got_len={} expected_len={}",
+                    auth_data.credential_id.len(),
+                    key_identifier.len()
+                );
                 return Err(InstructionExecutionError::InvariantViolation(
                     "app attest credential id does not match proof key id".into(),
                 ));
@@ -8051,19 +8138,33 @@ mod attestation {
 
             let expected_rp_hash = expected_rp_id_hash(metadata);
             if auth_data.rp_id_hash != expected_rp_hash {
+                warn!(
+                    "[AppAttest] FAIL: rpIdHash mismatch: got={} expected={} (team={}.bundle={})",
+                    hex::encode(auth_data.rp_id_hash),
+                    hex::encode(expected_rp_hash),
+                    metadata.team_id,
+                    metadata.bundle_id
+                );
                 return Err(InstructionExecutionError::InvariantViolation(
                     "app attest rpIdHash does not match declared metadata".into(),
                 ));
             }
 
             let verifying_key =
-                verify_attestation_chain(&attestation_object.certificates, block_timestamp_ms)?;
+                verify_attestation_chain(&attestation_object.certificates, block_timestamp_ms)
+                    .inspect_err(|e| {
+                        warn!("[AppAttest] FAIL: verify_attestation_chain: {e}");
+                    })?;
             verify_attestation_nonce(
                 &attestation_object.certificates[0],
                 &attestation_object.auth_data,
-                &challenge.client_data_hash,
-            )?;
+                attest_client_data_hash,
+            )
+            .inspect_err(|e| {
+                warn!("[AppAttest] FAIL: verify_attestation_nonce: {e}");
+            })?;
 
+            warn!("[AppAttest] from_certificate: OK");
             Ok(Self {
                 verifying_key,
                 rp_id_hash: expected_rp_hash,
@@ -8192,6 +8293,29 @@ mod attestation {
         }
     }
 
+    fn cbor_map_optional_bytes(map: &[(Value, Value)], keys: &[&str]) -> Option<Vec<u8>> {
+        for key in keys {
+            if let Some((_, Value::Bytes(bytes))) = map
+                .iter()
+                .find(|(candidate, _)| matches!(candidate, Value::Text(text) if text == key))
+            {
+                return Some(bytes.clone());
+            }
+        }
+        None
+    }
+
+    fn cbor_map_bytes(
+        map: &[(Value, Value)],
+        keys: &[&str],
+    ) -> Result<Vec<u8>, InstructionExecutionError> {
+        cbor_map_optional_bytes(map, keys).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!("app attest assertion missing `{}` entry", keys.join(" | ")).into(),
+            )
+        })
+    }
+
     struct AttestationAuthData<'a> {
         rp_id_hash: [u8; 32],
         sign_count: u32,
@@ -8243,17 +8367,67 @@ mod attestation {
         })
     }
 
+    struct AssertionAuthData {
+        rp_id_hash: [u8; 32],
+        flags: u8,
+        sign_count: u32,
+    }
+
+    fn parse_assertion_auth_data(
+        auth_data: &[u8],
+    ) -> Result<AssertionAuthData, InstructionExecutionError> {
+        if auth_data.len() < 37 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "app attest assertion authenticatorData is too short".into(),
+            ));
+        }
+        let rp_id_hash = auth_data[0..32].try_into().expect("slice length verified");
+        let flags = auth_data[32];
+        let sign_count =
+            u32::from_be_bytes(auth_data[33..37].try_into().expect("slice length verified"));
+        Ok(AssertionAuthData {
+            rp_id_hash,
+            flags,
+            sign_count,
+        })
+    }
+
+    fn parse_apple_signature(
+        signature_bytes: &[u8],
+    ) -> Result<P256Signature, InstructionExecutionError> {
+        if let Ok(signature) = P256Signature::from_der(signature_bytes) {
+            return Ok(signature);
+        }
+        if signature_bytes.len() == 64 {
+            return P256Signature::from_slice(signature_bytes).map_err(|_| {
+                InstructionExecutionError::InvariantViolation(
+                    "app attest raw signature bytes are malformed".into(),
+                )
+            });
+        }
+        Err(InstructionExecutionError::InvariantViolation(
+            "app attest signature must be DER or 64-byte raw format".into(),
+        ))
+    }
+
     struct AppleAssertion {
         authenticator_data: Vec<u8>,
         rp_id_hash: [u8; 32],
         _flags: u8,
         sign_count: u32,
-        client_data_hash: [u8; 32],
+        client_data_hash: Option<[u8; 32]>,
         signature: P256Signature,
     }
 
     impl AppleAssertion {
         fn parse(bytes: &[u8]) -> Result<Self, InstructionExecutionError> {
+            if let Ok(assertion) = Self::parse_cbor(bytes) {
+                return Ok(assertion);
+            }
+            Self::parse_compact(bytes)
+        }
+
+        fn parse_compact(bytes: &[u8]) -> Result<Self, InstructionExecutionError> {
             const AUTH_DATA_LEN: usize = 37;
             const CLIENT_HASH_LEN: usize = 32;
             if bytes.len() <= AUTH_DATA_LEN + CLIENT_HASH_LEN {
@@ -8263,29 +8437,58 @@ mod attestation {
             }
             let (authenticator_data, remainder) = bytes.split_at(AUTH_DATA_LEN);
             let (client_hash, signature_bytes) = remainder.split_at(CLIENT_HASH_LEN);
-            let signature = P256Signature::from_der(signature_bytes).map_err(|_| {
-                InstructionExecutionError::InvariantViolation(
-                    "app attest signature is not valid DER".into(),
-                )
-            })?;
-
-            let rp_id_hash = authenticator_data[0..32]
-                .try_into()
-                .expect("slice length verified");
-            let flags = authenticator_data[32];
-            let sign_count = u32::from_be_bytes(
-                authenticator_data[33..37]
-                    .try_into()
-                    .expect("slice length verified"),
-            );
+            let signature = parse_apple_signature(signature_bytes)?;
+            let parsed_auth_data = parse_assertion_auth_data(authenticator_data)?;
 
             let auth_copy = authenticator_data.to_vec();
             Ok(Self {
                 authenticator_data: auth_copy.clone(),
-                rp_id_hash,
-                _flags: flags,
-                sign_count,
-                client_data_hash: client_hash.try_into().expect("slice length verified"),
+                rp_id_hash: parsed_auth_data.rp_id_hash,
+                _flags: parsed_auth_data.flags,
+                sign_count: parsed_auth_data.sign_count,
+                client_data_hash: Some(client_hash.try_into().expect("slice length verified")),
+                signature,
+            })
+        }
+
+        fn parse_cbor(bytes: &[u8]) -> Result<Self, InstructionExecutionError> {
+            let value: Value = from_reader(bytes).map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("failed to decode app attest assertion CBOR: {err}").into(),
+                )
+            })?;
+            let map = match value {
+                Value::Map(map) => map,
+                _ => {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "app attest assertion must be a CBOR map".into(),
+                    ));
+                }
+            };
+
+            let authenticator_data = cbor_map_bytes(&map, &["authenticatorData", "authData"])?;
+            let signature_bytes = cbor_map_bytes(&map, &["signature", "sig"])?;
+            let signature = parse_apple_signature(&signature_bytes)?;
+            let parsed_auth_data = parse_assertion_auth_data(&authenticator_data)?;
+            let client_data_hash =
+                match cbor_map_optional_bytes(&map, &["clientDataHash", "client_data_hash"]) {
+                    Some(bytes) => {
+                        let hash: [u8; 32] = bytes.try_into().map_err(|_| {
+                            InstructionExecutionError::InvariantViolation(
+                                "app attest clientDataHash must be 32 bytes".into(),
+                            )
+                        })?;
+                        Some(hash)
+                    }
+                    None => None,
+                };
+
+            Ok(Self {
+                authenticator_data,
+                rp_id_hash: parsed_auth_data.rp_id_hash,
+                _flags: parsed_auth_data.flags,
+                sign_count: parsed_auth_data.sign_count,
+                client_data_hash,
                 signature,
             })
         }
@@ -8296,77 +8499,148 @@ mod attestation {
             counter: u64,
             challenge: &ReceiptChallenge,
             attestation: &AppleAttestation,
-        ) -> Result<(), InstructionExecutionError> {
+        ) -> Result<[u8; 32], InstructionExecutionError> {
             if self.rp_id_hash != attestation.rp_id_hash {
+                warn!(
+                    "[AppAttest] FAIL: assertion rpIdHash mismatch: got={} expected={}",
+                    hex::encode(self.rp_id_hash),
+                    hex::encode(attestation.rp_id_hash)
+                );
                 return Err(InstructionExecutionError::InvariantViolation(
                     "app attest assertion rpIdHash mismatch".into(),
                 ));
             }
-            if self.client_data_hash != challenge.client_data_hash {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "app attest assertion client data hash mismatch".into(),
-                ));
-            }
+            let client_data_hash = if let Some(client_data_hash) = self.client_data_hash {
+                if client_data_hash != challenge.client_data_hash {
+                    warn!(
+                        "[AppAttest] FAIL: assertion client_data_hash mismatch: got={} expected={}",
+                        hex::encode(client_data_hash),
+                        hex::encode(challenge.client_data_hash)
+                    );
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "app attest assertion client data hash mismatch".into(),
+                    ));
+                }
+                client_data_hash
+            } else {
+                challenge.client_data_hash
+            };
             if u64::from(self.sign_count) != counter {
+                warn!(
+                    "[AppAttest] FAIL: assertion counter mismatch: got={} expected={}",
+                    self.sign_count, counter
+                );
                 return Err(InstructionExecutionError::InvariantViolation(
                     "app attest counter mismatch".into(),
                 ));
             }
-            Ok(())
+            Ok(client_data_hash)
         }
     }
 
     fn verify_apple_signature(
         verifying_key: &VerifyingKey,
         assertion: &AppleAssertion,
+        client_data_hash: &[u8; 32],
     ) -> Result<(), InstructionExecutionError> {
-        let mut digest = Sha256::new();
-        digest.update(&assertion.authenticator_data);
-        digest.update(assertion.client_data_hash);
-        verifying_key
-            .verify_digest(digest, &assertion.signature)
-            .map_err(|_| {
-                InstructionExecutionError::InvariantViolation(
-                    "app attest signature does not verify".into(),
-                )
-            })
+        let mut primary_digest = Sha256::new();
+        primary_digest.update(&assertion.authenticator_data);
+        primary_digest.update(client_data_hash);
+        let primary_prehash = primary_digest.finalize();
+        if verifying_key
+            .verify_prehash(primary_prehash.as_ref(), &assertion.signature)
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        // Some App Attest clients sign against SHA256(clientDataHash) rather
+        // than the raw 32-byte clientDataHash.
+        let hashed_client_data = Sha256::digest(client_data_hash);
+        let mut fallback_digest = Sha256::new();
+        fallback_digest.update(&assertion.authenticator_data);
+        fallback_digest.update(hashed_client_data.as_slice());
+        let fallback_prehash = fallback_digest.finalize();
+        if verifying_key
+            .verify_prehash(fallback_prehash.as_ref(), &assertion.signature)
+            .is_ok()
+        {
+            warn!(
+                "[AppAttest] verify_apple_signature: accepted SHA256(clientDataHash) compatibility path"
+            );
+            return Ok(());
+        }
+
+        warn!("[AppAttest] FAIL: signature verification failed (primary + compatibility path)");
+        Err(InstructionExecutionError::InvariantViolation(
+            "app attest signature does not verify".into(),
+        ))
     }
 
     fn verify_attestation_chain(
         certificates: &[Vec<u8>],
         block_timestamp_ms: u64,
     ) -> Result<VerifyingKey, InstructionExecutionError> {
+        warn!(
+            "[AppAttest] verify_attestation_chain: certs={}, block_ts={block_timestamp_ms}",
+            certificates.len()
+        );
         if certificates.len() < 2 {
+            warn!(
+                "[AppAttest] FAIL: chain too short: {} certs",
+                certificates.len()
+            );
             return Err(InstructionExecutionError::InvariantViolation(
                 "attestation must include leaf and intermediate certificates".into(),
             ));
         }
         let block_time = asn1_time_from_unix_ms(block_timestamp_ms)?;
         let (_, leaf_cert) = X509Certificate::from_der(&certificates[0]).map_err(|err| {
+            warn!("[AppAttest] FAIL: parse leaf cert: {err}");
             InstructionExecutionError::InvariantViolation(
                 format!("failed to parse leaf attestation cert: {err}").into(),
             )
         })?;
         let (_, intermediate_cert) =
             X509Certificate::from_der(&certificates[1]).map_err(|err| {
+                warn!("[AppAttest] FAIL: parse intermediate cert: {err}");
                 InstructionExecutionError::InvariantViolation(
                     format!("failed to parse intermediate attestation cert: {err}").into(),
                 )
             })?;
 
-        check_certificate_validity(&leaf_cert, block_time)?;
-        check_certificate_validity(&intermediate_cert, block_time)?;
+        warn!(
+            "[AppAttest] chain: leaf_not_before={:?} leaf_not_after={:?} intermediate_not_before={:?} intermediate_not_after={:?} block_time={:?}",
+            leaf_cert.validity().not_before,
+            leaf_cert.validity().not_after,
+            intermediate_cert.validity().not_before,
+            intermediate_cert.validity().not_after,
+            block_time
+        );
+
+        check_certificate_validity(&leaf_cert, block_time).inspect_err(|e| {
+            warn!("[AppAttest] FAIL: leaf cert validity: {e}");
+        })?;
+        check_certificate_validity(&intermediate_cert, block_time).inspect_err(|e| {
+            warn!("[AppAttest] FAIL: intermediate cert validity: {e}");
+        })?;
 
         leaf_cert
             .verify_signature(Some(intermediate_cert.public_key()))
-            .map_err(|_| {
+            .map_err(|e| {
+                warn!("[AppAttest] FAIL: leaf not signed by intermediate: {e}");
                 InstructionExecutionError::InvariantViolation(
                     "leaf attestation certificate not signed by intermediate".into(),
                 )
             })?;
 
         let mut anchored = false;
-        for anchor in apple_trust_anchors() {
+        let anchors = apple_trust_anchors();
+        warn!(
+            "[AppAttest] chain: checking {} trust anchors",
+            anchors.len()
+        );
+        for anchor in anchors {
             if let Ok((_, root)) = X509Certificate::from_der(anchor) {
                 if intermediate_cert
                     .verify_signature(Some(root.public_key()))
@@ -8379,6 +8653,7 @@ mod attestation {
         }
 
         if !anchored {
+            warn!("[AppAttest] FAIL: intermediate cert does not chain to any Apple root");
             return Err(InstructionExecutionError::InvariantViolation(
                 "intermediate attestation certificate does not chain to trusted Apple root".into(),
             ));
@@ -8386,35 +8661,54 @@ mod attestation {
 
         let spki = leaf_cert.public_key();
         if spki.subject_public_key.data.is_empty() {
+            warn!("[AppAttest] FAIL: leaf cert missing public key");
             return Err(InstructionExecutionError::InvariantViolation(
                 "attestation leaf certificate missing public key".into(),
             ));
         }
         let verifying_key = VerifyingKey::from_sec1_bytes(spki.subject_public_key.data.as_ref())
-            .map_err(|_| {
+            .map_err(|e| {
+                warn!("[AppAttest] FAIL: invalid P-256 key in leaf: {e}");
                 InstructionExecutionError::InvariantViolation(
                     "attestation leaf certificate does not contain a valid P-256 key".into(),
                 )
             })?;
+        warn!("[AppAttest] verify_attestation_chain: OK");
         Ok(verifying_key)
     }
 
     fn decode_app_attest_nonce_extension(
         nonce_ext_der: &[u8],
     ) -> Result<Vec<u8>, yasna::ASN1Error> {
-        // Apple production App Attest encodes the nonce as:
-        //   SEQUENCE { SEQUENCE { [0] EXPLICIT OCTET STRING { <nonce> } } }
-        // Keep legacy plain OCTET STRING support for backwards compatibility with older test
-        // fixtures and development certificates.
+        // Apple encodes the nonce extension (OID 1.2.840.113635.100.8.2) in at least
+        // three observed formats depending on iOS version and environment:
+        //
+        // 1. Real device (iOS 18+):  SEQUENCE { [1] EXPLICIT OCTET STRING { <nonce> } }
+        // 2. Earlier production:     SEQUENCE { SEQUENCE { [0] EXPLICIT OCTET STRING { <nonce> } } }
+        // 3. Legacy / test:          OCTET STRING { <nonce> }
+
+        // Format 1: real Apple device — SEQUENCE { [1] EXPLICIT { OCTET STRING } }
         yasna::parse_der(nonce_ext_der, |reader| {
             reader.read_sequence(|seq| {
-                seq.next().read_sequence(|inner| {
-                    inner
-                        .next()
-                        .read_tagged(yasna::Tag::context(0), |tag_reader| tag_reader.read_bytes())
+                seq.next()
+                    .read_tagged(yasna::Tag::context(1), |tag_reader| tag_reader.read_bytes())
+            })
+        })
+        // Format 2: earlier production — SEQUENCE { SEQUENCE { [0] EXPLICIT { OCTET STRING } } }
+        .or_else(|_| {
+            yasna::parse_der(nonce_ext_der, |reader| {
+                reader.read_sequence(|seq| {
+                    seq.next().read_sequence(|inner| {
+                        inner
+                            .next()
+                            .read_tagged(yasna::Tag::context(0), |tag_reader| {
+                                tag_reader.read_bytes()
+                            })
+                    })
                 })
             })
         })
+        // Format 3: legacy plain OCTET STRING
         .or_else(|_| yasna::parse_der(nonce_ext_der, |reader| reader.read_bytes()))
     }
 
@@ -8429,12 +8723,14 @@ mod attestation {
         let expected: [u8; 32] = digest.finalize().into();
 
         let (_, cert) = X509Certificate::from_der(leaf_der).map_err(|err| {
+            warn!("[AppAttest] FAIL: nonce: parse leaf cert: {err}");
             InstructionExecutionError::InvariantViolation(
                 format!("failed to parse app attest leaf certificate: {err}").into(),
             )
         })?;
         let extensions = cert.extensions();
         if extensions.is_empty() {
+            warn!("[AppAttest] FAIL: nonce: leaf cert has no extensions");
             return Err(InstructionExecutionError::InvariantViolation(
                 "app attest leaf certificate is missing extensions".into(),
             ));
@@ -8443,20 +8739,35 @@ mod attestation {
             .iter()
             .find(|ext| ext.oid == APPLE_NONCE_OID)
             .ok_or_else(|| {
+                let oids: Vec<String> = extensions.iter().map(|e| e.oid.to_string()).collect();
+                warn!(
+                    "[AppAttest] FAIL: nonce: OID {} not found among: {:?}",
+                    APPLE_NONCE_OID, oids
+                );
                 InstructionExecutionError::InvariantViolation(
                     "app attest leaf certificate missing nonce extension".into(),
                 )
             })?;
         let nonce_bytes = decode_app_attest_nonce_extension(nonce_ext.value).map_err(|err| {
+            warn!(
+                "[AppAttest] FAIL: nonce: decode extension DER: {err}, raw_hex={}",
+                hex::encode(nonce_ext.value)
+            );
             InstructionExecutionError::InvariantViolation(
                 format!("failed to decode app attest nonce extension: {err}").into(),
             )
         })?;
         if nonce_bytes.as_slice() != expected {
+            warn!(
+                "[AppAttest] FAIL: nonce mismatch: got={} expected={}",
+                hex::encode(&nonce_bytes),
+                hex::encode(expected)
+            );
             return Err(InstructionExecutionError::InvariantViolation(
                 "app attest nonce does not match transaction challenge".into(),
             ));
         }
+        warn!("[AppAttest] verify_attestation_nonce: OK");
         Ok(())
     }
 
@@ -9028,8 +9339,20 @@ mod attestation {
 
         #[derive(Clone, Copy)]
         enum AppleNonceExtensionFormat {
+            /// Real Apple device (iOS 18+): SEQUENCE { [1] EXPLICIT { OCTET STRING } }
+            RealDeviceTag1,
+            /// Earlier production: SEQUENCE { SEQUENCE { [0] EXPLICIT { OCTET STRING } } }
             ProductionDerSequence,
+            /// Legacy plain OCTET STRING
             LegacyOctetString,
+        }
+
+        #[derive(Clone, Copy)]
+        enum AppleAssertionEncoding {
+            Compact,
+            CborDerSignature,
+            CborRawSignature,
+            CompactHashedClientData,
         }
 
         fn sample_chain_id() -> ChainId {
@@ -9074,17 +9397,77 @@ mod attestation {
         }
 
         #[test]
-        fn app_attest_nonce_extension_fixture_der_decodes_both_formats() {
+        fn apple_attestation_verifies_with_cbor_assertion_der_signature() {
+            let fixture =
+                AppleFixture::new_with_assertion_encoding(AppleAssertionEncoding::CborDerSignature);
+            let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
+            verify_platform_proof(
+                &fixture.receipt,
+                &fixture.certificate,
+                &chain_id,
+                fixture.certificate.issued_at_ms + 1_000,
+                &cfg,
+                None,
+            )
+            .expect("CBOR App Attest assertions with DER signatures should verify");
+        }
+
+        #[test]
+        fn apple_attestation_verifies_with_cbor_assertion_raw_signature() {
+            let fixture =
+                AppleFixture::new_with_assertion_encoding(AppleAssertionEncoding::CborRawSignature);
+            let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
+            verify_platform_proof(
+                &fixture.receipt,
+                &fixture.certificate,
+                &chain_id,
+                fixture.certificate.issued_at_ms + 1_000,
+                &cfg,
+                None,
+            )
+            .expect("CBOR App Attest assertions with 64-byte raw signatures should verify");
+        }
+
+        #[test]
+        fn apple_attestation_verifies_with_hashed_client_data_signature_compat() {
+            let fixture = AppleFixture::new_with_assertion_encoding(
+                AppleAssertionEncoding::CompactHashedClientData,
+            );
+            let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
+            verify_platform_proof(
+                &fixture.receipt,
+                &fixture.certificate,
+                &chain_id,
+                fixture.certificate.issued_at_ms + 1_000,
+                &cfg,
+                None,
+            )
+            .expect("compatibility signature path should verify");
+        }
+
+        #[test]
+        fn app_attest_nonce_extension_fixture_der_decodes_all_formats() {
             const EXPECTED_NONCE: [u8; 32] = [
                 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
                 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B,
                 0x1C, 0x1D, 0x1E, 0x1F,
             ];
+            // Format 1: real Apple device (iOS 18+) — SEQUENCE { [1] EXPLICIT { OCTET STRING } }
+            const REAL_DEVICE_DER: [u8; 38] = [
+                0x30, 0x24, 0xA1, 0x22, 0x04, 0x20, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+                0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+                0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+            ];
+            // Format 2: earlier production — SEQUENCE { SEQUENCE { [0] EXPLICIT { OCTET STRING } } }
             const PRODUCTION_DER: [u8; 40] = [
                 0x30, 0x26, 0x30, 0x24, 0xA0, 0x22, 0x04, 0x20, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
                 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13,
                 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
             ];
+            // Format 3: legacy plain OCTET STRING
             const LEGACY_DER: [u8; 34] = [
                 0x04, 0x20, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,
                 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19,
@@ -9092,13 +9475,56 @@ mod attestation {
             ];
 
             assert_eq!(
+                decode_app_attest_nonce_extension(&REAL_DEVICE_DER)
+                    .expect("real device DER decode"),
+                EXPECTED_NONCE,
+                "Format 1: SEQUENCE {{ [1] EXPLICIT {{ OCTET STRING }} }} — observed on real iOS 18+ device"
+            );
+            assert_eq!(
                 decode_app_attest_nonce_extension(&PRODUCTION_DER).expect("production DER decode"),
                 EXPECTED_NONCE,
+                "Format 2: SEQUENCE {{ SEQUENCE {{ [0] EXPLICIT {{ OCTET STRING }} }} }}"
             );
             assert_eq!(
                 decode_app_attest_nonce_extension(&LEGACY_DER).expect("legacy DER decode"),
                 EXPECTED_NONCE,
+                "Format 3: plain OCTET STRING"
             );
+        }
+
+        #[test]
+        fn apple_attestation_accepts_real_device_nonce_extension() {
+            let fixture =
+                AppleFixture::new_with_nonce_extension(AppleNonceExtensionFormat::RealDeviceTag1);
+            let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
+            verify_platform_proof(
+                &fixture.receipt,
+                &fixture.certificate,
+                &chain_id,
+                fixture.certificate.issued_at_ms + 1_000,
+                &cfg,
+                None,
+            )
+            .expect("real device (iOS 18+) nonce extension should be supported");
+        }
+
+        #[test]
+        fn apple_attestation_accepts_production_der_nonce_extension() {
+            let fixture = AppleFixture::new_with_nonce_extension(
+                AppleNonceExtensionFormat::ProductionDerSequence,
+            );
+            let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
+            verify_platform_proof(
+                &fixture.receipt,
+                &fixture.certificate,
+                &chain_id,
+                fixture.certificate.issued_at_ms + 1_000,
+                &cfg,
+                None,
+            )
+            .expect("production DER nonce extension should stay supported");
         }
 
         #[test]
@@ -9807,10 +10233,27 @@ mod attestation {
 
         impl AppleFixture {
             fn new() -> Self {
-                Self::new_with_nonce_extension(AppleNonceExtensionFormat::ProductionDerSequence)
+                Self::new_with_options(
+                    AppleNonceExtensionFormat::RealDeviceTag1,
+                    AppleAssertionEncoding::Compact,
+                )
             }
 
             fn new_with_nonce_extension(nonce_extension: AppleNonceExtensionFormat) -> Self {
+                Self::new_with_options(nonce_extension, AppleAssertionEncoding::Compact)
+            }
+
+            fn new_with_assertion_encoding(assertion_encoding: AppleAssertionEncoding) -> Self {
+                Self::new_with_options(
+                    AppleNonceExtensionFormat::RealDeviceTag1,
+                    assertion_encoding,
+                )
+            }
+
+            fn new_with_options(
+                nonce_extension: AppleNonceExtensionFormat,
+                assertion_encoding: AppleAssertionEncoding,
+            ) -> Self {
                 static CHAIN: LazyLock<TestChain> = LazyLock::new(TestChain::generate);
                 register_test_apple_root(CHAIN.root_der);
 
@@ -9821,9 +10264,26 @@ mod attestation {
                 let signing_key =
                     SigningKey::from_pkcs8_der(&signing_key_der).expect("decode leaf key");
                 let mut certificate = CHAIN.build_certificate(&spend_pair, &operator_pair);
-                let receipt = CHAIN.build_receipt(&certificate, &spend_pair, &signing_key, 7);
-                let chain_id = sample_chain_id();
-                let challenge = derive_receipt_challenge(&receipt, &chain_id).expect("challenge");
+                let receipt = CHAIN.build_receipt(
+                    &certificate,
+                    &spend_pair,
+                    &signing_key,
+                    7,
+                    assertion_encoding,
+                );
+
+                // The attestation is created at top-up time with a challenge
+                // independent of any receipt.  iOS uses
+                // blake2b(accountId + spendPublicKey) as the clientDataHash
+                // passed to DCAppAttestService.attestKey().  Simulate that
+                // here with a deterministic stand-in so the attestation and
+                // receipt challenges are intentionally different (matching the
+                // real device flow).
+                let topup_nonce = Hash::new(b"simulated-topup-attestation-challenge");
+                let mut topup_cdh = [0u8; 32];
+                topup_cdh.copy_from_slice(topup_nonce.as_ref());
+                certificate.attestation_nonce = Some(topup_nonce);
+
                 certificate.attestation_report = build_attestation_report(
                     &leaf_keypair,
                     &CHAIN.intermediate,
@@ -9831,7 +10291,7 @@ mod attestation {
                     &signing_key,
                     &CHAIN.credential_id,
                     &CHAIN.rp_id_hash,
-                    &challenge.client_data_hash,
+                    &topup_cdh,
                     nonce_extension,
                 );
                 Self {
@@ -9967,6 +10427,7 @@ mod attestation {
                 spend_pair: &iroha_crypto::KeyPair,
                 signing_key: &SigningKey,
                 counter: u64,
+                assertion_encoding: AppleAssertionEncoding,
             ) -> OfflineSpendReceipt {
                 let mut receipt = OfflineSpendReceipt {
                     tx_id: Hash::new(b"apple-offline"),
@@ -9994,6 +10455,7 @@ mod attestation {
                     &self.rp_id_hash,
                     &challenge.client_data_hash,
                     counter,
+                    assertion_encoding,
                 );
                 receipt.platform_proof =
                     OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
@@ -10042,8 +10504,20 @@ mod attestation {
             nonce_digest.update(client_data_hash);
             let nonce = nonce_digest.finalize();
             let nonce_der = match nonce_extension {
+                AppleNonceExtensionFormat::RealDeviceTag1 => {
+                    // Real Apple device (iOS 18+) nonce extension format:
+                    // SEQUENCE { [1] EXPLICIT OCTET STRING { <nonce> } }
+                    yasna::construct_der(|writer| {
+                        writer.write_sequence(|seq| {
+                            seq.next()
+                                .write_tagged(yasna::Tag::context(1), |tag_writer| {
+                                    tag_writer.write_bytes(&nonce);
+                                });
+                        });
+                    })
+                }
                 AppleNonceExtensionFormat::ProductionDerSequence => {
-                    // Match Apple production App Attest nonce extension format:
+                    // Earlier production App Attest nonce extension format:
                     // SEQUENCE { SEQUENCE { [0] EXPLICIT OCTET STRING { <nonce> } } }
                     yasna::construct_der(|writer| {
                         writer.write_sequence(|seq| {
@@ -10125,27 +10599,83 @@ mod attestation {
             buf
         }
 
-        fn build_assertion(
-            signing_key: &SigningKey,
-            rp_id_hash: &[u8; 32],
-            client_data_hash: &[u8; 32],
-            counter: u64,
-        ) -> Vec<u8> {
+        fn build_assertion_auth_data(rp_id_hash: &[u8; 32], counter: u64) -> Vec<u8> {
             let mut auth_data = Vec::new();
             auth_data.extend_from_slice(rp_id_hash);
             auth_data.push(0x01);
             let counter_u32 = u32::try_from(counter).expect("assertion counter fits in u32");
             auth_data.extend_from_slice(&counter_u32.to_be_bytes());
+            auth_data
+        }
 
-            let mut digest = Sha256::new();
-            digest.update(&auth_data);
-            digest.update(client_data_hash);
-            let signature: P256Signature = signing_key.sign_digest(digest);
+        fn build_assertion(
+            signing_key: &SigningKey,
+            rp_id_hash: &[u8; 32],
+            client_data_hash: &[u8; 32],
+            counter: u64,
+            encoding: AppleAssertionEncoding,
+        ) -> Vec<u8> {
+            let auth_data = build_assertion_auth_data(rp_id_hash, counter);
 
-            let mut assertion = auth_data;
-            assertion.extend_from_slice(client_data_hash);
-            assertion.extend_from_slice(signature.to_der().as_bytes());
-            assertion
+            let signature: P256Signature = match encoding {
+                AppleAssertionEncoding::CompactHashedClientData => {
+                    let hashed_client_data = Sha256::digest(client_data_hash);
+                    let mut digest = Sha256::new();
+                    digest.update(&auth_data);
+                    digest.update(hashed_client_data.as_slice());
+                    signing_key.sign_digest(digest)
+                }
+                _ => {
+                    let mut digest = Sha256::new();
+                    digest.update(&auth_data);
+                    digest.update(client_data_hash);
+                    signing_key.sign_digest(digest)
+                }
+            };
+            match encoding {
+                AppleAssertionEncoding::Compact => {
+                    let mut assertion = auth_data;
+                    assertion.extend_from_slice(client_data_hash);
+                    assertion.extend_from_slice(signature.to_der().as_bytes());
+                    assertion
+                }
+                AppleAssertionEncoding::CompactHashedClientData => {
+                    let mut assertion = auth_data;
+                    assertion.extend_from_slice(client_data_hash);
+                    assertion.extend_from_slice(signature.to_der().as_bytes());
+                    assertion
+                }
+                AppleAssertionEncoding::CborDerSignature => {
+                    let value = Value::Map(vec![
+                        (
+                            Value::Text("authenticatorData".into()),
+                            Value::Bytes(auth_data),
+                        ),
+                        (
+                            Value::Text("signature".into()),
+                            Value::Bytes(signature.to_der().as_bytes().to_vec()),
+                        ),
+                    ]);
+                    let mut encoded = Vec::new();
+                    into_writer(&value, &mut encoded).expect("serialize assertion");
+                    encoded
+                }
+                AppleAssertionEncoding::CborRawSignature => {
+                    let value = Value::Map(vec![
+                        (
+                            Value::Text("authenticatorData".into()),
+                            Value::Bytes(auth_data),
+                        ),
+                        (
+                            Value::Text("signature".into()),
+                            Value::Bytes(signature.to_bytes().to_vec()),
+                        ),
+                    ]);
+                    let mut encoded = Vec::new();
+                    into_writer(&value, &mut encoded).expect("serialize assertion");
+                    encoded
+                }
+            }
         }
     }
 

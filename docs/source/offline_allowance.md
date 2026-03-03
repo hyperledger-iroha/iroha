@@ -796,6 +796,7 @@ CLI tools, and dashboards stay in sync with the roadmap requirements.
 | `GET`  | `/v1/offline/certificates` | Alias for `/v1/offline/allowances`. |
 | `POST` | `/v1/offline/certificates` | Alias for `/v1/offline/allowances` issuance. |
 | `POST` | `/v1/offline/certificates/issue` | Issue an operator-signed certificate without registering it on-ledger. |
+| `POST` | `/v1/offline/build-claims/issue` | Issue an operator-signed `OfflineBuildClaim` for a receipt `tx_id`. |
 | `POST` | `/v1/offline/certificates/query` | Alias for `/v1/offline/allowances/query`. |
 | `GET`  | `/v1/offline/certificates/{certificate_id_hex}` | Alias for `/v1/offline/allowances/{certificate_id_hex}`. |
 | `POST` | `/v1/offline/certificates/{certificate_id_hex}/renew` | Alias for allowance renewal. |
@@ -825,6 +826,10 @@ Top-ups are a two-step flow: issue a certificate with
 via `/v1/offline/allowances` (or `/v1/offline/allowances/{certificate_id_hex}/renew`).
 There is no single “top-up” endpoint; SDK helpers simply chain the two calls
 and verify the certificate ids match.
+
+When build-claim verification is enabled, settlement submitters can request a
+signed claim from `/v1/offline/build-claims/issue` after receiving a receipt
+(`tx_id`) and before posting `/v1/offline/settlements`.
 
 Issuer endpoints (`/v1/offline/certificates/*/issue`) are only enabled when
 `torii.offline_issuer` is configured. Use `torii.offline_issuer.allowed_controllers` to restrict
