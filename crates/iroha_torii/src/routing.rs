@@ -39718,9 +39718,7 @@ pub async fn handle_post_v1_offline_build_claims_issue(
         ));
     }
 
-    let issued_at_ms = req
-        .issued_at_ms
-        .unwrap_or(record.certificate.issued_at_ms);
+    let issued_at_ms = req.issued_at_ms.unwrap_or(record.certificate.issued_at_ms);
     let expires_at_ms = req
         .expires_at_ms
         .unwrap_or(record.certificate.expires_at_ms);
@@ -39750,7 +39748,11 @@ pub async fn handle_post_v1_offline_build_claims_issue(
         lineage.scope
     );
     let claim_id = Hash::new(claim_seed.as_bytes());
-    if world.offline_consumed_build_claim_ids().get(&claim_id).is_some() {
+    if world
+        .offline_consumed_build_claim_ids()
+        .get(&claim_id)
+        .is_some()
+    {
         return Err(build_claim_issue_error(
             OfflineTransferRejectionReason::BuildClaimReplayed,
             "build-claim id was already consumed",
@@ -39774,7 +39776,8 @@ pub async fn handle_post_v1_offline_build_claims_issue(
             format!("failed to encode build-claim payload: {err}"),
         )
     })?;
-    build_claim.operator_signature = Signature::new(issuer.operator_keypair.private_key(), &payload);
+    build_claim.operator_signature =
+        Signature::new(issuer.operator_keypair.private_key(), &payload);
 
     json_response(&OfflineBuildClaimIssueResponse {
         claim_id_hex: hex::encode(build_claim.claim_id.as_ref()),
