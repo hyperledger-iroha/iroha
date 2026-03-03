@@ -28,6 +28,8 @@ Runs `cargo` with optional accelerators when available:
 Options:
   --target-dir DIR   Set CARGO_TARGET_DIR=DIR
   --no-sccache       Do not auto-enable sccache
+  --sccache-dir DIR  Set SCCACHE_DIR (default: <repo>/.cache/sccache)
+  --no-incremental   Set CARGO_INCREMENTAL=0 (helps Rust sccache hit rates)
   --zero-debug       Set CARGO_PROFILE_{DEV,TEST}_DEBUG=0 for faster local builds
   --linker MODE      Linker preference: auto|off|mold|lld|ld.lld|zld|ld64.lld|<path>
   --print-env        Print selected env/config and exit
@@ -42,6 +44,8 @@ USAGE
 
 target_dir=""
 auto_sccache=true
+sccache_dir=""
+no_incremental=false
 linker_mode="auto"
 zero_debug=false
 print_env_only=false
@@ -51,30 +55,42 @@ cargo_args=()
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-	--target-dir)
-		shift
-		if [[ $# -eq 0 ]]; then
-			echo "error: missing argument for --target-dir" >&2
-			usage >&2
-			exit 1
-		fi
-		target_dir="$1"
-		;;
+		--target-dir)
+			shift
+			if [[ $# -eq 0 ]]; then
+				echo "error: missing argument for --target-dir" >&2
+				usage >&2
+				exit 1
+			fi
+			target_dir="$1"
+			;;
 		--no-sccache)
 			auto_sccache=false
+			;;
+		--sccache-dir)
+			shift
+			if [[ $# -eq 0 ]]; then
+				echo "error: missing argument for --sccache-dir" >&2
+				usage >&2
+				exit 1
+			fi
+			sccache_dir="$1"
+			;;
+		--no-incremental)
+			no_incremental=true
 			;;
 		--zero-debug)
 			zero_debug=true
 			;;
 		--linker)
 			shift
-		if [[ $# -eq 0 ]]; then
-			echo "error: missing argument for --linker" >&2
-			usage >&2
-			exit 1
-		fi
-		linker_mode="$1"
-		;;
+			if [[ $# -eq 0 ]]; then
+				echo "error: missing argument for --linker" >&2
+				usage >&2
+				exit 1
+			fi
+			linker_mode="$1"
+			;;
 	--print-env)
 		print_env_only=true
 		;;
@@ -115,6 +131,10 @@ fi
 if [[ "${zero_debug}" == true ]]; then
 	export CARGO_PROFILE_DEV_DEBUG=0
 	export CARGO_PROFILE_TEST_DEBUG=0
+fi
+
+if [[ "${no_incremental}" == true ]]; then
+	export CARGO_INCREMENTAL=0
 fi
 
 if ! command -v cargo >/dev/null 2>&1; then
@@ -212,6 +232,38 @@ else
 	enabled_sccache="disabled"
 fi
 
+sccache_active=false
+if [[ -n "${RUSTC_WRAPPER:-}" ]] && [[ "${RUSTC_WRAPPER}" == *sccache* ]]; then
+	sccache_active=true
+fi
+
+active_sccache_dir=""
+if [[ "${sccache_active}" == true ]]; then
+	if [[ -n "${sccache_dir}" ]]; then
+		active_sccache_dir="${sccache_dir}"
+	elif [[ -n "${SCCACHE_DIR:-}" ]]; then
+		active_sccache_dir="${SCCACHE_DIR}"
+	else
+		active_sccache_dir="${REPO_ROOT}/.cache/sccache"
+	fi
+
+	export SCCACHE_DIR="${active_sccache_dir}"
+	mkdir -p "${active_sccache_dir}" >/dev/null 2>&1 || true
+
+	# Align daemon cache path with requested SCCACHE_DIR when an older server
+	# is already running with a different location.
+	if command -v sccache >/dev/null 2>&1; then
+		current_cache_location="$(
+			sccache --show-stats 2>/dev/null \
+				| sed -n 's/^Cache location[[:space:]]*Local disk: "\(.*\)".*/\1/p' \
+				| head -n 1
+		)"
+		if [[ -n "${current_cache_location}" ]] && [[ "${current_cache_location}" != "${active_sccache_dir}" ]]; then
+			sccache --stop-server >/dev/null 2>&1 || true
+		fi
+	fi
+fi
+
 selected_linker=""
 if selected_linker="$(select_linker "${linker_mode}" 2>/dev/null)"; then
 	linker_flag="-Clink-arg=-fuse-ld=${selected_linker}"
@@ -227,6 +279,9 @@ if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
 	echo "[cargo-fast] CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
 fi
 echo "[cargo-fast] sccache=${enabled_sccache}"
+if [[ -n "${SCCACHE_DIR:-}" ]]; then
+	echo "[cargo-fast] SCCACHE_DIR=${SCCACHE_DIR}"
+fi
 if [[ -n "${selected_linker}" ]]; then
 	echo "[cargo-fast] linker=${selected_linker} (via -fuse-ld)"
 else
@@ -238,6 +293,9 @@ fi
 if [[ "${zero_debug}" == true ]]; then
 	echo "[cargo-fast] CARGO_PROFILE_DEV_DEBUG=${CARGO_PROFILE_DEV_DEBUG}"
 	echo "[cargo-fast] CARGO_PROFILE_TEST_DEBUG=${CARGO_PROFILE_TEST_DEBUG}"
+fi
+if [[ "${no_incremental}" == true ]]; then
+	echo "[cargo-fast] CARGO_INCREMENTAL=${CARGO_INCREMENTAL}"
 fi
 
 if [[ "${print_env_only}" == true ]]; then
