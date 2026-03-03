@@ -5236,6 +5236,8 @@ pub struct ToriiOnboarding {
 pub struct ToriiOfflineIssuer {
     /// Private key used to sign offline wallet certificates.
     pub operator_private_key: ExposedPrivateKey,
+    /// Additional legacy private keys accepted for build-claim signatures.
+    pub legacy_operator_private_keys: Vec<ExposedPrivateKey>,
     /// Allowed controller allow-list (empty => allow all).
     pub allowed_controllers: Vec<AccountId>,
 }
@@ -6687,6 +6689,8 @@ pub struct Offline {
     pub skip_platform_attestation: bool,
     /// Skip build claim verification (for local testing only).
     pub skip_build_claim_verification: bool,
+    /// Enforce strict iOS App Attest signature verification (disable compatibility fallback).
+    pub apple_app_attest_strict_signature: bool,
 }
 
 impl Default for Offline {
@@ -6706,6 +6710,8 @@ impl Default for Offline {
             skip_platform_attestation: defaults::settlement::offline::SKIP_PLATFORM_ATTESTATION,
             skip_build_claim_verification:
                 defaults::settlement::offline::SKIP_BUILD_CLAIM_VERIFICATION,
+            apple_app_attest_strict_signature:
+                defaults::settlement::offline::APPLE_APP_ATTEST_STRICT_SIGNATURE,
         }
     }
 }

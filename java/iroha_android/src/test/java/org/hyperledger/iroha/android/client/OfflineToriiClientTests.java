@@ -5,11 +5,14 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceCommitment;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceList;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceRegisterResponse;
+import org.hyperledger.iroha.android.offline.OfflineBuildClaimIssueRequest;
+import org.hyperledger.iroha.android.offline.OfflineBuildClaimIssueResponse;
 import org.hyperledger.iroha.android.offline.OfflineBundleProofStatus;
 import org.hyperledger.iroha.android.offline.OfflineCertificateIssueResponse;
 import org.hyperledger.iroha.android.offline.OfflineListParams;
@@ -17,6 +20,7 @@ import org.hyperledger.iroha.android.offline.OfflineProofRequestKind;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestParams;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestResult;
 import org.hyperledger.iroha.android.offline.OfflineQueryEnvelope;
+import org.hyperledger.iroha.android.offline.OfflineSettlementBuildClaimOverride;
 import org.hyperledger.iroha.android.offline.OfflineSettlementSubmitResponse;
 import org.hyperledger.iroha.android.offline.OfflineTopUpResponse;
 import org.hyperledger.iroha.android.offline.OfflineToriiException;
@@ -26,6 +30,7 @@ import org.hyperledger.iroha.android.offline.OfflineWalletCertificateDraft;
 import org.hyperledger.iroha.android.offline.OfflineWalletPolicy;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.tx.SignedTransaction;
 
 public final class OfflineToriiClientTests {
 
@@ -34,15 +39,24 @@ public final class OfflineToriiClientTests {
   public static void main(final String[] args) {
     listAllowancesParsesResponse();
     propagatesNon2xxResponses();
+    propagatesRejectCodeFromNon2xxResponses();
     queryTransfersUsesPostBody();
     queryEnvelopeFromParamsParsesJson();
     builderRejectsInvalidVerdictFilters();
     buildProofRequestPostsBody();
     submitSettlementPostsBodyAndParsesResponse();
+    submitSettlementSupportsBuildClaimOverridesAndRepairFlag();
+    submitSettlementRejectsInvalidBuildClaimOverrideTxId();
+    submitSettlementAndWaitUsesDefaultStatusOptionsWhenOmitted();
+    submitSettlementAndWaitPollsTransactionStatus();
+    submitSettlementAndWaitPropagatesTransactionStatusFailure();
+    submitSettlementAndWaitPropagatesCancellation();
     getSettlementFetchesDetail();
     getBundleProofStatusParsesResponse();
     proofRequestBuilderValidation();
     issueCertificatePostsDraft();
+    issueBuildClaimPostsBodyAndParsesResponse();
+    issueBuildClaimRejectsUnsupportedPlatform();
     issueCertificateRenewalUsesPath();
     registerAllowancePostsCertificate();
     registerAllowanceParsesResponse();
@@ -139,6 +153,43 @@ public final class OfflineToriiClientTests {
       assert ex.getCause() instanceof OfflineToriiException : "expected OfflineToriiException";
       assert ex.getCause().getMessage().contains("500") : "status missing from message";
       assert ex.getCause().getMessage().contains("boom") : "body missing from message";
+      final OfflineToriiException error = (OfflineToriiException) ex.getCause();
+      assert Integer.valueOf(500).equals(error.statusCode().orElse(null))
+          : "status code not surfaced";
+      assert error.responseBody().orElse("").contains("boom")
+          : "response body not surfaced";
+      assert error.rejectCode().isEmpty() : "unexpected reject code";
+      return;
+    }
+    throw new AssertionError("Expected CompletionException for non-2xx responses");
+  }
+
+  private static void propagatesRejectCodeFromNon2xxResponses() {
+    final StubExecutor executor =
+        new StubExecutor(
+            400,
+            "{\"error\":\"missing build claim\"}",
+            "Bad Request",
+            Map.of("x-iroha-reject-code", List.of("build_claim_missing")));
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    try {
+      client.submitSettlement(Map.of("bundle_id", "deadbeef"), "merchant@wonderland", "deadbeef")
+          .join();
+    } catch (final CompletionException ex) {
+      assert ex.getCause() instanceof OfflineToriiException : "expected OfflineToriiException";
+      final OfflineToriiException error = (OfflineToriiException) ex.getCause();
+      assert Integer.valueOf(400).equals(error.statusCode().orElse(null))
+          : "status code not surfaced";
+      assert "build_claim_missing".equals(error.rejectCode().orElse(null))
+          : "reject code not surfaced";
+      assert error.responseBody().orElse("").contains("missing build claim")
+          : "response body not surfaced";
+      assert error.getMessage().contains("reject_code=build_claim_missing")
+          : "reject code missing from message";
       return;
     }
     throw new AssertionError("Expected CompletionException for non-2xx responses");
@@ -256,6 +307,224 @@ public final class OfflineToriiClientTests {
         : "authority missing";
     assert executor.lastBody.contains("\"private_key\":\"deadbeef\"") : "private key missing";
     assert executor.lastBody.contains("\"transfer\"") : "transfer missing";
+    assert !executor.lastBody.contains("\"build_claim_overrides\"")
+        : "unexpected default build claim overrides";
+    assert !executor.lastBody.contains("\"repair_existing_build_claims\"")
+        : "unexpected default repair flag";
+  }
+
+  private static void submitSettlementSupportsBuildClaimOverridesAndRepairFlag() {
+    final StubExecutor executor =
+        new StubExecutor(
+            200,
+            """
+            {
+              "bundle_id_hex": "deadbeef",
+              "transaction_hash_hex": "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe"
+            }
+            """);
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    final OfflineSettlementBuildClaimOverride claimOverride =
+        OfflineSettlementBuildClaimOverride.builder()
+            .txIdHex("ab".repeat(32))
+            .appId("com.example.android")
+            .buildNumber(77L)
+            .issuedAtMs(1_700_000_000_000L)
+            .expiresAtMs(1_700_000_100_000L)
+            .build();
+
+    client
+        .submitSettlement(
+            Map.of("bundle_id", "deadbeef", "receipts", List.of()),
+            "merchant@wonderland",
+            "deadbeef",
+            List.of(claimOverride),
+            true)
+        .join();
+    assert executor.lastBody.contains("\"build_claim_overrides\"")
+        : "build_claim_overrides missing";
+    assert executor.lastBody.contains("\"tx_id_hex\":\"" + "ab".repeat(32) + "\"")
+        : "override tx_id_hex missing";
+    assert executor.lastBody.contains("\"app_id\":\"com.example.android\"")
+        : "override app_id missing";
+    assert executor.lastBody.contains("\"build_number\":77")
+        : "override build_number missing";
+    assert executor.lastBody.contains("\"repair_existing_build_claims\":true")
+        : "repair flag missing";
+  }
+
+  private static void submitSettlementRejectsInvalidBuildClaimOverrideTxId() {
+    try {
+      OfflineSettlementBuildClaimOverride.builder()
+          .txIdHex("not-a-hash")
+          .build();
+      throw new AssertionError("expected txIdHex validation failure");
+    } catch (final IllegalArgumentException expected) {
+      assert expected.getMessage().contains("txIdHex") : "unexpected error message";
+    }
+  }
+
+  private static void submitSettlementAndWaitPollsTransactionStatus() {
+    final String txHashHex = "ca".repeat(32);
+    final StubExecutor executor =
+        new StubExecutor(
+            200,
+            """
+            {
+              "bundle_id_hex": "deadbeef",
+              "transaction_hash_hex": "%s"
+            }
+            """
+                .formatted(txHashHex));
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    final StubStatusClient statusClient = StubStatusClient.success(Map.of("status", "Committed"));
+    final PipelineStatusOptions options =
+        PipelineStatusOptions.builder().intervalMillis(50L).maxAttempts(5).build();
+
+    final OfflineSettlementSubmitResponse response =
+        client
+            .submitSettlementAndWait(
+                Map.of("bundle_id", "deadbeef", "receipts", List.of()),
+                "merchant@wonderland",
+                "deadbeef",
+                statusClient,
+                options)
+            .join();
+
+    assert "deadbeef".equals(response.bundleIdHex()) : "bundle id mismatch";
+    assert txHashHex.equals(response.transactionHashHex()) : "tx hash mismatch";
+    assert statusClient.waitCalls == 1 : "status poll should be called once";
+    assert txHashHex.equals(statusClient.lastHashHex) : "status poll hash mismatch";
+    assert statusClient.lastOptions == options : "status options mismatch";
+  }
+
+  private static void submitSettlementAndWaitUsesDefaultStatusOptionsWhenOmitted() {
+    final String txHashHex = "cd".repeat(32);
+    final StubExecutor executor =
+        new StubExecutor(
+            200,
+            """
+            {
+              "bundle_id_hex": "deadbeef",
+              "transaction_hash_hex": "%s"
+            }
+            """
+                .formatted(txHashHex));
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    final StubStatusClient statusClient = StubStatusClient.success(Map.of("status", "Committed"));
+
+    final OfflineSettlementSubmitResponse response =
+        client
+            .submitSettlementAndWait(
+                Map.of("bundle_id", "deadbeef", "receipts", List.of()),
+                "merchant@wonderland",
+                "deadbeef",
+                statusClient)
+            .join();
+
+    assert "deadbeef".equals(response.bundleIdHex()) : "bundle id mismatch";
+    assert txHashHex.equals(response.transactionHashHex()) : "tx hash mismatch";
+    assert statusClient.waitCalls == 1 : "status poll should be called once";
+    assert txHashHex.equals(statusClient.lastHashHex) : "status poll hash mismatch";
+    assert statusClient.lastOptions == null : "status options should default to null";
+  }
+
+  private static void submitSettlementAndWaitPropagatesTransactionStatusFailure() {
+    final String txHashHex = "cb".repeat(32);
+    final StubExecutor executor =
+        new StubExecutor(
+            200,
+            """
+            {
+              "bundle_id_hex": "deadbeef",
+              "transaction_hash_hex": "%s"
+            }
+            """
+                .formatted(txHashHex));
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    final TransactionStatusException statusFailure =
+        new TransactionStatusException(
+            txHashHex, "Rejected", "build_claim_missing", Map.of("kind", "Transaction"));
+    final StubStatusClient statusClient = StubStatusClient.failure(statusFailure);
+
+    boolean threw = false;
+    try {
+      client
+          .submitSettlementAndWait(
+              Map.of("bundle_id", "deadbeef", "receipts", List.of()),
+              "merchant@wonderland",
+              "deadbeef",
+              statusClient,
+              PipelineStatusOptions.builder().intervalMillis(1L).maxAttempts(2).build())
+          .join();
+    } catch (final CompletionException exception) {
+      threw = true;
+      assert exception.getCause() instanceof TransactionStatusException
+          : "unexpected failure type";
+      final TransactionStatusException error = (TransactionStatusException) exception.getCause();
+      assert "Rejected".equals(error.status()) : "status mismatch";
+      assert "build_claim_missing".equals(error.rejectionReason().orElse(null))
+          : "rejection reason mismatch";
+      assert error.getMessage().contains("build_claim_missing")
+          : "error message should include rejection reason";
+    }
+    assert threw : "expected submitSettlementAndWait to propagate status failure";
+    assert statusClient.waitCalls == 1 : "status poll should be called once";
+    assert txHashHex.equals(statusClient.lastHashHex) : "status poll hash mismatch";
+  }
+
+  private static void submitSettlementAndWaitPropagatesCancellation() {
+    final String txHashHex = "ce".repeat(32);
+    final StubExecutor executor =
+        new StubExecutor(
+            200,
+            """
+            {
+              "bundle_id_hex": "deadbeef",
+              "transaction_hash_hex": "%s"
+            }
+            """
+                .formatted(txHashHex));
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    final CancellationException cancellation = new CancellationException("poll cancelled");
+    final StubStatusClient statusClient = StubStatusClient.failure(cancellation);
+
+    try {
+      client
+          .submitSettlementAndWait(
+              Map.of("bundle_id", "deadbeef", "receipts", List.of()),
+              "merchant@wonderland",
+              "deadbeef",
+              statusClient)
+          .join();
+      throw new AssertionError("expected submitSettlementAndWait to propagate cancellation");
+    } catch (final CancellationException direct) {
+      assert direct == cancellation : "cancellation instance mismatch";
+    } catch (final CompletionException wrapped) {
+      assert wrapped.getCause() == cancellation : "unexpected wrapped cancellation cause";
+    }
+    assert statusClient.waitCalls == 1 : "status poll should be called once";
+    assert txHashHex.equals(statusClient.lastHashHex) : "status poll hash mismatch";
   }
 
   private static void getSettlementFetchesDetail() {
@@ -424,6 +693,76 @@ public final class OfflineToriiClientTests {
     assert executor.lastBody.contains("\"certificate\"") : "certificate missing from body";
     assert !executor.lastBody.contains("\"operator\"")
         : "draft request must omit operator";
+  }
+
+  private static void issueBuildClaimPostsBodyAndParsesResponse() {
+    final StubExecutor executor =
+        new StubExecutor(
+            200,
+            """
+            {
+              "claim_id_hex": "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface",
+              "build_claim": {
+                "claim_id": "hash:FEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACEFEEDFACE#CD31",
+                "nonce": "hash:ABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCDABCD#C9C5",
+                "platform": "Apple",
+                "app_id": "com.example.ios",
+                "build_number": 77,
+                "issued_at_ms": 1700000000000,
+                "expires_at_ms": 1700000100000,
+                "operator_signature": "AA"
+              }
+            }
+            """);
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+
+    final OfflineBuildClaimIssueRequest request =
+        OfflineBuildClaimIssueRequest.builder()
+            .certificateIdHex("ab".repeat(32))
+            .txIdHex("cd".repeat(32))
+            .platform("apple")
+            .appId("com.example.ios")
+            .buildNumber(77L)
+            .issuedAtMs(1_700_000_000_000L)
+            .expiresAtMs(1_700_000_100_000L)
+            .build();
+    final OfflineBuildClaimIssueResponse response = client.issueBuildClaim(request).join();
+
+    assert response.claimIdHex().equals("feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface")
+        : "claim id mismatch";
+    assert "Apple".equals(response.buildClaim().get("platform"))
+        : "build claim platform mismatch";
+    assert "Apple".equals(response.typedBuildClaim().platform())
+        : "typed build claim platform mismatch";
+    assert "com.example.ios".equals(response.typedBuildClaim().appId())
+        : "typed build claim app id mismatch";
+    assert response.typedBuildClaim().buildNumber() == 77L
+        : "typed build claim build number mismatch";
+    assert executor.lastRequest.uri().getPath().endsWith("/v1/offline/build-claims/issue")
+        : "build claim issue path mismatch";
+    assert executor.lastBody.contains("\"certificate_id_hex\":\"" + "ab".repeat(32) + "\"")
+        : "certificate_id_hex missing";
+    assert executor.lastBody.contains("\"tx_id_hex\":\"" + "cd".repeat(32) + "\"")
+        : "tx_id_hex missing";
+    assert executor.lastBody.contains("\"platform\":\"apple\"")
+        : "platform missing";
+  }
+
+  private static void issueBuildClaimRejectsUnsupportedPlatform() {
+    try {
+      OfflineBuildClaimIssueRequest.builder()
+          .certificateIdHex("ab".repeat(32))
+          .txIdHex("cd".repeat(32))
+          .platform("windows-phone")
+          .build();
+      throw new AssertionError("expected platform validation failure");
+    } catch (final IllegalArgumentException expected) {
+      assert expected.getMessage().contains("platform") : "unexpected error message";
+    }
   }
 
   private static void issueCertificateRenewalUsesPath() {
@@ -708,19 +1047,32 @@ public final class OfflineToriiClientTests {
   private static final class StubExecutor implements HttpTransportExecutor {
     private final int status;
     private final byte[] body;
+    private final String message;
+    private final Map<String, List<String>> headers;
     private TransportRequest lastRequest;
     private String lastBody = "";
 
     private StubExecutor(final int status, final String body) {
+      this(status, body, "", Map.of());
+    }
+
+    private StubExecutor(
+        final int status,
+        final String body,
+        final String message,
+        final Map<String, List<String>> headers) {
       this.status = status;
       this.body = body.getBytes(StandardCharsets.UTF_8);
+      this.message = message;
+      this.headers = headers;
     }
 
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       this.lastRequest = request;
       this.lastBody = new String(request.body(), StandardCharsets.UTF_8);
-      return CompletableFuture.completedFuture(new TransportResponse(status, body, "", java.util.Map.of()));
+      return CompletableFuture.completedFuture(
+          new TransportResponse(status, body, message, headers));
     }
   }
 
@@ -756,6 +1108,43 @@ public final class OfflineToriiClientTests {
       final TransportResponse response =
           new TransportResponse(next.status, next.body, "", java.util.Map.of());
       return CompletableFuture.completedFuture(response);
+    }
+  }
+
+  private static final class StubStatusClient implements IrohaClient {
+    private final CompletableFuture<Map<String, Object>> nextResult;
+    private String lastHashHex;
+    private PipelineStatusOptions lastOptions;
+    private int waitCalls;
+
+    private StubStatusClient(final CompletableFuture<Map<String, Object>> nextResult) {
+      this.nextResult = nextResult;
+    }
+
+    private static StubStatusClient success(final Map<String, Object> payload) {
+      return new StubStatusClient(CompletableFuture.completedFuture(payload));
+    }
+
+    private static StubStatusClient failure(final Throwable throwable) {
+      final CompletableFuture<Map<String, Object>> failed = new CompletableFuture<>();
+      failed.completeExceptionally(throwable);
+      return new StubStatusClient(failed);
+    }
+
+    @Override
+    public CompletableFuture<ClientResponse> submitTransaction(final SignedTransaction transaction) {
+      final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
+      future.completeExceptionally(new UnsupportedOperationException("submitTransaction not used"));
+      return future;
+    }
+
+    @Override
+    public CompletableFuture<Map<String, Object>> waitForTransactionStatus(
+        final String hashHex, final PipelineStatusOptions options) {
+      this.waitCalls += 1;
+      this.lastHashHex = hashHex;
+      this.lastOptions = options;
+      return nextResult;
     }
   }
 

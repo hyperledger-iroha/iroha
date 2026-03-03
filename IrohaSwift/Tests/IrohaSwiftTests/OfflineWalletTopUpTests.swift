@@ -37,6 +37,7 @@ final class OfflineWalletTopUpTests: XCTestCase {
         let certificate = try makeCertificate()
         let certificateIdHex = try certificate.certificateIdHex().lowercased()
         let draft = makeDraft(from: certificate)
+        let attestationNonce = Data(repeating: 0xA1, count: 32)
         let issuePayload = try makeIssuePayload(certificate: certificate)
         let registerPayload = try makeRegisterPayload(certificateIdHex: certificateIdHex)
 
@@ -57,6 +58,15 @@ final class OfflineWalletTopUpTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, expected.method)
             XCTAssertEqual(request.url?.path, expected.path)
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            if request.url?.path == "/v1/offline/certificates/issue" {
+                let body = try XCTUnwrap(self.requestBody(from: request))
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                let certificate = try XCTUnwrap(json["certificate"] as? [String: Any])
+                let nonceLiteral = try XCTUnwrap(certificate["attestation_nonce"] as? String)
+                let nonceHex = attestationNonce.map { String(format: "%02X", $0) }.joined()
+                XCTAssertTrue(nonceLiteral.hasPrefix("hash:"))
+                XCTAssertTrue(nonceLiteral.contains(nonceHex))
+            }
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -68,6 +78,7 @@ final class OfflineWalletTopUpTests: XCTestCase {
         let response = try await wallet.topUpAllowance(draft: draft,
                                                        authority: certificate.controller,
                                                        privateKey: "ed0120deadbeef",
+                                                       attestationNonce: attestationNonce,
                                                        recordVerdict: true,
                                                        recordedAt: 777)
         XCTAssertEqual(response.certificate.certificateIdHex.lowercased(), certificateIdHex)
@@ -327,6 +338,30 @@ final class OfflineWalletTopUpTests: XCTestCase {
             revocationJournal: revocationJournal,
             counterJournal: counterJournal
         )
+    }
+
+    private func requestBody(from request: URLRequest) throws -> Data? {
+        if let body = request.httpBody {
+            return body
+        }
+        guard let stream = request.httpBodyStream else {
+            return nil
+        }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count < 0 {
+                throw stream.streamError ?? URLError(.cannotDecodeRawData)
+            }
+            if count == 0 {
+                break
+            }
+            data.append(buffer, count: count)
+        }
+        return data
     }
 
     private func makeCertificate() throws -> OfflineWalletCertificate {

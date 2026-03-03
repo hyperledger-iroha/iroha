@@ -5262,13 +5262,17 @@ mod torii_mock_support {
                 Err(_) => {}
             }
             let workspace_dir = workspace_root();
+            let script_path = workspace_dir.join("python/iroha_torii_client/mock.py");
             let module = "python.iroha_torii_client.mock";
             let mut last_error: Option<io::Error> = None;
             for candidate in ["python3", "python"] {
                 let mut cmd = Command::new(candidate);
-                cmd.arg("-m")
-                    .arg(module)
-                    .arg("--stdio")
+                if script_path.is_file() {
+                    cmd.arg(&script_path);
+                } else {
+                    cmd.arg("-m").arg(module);
+                }
+                cmd.arg("--stdio")
                     .env("PYTHONUNBUFFERED", "1")
                     .env("PYTHONPATH", python_path_env(&workspace_dir))
                     .stdout(Stdio::piped())

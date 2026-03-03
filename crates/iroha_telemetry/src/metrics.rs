@@ -6202,6 +6202,8 @@ pub struct Metrics {
     pub offline_transfer_pruned_total: IntCounter,
     /// Offline attestation tokens processed grouped by integrity policy.
     pub offline_attestation_policy_total: IntCounterVec,
+    /// iOS App Attest assertions accepted through the compatibility signature path.
+    pub offline_app_attest_signature_compat_total: IntCounter,
     /// Viral incentive lifecycle events grouped by event kind.
     pub social_events_total: IntCounterVec,
     /// Latest viral reward budget spend for the active day.
@@ -8201,6 +8203,11 @@ impl Default for Metrics {
                 "Offline attestation tokens processed grouped by Android integrity policy",
             ),
             &["policy"],
+        )
+        .expect("Infallible");
+        let offline_app_attest_signature_compat_total = IntCounter::new(
+            "iroha_offline_app_attest_signature_compat_total",
+            "iOS App Attest assertions accepted via SHA256(clientDataHash) compatibility path",
         )
         .expect("Infallible");
         let social_events_total = IntCounterVec::new(
@@ -12864,6 +12871,7 @@ impl Default for Metrics {
             offline_transfer_rejections_total,
             offline_transfer_pruned_total,
             offline_attestation_policy_total,
+            offline_app_attest_signature_compat_total,
             social_events_total,
             social_budget_spent,
             social_campaign_spent,
@@ -13954,6 +13962,7 @@ impl Default for Metrics {
             offline_transfer_rejections_total,
             offline_transfer_pruned_total,
             offline_attestation_policy_total,
+            offline_app_attest_signature_compat_total,
             social_events_total,
             social_budget_spent,
             social_campaign_spent,
@@ -15441,6 +15450,11 @@ impl Metrics {
         self.offline_attestation_policy_total
             .with_label_values(&[policy])
             .inc();
+    }
+
+    /// Record an iOS App Attest signature accepted by the compatibility fallback.
+    pub fn inc_offline_app_attest_signature_compat(&self) {
+        self.offline_app_attest_signature_compat_total.inc();
     }
 
     /// Update queue/backlog telemetry for the SoraNet privacy aggregator.
