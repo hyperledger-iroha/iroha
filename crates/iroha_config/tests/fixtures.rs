@@ -2124,6 +2124,7 @@ fn minimal_config_snapshot() {
                     escrow_accounts: {},
                     android_trust_anchors: [],
                     skip_platform_attestation: false,
+                    skip_build_claim_verification: false,
                 },
                 router: Router {
                     twap_window: 60s,

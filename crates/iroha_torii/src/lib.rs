@@ -3461,6 +3461,43 @@ async fn handler_offline_certificates_issue(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_offline_build_claims_issue(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
+        crate::routing::OfflineBuildClaimIssueRequest,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_post_v1_offline_build_claims_issue(
+            app.clone(),
+            crate::utils::extractors::NoritoJson(req),
+            app.telemetry.clone(),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        None,
+        "v1/offline/build-claims/issue",
+        enforce,
+    )
+    .await?;
+
+    routing::handle_post_v1_offline_build_claims_issue(
+        app.clone(),
+        crate::utils::extractors::NoritoJson(req),
+        app.telemetry.clone(),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_offline_allowance_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -14471,6 +14508,10 @@ impl Torii {
                 .route(
                     "/v1/offline/certificates/issue",
                     post(handler_offline_certificates_issue),
+                )
+                .route(
+                    "/v1/offline/build-claims/issue",
+                    post(handler_offline_build_claims_issue),
                 )
                 .route(
                     "/v1/offline/certificates/{certificate_id_hex}",

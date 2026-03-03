@@ -20652,12 +20652,17 @@ function normalizeOfflineAllowanceRegisterRequest(input, context) {
 function normalizeOfflineCertificate(certificate, context) {
   const record = ensureRecord(certificate, context);
   const normalized = normalizeOfflineCertificateDraft(record, context);
+  const operator = ToriiClient._normalizeAccountId(
+    record.operator,
+    `${context}.operator`,
+  );
   const operatorSignature = normalizeUpperHex(
     pickOverride(record, "operator_signature", "operatorSignature"),
     `${context}.operator_signature`,
   );
   return {
     ...normalized,
+    operator,
     operator_signature: operatorSignature,
   };
 }
@@ -20667,10 +20672,6 @@ function normalizeOfflineCertificateDraft(draft, context) {
   const controller = ToriiClient._normalizeAccountId(
     record.controller,
     `${context}.controller`,
-  );
-  const operator = ToriiClient._normalizeAccountId(
-    record.operator,
-    `${context}.operator`,
   );
   const allowance = ensureRecord(record.allowance, `${context}.allowance`);
   const asset = requireNonEmptyString(allowance.asset, `${context}.allowance.asset`);
@@ -20738,7 +20739,6 @@ function normalizeOfflineCertificateDraft(draft, context) {
         );
   return {
     controller,
-    operator,
     allowance: {
       asset,
       amount,
