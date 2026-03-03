@@ -81,6 +81,7 @@ export {
 export {
   hashSignedTransaction,
   resignSignedTransaction,
+  encodeSignedTransactionNorito,
   buildRegisterDomainTransaction,
   buildTransaction,
   buildMintAssetTransaction,

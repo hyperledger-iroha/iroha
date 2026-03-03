@@ -43,7 +43,18 @@ import {
 } from "./instructionBuilders.js";
 
 function normalizeAuthority(authority) {
-  return normalizeAccountId(authority, "authority");
+  const raw = String(authority ?? "").trim();
+  if (!raw) {
+    return normalizeAccountId(authority, "authority");
+  }
+  const canonical = normalizeAccountId(raw, "authority");
+  // Keep validated `<signatory>@<domain>` authority literals in raw form when
+  // canonical normalization collapses them into IH58. Some runtimes still
+  // require the signatory literal for transaction-authority parsing.
+  if (raw.includes("@") && !canonical.includes("@")) {
+    return raw;
+  }
+  return canonical;
 }
 
 function resolveNativeBinding() {
@@ -130,6 +141,20 @@ export function resignSignedTransaction(signedTransaction, privateKey) {
 }
 
 /**
+ * Convert a versioned signed transaction payload into Norito bytes for legacy Torii `/transaction` submit routes.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
+ * @returns {Buffer}
+ */
+export function encodeSignedTransactionNorito(signedTransaction) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.encodeSignedTransactionNorito !== "function") {
+    throw new Error("native binding 'encodeSignedTransactionNorito' is unavailable");
+  }
+  const txBuffer = toBuffer(signedTransaction);
+  return Buffer.from(native.encodeSignedTransactionNorito(txBuffer));
+}
+
+/**
  * Build and sign a RegisterDomain transaction via the native helper.
  * @param {{
  *   chainId: string,
@@ -178,8 +203,11 @@ export function buildRegisterDomainTransaction(input) {
     nonce,
     toBuffer(privateKey),
   );
-  const signed = result?.signed_transaction ?? null;
-  const hashBytes = result?.hash ?? null;
+  const signed =
+    result?.signed_transaction ??
+    result?.signedTransaction ??
+    null;
+  const hashBytes = result?.hash ?? result?.hashBytes ?? null;
   if (!signed || !hashBytes) {
     throw new Error(
       "native binding 'build_register_domain_transaction' returned missing fields",
@@ -242,8 +270,11 @@ export function buildTransaction(input) {
     toBuffer(privateKey),
   );
 
-  const signed = result?.signed_transaction ?? null;
-  const hashBytes = result?.hash ?? null;
+  const signed =
+    result?.signed_transaction ??
+    result?.signedTransaction ??
+    null;
+  const hashBytes = result?.hash ?? result?.hashBytes ?? null;
   if (!signed || !hashBytes) {
     throw new Error("native binding 'build_transaction' returned missing fields");
   }

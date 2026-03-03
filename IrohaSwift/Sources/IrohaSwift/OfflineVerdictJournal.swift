@@ -351,28 +351,55 @@ public final class OfflineVerdictJournal {
               case let .object(metadata) = metadataValue else {
             return .empty
         }
-        guard let policyRaw = normalizedString(metadata["android.integrity.policy"]) else {
+        let parsed = OfflineCertificateParsedMetadata(from: metadata)
+        guard let policy = parsed.platformPolicy else {
             return .empty
         }
-        let trimmed = policyRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return .empty
-        }
-        let policy = trimmed.lowercased()
         var provisioned: OfflineVerdictProvisionedMetadata?
         var playIntegrity: OfflineVerdictPlayIntegrityMetadata?
         var hmsSafetyDetect: OfflineVerdictHmsSafetyDetectMetadata?
         switch policy {
-        case "provisioned":
-            provisioned = parseProvisionedMetadata(from: metadata)
-        case "play_integrity":
-            playIntegrity = parsePlayIntegrityMetadata(from: metadata)
-        case "hms_safety_detect":
-            hmsSafetyDetect = parseHmsSafetyDetectMetadata(from: metadata)
-        default:
+        case .provisioned:
+            if let p = parsed.androidProvisioned,
+               let inspector = p.inspectorPublicKey,
+               let schema = p.manifestSchema {
+                provisioned = OfflineVerdictProvisionedMetadata(
+                    inspectorPublicKeyHex: inspector,
+                    manifestSchema: schema,
+                    manifestVersion: p.manifestVersion,
+                    maxManifestAgeMs: p.maxManifestAgeMs,
+                    manifestDigestHex: p.manifestDigestHex)
+            }
+        case .playIntegrity:
+            if let p = parsed.androidPlayIntegrity,
+               let projectNumber = p.cloudProjectNumber,
+               let env = p.environment,
+               !p.packageNames.isEmpty, !p.signingDigestsSha256.isEmpty,
+               !p.allowedAppVerdicts.isEmpty, !p.allowedDeviceVerdicts.isEmpty {
+                playIntegrity = OfflineVerdictPlayIntegrityMetadata(
+                    cloudProjectNumber: projectNumber,
+                    environment: env,
+                    packageNames: p.packageNames,
+                    signingDigestsSha256: p.signingDigestsSha256,
+                    allowedAppVerdicts: p.allowedAppVerdicts,
+                    allowedDeviceVerdicts: p.allowedDeviceVerdicts,
+                    maxTokenAgeMs: p.maxTokenAgeMs)
+            }
+        case .hmsSafetyDetect:
+            if let h = parsed.androidHmsSafetyDetect,
+               let appId = h.appId,
+               !h.packageNames.isEmpty, !h.signingDigestsSha256.isEmpty {
+                hmsSafetyDetect = OfflineVerdictHmsSafetyDetectMetadata(
+                    appId: appId,
+                    packageNames: h.packageNames,
+                    signingDigestsSha256: h.signingDigestsSha256,
+                    requiredEvaluations: h.requiredEvaluations,
+                    maxTokenAgeMs: h.maxTokenAgeMs)
+            }
+        case .markerKey:
             break
         }
-        return IntegritySnapshot(policy: policy,
+        return IntegritySnapshot(policy: policy.rawValue,
                                  playIntegrityMetadata: playIntegrity,
                                  hmsSafetyDetectMetadata: hmsSafetyDetect,
                                  provisionedMetadata: provisioned)
@@ -518,100 +545,6 @@ public final class OfflineVerdictJournal {
             }
         }
         return current & 0xFFFF
-    }
-
-    private static func parseProvisionedMetadata(from metadata: [String: ToriiJSONValue])
-        -> OfflineVerdictProvisionedMetadata? {
-        guard let inspector = normalizedString(metadata["android.provisioned.inspector_public_key"]),
-              let schema = normalizedString(metadata["android.provisioned.manifest_schema"]) else {
-            return nil
-        }
-        let version = normalizedInt(metadata["android.provisioned.manifest_version"])
-        let maxAge = normalizedUInt64(metadata["android.provisioned.max_manifest_age_ms"])
-        let digest = normalizedString(metadata["android.provisioned.manifest_digest"])
-        return OfflineVerdictProvisionedMetadata(inspectorPublicKeyHex: inspector,
-                                                 manifestSchema: schema,
-                                                 manifestVersion: version,
-                                                 maxManifestAgeMs: maxAge,
-                                                 manifestDigestHex: digest)
-    }
-
-    private static func parsePlayIntegrityMetadata(from metadata: [String: ToriiJSONValue])
-        -> OfflineVerdictPlayIntegrityMetadata? {
-        guard let projectNumber = normalizedUInt64(metadata["android.play_integrity.cloud_project_number"]),
-              let environment = normalizedString(metadata["android.play_integrity.environment"]) else {
-            return nil
-        }
-        let packages = normalizedStringArray(metadata["android.play_integrity.package_names"])
-        let digests = normalizedStringArray(metadata["android.play_integrity.signing_digests_sha256"])
-        let appVerdicts = normalizedStringArray(metadata["android.play_integrity.allowed_app_verdicts"])
-        let deviceVerdicts = normalizedStringArray(metadata["android.play_integrity.allowed_device_verdicts"])
-        guard !packages.isEmpty, !digests.isEmpty, !appVerdicts.isEmpty, !deviceVerdicts.isEmpty else {
-            return nil
-        }
-        let maxAge = normalizedUInt64(metadata["android.play_integrity.max_token_age_ms"])
-        return OfflineVerdictPlayIntegrityMetadata(
-            cloudProjectNumber: projectNumber,
-            environment: environment,
-            packageNames: packages,
-            signingDigestsSha256: digests,
-            allowedAppVerdicts: appVerdicts,
-            allowedDeviceVerdicts: deviceVerdicts,
-            maxTokenAgeMs: maxAge
-        )
-    }
-
-    private static func parseHmsSafetyDetectMetadata(from metadata: [String: ToriiJSONValue])
-        -> OfflineVerdictHmsSafetyDetectMetadata? {
-        guard let appId = normalizedString(metadata["android.hms_safety_detect.app_id"]) else {
-            return nil
-        }
-        let packages = normalizedStringArray(metadata["android.hms_safety_detect.package_names"])
-        let digests = normalizedStringArray(metadata["android.hms_safety_detect.signing_digests_sha256"])
-        let evaluations = normalizedStringArray(metadata["android.hms_safety_detect.required_evaluations"])
-        guard !packages.isEmpty, !digests.isEmpty else {
-            return nil
-        }
-        let maxAge = normalizedUInt64(metadata["android.hms_safety_detect.max_token_age_ms"])
-        return OfflineVerdictHmsSafetyDetectMetadata(
-            appId: appId,
-            packageNames: packages,
-            signingDigestsSha256: digests,
-            requiredEvaluations: evaluations,
-            maxTokenAgeMs: maxAge
-        )
-    }
-
-    private static func normalizedString(_ value: ToriiJSONValue?) -> String? {
-        guard let value else { return nil }
-        return value.normalizedString
-    }
-
-    private static func normalizedUInt64(_ value: ToriiJSONValue?) -> UInt64? {
-        guard let value else { return nil }
-        return value.normalizedUInt64
-    }
-
-    private static func normalizedInt(_ value: ToriiJSONValue?) -> Int? {
-        guard let value else { return nil }
-        guard let parsed = value.normalizedInt64 else { return nil }
-        guard parsed >= Int64(Int.min), parsed <= Int64(Int.max) else {
-            return nil
-        }
-        return Int(parsed)
-    }
-
-    private static func normalizedStringArray(_ value: ToriiJSONValue?) -> [String] {
-        guard let value else { return [] }
-        switch value {
-        case .array(let values):
-            return values.compactMap { normalizedString($0) }
-        case .string(let string):
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? [] : [trimmed]
-        default:
-            return []
-        }
     }
 
     private struct IntegritySnapshot {

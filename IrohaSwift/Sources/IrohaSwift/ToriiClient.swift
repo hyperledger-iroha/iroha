@@ -2329,11 +2329,12 @@ public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
     public let verdictIdHex: String?
     public let attestationNonceHex: String?
     public let remainingAmount: String
+    public let currentCommitmentHex: String
     public let deadlineKind: String?
     public let deadlineState: String?
     public let deadlineMs: UInt64?
     public let deadlineMsRemaining: Int64?
-    public let record: ToriiJSONValue
+    let record: ToriiJSONValue
 
     public func decodeRecord<T: Decodable>(as type: T.Type = T.self,
                                            decoder: JSONDecoder = JSONDecoder()) throws -> T {
@@ -2351,6 +2352,7 @@ public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
                 verdictIdHex: String?,
                 attestationNonceHex: String?,
                 remainingAmount: String,
+                currentCommitmentHex: String,
                 deadlineKind: String? = nil,
                 deadlineState: String? = nil,
                 deadlineMs: UInt64? = nil,
@@ -2367,6 +2369,7 @@ public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
         self.verdictIdHex = verdictIdHex
         self.attestationNonceHex = attestationNonceHex
         self.remainingAmount = remainingAmount
+        self.currentCommitmentHex = currentCommitmentHex
         self.deadlineKind = deadlineKind
         self.deadlineState = deadlineState
         self.deadlineMs = deadlineMs
@@ -2473,6 +2476,9 @@ public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
         self.verdictIdHex = optionalString("verdict_id_hex")
         self.attestationNonceHex = optionalString("attestation_nonce_hex")
         self.remainingAmount = remainingAmountValue()
+        self.currentCommitmentHex = Self.parseCommitmentHex(
+            from: recordObject, recordValue: recordValue
+        )
         self.deadlineKind = optionalString("deadline_kind")
         self.deadlineState = optionalString("deadline_state")
         self.deadlineMs = optionalUInt64("deadline_ms")
@@ -2500,6 +2506,34 @@ public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
         return value.normalizedInt64
     }
 
+    private static func parseCommitmentHex(
+        from recordObject: [String: ToriiJSONValue],
+        recordValue: ToriiJSONValue
+    ) -> String {
+        if let hex = recordObject["current_commitment_hex"]?.normalizedString {
+            let trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cleaned = trimmed.lowercased().hasPrefix("0x")
+                ? String(trimmed.dropFirst(2)) : trimmed
+            if let data = Data(hexString: cleaned), !data.isEmpty {
+                return data.hexLowercased()
+            }
+        }
+        if let bytes = recordObject["current_commitment"]?.normalizedBytes, !bytes.isEmpty {
+            return bytes.hexLowercased()
+        }
+        let certificateValue: ToriiJSONValue
+        if let certValue = recordObject["certificate"] {
+            certificateValue = certValue
+        } else {
+            certificateValue = recordValue
+        }
+        if let cert = try? OfflineToriiDecoding.decodeCertificate(from: certificateValue),
+           !cert.allowance.commitment.isEmpty {
+            return cert.allowance.commitment.hexLowercased()
+        }
+        return ""
+    }
+
     private enum CodingKeys: String, CodingKey {
         case record
     }
@@ -2508,6 +2542,35 @@ public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
 public struct ToriiOfflineAllowanceList: Decodable, Sendable {
     public let items: [ToriiOfflineAllowanceItem]
     public let total: UInt64
+}
+
+public extension ToriiOfflineAllowanceItem {
+    /// Construct a synthetic allowance item from a certificate issue response,
+    /// for immediate local use before ledger confirmation.
+    init(issueResponse: ToriiOfflineCertificateIssueResponse,
+         controllerId: String,
+         registeredAtMs: UInt64) throws {
+        let certificate = try issueResponse.decodeCertificate()
+        guard !certificate.allowance.commitment.isEmpty else {
+            throw OfflineToriiDecodingError.missingField("commitment")
+        }
+        let commitmentHex = certificate.allowance.commitment.hexLowercased()
+        self.init(
+            certificateIdHex: issueResponse.certificateIdHex,
+            controllerId: controllerId,
+            controllerDisplay: controllerId,
+            assetId: certificate.allowance.assetId,
+            registeredAtMs: registeredAtMs,
+            expiresAtMs: certificate.expiresAtMs,
+            policyExpiresAtMs: certificate.policy.expiresAtMs,
+            refreshAtMs: certificate.refreshAtMs,
+            verdictIdHex: certificate.verdictId?.hexUppercased(),
+            attestationNonceHex: certificate.attestationNonce?.hexUppercased(),
+            remainingAmount: certificate.allowance.amount,
+            currentCommitmentHex: commitmentHex,
+            record: issueResponse.certificate
+        )
+    }
 }
 
 public extension ToriiOfflineAllowanceItem {
@@ -2699,7 +2762,7 @@ public struct ToriiOfflineCertificateIssueRequest: Encodable, Sendable {
 
 public struct ToriiOfflineCertificateIssueResponse: Decodable, Sendable, Equatable {
     public let certificateIdHex: String
-    public let certificate: ToriiJSONValue
+    let certificate: ToriiJSONValue
 
     private enum CodingKeys: String, CodingKey {
         case certificateIdHex = "certificate_id_hex"
@@ -2708,6 +2771,16 @@ public struct ToriiOfflineCertificateIssueResponse: Decodable, Sendable, Equatab
 
     public func decodeCertificate() throws -> OfflineWalletCertificate {
         try OfflineWalletCertificate(toriiValue: certificate)
+    }
+
+    /// Encode the raw certificate JSON to Data for local storage.
+    public func encodedRecordData() throws -> Data {
+        try certificate.encodedData()
+    }
+
+    /// Build a register request from this issue response — keeps ToriiJSONValue internal.
+    public func registerRequest(authority: String, privateKey: String) -> ToriiOfflineAllowanceRegisterRequest {
+        ToriiOfflineAllowanceRegisterRequest(authority: authority, privateKey: privateKey, certificate: certificate)
     }
 }
 
@@ -3235,6 +3308,43 @@ extension ToriiJSONValue {
             return Int64(string.trimmingCharacters(in: .whitespacesAndNewlines))
         default:
             return nil
+        }
+    }
+
+    public var normalizedInt: Int? {
+        guard let value = normalizedInt64,
+              value >= Int64(Int.min), value <= Int64(Int.max) else { return nil }
+        return Int(value)
+    }
+
+    public var normalizedBool: Bool? {
+        switch self {
+        case .bool(let value):
+            return value
+        case .string(let string):
+            switch string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "1": return true
+            case "false", "0": return false
+            default: return nil
+            }
+        case .number(let number):
+            if number == 1 { return true }
+            if number == 0 { return false }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    public var normalizedStringArray: [String] {
+        switch self {
+        case .array(let values):
+            return values.compactMap(\.normalizedString)
+        case .string(let string):
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? [] : [trimmed]
+        default:
+            return []
         }
     }
 }
@@ -8439,16 +8549,18 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     /// changing balances or policy caps.
     @discardableResult
     public func reprovisionOfflineAllowance(certificateIdHex: String,
-                                            currentCertificate: OfflineWalletCertificate,
+                                            currentCertificateRecordData: Data,
                                             newCommitment: Data,
                                             authority: String,
                                             privateKey: String,
+                                            lineage: OfflineCertificateLineage,
                                             completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.reprovisionOfflineAllowance(certificateIdHex: certificateIdHex,
-                                                                         currentCertificate: currentCertificate,
+                                                                         currentCertificateRecordData: currentCertificateRecordData,
                                                                          newCommitment: newCommitment,
                                                                          authority: authority,
-                                                                         privateKey: privateKey) }
+                                                                         privateKey: privateKey,
+                                                                         lineage: lineage) }
     }
 
     @discardableResult
@@ -9605,13 +9717,31 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     ///
     /// This avoids `topUp(0)` workarounds in recovery flows where only the commitment
     /// must change.
+    /// Reprovision from raw record data — decodes the certificate internally.
     public func reprovisionOfflineAllowance(certificateIdHex: String,
+                                            currentCertificateRecordData: Data,
+                                            newCommitment: Data,
+                                            authority: String,
+                                            privateKey: String,
+                                            lineage: OfflineCertificateLineage) async throws -> ToriiOfflineTopUpResponse {
+        let currentCertificate = try OfflineWalletCertificate(recordData: currentCertificateRecordData)
+        return try await reprovisionOfflineAllowance(certificateIdHex: certificateIdHex,
+                                                      currentCertificate: currentCertificate,
+                                                      newCommitment: newCommitment,
+                                                      authority: authority,
+                                                      privateKey: privateKey,
+                                                      lineage: lineage)
+    }
+
+    func reprovisionOfflineAllowance(certificateIdHex: String,
                                             currentCertificate: OfflineWalletCertificate,
                                             newCommitment: Data,
                                             authority: String,
-                                            privateKey: String) async throws -> ToriiOfflineTopUpResponse {
+                                            privateKey: String,
+                                            lineage: OfflineCertificateLineage) async throws -> ToriiOfflineTopUpResponse {
         let draft = try Self.makeOfflineReprovisionDraft(currentCertificate: currentCertificate,
-                                                         newCommitment: newCommitment)
+                                                         newCommitment: newCommitment,
+                                                         lineage: lineage)
         return try await topUpOfflineAllowanceRenewal(certificateIdHex: certificateIdHex,
                                                       draft: draft,
                                                       authority: authority,
@@ -11102,7 +11232,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     private static func makeOfflineReprovisionDraft(
         currentCertificate: OfflineWalletCertificate,
-        newCommitment: Data
+        newCommitment: Data,
+        lineage: OfflineCertificateLineage
     ) throws -> OfflineWalletCertificateDraft {
         guard newCommitment.count == 32 else {
             throw ToriiClientError.invalidPayload("newCommitment must be exactly 32 bytes.")
@@ -11112,16 +11243,17 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             amount: currentCertificate.allowance.amount,
             commitment: newCommitment
         )
+        var metadata = currentCertificate.metadata
+        lineage.apply(to: &metadata)
         return OfflineWalletCertificateDraft(
             controller: currentCertificate.controller,
-            operatorId: currentCertificate.operatorId,
             allowance: allowance,
             spendPublicKey: currentCertificate.spendPublicKey,
             attestationReport: currentCertificate.attestationReport,
             issuedAtMs: currentCertificate.issuedAtMs,
             expiresAtMs: currentCertificate.expiresAtMs,
             policy: currentCertificate.policy,
-            metadata: currentCertificate.metadata,
+            metadata: metadata,
             verdictId: currentCertificate.verdictId,
             attestationNonce: currentCertificate.attestationNonce,
             refreshAtMs: currentCertificate.refreshAtMs
