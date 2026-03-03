@@ -4912,6 +4912,7 @@ const QC_MISSING_PAYLOAD_RANGE_PULL_DEDUP_COOLDOWN_FLOOR: Duration = Duration::f
 const SIDECAR_MISMATCH_RECOVERY_ACTION_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
 const LOCK_LAG_PRUNE_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
 const LOCK_LAG_FRONTIER_STALL_WINDOWS_TO_ACTIVATE: u32 = 3;
+const MISSING_QC_HEIGHT_STALL_WINDOWS_TO_ACTIVATE: u32 = 3;
 const NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR: u64 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5083,6 +5084,30 @@ struct LockLagFrontierStallSnapshot {
     stall_window: Duration,
     mode_active: bool,
     window_index: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MissingQcHeightStallState {
+    height: u64,
+    committed_height: u64,
+    entered_at: Instant,
+    last_window_at: Instant,
+    windows_without_commit_progress: u32,
+    mode_active: bool,
+    window_index: u64,
+    last_rotation_at: Option<Instant>,
+    last_rotation_window_index: Option<u64>,
+    last_reacquire_window_index: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MissingQcHeightStallSnapshot {
+    height: u64,
+    entered_at: Instant,
+    stall_window: Duration,
+    mode_active: bool,
+    window_index: u64,
+    last_rotation_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -5382,6 +5407,7 @@ pub(super) struct Actor {
     range_pull_escalation_cooldowns: BTreeMap<(PeerId, u64, u64), Instant>,
     lock_lag_prune_cooldown: Option<LockLagPruneCooldownState>,
     lock_lag_frontier_stall: Option<LockLagFrontierStallState>,
+    missing_qc_height_stall: Option<MissingQcHeightStallState>,
     deferred_qcs: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     deferred_qc_roster_state: BTreeMap<QcVoteKey, DeferredRosterQcEntry>,
     deferred_missing_payload_qcs: BTreeMap<QcVoteKey, DeferredQcEntry>,
@@ -10300,6 +10326,7 @@ impl Actor {
             range_pull_escalation_cooldowns: BTreeMap::new(),
             lock_lag_prune_cooldown: None,
             lock_lag_frontier_stall: None,
+            missing_qc_height_stall: None,
             deferred_qcs: BTreeMap::new(),
             deferred_qc_roster_state: BTreeMap::new(),
             deferred_missing_payload_qcs: BTreeMap::new(),
@@ -15494,6 +15521,161 @@ impl Actor {
         })
     }
 
+    fn missing_qc_height_stall_window(&self) -> Duration {
+        self.commit_quorum_timeout()
+            .max(self.recovery_missing_qc_reacquire_window())
+            .max(self.recovery_missing_block_height_ttl())
+            .max(Duration::from_millis(1))
+    }
+
+    fn missing_qc_height_has_unresolved_dependency(&self, height: u64) -> bool {
+        self.pending
+            .missing_block_requests
+            .iter()
+            .any(|(hash, request)| {
+                request.height == height && !self.block_payload_available_locally(*hash)
+            })
+            || self
+                .deferred_missing_payload_qcs
+                .values()
+                .any(|entry| entry.qc.height == height)
+    }
+
+    fn missing_qc_height_unresolved_dependency_progress(&self, height: u64) -> Option<Instant> {
+        self.pending
+            .missing_block_requests
+            .iter()
+            .filter_map(|(hash, request)| {
+                (request.height == height && !self.block_payload_available_locally(*hash))
+                    .then_some(request.last_dependency_progress)
+            })
+            .max()
+    }
+
+    fn missing_qc_height_stall_snapshot(
+        &mut self,
+        active_height: u64,
+        now: Instant,
+    ) -> Option<MissingQcHeightStallSnapshot> {
+        if self.active_consensus_round_height() != active_height {
+            self.missing_qc_height_stall = None;
+            return None;
+        }
+        if !self.missing_qc_height_has_unresolved_dependency(active_height) {
+            self.missing_qc_height_stall = None;
+            return None;
+        }
+        let committed_height = self.committed_height_snapshot();
+        let dependency_progress =
+            self.missing_qc_height_unresolved_dependency_progress(active_height);
+        let stall_window = self.missing_qc_height_stall_window();
+        let mut stall = match self.missing_qc_height_stall {
+            Some(existing) if existing.height == active_height => {
+                if committed_height > existing.committed_height {
+                    self.missing_qc_height_stall = None;
+                    return None;
+                }
+                existing
+            }
+            _ => MissingQcHeightStallState {
+                height: active_height,
+                committed_height,
+                entered_at: now,
+                last_window_at: now,
+                windows_without_commit_progress: 0,
+                mode_active: false,
+                window_index: 0,
+                last_rotation_at: None,
+                last_rotation_window_index: None,
+                last_reacquire_window_index: None,
+            },
+        };
+
+        if let Some(progress_at) = dependency_progress
+            && progress_at > stall.last_window_at
+        {
+            stall.entered_at = progress_at;
+            stall.last_window_at = progress_at;
+            stall.windows_without_commit_progress = 0;
+            if stall.mode_active {
+                stall.mode_active = false;
+                stall.window_index = 0;
+                stall.last_rotation_at = None;
+                stall.last_rotation_window_index = None;
+                stall.last_reacquire_window_index = None;
+            }
+        }
+
+        let elapsed_window_count = {
+            let window_nanos = stall_window.as_nanos().max(1);
+            let elapsed = now
+                .saturating_duration_since(stall.last_window_at)
+                .as_nanos()
+                / window_nanos;
+            u64::try_from(elapsed).unwrap_or(u64::MAX)
+        };
+        if elapsed_window_count > 0 {
+            stall.last_window_at = now;
+            let increment = u32::try_from(elapsed_window_count).unwrap_or(u32::MAX);
+            stall.windows_without_commit_progress = stall
+                .windows_without_commit_progress
+                .saturating_add(increment);
+            if stall.mode_active {
+                stall.window_index = stall.window_index.saturating_add(elapsed_window_count);
+            } else if stall.windows_without_commit_progress
+                >= MISSING_QC_HEIGHT_STALL_WINDOWS_TO_ACTIVATE
+            {
+                stall.mode_active = true;
+                stall.entered_at = now;
+                stall.window_index = 0;
+                stall.last_rotation_at = None;
+                stall.last_rotation_window_index = None;
+                stall.last_reacquire_window_index = None;
+                warn!(
+                    height = active_height,
+                    committed_height,
+                    stall_window_ms = stall_window.as_millis(),
+                    windows_without_commit_progress = stall.windows_without_commit_progress,
+                    "entered same-height missing-QC stall dampening mode"
+                );
+            }
+        }
+        stall.committed_height = committed_height;
+        self.missing_qc_height_stall = Some(stall);
+        Some(MissingQcHeightStallSnapshot {
+            height: stall.height,
+            entered_at: stall.entered_at,
+            stall_window,
+            mode_active: stall.mode_active,
+            window_index: stall.window_index,
+            last_rotation_at: stall.last_rotation_at,
+        })
+    }
+
+    fn mark_missing_qc_height_stall_range_pull_window(&mut self, height: u64, window_index: u64) {
+        if let Some(stall) = self.missing_qc_height_stall.as_mut()
+            && stall.height == height
+            && stall.mode_active
+        {
+            stall.last_reacquire_window_index = Some(window_index);
+        }
+    }
+
+    fn mark_missing_qc_height_stall_rotation_window(
+        &mut self,
+        height: u64,
+        window_index: u64,
+        now: Instant,
+    ) {
+        if let Some(stall) = self.missing_qc_height_stall.as_mut()
+            && stall.height == height
+            && stall.mode_active
+        {
+            stall.last_rotation_at = Some(now);
+            stall.last_rotation_window_index = Some(window_index);
+        }
+    }
+
     fn effective_hash_miss_escalation_cap(
         &self,
         height: u64,
@@ -16446,6 +16628,18 @@ impl Actor {
         } else {
             None
         };
+        let missing_qc_stall_reason = matches!(
+            reason,
+            "idle_missing_qc_reacquire"
+                | "qc_missing_payload_quorum_fast_recovery"
+                | "missing_block_height_hard_cap"
+        );
+        let active_round_height = self.active_consensus_round_height();
+        let missing_qc_stall = if missing_qc_stall_reason {
+            self.missing_qc_height_stall_snapshot(active_round_height, now)
+        } else {
+            None
+        };
         let tier_label = tier.map(RangePullCandidateTier::label).unwrap_or("auto");
         let mut targets = tier.map_or_else(
             || self.range_pull_targets_for_height(height),
@@ -16455,6 +16649,13 @@ impl Actor {
         let mut lock_lag_stall_window_index = 0_u64;
         let mut lock_lag_stall_all_peers = false;
         let mut lock_lag_stall_dwell_ms = 0_u128;
+        let mut missing_qc_stall_mode = false;
+        let mut missing_qc_stall_window_index = 0_u64;
+        let mut missing_qc_stall_all_peers = false;
+        let mut missing_qc_stall_dwell_ms = 0_u128;
+        let mut missing_qc_stall_height: Option<u64> = None;
+        let mut missing_qc_stall_window: Option<Duration> = None;
+        let mut missing_qc_stall_window_suppressed = false;
         if let Some(stall) = lock_lag_stall
             .filter(|stall| stall.mode_active && lock_lag_frontier == Some(stall.frontier_height))
         {
@@ -16486,6 +16687,63 @@ impl Actor {
             } else {
                 lock_lag_stall_all_peers = true;
             }
+        }
+        if let Some(stall) = missing_qc_stall.filter(|stall| {
+            stall.mode_active
+                && canonical_height == stall.height
+                && active_round_height == stall.height
+        }) {
+            missing_qc_stall_mode = true;
+            missing_qc_stall_window_index = stall.window_index;
+            missing_qc_stall_height = Some(stall.height);
+            missing_qc_stall_window = Some(stall.stall_window);
+            missing_qc_stall_dwell_ms = now.saturating_duration_since(stall.entered_at).as_millis();
+
+            let already_emitted = self.missing_qc_height_stall.as_ref().is_some_and(|state| {
+                state.height == stall.height
+                    && state.mode_active
+                    && state.last_reacquire_window_index == Some(stall.window_index)
+            });
+            if already_emitted {
+                missing_qc_stall_window_suppressed = true;
+            } else {
+                targets.sort_by(|lhs, rhs| {
+                    lhs.public_key()
+                        .cmp(rhs.public_key())
+                        .then_with(|| lhs.cmp(rhs))
+                });
+                targets.dedup();
+                let peer_count = targets.len();
+                if peer_count > 2 {
+                    if stall.window_index % 3 == 2 {
+                        missing_qc_stall_all_peers = true;
+                    } else {
+                        let peer_count_u64 = u64::try_from(peer_count).unwrap_or(u64::MAX).max(1);
+                        let start_idx =
+                            usize::try_from(stall.window_index % peer_count_u64).unwrap_or(0);
+                        let second_idx = (start_idx + 1) % peer_count;
+                        let mut cohort = Vec::with_capacity(2);
+                        cohort.push(targets[start_idx].clone());
+                        if second_idx != start_idx {
+                            cohort.push(targets[second_idx].clone());
+                        }
+                        targets = cohort;
+                    }
+                } else {
+                    missing_qc_stall_all_peers = true;
+                }
+            }
+        }
+        if missing_qc_stall_window_suppressed {
+            debug!(
+                height,
+                canonical_height,
+                reason,
+                missing_qc_stall_height = ?missing_qc_stall_height,
+                missing_qc_stall_window_index,
+                "suppressing same-height missing-QC reanchor in the current stall window"
+            );
+            return false;
         }
         if targets.is_empty() {
             return false;
@@ -16519,6 +16777,11 @@ impl Actor {
                 2,
             ));
         }
+        if missing_qc_stall_mode {
+            cooldown = cooldown.max(
+                missing_qc_stall_window.unwrap_or_else(|| self.missing_qc_height_stall_window()),
+            );
+        }
         let expires = now.checked_add(cooldown).unwrap_or(now);
         let mut sent = 0usize;
         for peer in targets {
@@ -16551,6 +16814,12 @@ impl Actor {
         if sent == 0 {
             return false;
         }
+        if let Some(stalled_height) = missing_qc_stall_height.filter(|_| missing_qc_stall_mode) {
+            self.mark_missing_qc_height_stall_range_pull_window(
+                stalled_height,
+                missing_qc_stall_window_index,
+            );
+        }
 
         super::status::inc_blocksync_range_pull_escalation();
         #[cfg(feature = "telemetry")]
@@ -16568,6 +16837,11 @@ impl Actor {
             lock_lag_stall_window_index,
             lock_lag_stall_all_peers,
             lock_lag_stall_dwell_ms,
+            missing_qc_stall_mode,
+            missing_qc_stall_height = ?missing_qc_stall_height,
+            missing_qc_stall_window_index,
+            missing_qc_stall_all_peers,
+            missing_qc_stall_dwell_ms,
             anchor = %anchor_hash,
             targets = sent,
             tier = tier_label,
@@ -19009,6 +19283,7 @@ impl Actor {
             );
             height = commit_horizon_height;
         }
+        let missing_qc_stall_snapshot = self.missing_qc_height_stall_snapshot(height, now);
         let backlog_signals = self.idle_backlog_signals_for_height(height, queue_depths);
         let IdleBacklogSignals {
             existing_worker_backlog,
@@ -19044,6 +19319,12 @@ impl Actor {
             .propose
             .proposals_seen
             .contains(&(height, current_view));
+        let same_height_unresolved_dependency =
+            self.missing_qc_height_has_unresolved_dependency(height);
+        let same_height_unresolved_backlog =
+            same_height_unresolved_dependency || self.has_residual_round_backlog_for_height(height);
+        let missing_qc_progress_signal =
+            committed_height >= height || !same_height_unresolved_backlog;
         if proposal_seen {
             if self
                 .subsystems
@@ -19059,7 +19340,23 @@ impl Actor {
                 );
             }
             self.subsystems.propose.proposal_liveness = None;
-            self.subsystems.propose.last_missing_qc_timeout_trigger = None;
+            if missing_qc_progress_signal {
+                self.subsystems.propose.last_missing_qc_timeout_trigger = None;
+            } else if self
+                .subsystems
+                .propose
+                .last_missing_qc_timeout_trigger
+                .is_some()
+            {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    same_height_unresolved_dependency,
+                    same_height_unresolved_backlog,
+                    "proposal observed without same-height progress; preserving missing-QC timeout streak"
+                );
+            }
             self.subsystems
                 .propose
                 .last_missing_qc_reacquire_without_dependency_at
@@ -19505,6 +19802,29 @@ impl Actor {
             );
             return false;
         }
+        if let Some(stall) =
+            missing_qc_stall_snapshot.filter(|stall| stall.mode_active && stall.height == height)
+        {
+            let rotation_suppressed = self.missing_qc_height_stall.as_ref().is_some_and(|state| {
+                state.height == stall.height
+                    && state.mode_active
+                    && state.last_rotation_window_index == Some(stall.window_index)
+            });
+            if rotation_suppressed {
+                debug!(
+                    height,
+                    view = current_view,
+                    window_index = stall.window_index,
+                    stall_window_ms = stall.stall_window.as_millis(),
+                    stall_dwell_ms = now.saturating_duration_since(stall.entered_at).as_millis(),
+                    last_rotation_at_ms = stall
+                        .last_rotation_at
+                        .map(|at| now.saturating_duration_since(at).as_millis()),
+                    "suppressing repeated missing-QC rotation in same-height stall window"
+                );
+                return false;
+            }
+        }
 
         let next_view = current_view.saturating_add(1);
         if !proposal_seen {
@@ -19554,6 +19874,11 @@ impl Actor {
                 consensus_rx_depth = queue_depths.consensus_rx,
                 "no proposal observed before cutoff; rotating leader via view change"
             );
+        }
+        if let Some(stall) =
+            missing_qc_stall_snapshot.filter(|stall| stall.mode_active && stall.height == height)
+        {
+            self.mark_missing_qc_height_stall_rotation_window(height, stall.window_index, now);
         }
         self.trigger_view_change_with_cause(height, current_view, ViewChangeCause::MissingQc);
         true
