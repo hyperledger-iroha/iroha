@@ -37343,7 +37343,7 @@ async fn missing_qc_height_stall_mode_throttles_qc_missing_payload_range_pull_to
 
 #[tokio::test(flavor = "current_thread")]
 async fn missing_qc_height_stall_mode_reanchor_uses_deterministic_peer_subset_and_periodic_all_peers()
-{
+ {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let _ = seed_genesis_block_for_state(&actor.state);
@@ -37532,6 +37532,340 @@ async fn missing_qc_height_stall_mode_preserves_hard_cap_fail_closed_behavior() 
         "same-height missing-QC stall damping must not suppress MissingPayload fail-closed escalation"
     );
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_qc_height_stall_mode_shares_rotation_budget_across_causes() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.active_consensus_round_height();
+    let now = Instant::now();
+    let stale = now.checked_sub(Duration::from_secs(45)).unwrap_or(now);
+    let _ = insert_unresolved_missing_request_for_tests(actor, 0xA8, height, 1, stale, stale);
+
+    let (stall_window, activate_at) =
+        activate_missing_qc_height_stall_mode_for_tests(actor, height, now);
+    assert!(
+        actor
+            .missing_qc_height_stall_snapshot(height, activate_at)
+            .is_some_and(|stall| stall.mode_active),
+        "test setup should activate same-height missing-QC stall mode"
+    );
+
+    assert!(
+        actor.try_reserve_missing_qc_height_stall_rotation_window(
+            height,
+            super::ViewChangeCause::MissingQc,
+            activate_at,
+        ),
+        "first rotation reservation in a stalled window should succeed"
+    );
+    assert!(
+        !actor.try_reserve_missing_qc_height_stall_rotation_window(
+            height,
+            super::ViewChangeCause::MissingPayload,
+            activate_at + Duration::from_millis(1),
+        ),
+        "rotation budget should be shared across MissingQc and MissingPayload causes"
+    );
+    assert!(
+        actor.try_reserve_missing_qc_height_stall_rotation_window(
+            height,
+            super::ViewChangeCause::MissingPayload,
+            activate_at + stall_window + Duration::from_millis(1),
+        ),
+        "next stalled window should allow one rotation again"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_qc_height_stall_mode_throttles_deferred_qc_targeted_fetch_to_one_per_window() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.active_consensus_round_height();
+    let now = Instant::now();
+    let stale = now.checked_sub(Duration::from_secs(45)).unwrap_or(now);
+    let block_hash =
+        insert_unresolved_missing_request_for_tests(actor, 0xA9, height, 1, stale, stale);
+
+    let (stall_window, activate_at) =
+        activate_missing_qc_height_stall_mode_for_tests(actor, height, now);
+    assert!(
+        actor
+            .missing_qc_height_stall_snapshot(height, activate_at)
+            .is_some_and(|stall| stall.mode_active),
+        "test setup should activate same-height missing-QC stall mode"
+    );
+
+    let first_window = actor
+        .missing_payload_fetch_window_snapshot(height, block_hash, activate_at)
+        .expect("stall window gate should be available for unresolved same-height payload");
+    assert!(
+        !actor.missing_payload_fetch_window_already_emitted(
+            height,
+            block_hash,
+            first_window.window_index,
+        ),
+        "fresh stalled window should not be marked as already emitted"
+    );
+    actor.mark_missing_payload_fetch_window_emitted(
+        height,
+        block_hash,
+        first_window.window_index,
+        activate_at,
+    );
+    assert!(
+        actor.missing_payload_fetch_window_already_emitted(
+            height,
+            block_hash,
+            first_window.window_index
+        ),
+        "first emission mark should gate repeated targeted fetches in the same window"
+    );
+
+    if let Some(stall) = actor.missing_qc_height_stall.as_mut() {
+        let rewind = stall_window.saturating_add(Duration::from_millis(1));
+        stall.last_window_at = stall
+            .last_window_at
+            .checked_sub(rewind)
+            .unwrap_or(stall.last_window_at);
+    }
+
+    let second_window = actor
+        .missing_payload_fetch_window_snapshot(
+            height,
+            block_hash,
+            activate_at + stall_window + Duration::from_millis(1),
+        )
+        .expect("next stall window should still track unresolved payload gate");
+    assert!(
+        second_window.window_index > first_window.window_index,
+        "stall window index should advance once the window elapses"
+    );
+    assert!(
+        !actor.missing_payload_fetch_window_already_emitted(
+            height,
+            block_hash,
+            second_window.window_index,
+        ),
+        "next stalled window should allow one deferred-QC targeted fetch again"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn deferred_missing_payload_qc_replay_respects_same_height_stall_window_pacing() {
+    let _view_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.active_consensus_round_height();
+    let view = 0_u64;
+    let now = Instant::now();
+    let stale = now.checked_sub(Duration::from_secs(45)).unwrap_or(now);
+    let block_hash =
+        insert_unresolved_missing_request_for_tests(actor, 0xAA, height, 1, stale, stale);
+
+    let (stall_window, activate_at) =
+        activate_missing_qc_height_stall_mode_for_tests(actor, height, now);
+    assert!(
+        actor
+            .missing_qc_height_stall_snapshot(height, activate_at)
+            .is_some_and(|stall| stall.mode_active),
+        "test setup should activate same-height missing-QC stall mode"
+    );
+
+    let qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        mode_tag: super::PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: Vec::new(),
+        aggregate: QcAggregate {
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+    let key = super::Actor::qc_tally_key(&qc);
+    actor.deferred_missing_payload_qcs.insert(
+        key,
+        super::DeferredQcEntry {
+            qc,
+            first_seen: activate_at
+                .checked_sub(actor.recovery_deferred_qc_ttl() + Duration::from_millis(1))
+                .unwrap_or(activate_at),
+            last_attempt: activate_at,
+            attempts: super::DEFERRED_MISSING_PAYLOAD_QC_MAX_ATTEMPTS,
+            escalated_fetch: true,
+            reason: "test_stall_window_pacing",
+        },
+    );
+
+    let before = super::status::snapshot()
+        .view_change_causes
+        .missing_payload_total;
+    assert!(
+        !actor.try_replay_deferred_missing_payload_qcs(activate_at + Duration::from_millis(1)),
+        "replay should be paced while still in the same stalled window"
+    );
+    assert!(
+        actor.deferred_missing_payload_qcs.contains_key(&key),
+        "paced replay should keep deferred QC queued"
+    );
+    assert_eq!(
+        super::status::snapshot()
+            .view_change_causes
+            .missing_payload_total,
+        before,
+        "paced replay must not rotate view in the same stalled window"
+    );
+
+    assert!(
+        actor.try_replay_deferred_missing_payload_qcs(
+            activate_at + stall_window + Duration::from_millis(1)
+        ),
+        "replay should proceed once the next stalled window opens"
+    );
+    assert!(
+        !actor.deferred_missing_payload_qcs.contains_key(&key),
+        "deferred QC should be drained after paced replay is allowed"
+    );
+    assert_eq!(
+        super::status::snapshot()
+            .view_change_causes
+            .missing_payload_total,
+        before.saturating_add(1),
+        "allowed replay should emit the fail-closed MissingPayload rotation"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_qc_height_stall_mode_hard_cap_suppression_retries_next_window() {
+    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let _guard = super::status::view_change_cause_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+    let actor = &mut harness.actor;
+
+    let now = Instant::now();
+    let height = actor.active_consensus_round_height();
+    let stall_window = actor.missing_qc_height_stall_window();
+    actor.missing_qc_height_stall = Some(super::MissingQcHeightStallState {
+        height,
+        committed_height: actor.committed_height_snapshot(),
+        entered_at: now,
+        last_window_at: now,
+        windows_without_commit_progress: 3,
+        mode_active: true,
+        window_index: 0,
+        last_rotation_at: Some(now),
+        last_rotation_window_index: Some(0),
+        last_reacquire_window_index: None,
+    });
+
+    let view = 0_u64;
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view, now);
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
+    let ttl = actor
+        .recovery_missing_block_height_ttl()
+        .max(Duration::from_millis(1));
+    let stale = now
+        .checked_sub(ttl + Duration::from_millis(1))
+        .unwrap_or(now);
+
+    actor.note_missing_block_height_attempt(
+        block_hash,
+        height,
+        view,
+        super::MissingBlockRecoveryStage::HashFetch,
+        None,
+        stale,
+    );
+    let key = actor.missing_block_recovery_key_for_height(height);
+    let attempt_cap = actor.recovery_missing_block_height_attempt_cap().max(1);
+    {
+        let budget = actor
+            .missing_block_height_recovery
+            .get_mut(&key)
+            .expect("height budget should exist");
+        budget.attempts = attempt_cap;
+        budget.first_seen = stale;
+        budget.last_seen = now;
+        budget.range_pull.stage = super::MissingBlockRecoveryStage::RangePullFromAnchor;
+        budget.range_pull.candidate_tier = super::RangePullCandidateTier::TrustedPeers;
+        budget.range_pull.inflight = true;
+        budget.range_pull.last_requested = Some(now - ttl / 2);
+        budget.range_pull.last_progress = stale;
+    }
+
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(10),
+            view_change_window: Some(Duration::from_millis(10)),
+            first_seen: stale,
+            last_requested: now - ttl / 2,
+            last_dependency_progress: stale,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 2,
+        },
+    );
+
+    let before = super::status::snapshot();
+    let _ = actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, now);
+    let after_first = super::status::snapshot();
+    assert_eq!(
+        after_first.view_change_causes.missing_payload_total,
+        before.view_change_causes.missing_payload_total,
+        "used stall-window rotation budget should suppress hard-cap escalation in the same window"
+    );
+    assert!(
+        actor.missing_block_height_recovery.contains_key(&key),
+        "suppressed hard-cap escalation should keep recovery budget for next window retry"
+    );
+
+    let second_now = now + stall_window + Duration::from_millis(1);
+    assert!(
+        actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, second_now),
+        "next stalled window should allow fail-closed hard-cap escalation"
+    );
+    let after_second = super::status::snapshot();
+    assert_eq!(
+        after_second.view_change_causes.missing_payload_total,
+        before
+            .view_change_causes
+            .missing_payload_total
+            .saturating_add(1),
+        "fail-closed hard-cap escalation must fire once next stall window opens"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
 }
 
@@ -43253,7 +43587,6 @@ async fn missing_qc_height_stall_mode_limits_missing_qc_view_rotation_to_one_per
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-    let _ = seed_genesis_block_for_state(&actor.state);
     actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
     let _guard = super::status::view_change_cause_test_guard();
 
@@ -43277,30 +43610,17 @@ async fn missing_qc_height_stall_mode_limits_missing_qc_view_rotation_to_one_per
         committed_height,
     );
     let current_view = 0_u64;
-    let setup_now = Instant::now();
-    let stale = setup_now
-        .checked_sub(Duration::from_secs(45))
-        .unwrap_or(setup_now);
-    let _ = insert_unresolved_missing_request_for_tests(actor, 0xA6, height, 1, stale, stale);
-    let (stall_window, first_now) =
-        activate_missing_qc_height_stall_mode_for_tests(actor, height, setup_now);
-    assert!(
-        actor
-            .missing_qc_height_stall_snapshot(height, first_now)
-            .is_some_and(|stall| stall.mode_active),
-        "test setup should activate same-height missing-QC stall mode"
-    );
-
+    let first_now = Instant::now();
     let timeout_no_proposal = super::idle_view_timeout(
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
-    let availability_timeout =
-        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
     let first_elapsed = timeout_no_proposal
-        .saturating_add(availability_timeout)
+        .saturating_add(
+            actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled()),
+        )
         .saturating_add(Duration::from_millis(1));
     let first_start = first_now.checked_sub(first_elapsed).unwrap_or(first_now);
     actor
@@ -43311,21 +43631,65 @@ async fn missing_qc_height_stall_mode_limits_missing_qc_view_rotation_to_one_per
         view: current_view,
         since: first_start,
     });
+    actor
+        .subsystems
+        .propose
+        .proposals_seen
+        .insert((height, current_view));
+    actor
+        .subsystems
+        .propose
+        .proposals_seen
+        .insert((height, current_view));
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: first_start,
+    });
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: first_start,
+    });
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: first_start,
+    });
     actor.subsystems.propose.last_pacemaker_attempt = Some(first_now);
-    actor.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, current_view));
     actor.subsystems.propose.proposals_seen.clear();
 
     assert!(
         actor.force_view_change_if_idle(first_now),
-        "first timed-out missing-QC window should rotate view"
+        "baseline setup should rotate missing-QC once before applying stall-window suppression"
     );
     assert_eq!(
         actor.phase_tracker.current_view(height),
         Some(current_view.saturating_add(1))
     );
 
+    let stall_window = actor.missing_qc_height_stall_window();
     let next_view = current_view.saturating_add(1);
-    let second_now = first_now + Duration::from_millis(1);
+    let second_now = first_now
+        .checked_add(Duration::from_millis(1))
+        .unwrap_or(first_now);
+    let stale = second_now
+        .checked_sub(Duration::from_secs(45))
+        .unwrap_or(second_now);
+    let _ = insert_unresolved_missing_request_for_tests(actor, 0xA6, height, 1, stale, stale);
+    actor.missing_qc_height_stall = Some(super::MissingQcHeightStallState {
+        height,
+        committed_height: actor.committed_height_snapshot(),
+        entered_at: second_now,
+        last_window_at: second_now,
+        windows_without_commit_progress: 3,
+        mode_active: true,
+        window_index: 0,
+        last_rotation_at: Some(second_now),
+        last_rotation_window_index: Some(0),
+        last_reacquire_window_index: None,
+    });
+
     let timeout_with_proposal = super::idle_view_timeout(
         true,
         actor.commit_quorum_timeout(),
@@ -43333,7 +43697,7 @@ async fn missing_qc_height_stall_mode_limits_missing_qc_view_rotation_to_one_per
         actor.runtime_da_enabled(),
     );
     let second_elapsed = timeout_with_proposal
-        .saturating_add(availability_timeout)
+        .saturating_add(actor.recovery_missing_qc_reacquire_window())
         .saturating_add(Duration::from_millis(1));
     let second_start = second_now.checked_sub(second_elapsed).unwrap_or(second_now);
     actor
@@ -43369,7 +43733,7 @@ async fn missing_qc_height_stall_mode_limits_missing_qc_view_rotation_to_one_per
         "suppressed same-window rotation should not increment MissingQc cause counters"
     );
 
-    let third_now = first_now + stall_window + Duration::from_millis(1);
+    let third_now = second_now + stall_window + Duration::from_millis(1);
     let third_start = third_now.checked_sub(second_elapsed).unwrap_or(third_now);
     actor
         .phase_tracker
