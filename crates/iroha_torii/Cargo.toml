@@ -92,7 +92,6 @@ sorafs_node = { path = "../sorafs_node" }
 iroha_version = { workspace = true }
 iroha_torii_shared = { workspace = true }
 iroha_futures = { workspace = true }
-iroha_macro = { workspace = true }
 iroha_p2p = { workspace = true }
 iroha_schema = { workspace = true, optional = true }
 iroha_schema_gen = { workspace = true, optional = true }
@@ -108,7 +107,6 @@ thiserror = { workspace = true }
 displaydoc = { workspace = true }
 futures = { workspace = true, features = ["std", "async-await"] }
 axum = { workspace = true, features = ["multipart", "ws", "query", "json", "tokio", "http1", "macros", "original-uri"] }
-axum-macros = "0.5.0"
 tower-http = { version = "0.6.6", features = ["trace", "timeout"] }
 tower = "0.5.2"
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
