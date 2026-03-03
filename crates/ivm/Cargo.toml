@@ -227,5 +227,3 @@ harness = false
 name = "bench_aes128_stream"
 path = "benches/bench_aes128_stream.rs"
 harness = false
-[build-dependencies]
-cargo_metadata = "0.23.0"
