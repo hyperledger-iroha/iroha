@@ -252,6 +252,10 @@ impl Actor {
             &mut self.subsystems.propose.forced_view_after_timeout,
             &mut self.subsystems.propose.last_missing_qc_timeout_trigger,
             &mut self.subsystems.propose.last_missing_qc_reacquire_attempt,
+            &mut self
+                .subsystems
+                .propose
+                .last_missing_qc_reacquire_without_dependency_at,
             &mut self.subsystems.propose.proposal_liveness,
             &mut self.subsystems.propose.last_pacemaker_attempt,
             &mut self.subsystems.propose.last_successful_proposal,
