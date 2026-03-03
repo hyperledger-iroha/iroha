@@ -6685,6 +6685,8 @@ pub struct Offline {
     pub android_trust_anchors: Vec<Vec<u8>>,
     /// Skip platform attestation verification (for local testing only).
     pub skip_platform_attestation: bool,
+    /// Skip build claim verification (for local testing only).
+    pub skip_build_claim_verification: bool,
 }
 
 impl Default for Offline {
@@ -6702,6 +6704,8 @@ impl Default for Offline {
             escrow_accounts: BTreeMap::new(),
             android_trust_anchors: Vec::new(),
             skip_platform_attestation: defaults::settlement::offline::SKIP_PLATFORM_ATTESTATION,
+            skip_build_claim_verification:
+                defaults::settlement::offline::SKIP_BUILD_CLAIM_VERIFICATION,
         }
     }
 }

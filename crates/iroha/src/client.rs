@@ -9551,6 +9551,8 @@ where
     // Keep track of the block height in which the transaction was approved
     // so we can later detect the corresponding block finalization event.
     let mut block_height = None;
+    // Remember whether we have observed a matching committed block event.
+    let mut committed_block_observed = false;
     // Track when the transaction first entered the queue.
     let mut queued_at: Option<Instant> = None;
     let poll_enabled = poll_interval != Duration::ZERO;
@@ -9587,6 +9589,9 @@ where
                         }
                         TxConfirmationStatus::Approved(height) => {
                             if let Some(height) = height {
+                                if block_height != Some(height) {
+                                    committed_block_observed = false;
+                                }
                                 block_height = Some(height);
                             }
                         }
@@ -9642,7 +9647,11 @@ where
                                         height = ?transaction_event.block_height(),
                                         "transaction approved"
                                     );
-                                    block_height = transaction_event.block_height();
+                                    let next_height = transaction_event.block_height();
+                                    if block_height != next_height {
+                                        committed_block_observed = false;
+                                    }
+                                    block_height = next_height;
                                 }
                                 TransactionStatus::Rejected(reason) => {
                                     warn!(%hash, ?reason, "transaction rejected during confirmation stream");
@@ -9659,7 +9668,64 @@ where
                             }
                         }
                         PipelineEventBox::Block(block_event) => {
-                            if Some(block_event.header().height()) == block_height {
+                            let event_height = block_event.header().height();
+                            if block_height.is_none() && poll_enabled {
+                                match status_check() {
+                                    Ok(Some(status)) => match status {
+                                        TxConfirmationStatus::Queued => {
+                                            if let Some(first) = queued_at {
+                                                let elapsed = first.elapsed();
+                                                if elapsed > max_queued_duration {
+                                                    warn!(%hash, ?elapsed, "transaction remained queued");
+                                                    return Some(Err(tx_confirmation_final_report(eyre!(
+                                                        "transaction queued for too long"
+                                                    ))));
+                                                }
+                                            } else {
+                                                queued_at = Some(Instant::now());
+                                                debug!(%hash, "transaction entered queue");
+                                            }
+                                        }
+                                        TxConfirmationStatus::Approved(height) => {
+                                            if let Some(height) = height {
+                                                if block_height != Some(height) {
+                                                    committed_block_observed = false;
+                                                }
+                                                block_height = Some(height);
+                                            }
+                                        }
+                                        TxConfirmationStatus::Committed => {
+                                            debug!(%hash, "transaction committed; awaiting applied");
+                                        }
+                                        TxConfirmationStatus::Applied => return Some(Ok(hash)),
+                                        TxConfirmationStatus::Rejected(Some(reason)) => {
+                                            return Some(Err(tx_confirmation_final_report(
+                                                tx_rejection_to_report(&reason),
+                                            )));
+                                        }
+                                        TxConfirmationStatus::Rejected(None) => {
+                                            return Some(Err(tx_confirmation_final_report(eyre!(
+                                                "Transaction rejected"
+                                            ))));
+                                        }
+                                        TxConfirmationStatus::Expired => {
+                                            return Some(Err(tx_confirmation_final_report(eyre!(
+                                                "Transaction expired"
+                                            ))));
+                                        }
+                                    },
+                                    Ok(None) => {}
+                                    Err(err) => {
+                                        debug!(
+                                            %hash,
+                                            ?err,
+                                            "status check failed while correlating block event; waiting"
+                                        );
+                                    }
+                                }
+                            }
+
+                            if Some(event_height) == block_height {
                                 match block_event.status() {
                                     BlockStatus::Applied => {
                                         debug!(
@@ -9703,12 +9769,27 @@ where
                                                 | TxConfirmationStatus::Committed,
                                             )
                                             | None) => {
+                                                if committed_block_observed {
+                                                    debug!(
+                                                        %hash,
+                                                        "block committed+applied observed; accepting despite stale polled status"
+                                                    );
+                                                    return Some(Ok(hash));
+                                                }
                                                 debug!(
                                                     %hash,
                                                     "block applied observed before final transaction status; waiting"
                                                 );
                                             }
                                             Err(err) => {
+                                                if committed_block_observed {
+                                                    debug!(
+                                                        %hash,
+                                                        ?err,
+                                                        "status check failed after committed+applied block events; accepting"
+                                                    );
+                                                    return Some(Ok(hash));
+                                                }
                                                 debug!(
                                                     %hash,
                                                     ?err,
@@ -9725,6 +9806,15 @@ where
                                             "transaction committed observed in block event"
                                         );
                                         return Some(Ok(hash));
+                                    }
+                                    BlockStatus::Committed => {
+                                        debug!(
+                                            %hash,
+                                            height = block_event.header().height().get(),
+                                            status = ?block_event.status(),
+                                            "transaction committed observed in block event"
+                                        );
+                                        committed_block_observed = true;
                                     }
                                     _ => {}
                                 }
@@ -15200,7 +15290,7 @@ mod tests {
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_JSON)
-            .body(br#"{}"#.to_vec())
+            .body(br"{}".to_vec())
             .unwrap();
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
 

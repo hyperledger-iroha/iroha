@@ -3279,6 +3279,8 @@ pub mod settlement {
         pub const MAX_RECEIPT_AGE_MS: u64 = 86_400_000;
         /// Whether to skip platform attestation verification (for local testing only).
         pub const SKIP_PLATFORM_ATTESTATION: bool = false;
+        /// Whether to skip build claim verification (for local testing only).
+        pub const SKIP_BUILD_CLAIM_VERIFICATION: bool = false;
     }
     /// Router defaults (shadow price, guard rails).
     pub mod router {

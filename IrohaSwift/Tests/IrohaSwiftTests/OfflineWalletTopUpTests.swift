@@ -210,12 +210,14 @@ final class OfflineWalletTopUpTests: XCTestCase {
         }
 
         let wallet = try makeWallet()
+        let existingRecordData = try makeRecordData(for: existing)
         let response = try await wallet.reprovisionAllowance(
             certificateIdHex: "deadbeef",
-            currentCertificate: existing,
+            currentCertificateRecordData: existingRecordData,
             newCommitment: Data(repeating: 0x44, count: 32),
             authority: existing.controller,
             privateKey: "ed0120deadbeef",
+            lineage: OfflineCertificateLineage(scope: "test", epoch: 2, prevCertificateIdHex: "deadbeef"),
             recordVerdict: true,
             recordedAt: 999
         )
@@ -276,12 +278,14 @@ final class OfflineWalletTopUpTests: XCTestCase {
         }
 
         let wallet = try makeWallet()
+        let existingRecordData = try makeRecordData(for: existing)
         _ = try await wallet.reprovisionAllowance(
             certificateIdHex: "deadbeef",
-            currentCertificate: existing,
+            currentCertificateRecordData: existingRecordData,
             newCommitment: Data(repeating: 0x55, count: 32),
             authority: existing.controller,
             privateKey: "ed0120deadbeef",
+            lineage: OfflineCertificateLineage(scope: "test", epoch: 2, prevCertificateIdHex: "deadbeef"),
             recordVerdict: false
         )
         XCTAssertNil(wallet.verdictMetadata(for: renewedCertificateIdHex))
@@ -353,7 +357,6 @@ final class OfflineWalletTopUpTests: XCTestCase {
     private func makeDraft(from certificate: OfflineWalletCertificate) -> OfflineWalletCertificateDraft {
         OfflineWalletCertificateDraft(
             controller: certificate.controller,
-            operatorId: certificate.operatorId,
             allowance: certificate.allowance,
             spendPublicKey: certificate.spendPublicKey,
             attestationReport: certificate.attestationReport,
@@ -365,6 +368,15 @@ final class OfflineWalletTopUpTests: XCTestCase {
             attestationNonce: certificate.attestationNonce,
             refreshAtMs: certificate.refreshAtMs
         )
+    }
+
+    private func makeRecordData(for certificate: OfflineWalletCertificate) throws -> Data {
+        let toriiCertificate = try certificate.toriiJSON()
+        let certificateData = try toriiCertificate.encodedData()
+        guard let certificateObject = try JSONSerialization.jsonObject(with: certificateData) as? [String: Any] else {
+            throw XCTSkip("certificate must be a JSON object")
+        }
+        return try JSONSerialization.data(withJSONObject: ["certificate": certificateObject], options: [.sortedKeys])
     }
 
     private func makeIssuePayload(certificate: OfflineWalletCertificate) throws -> Data {

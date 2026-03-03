@@ -462,6 +462,71 @@ async fn wait_for_council_member_present(
     }
 }
 
+fn parliament_body_json_key(body: ParliamentBody) -> &'static str {
+    match body {
+        ParliamentBody::RulesCommittee => "rules-committee",
+        ParliamentBody::AgendaCouncil => "agenda-council",
+        ParliamentBody::InterestPanel => "interest-panel",
+        ParliamentBody::ReviewPanel => "review-panel",
+        ParliamentBody::PolicyJury => "policy-jury",
+        ParliamentBody::OversightCommittee => "oversight-committee",
+        ParliamentBody::FmaCommittee => "fma-committee",
+    }
+}
+
+fn proposal_snapshot_body_members(
+    proposal_payload: &norito::json::Value,
+    body: ParliamentBody,
+) -> Result<Option<Vec<iroha::data_model::account::AccountId>>> {
+    let body_key = parliament_body_json_key(body);
+    let Some(parliament_snapshot) = proposal_payload
+        .get("proposal")
+        .and_then(|value| value.get("parliament_snapshot"))
+    else {
+        return Ok(None);
+    };
+    if matches!(parliament_snapshot, norito::json::Value::Null) {
+        return Ok(None);
+    }
+    let members = proposal_payload
+        .get("proposal")
+        .and_then(|_| Some(parliament_snapshot))
+        .and_then(|value| value.get("bodies"))
+        .and_then(|value| value.get("rosters"))
+        .and_then(|value| value.get(body_key))
+        .and_then(|value| value.get("members"))
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| {
+            eyre!("proposal payload missing roster members for body `{body_key}`: {proposal_payload:?}")
+        })?;
+    let mut parsed = Vec::with_capacity(members.len());
+    for entry in members {
+        let raw = entry
+            .as_str()
+            .ok_or_else(|| eyre!("invalid non-string roster member in `{body_key}`: {entry:?}"))?;
+        parsed.push(raw.parse().wrap_err_with(|| {
+            format!("failed to parse roster member account id `{raw}` in `{body_key}`")
+        })?);
+    }
+    if parsed.is_empty() {
+        return Err(eyre!(
+            "proposal roster members for body `{body_key}` is empty"
+        ));
+    }
+    Ok(Some(parsed))
+}
+
+fn find_account_keypair<'a>(
+    accounts: &'a [(iroha::data_model::account::AccountId, KeyPair)],
+    account_id: &iroha::data_model::account::AccountId,
+) -> Result<&'a KeyPair> {
+    accounts
+        .iter()
+        .find(|(candidate_id, _)| candidate_id == account_id)
+        .map(|(_, keypair)| keypair)
+        .ok_or_else(|| eyre!("missing key pair for account `{account_id}`"))
+}
+
 async fn wait_for_domain_registration(
     client: &Client,
     domain_id: &DomainId,
@@ -1407,25 +1472,45 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     .await
     .wrap_err("unauthorized proposal approval attempt should be rejected")?;
 
-    let first_council_account_id = council_members
+    let proposal_payload = alice
+        .get_gov_proposal_json(&proposal_id_hex)
+        .wrap_err("query first governance proposal payload for parliament snapshot")?;
+    let rules_approvers =
+        proposal_snapshot_body_members(&proposal_payload, ParliamentBody::RulesCommittee)
+            .wrap_err("extract rules committee roster for first proposal")?
+            .unwrap_or_else(|| {
+                citizens
+                    .iter()
+                    .map(|(account_id, _)| account_id.clone())
+                    .collect()
+            });
+    let agenda_approvers =
+        proposal_snapshot_body_members(&proposal_payload, ParliamentBody::AgendaCouncil)
+            .wrap_err("extract agenda council roster for first proposal")?
+            .unwrap_or_else(|| {
+                citizens
+                    .iter()
+                    .map(|(account_id, _)| account_id.clone())
+                    .collect()
+            });
+
+    let first_rules_approver = rules_approvers
         .first()
         .cloned()
-        .expect("at least one council member is required");
-    let (_, first_council_key_pair) = citizens
-        .iter()
-        .find(|(account_id, _)| account_id == &first_council_account_id)
-        .expect("first council account should have a generated key pair");
-    let mut first_council_client = ready_peer.client_for(
-        &first_council_account_id,
-        first_council_key_pair.private_key().clone(),
+        .expect("rules committee roster should include at least one member");
+    let first_rules_key_pair = find_account_keypair(&citizens, &first_rules_approver)
+        .wrap_err("find key pair for first rules committee approver")?;
+    let mut first_rules_client = ready_peer.client_for(
+        &first_rules_approver,
+        first_rules_key_pair.private_key().clone(),
     );
-    tune_client_timeouts(&mut first_council_client);
-    first_council_client
+    tune_client_timeouts(&mut first_rules_client);
+    first_rules_client
         .submit(ApproveGovernanceProposal {
             body: ParliamentBody::RulesCommittee,
             proposal_id,
         })
-        .wrap_err("submit first council rules committee approval")?;
+        .wrap_err("submit first rules committee approval")?;
     wait_for_referendum_found(&alice, &referendum_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for referendum record to appear")?;
@@ -1434,36 +1519,43 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .wrap_err("wait for referendum to remain proposed before agenda council quorum")?;
     eprintln!("sora smoke: referendum remained proposed after partial council approvals");
 
-    for (approval_idx, council_account_id) in council_members.iter().enumerate() {
-        let (_, council_key_pair) = citizens
-            .iter()
-            .find(|(account_id, _)| account_id == council_account_id)
-            .expect("council account should have a generated key pair");
-        let mut council_member_client =
-            ready_peer.client_for(council_account_id, council_key_pair.private_key().clone());
-        tune_client_timeouts(&mut council_member_client);
-        council_member_client
+    for (approval_idx, agenda_account_id) in agenda_approvers.iter().enumerate() {
+        let agenda_key_pair =
+            find_account_keypair(&citizens, agenda_account_id).wrap_err_with(|| {
+                format!("find key pair for agenda approver #{approval_idx} ({agenda_account_id})")
+            })?;
+        let mut agenda_client =
+            ready_peer.client_for(agenda_account_id, agenda_key_pair.private_key().clone());
+        tune_client_timeouts(&mut agenda_client);
+        agenda_client
             .submit(ApproveGovernanceProposal {
                 body: ParliamentBody::AgendaCouncil,
                 proposal_id,
             })
             .wrap_err_with(|| {
                 format!(
-                    "submit agenda council approval with council member #{approval_idx} ({council_account_id})"
+                    "submit agenda council approval with roster member #{approval_idx} ({agenda_account_id})"
                 )
             })?;
-        if approval_idx > 0 {
-            council_member_client
-                .submit(ApproveGovernanceProposal {
-                    body: ParliamentBody::RulesCommittee,
-                    proposal_id,
-                })
-                .wrap_err_with(|| {
-                    format!(
-                        "submit rules committee approval with council member #{approval_idx} ({council_account_id})"
-                    )
-                })?;
-        }
+    }
+    for (approval_idx, rules_account_id) in rules_approvers.iter().skip(1).enumerate() {
+        let rules_key_pair =
+            find_account_keypair(&citizens, rules_account_id).wrap_err_with(|| {
+                format!("find key pair for rules approver #{approval_idx} ({rules_account_id})")
+            })?;
+        let mut rules_client =
+            ready_peer.client_for(rules_account_id, rules_key_pair.private_key().clone());
+        tune_client_timeouts(&mut rules_client);
+        rules_client
+            .submit(ApproveGovernanceProposal {
+                body: ParliamentBody::RulesCommittee,
+                proposal_id,
+            })
+            .wrap_err_with(|| {
+                format!(
+                    "submit additional rules committee approval with roster member #{approval_idx} ({rules_account_id})"
+                )
+            })?;
     }
     wait_for_referendum_status(&alice, &referendum_id, "Open", Duration::from_secs(180))
         .await
@@ -1689,28 +1781,66 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .wrap_err("wait for second governance proposal to be queryable")?;
     eprintln!("sora smoke: rejection-path proposal submitted");
 
-    for (approval_idx, council_account_id) in council_members.iter().enumerate() {
-        let (_, council_key_pair) = citizens
-            .iter()
-            .find(|(account_id, _)| account_id == council_account_id)
-            .expect("council account should have a generated key pair");
-        let mut council_member_client =
-            ready_peer.client_for(council_account_id, council_key_pair.private_key().clone());
-        tune_client_timeouts(&mut council_member_client);
-        council_member_client
-            .submit_all([
-                ApproveGovernanceProposal {
-                    body: ParliamentBody::RulesCommittee,
-                    proposal_id: reject_proposal_id,
-                },
-                ApproveGovernanceProposal {
-                    body: ParliamentBody::AgendaCouncil,
-                    proposal_id: reject_proposal_id,
-                },
-            ])
+    let reject_proposal_payload = alice
+        .get_gov_proposal_json(&reject_proposal_id_hex)
+        .wrap_err("query second governance proposal payload for parliament snapshot")?;
+    let reject_rules_approvers =
+        proposal_snapshot_body_members(&reject_proposal_payload, ParliamentBody::RulesCommittee)
+            .wrap_err("extract rules committee roster for second proposal")?
+            .unwrap_or_else(|| {
+                citizens
+                    .iter()
+                    .map(|(account_id, _)| account_id.clone())
+                    .collect()
+            });
+    let reject_agenda_approvers =
+        proposal_snapshot_body_members(&reject_proposal_payload, ParliamentBody::AgendaCouncil)
+            .wrap_err("extract agenda council roster for second proposal")?
+            .unwrap_or_else(|| {
+                citizens
+                    .iter()
+                    .map(|(account_id, _)| account_id.clone())
+                    .collect()
+            });
+
+    for (approval_idx, rules_account_id) in reject_rules_approvers.iter().enumerate() {
+        let rules_key_pair =
+            find_account_keypair(&citizens, rules_account_id).wrap_err_with(|| {
+                format!(
+                    "find key pair for rejection-path rules approver #{approval_idx} ({rules_account_id})"
+                )
+            })?;
+        let mut rules_client =
+            ready_peer.client_for(rules_account_id, rules_key_pair.private_key().clone());
+        tune_client_timeouts(&mut rules_client);
+        rules_client
+            .submit(ApproveGovernanceProposal {
+                body: ParliamentBody::RulesCommittee,
+                proposal_id: reject_proposal_id,
+            })
             .wrap_err_with(|| {
                 format!(
-                    "approve rejection-path proposal in required parliament bodies with council member #{approval_idx} ({council_account_id})"
+                    "submit rejection-path rules approval with roster member #{approval_idx} ({rules_account_id})"
+                )
+            })?;
+    }
+    for (approval_idx, agenda_account_id) in reject_agenda_approvers.iter().enumerate() {
+        let agenda_key_pair = find_account_keypair(&citizens, agenda_account_id).wrap_err_with(|| {
+            format!(
+                "find key pair for rejection-path agenda approver #{approval_idx} ({agenda_account_id})"
+            )
+        })?;
+        let mut agenda_client =
+            ready_peer.client_for(agenda_account_id, agenda_key_pair.private_key().clone());
+        tune_client_timeouts(&mut agenda_client);
+        agenda_client
+            .submit(ApproveGovernanceProposal {
+                body: ParliamentBody::AgendaCouncil,
+                proposal_id: reject_proposal_id,
+            })
+            .wrap_err_with(|| {
+                format!(
+                    "submit rejection-path agenda approval with roster member #{approval_idx} ({agenda_account_id})"
                 )
             })?;
     }

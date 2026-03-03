@@ -80,18 +80,19 @@ use iroha_data_model::{
         PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
     },
     offline::{
-        AGGREGATE_PROOF_VERSION_V1, AggregateProofEnvelope, AndroidIntegrityPolicy,
-        AppleAppAttestProof, OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY, OFFLINE_LINEAGE_EPOCH_KEY,
+        AGGREGATE_PROOF_VERSION_V1, ANDROID_PROVISIONED_APP_ID_KEY, AggregateProofEnvelope,
+        AndroidIntegrityMetadata, AndroidIntegrityPolicy, AppleAppAttestProof,
+        OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY, OFFLINE_LINEAGE_EPOCH_KEY,
         OFFLINE_LINEAGE_PREV_CERTIFICATE_ID_HEX_KEY, OFFLINE_LINEAGE_SCOPE_KEY,
         OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceCommitment, OfflineAllowanceRecord,
-        OfflineBalanceProof, OfflineCounterState, OfflineCounterSummary, OfflinePlatformProof,
-        OfflinePlatformTokenSnapshot, OfflineProofRequestCounter, OfflineProofRequestError,
-        OfflineProofRequestKind, OfflineProofRequestReplay, OfflineProofRequestSum,
-        OfflineSpendReceipt, OfflineToOnlineTransfer, OfflineTransferLifecycleEntry,
-        OfflineTransferRecord, OfflineTransferRejectionPlatform, OfflineTransferRejectionReason,
-        OfflineTransferStatus, OfflineVerdictRevocation, OfflineVerdictRevocationReason,
-        OfflineVerdictSnapshot, OfflineWalletCertificate, OfflineWalletPolicy,
-        compute_receipts_root,
+        OfflineBalanceProof, OfflineBuildClaim, OfflineBuildClaimPlatform, OfflineCounterState,
+        OfflineCounterSummary, OfflinePlatformProof, OfflinePlatformTokenSnapshot,
+        OfflineProofRequestCounter, OfflineProofRequestError, OfflineProofRequestKind,
+        OfflineProofRequestReplay, OfflineProofRequestSum, OfflineSpendReceipt,
+        OfflineToOnlineTransfer, OfflineTransferLifecycleEntry, OfflineTransferRecord,
+        OfflineTransferRejectionPlatform, OfflineTransferRejectionReason, OfflineTransferStatus,
+        OfflineVerdictRevocation, OfflineVerdictRevocationReason, OfflineVerdictSnapshot,
+        OfflineWalletCertificate, OfflineWalletPolicy, compute_receipts_root,
     },
     peer::PeerId,
     prelude::*,
@@ -4568,17 +4569,11 @@ fn decode_and_validate_evidence(
                 iroha_core::sumeragi::consensus::NPOS_TAG
             }
         };
-        let prf_seed = matches!(
-            consensus_mode,
-            iroha_config::parameters::actual::ConsensusMode::Npos
-        )
-        .then(|| {
-            iroha_core::sumeragi::npos_seed_for_height_from_world(
-                &world,
-                state.chain_id_ref(),
-                height,
-            )
-        });
+        let prf_seed = Some(iroha_core::sumeragi::npos_seed_for_height_from_world(
+            &world,
+            state.chain_id_ref(),
+            height,
+        ));
         let context = iroha_core::sumeragi::EvidenceValidationContext {
             topology: &topology,
             chain_id,
@@ -4595,9 +4590,11 @@ fn decode_and_validate_evidence(
         };
     }
 
-    let npos_seed = world.sumeragi_npos_parameters().is_some().then(|| {
-        iroha_core::sumeragi::npos_seed_for_height_from_world(&world, state.chain_id_ref(), height)
-    });
+    let prf_seed = Some(iroha_core::sumeragi::npos_seed_for_height_from_world(
+        &world,
+        state.chain_id_ref(),
+        height,
+    ));
     let mut errors = Vec::new();
     for mode_tag in [
         iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
@@ -4607,11 +4604,7 @@ fn decode_and_validate_evidence(
             topology: &topology,
             chain_id,
             mode_tag,
-            prf_seed: if mode_tag == iroha_core::sumeragi::consensus::NPOS_TAG {
-                npos_seed
-            } else {
-                None
-            },
+            prf_seed,
         };
         match iroha_core::sumeragi::validate_evidence(&evidence, &context) {
             Ok(()) => return Ok(evidence),
@@ -4984,6 +4977,283 @@ mod evidence_submit_tests {
         let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
         let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
             .expect("evidence should validate with subject-height seed");
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
+
+        iroha_core::sumeragi::status::set_mode_tags(
+            &prev_mode,
+            prev_staged.as_deref(),
+            prev_activation,
+        );
+    }
+
+    #[test]
+    fn decode_and_validate_evidence_permissioned_uses_prf_seed() {
+        let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
+        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
+        let (prev_mode, prev_staged, prev_activation, _) =
+            iroha_core::sumeragi::status::mode_tags();
+        iroha_core::sumeragi::status::set_mode_tags(
+            iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
+            None,
+            None,
+        );
+
+        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer0 = PeerId::new(keypair0.public_key().clone());
+        let peer1 = PeerId::new(keypair1.public_key().clone());
+        let mut peer_list = vec![peer0.clone(), peer1.clone()];
+        peer_list.sort();
+        let topology = iroha_core::sumeragi::network_topology::Topology::new(peer_list.clone());
+
+        let height = 1_u64;
+        let view = 0_u64;
+        let canonical_leader = topology
+            .as_ref()
+            .first()
+            .expect("topology should have at least one peer")
+            .clone();
+        let mut seed_epoch1 = None;
+        for byte in 0u8..=u8::MAX {
+            let seed = [byte; 32];
+            let mut rotated = topology.clone();
+            rotated.shuffle_prf(seed, height);
+            rotated.nth_rotation(view);
+            let leader = rotated
+                .as_ref()
+                .first()
+                .expect("rotated topology should have at least one peer");
+            if leader != &canonical_leader {
+                seed_epoch1 = Some(seed);
+                break;
+            }
+        }
+        let seed_epoch1 = seed_epoch1.expect("must find a seed that changes permissioned leader");
+        let mut rotated = topology.clone();
+        rotated.shuffle_prf(seed_epoch1, height);
+        rotated.nth_rotation(view);
+        let signer_peer = rotated
+            .as_ref()
+            .first()
+            .expect("rotated topology should have at least one peer");
+        let signer_keypair = if signer_peer == &peer0 {
+            &keypair0
+        } else {
+            &keypair1
+        };
+
+        let world = iroha_core::state::World::default();
+        {
+            let mut block = world.block();
+            let params = SumeragiNposParameters {
+                epoch_length_blocks: 1,
+                ..SumeragiNposParameters::default()
+            };
+            block.parameters.get_mut().custom.insert(
+                SumeragiNposParameters::parameter_id(),
+                params.into_custom_parameter(),
+            );
+            block.vrf_epochs_mut_for_testing().insert(
+                0,
+                VrfEpochRecord {
+                    epoch: 0,
+                    seed: seed_epoch1,
+                    epoch_length: 1,
+                    commit_deadline_offset: 0,
+                    reveal_deadline_offset: 0,
+                    roster_len: 2,
+                    finalized: false,
+                    updated_at_height: 0,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            block.vrf_epochs_mut_for_testing().insert(
+                1,
+                VrfEpochRecord {
+                    epoch: 1,
+                    seed: [0x00; 32],
+                    epoch_length: 1,
+                    commit_deadline_offset: 0,
+                    reveal_deadline_offset: 0,
+                    roster_len: 2,
+                    finalized: false,
+                    updated_at_height: 1,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            block.commit();
+        }
+        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
+        let query = iroha_core::query::store::LiveQueryStore::start_test();
+        let state = iroha_core::state::State::new_for_testing(world, kura, query);
+        {
+            let mut block = state.commit_topology.block();
+            block.push(peer0);
+            block.push(peer1);
+            block.commit();
+        }
+
+        let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
+        let mut v1 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x11);
+        v1.signer = 0;
+        let mut v2 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x22);
+        v2.signer = 0;
+        let ev = Evidence {
+            kind: EvidenceKind::DoublePrepare,
+            payload: EvidencePayload::DoubleVote { v1, v2 },
+        };
+        let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
+        let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
+            .expect("permissioned evidence should validate with PRF-seeded topology");
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
+
+        iroha_core::sumeragi::status::set_mode_tags(
+            &prev_mode,
+            prev_staged.as_deref(),
+            prev_activation,
+        );
+    }
+
+    #[test]
+    fn decode_and_validate_evidence_unknown_mode_uses_dual_mode_prf_seed() {
+        let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
+        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
+        let (prev_mode, prev_staged, prev_activation, _) =
+            iroha_core::sumeragi::status::mode_tags();
+        // Force the fallback_mode == None branch.
+        iroha_core::sumeragi::status::set_mode_tags("", None, None);
+
+        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer0 = PeerId::new(keypair0.public_key().clone());
+        let peer1 = PeerId::new(keypair1.public_key().clone());
+        let mut peer_list = vec![peer0.clone(), peer1.clone()];
+        peer_list.sort();
+        let topology = iroha_core::sumeragi::network_topology::Topology::new(peer_list.clone());
+
+        let height = 1_u64;
+        let view = 0_u64;
+        let canonical_leader = topology
+            .as_ref()
+            .first()
+            .expect("topology should have at least one peer")
+            .clone();
+        let mut seed_epoch1 = None;
+        for byte in 0u8..=u8::MAX {
+            let seed = [byte; 32];
+            let mut rotated = topology.clone();
+            rotated.shuffle_prf(seed, height);
+            rotated.nth_rotation(view);
+            let leader = rotated
+                .as_ref()
+                .first()
+                .expect("rotated topology should have at least one peer");
+            if leader != &canonical_leader {
+                seed_epoch1 = Some(seed);
+                break;
+            }
+        }
+        let seed_epoch1 = seed_epoch1.expect("must find a seed that changes permissioned leader");
+        let mut rotated = topology.clone();
+        rotated.shuffle_prf(seed_epoch1, height);
+        rotated.nth_rotation(view);
+        let signer_peer = rotated
+            .as_ref()
+            .first()
+            .expect("rotated topology should have at least one peer");
+        let signer_keypair = if signer_peer == &peer0 {
+            &keypair0
+        } else {
+            &keypair1
+        };
+
+        let world = iroha_core::state::World::default();
+        {
+            let mut block = world.block();
+            let params = SumeragiNposParameters {
+                epoch_length_blocks: 1,
+                ..SumeragiNposParameters::default()
+            };
+            block.parameters.get_mut().custom.insert(
+                SumeragiNposParameters::parameter_id(),
+                params.into_custom_parameter(),
+            );
+            block.vrf_epochs_mut_for_testing().insert(
+                0,
+                VrfEpochRecord {
+                    epoch: 0,
+                    seed: seed_epoch1,
+                    epoch_length: 1,
+                    commit_deadline_offset: 0,
+                    reveal_deadline_offset: 0,
+                    roster_len: 2,
+                    finalized: false,
+                    updated_at_height: 0,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            block.vrf_epochs_mut_for_testing().insert(
+                1,
+                VrfEpochRecord {
+                    epoch: 1,
+                    seed: [0x00; 32],
+                    epoch_length: 1,
+                    commit_deadline_offset: 0,
+                    reveal_deadline_offset: 0,
+                    roster_len: 2,
+                    finalized: false,
+                    updated_at_height: 1,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            block.commit();
+        }
+        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
+        let query = iroha_core::query::store::LiveQueryStore::start_test();
+        let state = iroha_core::state::State::new_for_testing(world, kura, query);
+        {
+            let mut block = state.commit_topology.block();
+            block.push(peer0);
+            block.push(peer1);
+            block.commit();
+        }
+
+        let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
+        let mut v1 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x11);
+        v1.signer = 0;
+        let mut v2 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x22);
+        v2.signer = 0;
+        let ev = Evidence {
+            kind: EvidenceKind::DoublePrepare,
+            payload: EvidencePayload::DoubleVote { v1, v2 },
+        };
+        let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
+        let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
+            .expect("unknown-mode fallback should still validate with PRF-seeded topology");
         assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
 
         iroha_core::sumeragi::status::set_mode_tags(
@@ -21859,6 +22129,17 @@ fn settlement_snapshot_value(
     json_object(vec![json_entry("dvp", dvp), json_entry("pvp", pvp)])
 }
 
+fn hash_with_prefix<H>(hash: H) -> String
+where
+    H: norito::json::JsonSerialize,
+{
+    json::to_value(&hash)
+        .expect("serialize hash for status snapshot json")
+        .as_str()
+        .expect("serialized hash should be a JSON string")
+        .to_owned()
+}
+
 fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value {
     let highest_qc = json_object(vec![
         json_entry("height", snap.highest_qc_height),
@@ -21866,7 +22147,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "subject_block_hash",
             snap.highest_qc_subject
-                .map(|h| Value::from(format!("{h}")))
+                .map(|h| Value::from(hash_with_prefix(h)))
                 .unwrap_or(Value::Null),
         ),
     ]);
@@ -21876,7 +22157,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "subject_block_hash",
             snap.locked_qc_subject
-                .map(|h| Value::from(format!("{h}")))
+                .map(|h| Value::from(hash_with_prefix(h)))
                 .unwrap_or(Value::Null),
         ),
     ]);
@@ -21888,14 +22169,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "block_hash",
             snap.commit_qc
                 .block_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry(
             "validator_set_hash",
             snap.commit_qc
                 .validator_set_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry("validator_set_len", snap.commit_qc.validator_set_len),
@@ -21908,7 +22189,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "block_hash",
             snap.commit_quorum
                 .block_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry("signatures_present", snap.commit_quorum.signatures_present),
@@ -22004,11 +22285,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                         "roster_hash",
                         entry
                             .roster_hash
-                            .map(|hash| Value::from(format!("{hash}")))
+                            .map(|hash| Value::from(hash_with_prefix(hash)))
                             .unwrap_or(Value::Null),
                     ),
                     json_entry("roster_len", entry.roster_len),
-                    json_entry("block_hash", Value::from(format!("{}", entry.block_hash))),
+                    json_entry(
+                        "block_hash",
+                        Value::from(hash_with_prefix(entry.block_hash)),
+                    ),
                     json_entry("timestamp_ms", entry.timestamp_ms),
                 ])
             })
@@ -22037,7 +22321,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                         "roster_hash",
                         entry
                             .roster_hash
-                            .map(|hash| Value::from(format!("{hash}")))
+                            .map(|hash| Value::from(hash_with_prefix(hash)))
                             .unwrap_or(Value::Null),
                     ),
                     json_entry("roster_len", entry.roster_len),
@@ -22120,7 +22404,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "block_hash",
             snap.commit_inflight
                 .block_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry("started_ms", snap.commit_inflight.started_ms),
@@ -22144,7 +22428,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "last_timeout_block_hash",
             snap.commit_inflight
                 .last_timeout_block_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry("pause_total", snap.commit_inflight.pause_total),
@@ -22267,7 +22551,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "last_block",
             snap.validation_rejects
                 .last_block
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry(
@@ -22368,7 +22652,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "stage_last_hash",
             snap.kura_store
                 .stage_last_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry("rollback_last_height", snap.kura_store.rollback_last_height),
@@ -22377,7 +22661,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "rollback_last_hash",
             snap.kura_store
                 .rollback_last_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry(
@@ -22397,7 +22681,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "lock_reset_last_hash",
             snap.kura_store
                 .lock_reset_last_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
         json_entry(
@@ -22418,7 +22702,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "last_hash",
             snap.kura_store
                 .last_hash
-                .map(|hash| Value::from(format!("{hash}")))
+                .map(|hash| Value::from(hash_with_prefix(hash)))
                 .unwrap_or(Value::Null),
         ),
     ]);
@@ -22504,7 +22788,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                     json_entry("total_chunks", entry.total_chunks),
                     json_entry("rbc_bytes_total", entry.rbc_bytes_total),
                     json_entry("teu_total", entry.teu_total),
-                    json_entry("block_hash", format!("{}", entry.block_hash)),
+                    json_entry("block_hash", hash_with_prefix(entry.block_hash)),
                 ])
             })
             .collect(),
@@ -22590,9 +22874,12 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                             json_entry("height", qc.height),
                             json_entry("view", qc.view),
                             json_entry("epoch", qc.epoch),
-                            json_entry("subject_block_hash", format!("{}", qc.subject_block_hash)),
-                            json_entry("parent_state_root", format!("{}", qc.parent_state_root)),
-                            json_entry("post_state_root", format!("{}", qc.post_state_root)),
+                            json_entry(
+                                "subject_block_hash",
+                                hash_with_prefix(qc.subject_block_hash),
+                            ),
+                            json_entry("parent_state_root", hash_with_prefix(qc.parent_state_root)),
+                            json_entry("post_state_root", hash_with_prefix(qc.post_state_root)),
                             json_entry(
                                 "signers_bitmap",
                                 Value::Array(
@@ -22615,12 +22902,12 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                     json_entry("lane_id", entry.lane_id),
                     json_entry("dataspace_id", entry.dataspace_id),
                     json_entry("block_height", entry.block_height),
-                    json_entry("block_hash", format!("{}", entry.block_header.hash())),
+                    json_entry("block_hash", hash_with_prefix(entry.block_header.hash())),
                     json_entry(
                         "da_commitment_hash",
                         entry
                             .da_commitment_hash
-                            .map(|hash| Value::from(format!("{hash}")))
+                            .map(|hash| Value::from(hash_with_prefix(hash)))
                             .unwrap_or(Value::Null),
                     ),
                     json_entry("commit_qc", commit_qc),
@@ -22629,7 +22916,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                         json::to_value(&entry.settlement_commitment)
                             .expect("serialize settlement commitment for status"),
                     ),
-                    json_entry("settlement_hash", format!("{}", entry.settlement_hash)),
+                    json_entry("settlement_hash", hash_with_prefix(entry.settlement_hash)),
                     json_entry("rbc_bytes_total", entry.rbc_bytes_total),
                 ])
             })
@@ -22647,7 +22934,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                     json_entry("total_chunks", entry.total_chunks),
                     json_entry("rbc_bytes_total", entry.rbc_bytes_total),
                     json_entry("teu_total", entry.teu_total),
-                    json_entry("block_hash", format!("{}", entry.block_hash)),
+                    json_entry("block_hash", hash_with_prefix(entry.block_hash)),
                 ])
             })
             .collect(),
@@ -22854,7 +23141,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             .iter()
             .map(|ev| {
                 json_object(vec![
-                    json_entry("block_hash", Value::from(hex::encode(ev.block_hash))),
+                    json_entry(
+                        "block_hash",
+                        Value::from(hash_with_prefix(Hash::prehashed(ev.block_hash))),
+                    ),
                     json_entry("height", ev.height),
                     json_entry("view", ev.view),
                 ])
@@ -22901,7 +23191,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             .iter()
             .map(|entry| {
                 json_object(vec![
-                    json_entry("block_hash", format!("{}", entry.block_hash)),
+                    json_entry("block_hash", hash_with_prefix(entry.block_hash)),
                     json_entry("height", entry.height),
                     json_entry("view", entry.view),
                     json_entry("chunks", entry.chunks),
@@ -23585,13 +23875,15 @@ mod status_tests {
             .get("commit_qc")
             .and_then(Value::as_object)
             .expect("commit_qc object");
+        let block_hash = hash_with_prefix(block_hash);
+        let validator_set_hash = hash_with_prefix(validator_set_hash);
         assert_eq!(
             commit_qc.get("block_hash").and_then(Value::as_str),
-            Some(format!("{block_hash}").as_str())
+            Some(block_hash.as_str())
         );
         assert_eq!(
             commit_qc.get("validator_set_hash").and_then(Value::as_str),
-            Some(format!("{validator_set_hash}").as_str())
+            Some(validator_set_hash.as_str())
         );
         assert_eq!(
             commit_qc.get("signatures_total").and_then(Value::as_u64),
@@ -23737,7 +24029,7 @@ mod status_tests {
             .get("validation_rejects")
             .and_then(Value::as_object)
             .expect("validation_rejects object");
-        let last_block_hex = format!("{last_block}");
+        let last_block_hex = hash_with_prefix(last_block);
         assert_eq!(validation.get("total").and_then(Value::as_u64), Some(3));
         assert_eq!(
             validation.get("stateless_total").and_then(Value::as_u64),
@@ -24245,7 +24537,7 @@ mod status_tests {
                 .get("settlement_hash")
                 .and_then(Value::as_str)
                 .expect("settlement hash field"),
-            format!("{}", envelope.settlement_hash)
+            hash_with_prefix(envelope.settlement_hash)
         );
         let settlement_json = relay
             .get("settlement_commitment")
@@ -24304,7 +24596,7 @@ mod status_tests {
         let entry = recent.first().and_then(Value::as_object).unwrap();
         assert_eq!(
             entry.get("block_hash").and_then(Value::as_str).unwrap(),
-            hex::encode(evicted.block_hash)
+            hash_with_prefix(Hash::prehashed(evicted.block_hash))
         );
         assert_eq!(
             entry.get("height").and_then(Value::as_u64).unwrap(),
@@ -24499,7 +24791,7 @@ mod status_tests {
     fn status_snapshot_json_includes_pending_rbc_stash_counters() {
         let hash = Hash::prehashed([0x11; Hash::LENGTH]);
         let hash_typed = HashOf::from_untyped_unchecked(hash);
-        let hash_str = format!("{hash_typed}");
+        let hash_str = hash_with_prefix(hash_typed);
         let entry = status::PendingRbcEntrySnapshot {
             block_hash: hash_typed,
             height: 9,
@@ -24667,7 +24959,7 @@ mod status_tests {
             kura.get("last_hash")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
-            Some(format!("{last_hash}"))
+            Some(hash_with_prefix(last_hash))
         );
     }
 
@@ -27428,8 +27720,12 @@ pub struct OfflineTransferProofRequest {
 pub struct OfflineWalletCertificateDraft {
     /// Account that owns the allowance.
     pub controller: AccountId,
-    /// Operator account that signs this certificate.
-    pub operator: AccountId,
+    /// Deprecated operator account supplied by older clients.
+    ///
+    /// Torii now derives the operator account from its configured operator key and
+    /// the controller domain, so this field is optional and ignored.
+    #[norito(default)]
+    pub operator: Option<AccountId>,
     /// Commitment to the allowance this certificate governs.
     pub allowance: OfflineAllowanceCommitment,
     /// Spend public key baked into the wallet.
@@ -27458,10 +27754,14 @@ pub struct OfflineWalletCertificateDraft {
 
 #[cfg(feature = "app_api")]
 impl OfflineWalletCertificateDraft {
-    fn into_certificate(self, operator_signature: Signature) -> OfflineWalletCertificate {
+    fn into_certificate(
+        self,
+        operator: AccountId,
+        operator_signature: Signature,
+    ) -> OfflineWalletCertificate {
         OfflineWalletCertificate {
             controller: self.controller,
-            operator: self.operator,
+            operator,
             allowance: self.allowance,
             spend_public_key: self.spend_public_key,
             attestation_report: self.attestation_report,
@@ -27493,6 +27793,40 @@ pub struct OfflineCertificateIssueResponse {
     pub certificate_id_hex: String,
     /// Fully signed offline wallet certificate.
     pub certificate: OfflineWalletCertificate,
+}
+
+/// Request payload for POST `/v1/offline/build-claims/issue`.
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
+pub struct OfflineBuildClaimIssueRequest {
+    /// Registered offline certificate identifier (hex, case-insensitive).
+    pub certificate_id_hex: String,
+    /// Receipt transaction identifier (hex, case-insensitive) used as claim nonce.
+    pub tx_id_hex: String,
+    /// Platform slug (`apple` or `android`).
+    pub platform: String,
+    /// Application identifier (`bundle_id` on iOS, package name on Android).
+    #[norito(default)]
+    pub app_id: Option<String>,
+    /// Certified build number. Defaults to the certificate minimum when omitted.
+    #[norito(default)]
+    pub build_number: Option<u64>,
+    /// Issuance timestamp (unix ms). Defaults to certificate `issued_at_ms`.
+    #[norito(default)]
+    pub issued_at_ms: Option<u64>,
+    /// Expiry timestamp (unix ms). Defaults to certificate `expires_at_ms`.
+    #[norito(default)]
+    pub expires_at_ms: Option<u64>,
+}
+
+/// Response payload for POST `/v1/offline/build-claims/issue`.
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
+pub struct OfflineBuildClaimIssueResponse {
+    /// Deterministic build-claim identifier (hex, lowercase).
+    pub claim_id_hex: String,
+    /// Fully signed build claim payload.
+    pub build_claim: OfflineBuildClaim,
 }
 
 /// Request payload for POST `/v1/offline/allowances`.
@@ -39003,6 +39337,181 @@ fn draft_metadata_u64(metadata: &Metadata, key: &str, label: &str) -> Result<u64
 }
 
 #[cfg(feature = "app_api")]
+const IOS_APP_ATTEST_BUNDLE_ID_KEY: &str = "ios.app_attest.bundle_id";
+
+#[cfg(feature = "app_api")]
+fn build_claim_issue_error(
+    reason: OfflineTransferRejectionReason,
+    message: impl AsRef<str>,
+) -> Error {
+    conversion_error(format!(
+        "{OFFLINE_REJECTION_REASON_PREFIX}{}:{}",
+        reason.as_label(),
+        message.as_ref()
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn parse_build_claim_platform(value: &str) -> Result<OfflineBuildClaimPlatform> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "apple" | "ios" => Ok(OfflineBuildClaimPlatform::Apple),
+        "android" => Ok(OfflineBuildClaimPlatform::Android),
+        _ => Err(build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            format!("unsupported build-claim platform `{value}`"),
+        )),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn build_claim_metadata_string(metadata: &Metadata, key: &str) -> Result<String> {
+    let name = Name::from_str(key).map_err(|err| {
+        build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            format!("invalid build-claim metadata key `{key}`: {err}"),
+        )
+    })?;
+    let value = metadata.get(&name).ok_or_else(|| {
+        build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            format!("missing build-claim metadata `{key}`"),
+        )
+    })?;
+    let value = value.try_into_any::<String>().map_err(|err| {
+        build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            format!("build-claim metadata `{key}` is not a string: {err}"),
+        )
+    })?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            format!("build-claim metadata `{key}` must not be empty"),
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_build_claim_whitelist_app_id(
+    requested_app_id: Option<&str>,
+    package_names: &std::collections::BTreeSet<String>,
+    policy_label: &str,
+) -> Result<String> {
+    if let Some(app_id) = requested_app_id {
+        if !package_names.contains(app_id) {
+            return Err(build_claim_issue_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                format!("build-claim app_id is not in {policy_label} package whitelist"),
+            ));
+        }
+        return Ok(app_id.to_owned());
+    }
+
+    if package_names.len() == 1 {
+        return Ok(package_names
+            .iter()
+            .next()
+            .expect("len checked above")
+            .clone());
+    }
+
+    Err(build_claim_issue_error(
+        OfflineTransferRejectionReason::BuildClaimInvalid,
+        format!(
+            "build-claim app_id is required when `{policy_label}` exposes multiple package names"
+        ),
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_build_claim_app_id(
+    certificate: &OfflineWalletCertificate,
+    platform: OfflineBuildClaimPlatform,
+    requested_app_id: Option<&str>,
+) -> Result<String> {
+    let requested_app_id = requested_app_id.map(str::trim);
+    if requested_app_id.is_some_and(str::is_empty) {
+        return Err(build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            "build-claim app_id must not be empty",
+        ));
+    }
+
+    match platform {
+        OfflineBuildClaimPlatform::Apple => {
+            let configured_bundle =
+                build_claim_metadata_string(&certificate.metadata, IOS_APP_ATTEST_BUNDLE_ID_KEY)?;
+            if let Some(app_id) = requested_app_id {
+                if app_id != configured_bundle {
+                    return Err(build_claim_issue_error(
+                        OfflineTransferRejectionReason::BuildClaimInvalid,
+                        "build-claim app_id does not match ios.app_attest.bundle_id",
+                    ));
+                }
+                Ok(app_id.to_owned())
+            } else {
+                Ok(configured_bundle)
+            }
+        }
+        OfflineBuildClaimPlatform::Android => {
+            let metadata = AndroidIntegrityMetadata::from_metadata(&certificate.metadata)
+                .map_err(|err| {
+                    build_claim_issue_error(
+                        OfflineTransferRejectionReason::BuildClaimInvalid,
+                        format!("android metadata invalid for build-claim issuance: {err}"),
+                    )
+                })?
+                .ok_or_else(|| {
+                    build_claim_issue_error(
+                        OfflineTransferRejectionReason::BuildClaimInvalid,
+                        "android integrity metadata is missing for build-claim issuance",
+                    )
+                })?;
+            match metadata {
+                AndroidIntegrityMetadata::MarkerKey(meta) => resolve_build_claim_whitelist_app_id(
+                    requested_app_id,
+                    &meta.package_names,
+                    "marker-key",
+                ),
+                AndroidIntegrityMetadata::PlayIntegrity(meta) => {
+                    resolve_build_claim_whitelist_app_id(
+                        requested_app_id,
+                        &meta.package_names,
+                        "play-integrity",
+                    )
+                }
+                AndroidIntegrityMetadata::HmsSafetyDetect(meta) => {
+                    resolve_build_claim_whitelist_app_id(
+                        requested_app_id,
+                        &meta.package_names,
+                        "hms",
+                    )
+                }
+                AndroidIntegrityMetadata::Provisioned(_) => {
+                    let configured_app_id = build_claim_metadata_string(
+                        &certificate.metadata,
+                        ANDROID_PROVISIONED_APP_ID_KEY,
+                    )?;
+                    if let Some(app_id) = requested_app_id {
+                        if app_id != configured_app_id {
+                            return Err(build_claim_issue_error(
+                                OfflineTransferRejectionReason::BuildClaimInvalid,
+                                "build-claim app_id does not match android.provisioned.app_id",
+                            ));
+                        }
+                        Ok(app_id.to_owned())
+                    } else {
+                        Ok(configured_app_id)
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn sign_offline_certificate(
     issuer: &crate::OfflineIssuerSigner,
     draft: OfflineWalletCertificateDraft,
@@ -39024,20 +39533,8 @@ fn sign_offline_certificate(
         )));
     }
 
-    let operator_key = issuer.operator_keypair.public_key();
-    let allowance_signatory = draft
-        .operator
-        .try_signatory()
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "{OFFLINE_REJECTION_REASON_PREFIX}operator_account_multisig:operator account must be single-signature"
-            ))
-        })?;
-    if allowance_signatory != operator_key {
-        return Err(conversion_error(format!(
-            "{OFFLINE_REJECTION_REASON_PREFIX}operator_key_mismatch:operator key does not match operator account"
-        )));
-    }
+    let operator_key = issuer.operator_keypair.public_key().clone();
+    let operator = AccountId::new(draft.controller.domain().clone(), operator_key);
     let lineage = parse_offline_draft_lineage(&draft.metadata)?;
     if lineage.min_build_number == 0 {
         return Err(conversion_error(format!(
@@ -39046,7 +39543,7 @@ fn sign_offline_certificate(
     }
 
     // Placeholder signature; operator_signing_bytes ignores operator_signature.
-    let mut certificate = draft.into_certificate(Signature::from_bytes(&[]));
+    let mut certificate = draft.into_certificate(operator, Signature::from_bytes(&[]));
     let payload = certificate
         .operator_signing_bytes()
         .map_err(|err| {
@@ -39147,6 +39644,144 @@ pub async fn handle_post_v1_offline_certificates_renew_issue(
     json_response(&OfflineCertificateIssueResponse {
         certificate_id_hex,
         certificate,
+    })
+}
+
+/// POST /v1/offline/build-claims/issue — issue an operator-signed build claim.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_v1_offline_build_claims_issue(
+    app: crate::SharedAppState,
+    NoritoJson(req): NoritoJson<OfflineBuildClaimIssueRequest>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    use iroha_data_model::ValidationFail;
+
+    let issuer = app.offline_issuer.as_ref().ok_or_else(|| {
+        Error::Query(ValidationFail::NotPermitted(
+            "Offline issuer disabled".into(),
+        ))
+    })?;
+
+    let certificate_id = parse_hash_hex(&req.certificate_id_hex, "certificate_id_hex")?;
+    let nonce = parse_hash_hex(&req.tx_id_hex, "tx_id_hex")?;
+    let world = app.state.world_view();
+    let record = world
+        .offline_allowances()
+        .get(&certificate_id)
+        .cloned()
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}allowance_not_found:offline allowance not found"
+            ))
+        })?;
+
+    if !issuer.allowed_controllers.is_empty()
+        && !issuer
+            .allowed_controllers
+            .iter()
+            .any(|controller| controller == &record.certificate.controller)
+    {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}unauthorized_controller:controller is not permitted"
+        )));
+    }
+
+    let operator_key = record.certificate.operator.try_signatory().ok_or_else(|| {
+        build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            "certificate operator account must be single-signature for build claims",
+        )
+    })?;
+    if operator_key != issuer.operator_keypair.public_key() {
+        return Err(build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            "build-claim issuer key does not match certificate operator",
+        ));
+    }
+
+    let lineage = parse_offline_draft_lineage(&record.certificate.metadata)?;
+    if lineage.min_build_number == 0 {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:offline.build_claim.min_build_number must be greater than zero"
+        )));
+    }
+
+    let platform = parse_build_claim_platform(&req.platform)?;
+    let app_id = resolve_build_claim_app_id(&record.certificate, platform, req.app_id.as_deref())?;
+
+    let build_number = req.build_number.unwrap_or(lineage.min_build_number);
+    if build_number < lineage.min_build_number {
+        return Err(build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimBuildTooLow,
+            "build-claim build number is lower than certificate minimum",
+        ));
+    }
+
+    let issued_at_ms = req.issued_at_ms.unwrap_or(record.certificate.issued_at_ms);
+    let expires_at_ms = req
+        .expires_at_ms
+        .unwrap_or(record.certificate.expires_at_ms);
+    if issued_at_ms > expires_at_ms
+        || issued_at_ms < record.certificate.issued_at_ms
+        || expires_at_ms > record.certificate.expires_at_ms
+    {
+        return Err(build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimExpired,
+            "build-claim timestamp window must fit within certificate lifetime",
+        ));
+    }
+
+    let platform_slug = match platform {
+        OfflineBuildClaimPlatform::Apple => "apple",
+        OfflineBuildClaimPlatform::Android => "android",
+    };
+    let claim_seed = format!(
+        "{}:{}:{}:{}:{}:{}:{}:{}",
+        hex::encode(certificate_id.as_ref()),
+        hex::encode(nonce.as_ref()),
+        platform_slug,
+        app_id,
+        build_number,
+        issued_at_ms,
+        expires_at_ms,
+        lineage.scope
+    );
+    let claim_id = Hash::new(claim_seed.as_bytes());
+    if world
+        .offline_consumed_build_claim_ids()
+        .get(&claim_id)
+        .is_some()
+    {
+        return Err(build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimReplayed,
+            "build-claim id was already consumed",
+        ));
+    }
+
+    let mut build_claim = OfflineBuildClaim {
+        claim_id,
+        platform,
+        app_id,
+        build_number,
+        issued_at_ms,
+        expires_at_ms,
+        lineage_scope: lineage.scope,
+        nonce,
+        operator_signature: Signature::from_bytes(&[]),
+    };
+    let payload = build_claim.signing_bytes().map_err(|err| {
+        build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            format!("failed to encode build-claim payload: {err}"),
+        )
+    })?;
+    build_claim.operator_signature =
+        Signature::new(issuer.operator_keypair.private_key(), &payload);
+
+    json_response(&OfflineBuildClaimIssueResponse {
+        claim_id_hex: hex::encode(build_claim.claim_id.as_ref()),
+        build_claim,
     })
 }
 

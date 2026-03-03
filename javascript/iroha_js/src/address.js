@@ -1701,11 +1701,10 @@ function parseWithNativeCodec(input, expectedPrefix, requiredFormat) {
       return null;
     }
     const canonical = parsed.canonical_bytes;
-    if (!canonical) {
-      throw new AccountAddressError(
-        AccountAddressErrorCode.INVALID_LENGTH,
-        "native codec returned empty canonical bytes",
-      );
+    if (!canonical || canonical.length === 0) {
+      // Some native codec builds may return an empty canonical payload for
+      // otherwise parseable literals. Fall back to the pure-JS codec path.
+      return null;
     }
     const format = normalizeNativeAddressFormat(
       parsed.detected_format,
@@ -1728,7 +1727,9 @@ function parseWithNativeCodec(input, expectedPrefix, requiredFormat) {
       converted instanceof AccountAddressError &&
       (converted.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT ||
         converted.code === AccountAddressErrorCode.UNKNOWN_CURVE ||
-        converted.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM)
+        converted.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM ||
+        (converted.code === AccountAddressErrorCode.INVALID_LENGTH &&
+          /empty canonical bytes/i.test(converted.message)))
     ) {
       return null;
     }
