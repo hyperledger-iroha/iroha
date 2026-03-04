@@ -1,6 +1,38 @@
 # Status
 
 Last update: 2026-03-03
+- Latest sync (2026-03-03 Tranche 7 lagging-peer catch-up convergence, core-only/no new knobs):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/mode.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/qc.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - Changes:
+    - added internal lagging-frontier catch-up stall state + window snapshots (`FrontierCatchupStallState` / `FrontierCatchupWindowSnapshot`) with derived window `max(recovery_missing_block_height_ttl, recovery_missing_qc_reacquire_window, commit_quorum_timeout, 1ms)` and 3-window activation on unresolved no-commit-progress gaps,
+    - added frontier height-scoped reanchor window gating and wired `request_range_pull_from_anchor_with_tier(...)` so `frontier_gap_realign`, `missing_block_height_hard_cap`, and frontier-canonicalized `idle_missing_qc_reacquire` share one reanchor emission budget per stall window,
+    - added deterministic 2-peer rotating cohort fanout for frontier catch-up stall mode with every-3rd-window all-peer sweep,
+    - replaced sidecar mismatch fixed cooldown dedup with per-height/reason-group stall-window gates and progress-aware suppression; gate state now clears on height progress/canonical availability via existing cleanup paths,
+    - prioritized deferred QC replay by contiguous heights and throttled far-ahead replay attempts to one per frontier catch-up stall window (suppressed attempts remain deferred, not dropped),
+    - ensured mode-flip/reset paths clear new frontier + sidecar window-gate state.
+  - Test updates:
+    - `frontier_catchup_stall_mode_enters_after_three_no_progress_windows`
+    - `frontier_catchup_stall_mode_throttles_reanchor_to_one_per_window_across_reasons`
+    - `frontier_catchup_stall_mode_reanchor_uses_deterministic_subset_and_periodic_all_peers`
+    - `sidecar_mismatch_recovery_emits_at_most_one_escalation_per_window`
+    - `sidecar_mismatch_window_gate_clears_on_commit_progress`
+    - `deferred_qc_replay_under_catchup_stall_prioritizes_frontier_and_throttles_far_ahead`
+    - `missing_payload_and_missing_qc_share_rotation_budget_in_stall_window`
+  - Validation commands (current tree):
+    - `cargo fmt --all -- --check` (ok)
+    - `cargo test -p iroha_core frontier_catchup_stall_mode_ -- --nocapture` (ok; `4 passed`)
+    - `cargo test -p iroha_core sidecar_mismatch_ -- --nocapture` (ok; `8 passed`)
+    - `cargo test -p iroha_core deferred_qc_replay_under_catchup_stall_prioritizes_frontier_and_throttles_far_ahead -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core missing_payload_and_missing_qc_share_rotation_budget_in_stall_window -- --nocapture` (ok; `1 passed`)
+    - `cargo test -p iroha_core lock_lag_frontier_stall_mode_ -- --nocapture` (ok; `8 passed`)
+    - `cargo test -p iroha_core missing_qc_height_stall_mode_ -- --nocapture` (ok; `9 passed`)
+    - `cargo test -p iroha_core missing_block_height_hard_cap_ -- --nocapture` (ok; `9 passed`)
+  - Open follow-up:
+    - run the unchanged 3600s soak envelope and report strict/quorum gap, lagging-peer strict advance past 410, frontier/hard-cap/missing_qc hotspot deltas, and sidecar mismatch hotspot deltas against the latest failed soak baseline.
 - Latest sync (2026-03-03 Tranche 6 missing-QC same-height stall damping, safety/liveness neutral):
   - Implemented in:
     - `crates/iroha_core/src/sumeragi/main_loop.rs`
