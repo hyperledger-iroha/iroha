@@ -372,7 +372,7 @@ enum OfflineNorito {
                 }
 
                 // Some deployments provide a bare IH58 address encoded with the default-domain selector
-                // and pair it with an explicit FI domain (`IH58@bank1`). Rebase default-domain IH58
+                // and pair it with an explicit FI domain (`IH58@hbl`). Rebase default-domain IH58
                 // addresses to the requested domain instead of rejecting them.
                 if let rebased = try? address.rebasedFromDefaultDomain(to: canonicalDomain),
                    rebased.matchesDomainLabel(canonicalDomain) {

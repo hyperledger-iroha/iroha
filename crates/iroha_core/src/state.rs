@@ -5312,7 +5312,7 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         *self.confidential_registry_dirty = true;
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Returns a mutable handle to the world view; available only in test builds.
     #[inline]
     pub fn world_mut_for_testing(&mut self) -> &mut WorldTransaction<'block, 'state> {
@@ -13065,14 +13065,14 @@ impl State {
     }
 
     /// Push a committed block hash when constructing scenarios in tests.
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn push_block_hash_for_testing(&mut self, block_hash: HashOf<BlockHeader>) {
         let mut block = self.block_hashes.block();
         block.push(block_hash);
         block.commit();
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Latest committed block height recorded in the transactions storage (0 when empty).
     pub fn transactions_latest_height_for_testing(&self) -> usize {
         self.transactions.view().latest_height_for_tests()

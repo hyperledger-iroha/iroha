@@ -58,10 +58,10 @@ use iroha_data_model::{
     domain::{Domain, DomainId, NewDomain},
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
-        Burn, BurnBox, CreateKaigi, EndKaigi, Instruction as InstructionTrait, InstructionBox,
-        JoinKaigi, LeaveKaigi, Mint, MintBox, RecordKaigiUsage, Register, RegisterBox,
-        RegisterKaigiRelay, RegisterPeerWithPop, ReportKaigiRelayHealth, SetKaigiRelayManifest,
-        Transfer, TransferBox, Unregister, UnregisterBox,
+        Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, Instruction as InstructionTrait,
+        InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox, RecordKaigiUsage, Register,
+        RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop, ReportKaigiRelayHealth,
+        SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
@@ -5844,6 +5844,93 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 return Ok(Box::new(instruction).into_instruction_box());
             }
 
+            if let Some(custom_value) = remove_case_insensitive(&mut map, "Custom") {
+                let mut custom_map = match custom_value {
+                    json::Value::Object(map) => map,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "Custom instruction payload must be an object (found {other:?})"
+                            ),
+                        ));
+                    }
+                };
+                let payload =
+                    remove_case_insensitive(&mut custom_map, "payload").ok_or_else(|| {
+                        napi::Error::new(napi::Status::InvalidArg, "Custom.payload field missing")
+                    })?;
+                return Ok(InstructionBox::from(CustomInstruction::new(payload)));
+            }
+
+            if let Some(multisig_value) = remove_case_insensitive(&mut map, "Multisig") {
+                let multisig_map = match multisig_value {
+                    json::Value::Object(map) => map,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "Multisig instruction payload must be an object (found {other:?})"
+                            ),
+                        ));
+                    }
+                };
+                return Ok(InstructionBox::from(CustomInstruction::new(
+                    json::Value::Object(multisig_map),
+                )));
+            }
+
+            if let Some(propose_value) = remove_case_insensitive(&mut map, "MultisigPropose") {
+                let propose_fields = match propose_value {
+                    json::Value::Object(map) => map,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!("MultisigPropose payload must be an object (found {other:?})"),
+                        ));
+                    }
+                };
+                let mut payload = json::Map::new();
+                payload.insert("Propose".to_owned(), json::Value::Object(propose_fields));
+                return Ok(InstructionBox::from(CustomInstruction::new(
+                    json::Value::Object(payload),
+                )));
+            }
+
+            if let Some(approve_value) = remove_case_insensitive(&mut map, "MultisigApprove") {
+                let approve_fields = match approve_value {
+                    json::Value::Object(map) => map,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!("MultisigApprove payload must be an object (found {other:?})"),
+                        ));
+                    }
+                };
+                let mut payload = json::Map::new();
+                payload.insert("Approve".to_owned(), json::Value::Object(approve_fields));
+                return Ok(InstructionBox::from(CustomInstruction::new(
+                    json::Value::Object(payload),
+                )));
+            }
+
+            if let Some(register_value) = remove_case_insensitive(&mut map, "MultisigRegister") {
+                let register_fields = match register_value {
+                    json::Value::Object(map) => map,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!("MultisigRegister payload must be an object (found {other:?})"),
+                        ));
+                    }
+                };
+                let mut payload = json::Map::new();
+                payload.insert("Register".to_owned(), json::Value::Object(register_fields));
+                return Ok(InstructionBox::from(CustomInstruction::new(
+                    json::Value::Object(payload),
+                )));
+            }
+
             if let Some(zk_value) = remove_case_insensitive(&mut map, "Zk") {
                 let mut zk_map = match zk_value {
                     json::Value::Object(map) => map,
@@ -6103,6 +6190,17 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             outer.insert("Burn".to_owned(), json::Value::Object(burn_map));
             return Ok(json::Value::Object(outer));
         }
+    }
+
+    if let Some(custom_instruction) = instruction_ref.as_any().downcast_ref::<CustomInstruction>() {
+        let payload_json =
+            json::parse_value(custom_instruction.payload.get()).map_err(|error| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    format!("Custom.payload is not valid JSON: {error}"),
+                )
+            })?;
+        return Ok(custom_json_value(payload_json));
     }
 
     if let Some(propose) = instruction_ref
@@ -6681,6 +6779,14 @@ fn kaigi_json_value(tag: &str, payload: json::Value) -> json::Value {
     json::Value::Object(outer)
 }
 
+fn custom_json_value(payload: json::Value) -> json::Value {
+    let mut custom = json::Map::new();
+    custom.insert("payload".to_owned(), payload);
+    let mut outer = json::Map::new();
+    outer.insert("Custom".to_owned(), json::Value::Object(custom));
+    json::Value::Object(outer)
+}
+
 fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
     let mut variant = json::Map::new();
     variant.insert(tag.to_owned(), payload);
@@ -7070,8 +7176,8 @@ mod tests {
         domain::DomainId,
         events::EventFilterBox,
         isi::{
-            Burn, BurnBox, CreateKaigi, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
-            RecordKaigiUsage, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
+            Burn, BurnBox, CreateKaigi, CustomInstruction, InstructionBox, JoinKaigi, LeaveKaigi,
+            Mint, MintBox, RecordKaigiUsage, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
             SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
             governance::{
                 AtWindow, CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
@@ -7576,6 +7682,101 @@ mod tests {
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize instruction from json");
         assert_eq!(reconstructed, instruction);
+    }
+
+    #[test]
+    fn custom_instruction_json_roundtrip() {
+        let account = sample_account("wonderland");
+        let mut propose = json::Map::new();
+        propose.insert(
+            "account".to_owned(),
+            json::Value::String(account_json_literal(&account)),
+        );
+        propose.insert(
+            "instructions".to_owned(),
+            json::Value::Array(vec![norito_json!({
+                "Log": "hello-custom"
+            })]),
+        );
+        propose.insert(
+            "transaction_ttl_ms".to_owned(),
+            json::Value::Number(json::Number::from(30_000_u64)),
+        );
+        let mut payload = json::Map::new();
+        payload.insert("Propose".to_owned(), json::Value::Object(propose));
+        let instruction_json = custom_json_value(json::Value::Object(payload));
+
+        let instruction =
+            value_to_instruction(instruction_json.clone()).expect("parse Custom instruction");
+        assert!(
+            instruction
+                .as_any()
+                .downcast_ref::<CustomInstruction>()
+                .is_some(),
+            "instruction must decode as CustomInstruction"
+        );
+
+        let rendered =
+            instruction_to_json_value(&instruction).expect("render custom instruction to JSON");
+        assert_eq!(rendered, instruction_json);
+    }
+
+    #[test]
+    fn multisig_alias_payloads_decode_as_custom_instruction() {
+        let account = sample_account("wonderland");
+        let account_literal = account_json_literal(&account);
+
+        let mut propose_fields = json::Map::new();
+        propose_fields.insert(
+            "account".to_owned(),
+            json::Value::String(account_literal.clone()),
+        );
+        propose_fields.insert(
+            "instructions".to_owned(),
+            json::Value::Array(vec![norito_json!({
+                "Log": "multisig-propose"
+            })]),
+        );
+        let mut propose_outer = json::Map::new();
+        propose_outer.insert(
+            "MultisigPropose".to_owned(),
+            json::Value::Object(propose_fields),
+        );
+        let propose_instruction = value_to_instruction(json::Value::Object(propose_outer))
+            .expect("parse MultisigPropose alias");
+        let propose_rendered =
+            instruction_to_json_value(&propose_instruction).expect("render MultisigPropose alias");
+        assert!(
+            propose_rendered
+                .get("Custom")
+                .and_then(|value| value.get("payload"))
+                .and_then(|value| value.get("Propose"))
+                .is_some(),
+            "MultisigPropose alias must map to Custom.payload.Propose"
+        );
+
+        let mut approve_fields = json::Map::new();
+        approve_fields.insert("account".to_owned(), json::Value::String(account_literal));
+        approve_fields.insert(
+            "instructions_hash".to_owned(),
+            json::Value::String(hash_literal(0xCC)),
+        );
+        let mut multisig_payload = json::Map::new();
+        multisig_payload.insert("Approve".to_owned(), json::Value::Object(approve_fields));
+        let mut approve_outer = json::Map::new();
+        approve_outer.insert("Multisig".to_owned(), json::Value::Object(multisig_payload));
+        let approve_instruction =
+            value_to_instruction(json::Value::Object(approve_outer)).expect("parse Multisig alias");
+        let approve_rendered =
+            instruction_to_json_value(&approve_instruction).expect("render Multisig alias");
+        assert!(
+            approve_rendered
+                .get("Custom")
+                .and_then(|value| value.get("payload"))
+                .and_then(|value| value.get("Approve"))
+                .is_some(),
+            "Multisig alias must map to Custom.payload.Approve"
+        );
     }
 
     #[test]
