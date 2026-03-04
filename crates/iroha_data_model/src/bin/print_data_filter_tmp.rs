@@ -1,3 +1,5 @@
+//! Temporary utility to print sample `DataEventFilter` values as JSON and base64-encoded Norito bytes.
+
 use base64::Engine;
 use iroha_data_model::events::data::prelude::{AssetEventFilter, AssetEventSet, DataEventFilter};
 
