@@ -3670,6 +3670,7 @@ async fn handler_offline_settlements_submit(
             app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
+            app.offline_issuer.clone(),
             app.telemetry.clone(),
             crate::utils::extractors::NoritoJson(req),
         )
@@ -3684,6 +3685,7 @@ async fn handler_offline_settlements_submit(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
+        app.offline_issuer.clone(),
         app.telemetry.clone(),
         crate::utils::extractors::NoritoJson(req),
     )
@@ -13505,7 +13507,20 @@ struct AccountOnboardingSigner {
 #[derive(Clone)]
 struct OfflineIssuerSigner {
     operator_keypair: KeyPair,
+    legacy_operator_keypairs: Vec<KeyPair>,
     allowed_controllers: Vec<AccountId>,
+}
+
+#[cfg(feature = "app_api")]
+impl OfflineIssuerSigner {
+    fn keypair_for_operator(&self, operator_key: &iroha_crypto::PublicKey) -> Option<&KeyPair> {
+        if self.operator_keypair.public_key() == operator_key {
+            return Some(&self.operator_keypair);
+        }
+        self.legacy_operator_keypairs
+            .iter()
+            .find(|keypair| keypair.public_key() == operator_key)
+    }
 }
 
 /// Main network handler and the only entrypoint of the Iroha.
@@ -15669,8 +15684,21 @@ impl Torii {
                 .unwrap_or_else(|err| {
                     panic!("invalid torii.offline_issuer.operator_private_key: {err}")
                 });
+            let legacy_operator_keypairs = cfg
+                .legacy_operator_private_keys
+                .iter()
+                .enumerate()
+                .map(|(index, key)| {
+                    KeyPair::from_private_key(key.0.clone()).unwrap_or_else(|err| {
+                        panic!(
+                            "invalid torii.offline_issuer.legacy_operator_private_keys[{index}]: {err}"
+                        )
+                    })
+                })
+                .collect();
             OfflineIssuerSigner {
                 operator_keypair,
+                legacy_operator_keypairs,
                 allowed_controllers: cfg.allowed_controllers.clone(),
             }
         });

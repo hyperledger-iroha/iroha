@@ -1,0 +1,9 @@
+{
+  "fixture": "ios_app_attest_signature_compat_v1",
+  "provenance": "synthetic_test_vector",
+  "description": "Assertion signature validates only when verifier applies SHA256(clientDataHash) compatibility path.",
+  "todo_real_device_capture": "Replace this synthetic vector with a redacted real-device capture once attestation chain/legal review permits committing it to fixtures.",
+  "authenticator_data_hex": "e2f5d7810b2a4c9f5f66c8ac9331071712906dcf90be6c1e8a53f1a3f9988a73f45beed7c0c21c01",
+  "client_data_hash_hex": "00112233445566778899aabbccddeeff112233445566778899aabbccddeeff00",
+  "signing_key_hex": "0000000000000000000000000000000000000000000000000000000000000001"
+}

@@ -19,6 +19,7 @@ import java.util.regex.Pattern;
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.address.AccountAddress.AccountAddressException;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
@@ -92,7 +93,7 @@ public final class TransactionFixtureManifestTests {
     final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
     final Map<String, Object> manifest = loadManifest(manifestPath);
     assertSchemaMatches(manifest);
-    final SigningKey signingKey = parseSigningKey(manifest);
+    final Optional<SigningKey> manifestSigningKey = parseSigningKey(manifest);
 
     final Object fixturesValue = manifest.get("fixtures");
     final List<Object> fixtures = asList(fixturesValue, "fixtures");
@@ -105,7 +106,7 @@ public final class TransactionFixtureManifestTests {
         loadPayloadFixtures(manifestPath.getParent());
 
     for (Object entry : fixtures) {
-      validateFixture(entry, manifestPath, payloadFixtures, signingKey);
+      validateFixture(entry, manifestPath, payloadFixtures, manifestSigningKey);
     }
 
     assertEquals(
@@ -120,7 +121,7 @@ public final class TransactionFixtureManifestTests {
       final Object entry,
       final Path manifestPath,
       final Map<String, TransactionPayloadFixtures.Fixture> payloadFixtures,
-      final SigningKey signingKey)
+      final Optional<SigningKey> manifestSigningKey)
       throws Exception {
     final Map<String, Object> map = asMap(entry, "fixture");
     final String name = requireString(map.get("name"), "fixture.name");
@@ -219,7 +220,7 @@ public final class TransactionFixtureManifestTests {
         creationTimeMs,
         ttl,
         nonce,
-        signingKey);
+        resolveSigningKey(manifestSigningKey, authority, name));
   }
 
   private static byte[] decodeBase64(final String value, final String fieldName) {
@@ -267,6 +268,9 @@ public final class TransactionFixtureManifestTests {
   }
 
   private static void assertSchemaMatches(final Map<String, Object> manifest) {
+    if (!manifest.containsKey("schema")) {
+      return;
+    }
     final Map<String, Object> schema = asMap(manifest.get("schema"), "schema");
     assertEquals(
         "schema.payload mismatch",
@@ -278,7 +282,10 @@ public final class TransactionFixtureManifestTests {
         requireString(schema.get("signed"), "schema.signed"));
   }
 
-  private static SigningKey parseSigningKey(final Map<String, Object> manifest) {
+  private static Optional<SigningKey> parseSigningKey(final Map<String, Object> manifest) {
+    if (!manifest.containsKey("signing_key")) {
+      return Optional.empty();
+    }
     final Map<String, Object> signingKey = asMap(manifest.get("signing_key"), "signing_key");
     final String algorithm =
         requireString(signingKey.get("algorithm"), "signing_key.algorithm").toLowerCase();
@@ -292,9 +299,38 @@ public final class TransactionFixtureManifestTests {
       throw new IllegalStateException(
           "signing_key.public_key_hex must be 32 bytes (found " + publicKey.length + ")");
     }
-    final String seedHex = requireString(signingKey.get("seed_hex"), "signing_key.seed_hex");
-    hexToBytes(seedHex, "signing_key.seed_hex");
-    return new SigningKey(publicKey);
+    if (signingKey.containsKey("seed_hex")) {
+      final String seedHex = requireString(signingKey.get("seed_hex"), "signing_key.seed_hex");
+      hexToBytes(seedHex, "signing_key.seed_hex");
+    }
+    return Optional.of(new SigningKey(publicKey));
+  }
+
+  private static SigningKey resolveSigningKey(
+      final Optional<SigningKey> manifestSigningKey,
+      final String authority,
+      final String fixtureName) {
+    if (manifestSigningKey.isPresent()) {
+      return manifestSigningKey.get();
+    }
+    final String accountLiteral = normalizeAuthority(authority);
+    try {
+      final AccountAddress accountAddress = AccountAddress.fromIH58(accountLiteral, null);
+      final Optional<AccountAddress.SingleKeyPayload> payload = accountAddress.singleKeyPayload();
+      if (!payload.isPresent()) {
+        throw new IllegalStateException(
+            fixtureName + ": cannot derive signing key from non-single-key authority: " + authority);
+      }
+      final byte[] publicKey = payload.get().publicKey();
+      if (publicKey.length != 32) {
+        throw new IllegalStateException(
+            fixtureName + ": derived signing key must be 32 bytes (found " + publicKey.length + ")");
+      }
+      return new SigningKey(publicKey);
+    } catch (final AccountAddressException ex) {
+      throw new IllegalStateException(
+          fixtureName + ": failed to derive signing key from authority: " + authority, ex);
+    }
   }
 
   private static void verifySignature(

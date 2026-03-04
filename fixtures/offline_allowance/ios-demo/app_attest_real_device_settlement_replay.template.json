@@ -1,0 +1,18 @@
+{
+  "fixture": "ios_app_attest_real_device_settlement_replay_v1",
+  "description": "Template for Torii /v1/offline/settlements replay of a redacted real-device App Attest capture under strict and non-strict signature modes.",
+  "redaction_note": "Use test-only accounts/keys. Remove sensitive production values before committing.",
+  "chain_id": "test-chain",
+  "authority": "alice@merchants",
+  "private_key": "ed0120REPLACE_WITH_TEST_PRIVATE_KEY",
+  "expect_non_strict_ok": true,
+  "expect_non_strict_reject_code": null,
+  "expect_strict_ok": false,
+  "expect_strict_reject_code": "platform_signature_invalid",
+  "certificate": {
+    "TODO": "Paste OfflineWalletCertificate JSON from the redacted capture"
+  },
+  "transfer": {
+    "TODO": "Paste OfflineToOnlineTransfer JSON from the redacted capture"
+  }
+}

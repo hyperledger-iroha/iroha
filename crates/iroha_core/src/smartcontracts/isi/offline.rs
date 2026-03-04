@@ -6667,9 +6667,14 @@ mod attestation {
             return Ok(());
         }
         match &receipt.platform_proof {
-            OfflinePlatformProof::AppleAppAttest(proof) => {
-                verify_apple_attestation(receipt, certificate, chain_id, proof, block_timestamp_ms)
-            }
+            OfflinePlatformProof::AppleAppAttest(proof) => verify_apple_attestation(
+                receipt,
+                certificate,
+                chain_id,
+                proof,
+                block_timestamp_ms,
+                settlement_cfg,
+            ),
             OfflinePlatformProof::AndroidMarkerKey(proof) => {
                 let platform = OfflineTransferRejectionPlatform::Android;
                 let metadata = android_integrity_metadata(&certificate.metadata)?;
@@ -6794,6 +6799,7 @@ mod attestation {
         chain_id: &ChainId,
         proof: &AppleAppAttestProof,
         block_timestamp_ms: u64,
+        settlement_cfg: &actual::Offline,
     ) -> Result<(), InstructionExecutionError> {
         let platform = OfflineTransferRejectionPlatform::Apple;
         warn!(
@@ -6885,7 +6891,13 @@ mod attestation {
         )?;
         let client_data_hash = map_platform_err(
             assertion
-                .validate(&metadata, proof.counter, &challenge, &attestation)
+                .validate(
+                    &metadata,
+                    proof.counter,
+                    &challenge,
+                    &attestation,
+                    settlement_cfg,
+                )
                 .inspect_err(|e| {
                     warn!("[AppAttest] FAIL: assertion.validate: {e}");
                 }),
@@ -6893,10 +6905,16 @@ mod attestation {
             platform,
         )?;
         map_platform_err(
-            verify_apple_signature(attestation.verifying_key(), &assertion, &client_data_hash)
-                .inspect_err(|e| {
-                    warn!("[AppAttest] FAIL: verify_apple_signature: {e}");
-                }),
+            verify_apple_signature(
+                attestation.verifying_key(),
+                &assertion,
+                &client_data_hash,
+                &challenge.iroha_bytes,
+                settlement_cfg,
+            )
+            .inspect_err(|e| {
+                warn!("[AppAttest] FAIL: verify_apple_signature: {e}");
+            }),
             OfflineTransferRejectionReason::PlatformSignatureInvalid,
             platform,
         )?;
@@ -8499,6 +8517,7 @@ mod attestation {
             counter: u64,
             challenge: &ReceiptChallenge,
             attestation: &AppleAttestation,
+            settlement_cfg: &actual::Offline,
         ) -> Result<[u8; 32], InstructionExecutionError> {
             if self.rp_id_hash != attestation.rp_id_hash {
                 warn!(
@@ -8511,7 +8530,16 @@ mod attestation {
                 ));
             }
             let client_data_hash = if let Some(client_data_hash) = self.client_data_hash {
-                if client_data_hash != challenge.client_data_hash {
+                if client_data_hash == challenge.client_data_hash {
+                    client_data_hash
+                } else if !settlement_cfg.apple_app_attest_strict_signature
+                    && client_data_hash == challenge.iroha_bytes
+                {
+                    warn!(
+                        "[AppAttest] assertion uses raw receipt challenge hash clientDataHash compatibility path"
+                    );
+                    client_data_hash
+                } else {
                     warn!(
                         "[AppAttest] FAIL: assertion client_data_hash mismatch: got={} expected={}",
                         hex::encode(client_data_hash),
@@ -8521,7 +8549,6 @@ mod attestation {
                         "app attest assertion client data hash mismatch".into(),
                     ));
                 }
-                client_data_hash
             } else {
                 challenge.client_data_hash
             };
@@ -8542,6 +8569,8 @@ mod attestation {
         verifying_key: &VerifyingKey,
         assertion: &AppleAssertion,
         client_data_hash: &[u8; 32],
+        receipt_challenge_hash: &[u8; 32],
+        settlement_cfg: &actual::Offline,
     ) -> Result<(), InstructionExecutionError> {
         let mut primary_digest = Sha256::new();
         primary_digest.update(&assertion.authenticator_data);
@@ -8552,6 +8581,32 @@ mod attestation {
             .is_ok()
         {
             return Ok(());
+        }
+
+        if settlement_cfg.apple_app_attest_strict_signature {
+            warn!(
+                "[AppAttest] FAIL: strict signature mode enabled and primary verification failed"
+            );
+            return Err(InstructionExecutionError::InvariantViolation(
+                "app attest signature does not verify".into(),
+            ));
+        }
+
+        if client_data_hash != receipt_challenge_hash {
+            let mut raw_challenge_digest = Sha256::new();
+            raw_challenge_digest.update(&assertion.authenticator_data);
+            raw_challenge_digest.update(receipt_challenge_hash);
+            let raw_challenge_prehash = raw_challenge_digest.finalize();
+            if verifying_key
+                .verify_prehash(raw_challenge_prehash.as_ref(), &assertion.signature)
+                .is_ok()
+            {
+                metrics::global_or_default().inc_offline_app_attest_signature_compat();
+                warn!(
+                    "[AppAttest] verify_apple_signature: accepted raw receipt challenge hash compatibility path"
+                );
+                return Ok(());
+            }
         }
 
         // Some App Attest clients sign against SHA256(clientDataHash) rather
@@ -8565,13 +8620,14 @@ mod attestation {
             .verify_prehash(fallback_prehash.as_ref(), &assertion.signature)
             .is_ok()
         {
+            metrics::global_or_default().inc_offline_app_attest_signature_compat();
             warn!(
                 "[AppAttest] verify_apple_signature: accepted SHA256(clientDataHash) compatibility path"
             );
             return Ok(());
         }
 
-        warn!("[AppAttest] FAIL: signature verification failed (primary + compatibility path)");
+        warn!("[AppAttest] FAIL: signature verification failed (primary + compatibility paths)");
         Err(InstructionExecutionError::InvariantViolation(
             "app attest signature does not verify".into(),
         ))
@@ -9353,6 +9409,8 @@ mod attestation {
             CborDerSignature,
             CborRawSignature,
             CompactHashedClientData,
+            CompactRawReceiptHash,
+            CborDerSignatureRawReceiptHash,
         }
 
         fn sample_chain_id() -> ChainId {
@@ -9446,6 +9504,270 @@ mod attestation {
                 None,
             )
             .expect("compatibility signature path should verify");
+        }
+
+        #[test]
+        fn apple_attestation_rejects_hashed_client_data_signature_compat_in_strict_mode() {
+            let fixture = AppleFixture::new_with_assertion_encoding(
+                AppleAssertionEncoding::CompactHashedClientData,
+            );
+            let mut cfg = default_offline_policy();
+            cfg.apple_app_attest_strict_signature = true;
+            let chain_id = sample_chain_id();
+            assert!(
+                verify_platform_proof(
+                    &fixture.receipt,
+                    &fixture.certificate,
+                    &chain_id,
+                    fixture.certificate.issued_at_ms + 1_000,
+                    &cfg,
+                    None,
+                )
+                .is_err(),
+                "strict signature mode must reject compatibility-only assertions"
+            );
+        }
+
+        #[test]
+        fn apple_attestation_verifies_with_raw_receipt_hash_client_data_hash_compat() {
+            let fixture = AppleFixture::new_with_assertion_encoding(
+                AppleAssertionEncoding::CompactRawReceiptHash,
+            );
+            let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
+            verify_platform_proof(
+                &fixture.receipt,
+                &fixture.certificate,
+                &chain_id,
+                fixture.certificate.issued_at_ms + 1_000,
+                &cfg,
+                None,
+            )
+            .expect("raw challenge hash clientDataHash should verify in non-strict mode");
+        }
+
+        #[test]
+        fn apple_attestation_rejects_raw_receipt_hash_client_data_hash_compat_in_strict_mode() {
+            let fixture = AppleFixture::new_with_assertion_encoding(
+                AppleAssertionEncoding::CompactRawReceiptHash,
+            );
+            let mut cfg = default_offline_policy();
+            cfg.apple_app_attest_strict_signature = true;
+            let chain_id = sample_chain_id();
+            assert!(
+                verify_platform_proof(
+                    &fixture.receipt,
+                    &fixture.certificate,
+                    &chain_id,
+                    fixture.certificate.issued_at_ms + 1_000,
+                    &cfg,
+                    None,
+                )
+                .is_err(),
+                "strict signature mode must reject raw challenge hash clientDataHash compatibility"
+            );
+        }
+
+        #[test]
+        fn apple_attestation_verifies_with_raw_receipt_hash_signature_compat() {
+            let fixture = AppleFixture::new_with_assertion_encoding(
+                AppleAssertionEncoding::CborDerSignatureRawReceiptHash,
+            );
+            let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
+            verify_platform_proof(
+                &fixture.receipt,
+                &fixture.certificate,
+                &chain_id,
+                fixture.certificate.issued_at_ms + 1_000,
+                &cfg,
+                None,
+            )
+            .expect("raw challenge hash signature compatibility path should verify");
+        }
+
+        #[test]
+        fn apple_attestation_rejects_raw_receipt_hash_signature_compat_in_strict_mode() {
+            let fixture = AppleFixture::new_with_assertion_encoding(
+                AppleAssertionEncoding::CborDerSignatureRawReceiptHash,
+            );
+            let mut cfg = default_offline_policy();
+            cfg.apple_app_attest_strict_signature = true;
+            let chain_id = sample_chain_id();
+            assert!(
+                verify_platform_proof(
+                    &fixture.receipt,
+                    &fixture.certificate,
+                    &chain_id,
+                    fixture.certificate.issued_at_ms + 1_000,
+                    &cfg,
+                    None,
+                )
+                .is_err(),
+                "strict signature mode must reject raw challenge hash signature compatibility"
+            );
+        }
+
+        #[test]
+        fn app_attest_signature_compat_fixture_replays_and_respects_strict_mode() {
+            let fixture_path = workspace_root()
+                .join("fixtures/offline_allowance/ios-demo/app_attest_signature_compat.json");
+            let fixture_bytes = fs::read(&fixture_path).expect("read app attest signature fixture");
+            let fixture_value: JsonValue =
+                norito::json::from_slice(&fixture_bytes).expect("decode fixture JSON");
+            let fixture_object = fixture_value
+                .as_object()
+                .expect("fixture root must be a JSON object");
+            let decode_hex_field = |key: &str| -> Vec<u8> {
+                let value = fixture_object
+                    .get(key)
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_else(|| panic!("missing fixture field `{key}`"));
+                hex::decode(value).unwrap_or_else(|err| panic!("invalid hex for `{key}`: {err}"))
+            };
+
+            let authenticator_data = decode_hex_field("authenticator_data_hex");
+            let client_data_hash_bytes = decode_hex_field("client_data_hash_hex");
+            let client_data_hash: [u8; 32] = client_data_hash_bytes
+                .try_into()
+                .expect("client_data_hash_hex must contain exactly 32 bytes");
+            let signing_key_bytes = decode_hex_field("signing_key_hex");
+            let signing_key = SigningKey::from_slice(&signing_key_bytes)
+                .expect("fixture signing key must be a valid P-256 scalar");
+            let verifying_key = signing_key.verifying_key();
+
+            let mut fallback_digest = Sha256::new();
+            fallback_digest.update(&authenticator_data);
+            fallback_digest.update(Sha256::digest(client_data_hash).as_slice());
+            let fallback_prehash = fallback_digest.finalize();
+            let signature = signing_key
+                .sign_prehash(fallback_prehash.as_ref())
+                .expect("fixture signing key must sign fallback prehash");
+
+            let mut primary_digest = Sha256::new();
+            primary_digest.update(&authenticator_data);
+            primary_digest.update(client_data_hash);
+            let primary_prehash = primary_digest.finalize();
+            assert!(
+                verifying_key
+                    .verify_prehash(primary_prehash.as_ref(), &signature)
+                    .is_err(),
+                "fixture must only verify through compatibility path"
+            );
+
+            let assertion = AppleAssertion {
+                authenticator_data,
+                rp_id_hash: [0u8; 32],
+                _flags: 0,
+                sign_count: 0,
+                client_data_hash: Some(client_data_hash),
+                signature,
+            };
+
+            let cfg = default_offline_policy();
+            verify_apple_signature(
+                verifying_key,
+                &assertion,
+                &client_data_hash,
+                &[0u8; 32],
+                &cfg,
+            )
+            .expect("compatibility fixture should verify in non-strict mode");
+
+            let mut strict_cfg = cfg;
+            strict_cfg.apple_app_attest_strict_signature = true;
+            assert!(
+                verify_apple_signature(
+                    verifying_key,
+                    &assertion,
+                    &client_data_hash,
+                    &[0u8; 32],
+                    &strict_cfg,
+                )
+                .is_err(),
+                "strict mode must reject compatibility-only fixture signatures"
+            );
+        }
+
+        #[test]
+        #[ignore = "requires IROHA_APPLE_ATTEST_REAL_DEVICE_FIXTURE pointing to a redacted real-device capture"]
+        fn apple_attestation_real_device_fixture_replay_respects_strict_signature_policy() {
+            let fixture_path = std::env::var("IROHA_APPLE_ATTEST_REAL_DEVICE_FIXTURE")
+                .expect("set IROHA_APPLE_ATTEST_REAL_DEVICE_FIXTURE to the fixture JSON path");
+            let fixture_bytes =
+                fs::read(&fixture_path).expect("read IROHA_APPLE_ATTEST_REAL_DEVICE_FIXTURE");
+            let fixture_value: JsonValue =
+                norito::json::from_slice(&fixture_bytes).expect("decode fixture JSON");
+            let fixture_object = fixture_value
+                .as_object()
+                .expect("fixture root must be a JSON object");
+
+            let chain_id_text = fixture_object
+                .get("chain_id")
+                .and_then(JsonValue::as_str)
+                .expect("fixture must include `chain_id`");
+            let chain_id = chain_id_text
+                .parse()
+                .expect("fixture chain_id must be valid");
+
+            let block_timestamp_ms = fixture_object
+                .get("block_timestamp_ms")
+                .and_then(JsonValue::as_u64)
+                .expect("fixture must include integer `block_timestamp_ms`");
+
+            let expect_non_strict_ok = fixture_object
+                .get("expect_non_strict_ok")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(true);
+            let expect_strict_ok = fixture_object
+                .get("expect_strict_ok")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false);
+
+            let certificate: OfflineWalletCertificate = norito::json::from_value(
+                fixture_object
+                    .get("certificate")
+                    .cloned()
+                    .expect("fixture must include `certificate`"),
+            )
+            .expect("fixture certificate must decode");
+            let receipt: OfflineSpendReceipt = norito::json::from_value(
+                fixture_object
+                    .get("receipt")
+                    .cloned()
+                    .expect("fixture must include `receipt`"),
+            )
+            .expect("fixture receipt must decode");
+
+            let mut cfg = default_offline_policy();
+            let non_strict_ok = verify_platform_proof(
+                &receipt,
+                &certificate,
+                &chain_id,
+                block_timestamp_ms,
+                &cfg,
+                None,
+            )
+            .is_ok();
+            assert_eq!(
+                non_strict_ok, expect_non_strict_ok,
+                "non-strict expectation mismatch for fixture `{fixture_path}`",
+            );
+
+            cfg.apple_app_attest_strict_signature = true;
+            let strict_ok = verify_platform_proof(
+                &receipt,
+                &certificate,
+                &chain_id,
+                block_timestamp_ms,
+                &cfg,
+                None,
+            )
+            .is_ok();
+            assert_eq!(
+                strict_ok, expect_strict_ok,
+                "strict expectation mismatch for fixture `{fixture_path}`",
+            );
         }
 
         #[test]
@@ -10450,10 +10772,17 @@ mod attestation {
                 };
                 let chain_id = sample_chain_id();
                 let challenge = derive_receipt_challenge(&receipt, &chain_id).expect("challenge");
+                let assertion_client_data_hash = match assertion_encoding {
+                    AppleAssertionEncoding::CompactRawReceiptHash
+                    | AppleAssertionEncoding::CborDerSignatureRawReceiptHash => {
+                        &challenge.iroha_bytes
+                    }
+                    _ => &challenge.client_data_hash,
+                };
                 let assertion = build_assertion(
                     signing_key,
                     &self.rp_id_hash,
-                    &challenge.client_data_hash,
+                    assertion_client_data_hash,
                     counter,
                     assertion_encoding,
                 );
@@ -10633,19 +10962,16 @@ mod attestation {
                 }
             };
             match encoding {
-                AppleAssertionEncoding::Compact => {
+                AppleAssertionEncoding::Compact
+                | AppleAssertionEncoding::CompactHashedClientData
+                | AppleAssertionEncoding::CompactRawReceiptHash => {
                     let mut assertion = auth_data;
                     assertion.extend_from_slice(client_data_hash);
                     assertion.extend_from_slice(signature.to_der().as_bytes());
                     assertion
                 }
-                AppleAssertionEncoding::CompactHashedClientData => {
-                    let mut assertion = auth_data;
-                    assertion.extend_from_slice(client_data_hash);
-                    assertion.extend_from_slice(signature.to_der().as_bytes());
-                    assertion
-                }
-                AppleAssertionEncoding::CborDerSignature => {
+                AppleAssertionEncoding::CborDerSignature
+                | AppleAssertionEncoding::CborDerSignatureRawReceiptHash => {
                     let value = Value::Map(vec![
                         (
                             Value::Text("authenticatorData".into()),
