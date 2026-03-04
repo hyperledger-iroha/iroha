@@ -27,7 +27,6 @@ default = [
     "connect",
     "push",
     "circuit-params",
-    "zk-tests",
     "zk-halo2",
     "zk-halo2-ipa",
     "ipa-commitment"
@@ -79,7 +78,7 @@ zk-tests = ["iroha_core/zk-tests"]
 halo2-dev-tests = ["iroha_core/halo2-dev-tests"]
 [dependencies]
 norito = { workspace = true }
-iroha_core = { workspace = true, features = ["app_api", "iroha-core-tests", "zk-tests", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }
+iroha_core = { workspace = true, features = ["app_api", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }
 iroha_config = { workspace = true }
 iroha_primitives = { workspace = true, features = ["simd-accel"] }
 iroha_logger = { workspace = true }
@@ -106,7 +105,7 @@ prometheus = { workspace = true, optional = true }
 thiserror = { workspace = true }
 displaydoc = { workspace = true }
 futures = { workspace = true, features = ["std", "async-await"] }
-axum = { workspace = true, features = ["multipart", "ws", "query", "json", "tokio", "http1", "macros", "original-uri"] }
+axum = { workspace = true, features = ["ws", "query", "json", "tokio", "http1", "macros"] }
 tower-http = { version = "0.6.6", features = ["trace", "timeout"] }
 tower = "0.5.2"
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
@@ -156,7 +155,6 @@ hyper = "1.7.0"
 ivm = { path = "../ivm" }
 iroha_telemetry = { workspace = true }
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }
-rand_core_06 = { workspace = true }
 iroha_test_samples = { path = "../iroha_test_samples" }
 
 [[bench]]

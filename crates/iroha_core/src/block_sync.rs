@@ -21,10 +21,12 @@ use norito::codec::{Decode, Encode};
 use rand::seq::SliceRandom;
 use tokio::sync::mpsc;
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use crate::state::{StateReadOnly, StateView};
 use crate::{
     IrohaNetwork, NetworkMessage,
     kura::Kura,
-    state::{State, StateReadOnly, StateView, WorldReadOnly},
+    state::{State, WorldReadOnly},
     sumeragi::{
         SumeragiHandle,
         consensus::{
