@@ -2,6 +2,7 @@
 
 use std::{
     borrow::Cow,
+    collections::BTreeMap,
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -101,6 +102,7 @@ const IZANAMI_INGRESS_UNHEALTHY_COOLDOWN_MS: u64 = 5_000;
 const IZANAMI_INGRESS_REPROBE_INTERVAL_MS: u64 = 1_000;
 const IZANAMI_INGRESS_REQUEST_TIMEOUT_MS: u64 = 5_000;
 const IZANAMI_INGRESS_STATUS_TIMEOUT_MS: u64 = 20_000;
+const IZANAMI_INGRESS_QUEUE_PRESSURE_COOLDOWN_MAX_SHIFT: u32 = 4;
 const IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS: u32 = 2;
 const IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS: u64 = 250;
 const IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
@@ -228,15 +230,24 @@ impl IngressStats {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct EndpointHealthState {
     consecutive_failures: u32,
+    consecutive_queue_pressure_failures: u32,
     unhealthy_until: Option<Instant>,
     last_probe_at: Option<Instant>,
     sticky_unhealthy_until: Option<Instant>,
+}
+
+#[derive(Clone, Debug)]
+struct IngressLagSnapshot {
+    quorum_min_height: u64,
+    endpoint_heights: Vec<Option<u64>>,
+    sampled_at: Instant,
 }
 
 #[derive(Clone)]
 struct EndpointHealthPool {
     labels: Arc<Vec<String>>,
     state: Arc<StdMutex<Vec<EndpointHealthState>>>,
+    lag_snapshot: Arc<StdMutex<Option<IngressLagSnapshot>>>,
     cursor: Arc<AtomicU64>,
     config: IngressEndpointPoolConfig,
     ingress_stats: Arc<IngressStats>,
@@ -252,9 +263,16 @@ impl EndpointHealthPool {
         Self {
             labels: Arc::new(labels),
             state: Arc::new(StdMutex::new(vec![EndpointHealthState::default(); len])),
+            lag_snapshot: Arc::new(StdMutex::new(None)),
             cursor: Arc::new(AtomicU64::new(0)),
             config,
             ingress_stats,
+        }
+    }
+
+    fn update_lag_snapshot(&self, snapshot: IngressLagSnapshot) {
+        if let Ok(mut guard) = self.lag_snapshot.lock() {
+            *guard = Some(snapshot);
         }
     }
 
@@ -347,11 +365,39 @@ impl EndpointHealthPool {
         if len == 0 {
             return Vec::new();
         }
+        let lag_snapshot = self
+            .lag_snapshot
+            .lock()
+            .ok()
+            .and_then(|guard| (*guard).clone())
+            .filter(|snapshot| snapshot.endpoint_heights.len() == len);
+        let lagging_flags = lag_snapshot
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .endpoint_heights
+                    .iter()
+                    .map(|height| {
+                        height.is_some_and(|height| {
+                            snapshot.quorum_min_height.saturating_sub(height)
+                                > IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec![false; len]);
+        let _lag_snapshot_age = lag_snapshot
+            .as_ref()
+            .map(|snapshot| now.saturating_duration_since(snapshot.sampled_at));
+        let has_non_lagging_endpoint = lagging_flags.iter().any(|flag| !flag);
         let base = self.cursor.fetch_add(1, Ordering::Relaxed);
         let base_idx_u64 = base % u64::try_from(len).unwrap_or(1);
         let base_idx = usize::try_from(base_idx_u64).unwrap_or(0);
         let mut healthy = Vec::with_capacity(len);
         let mut probes = Vec::new();
+        let mut sticky_probe_candidates = Vec::new();
+        let mut lagging_fallback_healthy = Vec::new();
+        let mut lagging_fallback_unhealthy = Vec::new();
         let mut forced_probe: Option<(usize, Instant)> = None;
         let mut guard = self
             .state
@@ -359,8 +405,17 @@ impl EndpointHealthPool {
             .expect("endpoint health state mutex should not be poisoned");
         for offset in 0..len {
             let idx = (base_idx + offset) % len;
+            let excluded_by_lag = has_non_lagging_endpoint && lagging_flags[idx];
             let state = &mut guard[idx];
             let still_unhealthy = state.unhealthy_until.is_some_and(|until| now < until);
+            if excluded_by_lag {
+                if still_unhealthy {
+                    lagging_fallback_unhealthy.push(idx);
+                } else {
+                    lagging_fallback_healthy.push(idx);
+                }
+                continue;
+            }
             if !still_unhealthy {
                 state.unhealthy_until = None;
                 state.sticky_unhealthy_until = None;
@@ -371,8 +426,15 @@ impl EndpointHealthPool {
                 now.saturating_duration_since(last) >= self.config.reprobe_interval
             });
             if probe_due {
-                state.last_probe_at = Some(now);
-                probes.push(idx);
+                let sticky_active = state
+                    .sticky_unhealthy_until
+                    .is_some_and(|until| now < until);
+                if sticky_active {
+                    sticky_probe_candidates.push(idx);
+                } else {
+                    state.last_probe_at = Some(now);
+                    probes.push(idx);
+                }
             }
             if let Some(unhealthy_until) = state.unhealthy_until {
                 let should_replace = forced_probe
@@ -383,8 +445,23 @@ impl EndpointHealthPool {
                 }
             }
         }
+        if healthy.is_empty() {
+            for idx in sticky_probe_candidates {
+                if let Some(state) = guard.get_mut(idx) {
+                    state.last_probe_at = Some(now);
+                }
+                probes.push(idx);
+            }
+        }
         if healthy.is_empty() && probes.is_empty() {
-            if let Some((idx, _)) = forced_probe {
+            if let Some(idx) = lagging_fallback_healthy.first().copied() {
+                probes.push(idx);
+            } else if let Some(idx) = lagging_fallback_unhealthy.first().copied() {
+                if let Some(state) = guard.get_mut(idx) {
+                    state.last_probe_at = Some(now);
+                }
+                probes.push(idx);
+            } else if let Some((idx, _)) = forced_probe {
                 if let Some(state) = guard.get_mut(idx) {
                     state.last_probe_at = Some(now);
                 }
@@ -398,13 +475,14 @@ impl EndpointHealthPool {
     fn mark_success_at(&self, endpoint_idx: usize, now: Instant) {
         if let Ok(mut guard) = self.state.lock() {
             if let Some(state) = guard.get_mut(endpoint_idx) {
-                state.consecutive_failures = 0;
                 if state
                     .sticky_unhealthy_until
                     .is_some_and(|until| now < until)
                 {
                     return;
                 }
+                state.consecutive_failures = 0;
+                state.consecutive_queue_pressure_failures = 0;
                 state.unhealthy_until = None;
                 state.sticky_unhealthy_until = None;
             }
@@ -424,6 +502,12 @@ impl EndpointHealthPool {
             return false;
         };
         state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+        if matches!(failure_class, IngressFailureClass::QueuePressure) {
+            state.consecutive_queue_pressure_failures =
+                state.consecutive_queue_pressure_failures.saturating_add(1);
+        } else {
+            state.consecutive_queue_pressure_failures = 0;
+        }
         if !failure_class.is_retryable() {
             return false;
         }
@@ -436,9 +520,16 @@ impl EndpointHealthPool {
             return false;
         }
         let cooldown = if matches!(failure_class, IngressFailureClass::QueuePressure) {
-            self.config
+            let base = self
+                .config
                 .unhealthy_cooldown
-                .max(Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS))
+                .max(Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS));
+            let shift = state
+                .consecutive_queue_pressure_failures
+                .saturating_sub(1)
+                .min(IZANAMI_INGRESS_QUEUE_PRESSURE_COOLDOWN_MAX_SHIFT);
+            let multiplier = 1_u32.checked_shl(shift).unwrap_or(u32::MAX).max(1);
+            base.saturating_mul(multiplier)
         } else {
             self.config.unhealthy_cooldown
         };
@@ -470,6 +561,7 @@ struct IngressEndpoint {
 #[derive(Clone)]
 struct IngressEndpointPool {
     endpoints: Arc<Vec<IngressEndpoint>>,
+    endpoint_index_by_peer: Arc<BTreeMap<PeerId, usize>>,
     health: EndpointHealthPool,
 }
 
@@ -497,11 +589,38 @@ impl IngressEndpointPool {
             .iter()
             .map(|endpoint| endpoint.label.clone())
             .collect();
+        let endpoint_index_by_peer = endpoints
+            .iter()
+            .enumerate()
+            .map(|(idx, endpoint)| (endpoint.peer.id().clone(), idx))
+            .collect();
         let health = EndpointHealthPool::new(labels, config, ingress_stats);
         Self {
             endpoints: Arc::new(endpoints),
+            endpoint_index_by_peer: Arc::new(endpoint_index_by_peer),
             health,
         }
+    }
+
+    fn update_lag_snapshot(
+        &self,
+        quorum_min_height: u64,
+        sampled_heights: &[(PeerId, u64)],
+        sampled_at: Instant,
+    ) {
+        let mut endpoint_heights = vec![None; self.endpoints.len()];
+        for (peer_id, height) in sampled_heights {
+            if let Some(endpoint_idx) = self.endpoint_index_by_peer.get(peer_id)
+                && let Some(slot) = endpoint_heights.get_mut(*endpoint_idx)
+            {
+                *slot = Some(*height);
+            }
+        }
+        self.health.update_lag_snapshot(IngressLagSnapshot {
+            quorum_min_height,
+            endpoint_heights,
+            sampled_at,
+        });
     }
 
     fn run_with_failover<T, F>(&self, op_name: &'static str, mut operation: F) -> Result<T>
@@ -1303,6 +1422,7 @@ impl IzanamiRunner {
                 self.config.progress_interval,
                 self.config.progress_timeout,
                 &run_control,
+                Some(ingress_pool.as_ref()),
             )
             .await
         } else {
@@ -1576,13 +1696,16 @@ fn seeded_rng_from_seed(seed: Option<u64>) -> StdRng {
     )
 }
 
-fn sampled_peer_heights(peers: &[NetworkPeer]) -> Vec<u64> {
+fn sampled_peer_heights_with_ids(peers: &[NetworkPeer]) -> Vec<(PeerId, u64)> {
     peers
         .iter()
         .map(|peer| {
-            peer.best_effort_block_height()
-                .map(|height| height.total)
-                .unwrap_or(0)
+            (
+                peer.id().clone(),
+                peer.best_effort_block_height()
+                    .map(|height| height.total)
+                    .unwrap_or(0),
+            )
         })
         .collect()
 }
@@ -1696,6 +1819,7 @@ async fn wait_for_target_blocks(
     progress_interval: Duration,
     progress_timeout: Duration,
     run_control: &RunControl,
+    ingress_pool: Option<&IngressEndpointPool>,
 ) -> Result<()> {
     let start = Instant::now();
     let mut progress = ProgressState::new(start);
@@ -1708,9 +1832,13 @@ async fn wait_for_target_blocks(
             return Err(eyre!("izanami run stopped before target blocks reached"));
         }
         let now = Instant::now();
-        let heights = sampled_peer_heights(peers);
+        let sampled_heights = sampled_peer_heights_with_ids(peers);
+        let heights: Vec<_> = sampled_heights.iter().map(|(_, height)| *height).collect();
         let strict_min_height = heights.iter().copied().min().unwrap_or(0);
         let min_height = quorum_min_height_from_samples(heights.clone());
+        if let Some(ingress_pool) = ingress_pool {
+            ingress_pool.update_lag_snapshot(min_height, sampled_heights.as_slice(), now);
+        }
         let strict_reference_height =
             strict_divergence_reference_height_from_samples(heights.clone());
         let divergence_blocks = strict_reference_height.saturating_sub(strict_min_height);
@@ -3251,6 +3379,144 @@ mod tests {
     }
 
     #[test]
+    fn ingress_pool_excludes_lagging_endpoint_when_healthy_alternatives_exist() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:61".to_string(),
+                "http://127.0.0.1:62".to_string(),
+                "http://127.0.0.1:63".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 3,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(10),
+                reprobe_interval: Duration::from_secs(5),
+            },
+            ingress_stats,
+        );
+        let now = Instant::now();
+        pool.update_lag_snapshot(IngressLagSnapshot {
+            quorum_min_height: 220,
+            endpoint_heights: vec![Some(180), Some(220), Some(221)],
+            sampled_at: now,
+        });
+
+        let mut attempts = Vec::new();
+        let result: Result<&'static str> = pool.run_with_failover_at("submit", now, |idx, _| {
+            attempts.push(idx);
+            Ok("ok")
+        });
+        assert_eq!(
+            result.expect("healthy non-lagging endpoint should succeed"),
+            "ok"
+        );
+        assert_eq!(
+            attempts,
+            vec![1],
+            "lagging endpoint should be excluded while healthy non-lagging alternatives exist"
+        );
+    }
+
+    #[test]
+    fn ingress_pool_forced_probe_when_all_endpoints_excluded_or_unhealthy() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:71".to_string(),
+                "http://127.0.0.1:72".to_string(),
+                "http://127.0.0.1:73".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 3,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(30),
+                reprobe_interval: Duration::from_secs(30),
+            },
+            ingress_stats,
+        );
+        let start = Instant::now();
+        assert!(pool.mark_failure_at(1, start, IngressFailureClass::Retryable));
+        assert!(pool.mark_failure_at(2, start, IngressFailureClass::Retryable));
+        {
+            let mut guard = pool
+                .state
+                .lock()
+                .expect("endpoint health state mutex should not be poisoned");
+            if let Some(state) = guard.get_mut(1) {
+                state.last_probe_at = Some(start);
+            }
+            if let Some(state) = guard.get_mut(2) {
+                state.last_probe_at = Some(start);
+            }
+        }
+        pool.update_lag_snapshot(IngressLagSnapshot {
+            quorum_min_height: 300,
+            endpoint_heights: vec![Some(250), Some(300), Some(301)],
+            sampled_at: start,
+        });
+
+        let mut attempts = Vec::new();
+        let result: Result<&'static str> =
+            pool.run_with_failover_at("submit", start + Duration::from_secs(1), |idx, _| {
+                attempts.push(idx);
+                Ok("forced")
+            });
+        assert_eq!(
+            result.expect("forced probe should avoid a dead-end"),
+            "forced"
+        );
+        assert_eq!(
+            attempts,
+            vec![0],
+            "when all non-lagging endpoints are unavailable, forced probe should use the excluded lagging endpoint"
+        );
+    }
+
+    #[test]
+    fn queue_pressure_sticky_cooldown_blocks_early_reprobe() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:81".to_string(),
+                "http://127.0.0.1:82".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 2,
+                unhealthy_failure_threshold: 3,
+                unhealthy_cooldown: Duration::from_secs(5),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            ingress_stats,
+        );
+        let start = Instant::now();
+        let first: Result<&'static str> = pool.run_with_failover_at("submit", start, |idx, _| {
+            if idx == 0 {
+                Err(eyre!("transaction queued for too long"))
+            } else {
+                Ok("ok")
+            }
+        });
+        assert_eq!(
+            first.expect("healthy alternate endpoint should succeed"),
+            "ok"
+        );
+
+        let mut attempts = Vec::new();
+        let second: Result<&'static str> =
+            pool.run_with_failover_at("submit", start + Duration::from_secs(1), |idx, _| {
+                attempts.push(idx);
+                Ok("ok")
+            });
+        assert_eq!(second.expect("submission should still succeed"), "ok");
+        assert_eq!(
+            attempts,
+            vec![1],
+            "sticky queue-pressure endpoint should not be reprobed early while healthy alternatives exist"
+        );
+    }
+
+    #[test]
     fn endpoint_pool_queue_timeout_marks_unhealthy_on_first_failure() {
         let ingress_stats = Arc::new(IngressStats::default());
         let pool = EndpointHealthPool::new(
@@ -3714,6 +3980,7 @@ mod tests {
             Duration::from_millis(200),
             Duration::from_secs(5),
             &run_control,
+            None,
         )
         .await?;
         network.shutdown().await;
