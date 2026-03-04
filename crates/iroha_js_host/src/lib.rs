@@ -64,7 +64,8 @@ use iroha_data_model::{
         Transfer, TransferBox, Unregister, UnregisterBox,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
-            FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, VotingMode,
+            FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
+            VotingMode,
         },
         smart_contract_code::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
@@ -5638,6 +5639,17 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 return Ok(Box::new(ballot).into_instruction_box());
             }
 
+            if let Some(json::Value::Object(mut fields)) = map.remove("RegisterCitizen") {
+                let owner_value = required_value(&mut fields, "owner", "RegisterCitizen")?;
+                let owner: AccountId = json::from_value(owner_value).map_err(norito_to_napi)?;
+                let amount = parse_u128_value(
+                    required_value(&mut fields, "amount", "RegisterCitizen")?,
+                    "RegisterCitizen.amount",
+                )?;
+                let instruction = RegisterCitizen { owner, amount };
+                return Ok(Box::new(instruction).into_instruction_box());
+            }
+
             if let Some(enact_value) = map.remove("EnactReferendum") {
                 let enact: EnactReferendum =
                     json::from_value(enact_value).map_err(norito_to_napi)?;
@@ -6181,6 +6193,21 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         let mut outer = json::Map::new();
         outer.insert("CastPlainBallot".to_owned(), json::Value::Object(inner));
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(citizen) = instruction_ref.as_any().downcast_ref::<RegisterCitizen>() {
+        let mut inner = json::Map::new();
+        inner.insert(
+            "owner".to_owned(),
+            json::to_value(&citizen.owner).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "amount".to_owned(),
+            json::Value::String(citizen.amount.to_string()),
+        );
+        let mut outer = json::Map::new();
+        outer.insert("RegisterCitizen".to_owned(), json::Value::Object(inner));
         return Ok(json::Value::Object(outer));
     }
 
@@ -7048,7 +7075,8 @@ mod tests {
             SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
             governance::{
                 AtWindow, CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
-                FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, VotingMode,
+                FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
+                VotingMode,
             },
             smart_contract_code::{
                 ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -8972,6 +9000,38 @@ mod tests {
             .as_object()
             .unwrap()
             .get("CastPlainBallot")
+            .and_then(|value| value.get("owner"))
+            .and_then(|value| value.as_str())
+            .expect("owner string present");
+        assert_eq!(owner_json, account_json_literal(&owner));
+    }
+
+    #[test]
+    fn governance_register_citizen_instruction_json_roundtrip() {
+        let owner = sample_account("wonderland");
+        let instruction: InstructionBox = Box::new(RegisterCitizen {
+            owner: owner.clone(),
+            amount: 10_000,
+        })
+        .into_instruction_box();
+
+        let json_value =
+            instruction_to_json_value(&instruction).expect("serialize RegisterCitizen instruction");
+        assert!(
+            json_value
+                .as_object()
+                .and_then(|map| map.get("RegisterCitizen"))
+                .is_some()
+        );
+
+        let reconstructed =
+            value_to_instruction(json_value.clone()).expect("deserialize RegisterCitizen");
+        assert_eq!(reconstructed, instruction);
+
+        let owner_json = json_value
+            .as_object()
+            .unwrap()
+            .get("RegisterCitizen")
             .and_then(|value| value.get("owner"))
             .and_then(|value| value.as_str())
             .expect("owner string present");

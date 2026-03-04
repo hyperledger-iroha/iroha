@@ -38,6 +38,17 @@ Last update: 2026-03-04
     - `cargo test -p izanami queue_pressure_sticky_cooldown_blocks_early_reprobe -- --nocapture` (ok)
   - Open follow-up:
     - execute the unchanged 3600s soak envelope and verify tranche-7C gates (no strict-peer hard stall, lagging peer advances beyond 178 with sustained progress, strict/quorum gap <=150, and hotspot deltas for `frontier_gap_realign@179`, `missing_block_height_hard_cap@179`, `view_change{cause=missing_qc,height=179}`, and ingress `queue_pressure` on `:44005`).
+- Compile-time optimization follow-up for unchanged runtime feature behavior (`Cargo.toml`, `crates/iroha_core/Cargo.toml`, `crates/iroha_core/src/block_sync.rs`, `crates/iroha_torii/Cargo.toml`, `crates/{iroha_config,iroha_js_host,iroha_torii_shared}/Cargo.toml`): removed test-only feature forcing from normal Torii/Core builds (`iroha_core` default no longer includes `iroha-core-tests`; Torii no longer enables `zk-tests` by default or via workspace dependency), retained runtime ZK defaults (`zk-halo2`, `zk-halo2-ipa`), removed additional unused direct edges (`iroha_config`: `json5`, `displaydoc`, `derive_more`, `iroha_schema`; `iroha_js_host`: `futures`, `httpmock`; `iroha_torii_shared`: `iroha_primitives`), and dropped unused Axum features `multipart`/`original-uri` in Torii. Updated `iroha_core/src/block_sync.rs` imports with feature-gated `StateReadOnly`/`StateView` to keep default builds warning-clean after feature tightening.
+- Validation:
+  - `scripts/cargo_fast.sh -- check -p iroha_torii -p irohad` (ok, multiple passes).
+  - `scripts/cargo_fast.sh -- check -p irohad` (ok after `iroha_core` default-feature change and warning cleanup).
+  - `scripts/cargo_fast.sh -- check -p iroha_config -p iroha_core -p iroha_js_host -p iroha_torii_shared -p iroha_torii -p irohad` (ok).
+  - Cold timing sweep (`/usr/bin/time -p scripts/cargo_fast.sh --no-sccache --linker off --target-dir ... -- check -p irohad`):
+    - earlier baseline in this tranche: `real 170.89s` (`/tmp/iroha_final_opt`)
+    - after Torii/Core test-feature unforcing: `real 158.14s` (`/tmp/iroha_no_testzk`)
+    - after removing `iroha-core-tests` from core defaults: `real 150.77s` (`/tmp/iroha_no_coretests`)
+    - repeat with final patchset: `real 149.08s` (`/tmp/iroha_axum_trim2`)
+    - net improvement vs tranche baseline: ~`12.8%` faster cold `irohad` check on this host/session.
 - Latest sync (2026-03-03 Tranche 7 lagging-peer catch-up convergence, core-only/no new knobs):
   - Implemented in:
     - `crates/iroha_core/src/sumeragi/main_loop.rs`
