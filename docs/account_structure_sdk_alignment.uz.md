@@ -1,0 +1,46 @@
+---
+lang: uz
+direction: ltr
+source: docs/account_structure_sdk_alignment.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 164bd373091ae3280f9f90fcfd915a90088b0c79b8f3759ffd2548edb64d0a90
+source_last_modified: "2026-01-28T17:11:30.632934+00:00"
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
+---
+
+SDK va kodek egalari uchun # IH58 tarqatish eslatmasi
+
+Jamoalar: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec asboblari
+
+Kontekst: `docs/account_structure.md` endi yuk tashish IH58 hisob identifikatorini aks ettiradi
+amalga oshirish. Iltimos, SDK xatti-harakatlari va testlarini kanonik spetsifikatsiyaga moslang.
+
+Asosiy havolalar:
+- Manzil kodek + sarlavha tartibi - `docs/account_structure.md` §2
+- Egri registri — `docs/source/references/address_curve_registry.md`
+- Norm v1 domen bilan ishlash — `docs/source/references/address_norm_v1.md`
+- Fikstur vektorlari — `fixtures/account/address_vectors.json`
+
+Harakat elementlari:
+1. **Kanonik chiqish:** `AccountId::to_string()`/Displey faqat IH58 chiqarishi KERAK
+   (`@domain` qo'shimchasi yo'q). Kanonik hex disk raskadrovka uchun mo'ljallangan (`0x...`).
+2. **Qabul qilingan kiritishlar:** tahlilchilar IH58 (afzal), `sora` siqilgan,
+   va kanonik hex (faqat `0x...`; yalang'och olti burchak rad etiladi). Kirishlar MUMKIN
+   Marshrutlash bo'yicha maslahatlar uchun `@<domain>` qo'shimchasi; `<label>@<domain>` taxalluslari a talab qiladi
+   hal qiluvchi. Raw `public_key@domain` (multihash hex) qo'llab-quvvatlanadi.
+3. **Resolvers:** domensiz IH58/sora tahlil qilish uchun domen tanlagich kerak
+   resolver, agar selektor aniq sukut bo'lmasa (konfiguratsiya qilingan standartdan foydalaning
+   domen yorlig'i). UAID (`uaid:...`) va noaniq (`opaque:...`) harflar talab qiladi
+   hal qiluvchilar.
+4. **IH58 nazorat summasi:** `IH58PRE || prefix || payload` orqali Blake2b-512 dan foydalaning, oling
+   birinchi 2 bayt. Siqilgan alifbo bazasi **105**.
+5. **Egri chiziq:** SDK standarti faqat Ed25519 uchun. Aniq ro'yxatdan o'tishni ta'minlang
+   ML‑DSA/GOST/SM (Swift yaratish bayroqlari; JS/Android `configureCurveSupport`). Do
+   secp256k1 sukut bo'yicha Rust tashqarisida yoqilgan deb hisoblamang.
+6. **CAIP-10 yo‘q:** hali jo‘natilgan CAIP‑10 xaritasi mavjud emas; fosh qilmang yoki
+   CAIP‑10 konversiyalariga bog'liq.
+
+Iltimos, kodeklar/testlar yangilangandan keyin tasdiqlang; ochiq savollarni kuzatish mumkin
+hisob-manzillash RFC oqimida.

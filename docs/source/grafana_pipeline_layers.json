@@ -1,0 +1,102 @@
+{
+  "$schema": "https://grafana.com/schemas/json/dashboard/v1.json",
+  "title": "Iroha Pipeline Layers",
+  "editable": true,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Peak Layer Width",
+      "targets": [
+        { "expr": "pipeline_peak_layer_width", "legendFormat": "peak" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Components (count / max size)",
+      "targets": [
+        { "expr": "pipeline_comp_count", "legendFormat": "count" },
+        { "expr": "pipeline_comp_max", "legendFormat": "max" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "type": "bargauge",
+      "title": "Component Size CDF (le)",
+      "options": { "displayMode": "lcd" },
+      "targets": [
+        { "expr": "sum(pipeline_comp_hist_bucket) by (le)", "legendFormat": "le={{le}}" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 }
+    },
+    {
+      "type": "bargauge",
+      "title": "Layer Width CDF (le)",
+      "options": { "displayMode": "lcd" },
+      "targets": [
+        { "expr": "sum(pipeline_layer_width_hist_bucket) by (le)", "legendFormat": "le={{le}}" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Layer Width P50/P90 (approx)",
+      "targets": [
+        { "expr": "histogram_quantile(0.5, sum(rate(pipeline_layer_width_hist_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.9, sum(rate(pipeline_layer_width_hist_bucket[5m])) by (le))", "legendFormat": "p90" }
+      ],
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 }
+    },
+    {
+      "type": "stat",
+      "title": "DAG Vertices / Edges",
+      "targets": [
+        { "expr": "pipeline_dag_vertices", "legendFormat": "vertices" },
+        { "expr": "pipeline_dag_edges", "legendFormat": "edges" }
+      ],
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 24 }
+    },
+    {
+      "type": "stat",
+      "title": "Avg / Median Layer Width",
+      "targets": [
+        { "expr": "pipeline_layer_avg_width", "legendFormat": "avg" },
+        { "expr": "pipeline_layer_median_width", "legendFormat": "median" }
+      ],
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 24 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Register Max Index (p90/p99)",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.9, sum(rate(ivm_register_max_index_bucket[5m])) by (le))",
+          "legendFormat": "p90"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(ivm_register_max_index_bucket[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Unique Registers (p90/p99)",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.9, sum(rate(ivm_register_unique_count_bucket[5m])) by (le))",
+          "legendFormat": "p90"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(ivm_register_unique_count_bucket[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 30 }
+    }
+  ],
+  "timezone": "browser",
+  "schemaVersion": 36,
+  "version": 1
+}

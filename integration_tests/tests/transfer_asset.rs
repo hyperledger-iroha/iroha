@@ -1,20 +1,29 @@
-#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+//! Tests for transferring assets between accounts.
 
+use integration_tests::sandbox;
 use iroha::data_model::{
+    Registered,
     account::{Account, AccountId},
     asset::{Asset, AssetDefinition},
     isi::{Instruction, InstructionBox},
     prelude::*,
-    Registered,
 };
 use iroha_test_network::*;
-use iroha_test_samples::{gen_account_in, ALICE_ID};
+use iroha_test_samples::{ALICE_ID, gen_account_in};
+
+fn start_default(
+    context: &'static str,
+) -> Option<(sandbox::SerializedNetwork, tokio::runtime::Runtime)> {
+    sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()
+}
 
 #[test]
 // This test suite is also covered at the UI level in the iroha_cli tests
 // in test_tranfer_assets.py
 fn simulate_transfer_numeric() {
     simulate_transfer(
+        "simulate_transfer_numeric",
         numeric!(200),
         &numeric!(20),
         AssetDefinition::numeric,
@@ -24,22 +33,26 @@ fn simulate_transfer_numeric() {
 }
 
 fn simulate_transfer<T>(
+    context: &'static str,
     starting_amount: T,
     amount_to_transfer: &T,
     asset_definition_ctr: impl FnOnce(AssetDefinitionId) -> <AssetDefinition as Registered>::With,
-    mint_ctr: impl FnOnce(T, AssetId) -> Mint<T, Asset>,
+    mint_ctr: impl FnOnce(T, AssetId) -> Mint<Numeric, Asset>,
     transfer_ctr: impl FnOnce(AssetId, T, AccountId) -> Transfer<Asset, T, Account>,
 ) where
     T: std::fmt::Debug + Clone + Into<Numeric>,
     Mint<T, Asset>: Instruction,
     Transfer<Asset, T, Account>: Instruction,
+    InstructionBox: From<Transfer<Asset, T, Account>>,
 {
-    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let Some((network, _rt)) = start_default(context) else {
+        return;
+    };
     let iroha = network.client();
 
     let (alice_id, mouse_id) = generate_two_ids();
     let create_mouse = create_mouse(mouse_id.clone());
-    let asset_definition_id: AssetDefinitionId = "camomile#wonderland".parse().unwrap();
+    let asset_definition_id = asset_definition_id_for(context);
     let create_asset =
         Register::asset_definition(asset_definition_ctr(asset_definition_id.clone()));
     let mint_asset = mint_ctr(
@@ -66,17 +79,18 @@ fn simulate_transfer<T>(
     iroha
         .submit_blocking(transfer_asset)
         .expect("Failed to transfer asset.");
-    assert!(iroha
-        .query(FindAssets::new())
-        .filter_with(|asset| asset.id.account.eq(mouse_id.clone()))
-        .execute_all()
-        .unwrap()
-        .into_iter()
-        .any(|asset| {
-            *asset.id().definition() == asset_definition_id
-                && *asset.value() == amount_to_transfer.clone().into()
-                && *asset.id().account() == mouse_id
-        }));
+    assert!(
+        iroha
+            .query(FindAssets::new())
+            .execute_all()
+            .unwrap()
+            .into_iter()
+            .any(|asset| {
+                *asset.id().definition() == asset_definition_id
+                    && *asset.value() == amount_to_transfer.clone().into()
+                    && *asset.id().account() == mouse_id
+            })
+    );
 }
 
 fn generate_two_ids() -> (AccountId, AccountId) {
@@ -89,13 +103,22 @@ fn create_mouse(mouse_id: AccountId) -> Register<Account> {
     Register::account(Account::new(mouse_id))
 }
 
+fn asset_definition_id_for(context: &str) -> AssetDefinitionId {
+    format!("camomile_{context}#wonderland")
+        .parse()
+        .expect("asset definition id should be valid")
+}
+
 #[test]
 fn should_fail_if_asset_not_found() {
-    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let context = "should_fail_if_asset_not_found";
+    let Some((network, _rt)) = start_default(context) else {
+        return;
+    };
     let iroha = network.client();
 
     let (alice_id, mouse_id) = generate_two_ids();
-    let asset_definition_id: AssetDefinitionId = "camomile#wonderland".parse().unwrap();
+    let asset_definition_id = asset_definition_id_for(context);
     let create_asset_definition =
         Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
     let asset_id = AssetId::new(asset_definition_id.clone(), alice_id);
@@ -105,8 +128,10 @@ fn should_fail_if_asset_not_found() {
     let result = iroha.submit_all_blocking(instructions);
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .chain()
-        .any(|e| e.to_string() == format!("Failed to find asset: `{asset_id}`")));
+    assert!(
+        result
+            .unwrap_err()
+            .chain()
+            .any(|e| e.to_string() == format!("Failed to find asset: `{asset_id}`"))
+    );
 }

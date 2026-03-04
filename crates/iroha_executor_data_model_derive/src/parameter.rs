@@ -19,10 +19,10 @@ pub fn impl_derive_parameter(input: &syn::DeriveInput) -> TokenStream {
                 let value_id = iroha_data_model::Identifiable::id(value);
 
                 if *value_id != <Self as ::iroha_executor_data_model::parameter::Parameter>::id() {
-                    return Err(Self::Error::UnknownIdent(alloc::string::ToString::to_string(value_id.name().as_ref())));
+                    return Err(Self::Error::UnknownIdent(::std::string::ToString::to_string(value_id.name().as_ref())));
                 }
 
-                serde_json::from_str::<Self>(value.payload().as_ref()).map_err(Self::Error::Deserialize)
+                ::norito::json::from_str::<Self>(value.payload().as_ref()).map_err(Self::Error::Deserialize)
             }
         }
 
@@ -30,7 +30,7 @@ pub fn impl_derive_parameter(input: &syn::DeriveInput) -> TokenStream {
             fn from(value: #ident #ty_generics) -> Self {
                 ::iroha_executor_data_model::parameter::CustomParameter::new(
                     <#ident as ::iroha_executor_data_model::parameter::Parameter>::id(),
-                    ::serde_json::to_value::<#ident #ty_generics>(value)
+                    ::norito::json::to_value::<#ident #ty_generics>(&value)
                         .expect("INTERNAL BUG: Failed to serialize Executor data model entity"),
                 )
             }

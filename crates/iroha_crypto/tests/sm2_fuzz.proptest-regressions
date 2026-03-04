@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 4ff430d04fe234d915b767576b0b3f0ecbead55e9ab224731b3c9d7fc0823b00 # shrinks to case = WycheproofCase { distid: "ALICE123@YAHOO.COM", public_sec1: [4, 10, 228, 199, 121, 138, 160, 241, 25, 71, 27, 238, 17, 130, 91, 228, 98, 2, 187, 121, 226, 165, 132, 68, 149, 233, 124, 4, 255, 77, 242, 84, 138, 124, 2, 64, 248, 143, 28, 212, 225, 99, 82, 167, 60, 23, 183, 241, 111, 7, 53, 62, 83, 161, 118, 214, 132, 169, 254, 12, 107, 183, 152, 232, 87], message: [109, 101, 115, 115, 97, 103, 101, 32, 100, 105, 103, 101, 115, 116], signature_der: [48, 68, 2, 32, 64, 241, 236, 89, 247, 147, 217, 244, 158, 9, 220, 239, 73, 19, 13, 65, 148, 247, 159, 177, 238, 210, 202, 165, 91, 172, 219, 73, 196, 231, 85, 209, 2, 32, 111, 198, 218, 195, 44, 93, 92, 241, 12, 119, 223, 178, 15, 124, 46, 182, 103, 164, 87, 135, 47, 176, 158, 197, 99, 39, 166, 126, 199, 222, 235, 231], expect_valid: true }

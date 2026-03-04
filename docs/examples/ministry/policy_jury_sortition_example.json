@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "proposal_id": "AC-2026-042",
+  "round_id": "PJ-2026-02",
+  "drawn_at_unix_ms": 1768467600000,
+  "pop_snapshot_digest_blake2b_256": [
+    161,
+    102,
+    3,
+    26,
+    91,
+    115,
+    228,
+    1,
+    234,
+    212,
+    194,
+    219,
+    196,
+    196,
+    135,
+    94,
+    197,
+    200,
+    129,
+    56,
+    1,
+    13,
+    194,
+    65,
+    143,
+    95,
+    222,
+    76,
+    221,
+    128,
+    145,
+    36
+  ],
+  "randomness_beacon": [
+    34,
+    177,
+    228,
+    141,
+    71,
+    18,
+    63,
+    92,
+    158,
+    63,
+    12,
+    192,
+    200,
+    227,
+    74,
+    163,
+    197,
+    249,
+    196,
+    154,
+    44,
+    187,
+    112,
+    85,
+    157,
+    60,
+    176,
+    221,
+    193,
+    166,
+    239,
+    1
+  ],
+  "committee_size": 3,
+  "assignments": [
+    {
+      "slot": 0,
+      "juror_id": "citizen:ada",
+      "pop_identity": "pop:ada",
+      "grace_period_secs": 900,
+      "failover": {
+        "waitlist_rank": 1,
+        "escalate_after_secs": 600
+      }
+    },
+    {
+      "slot": 1,
+      "juror_id": "citizen:chai",
+      "pop_identity": "pop:chai",
+      "grace_period_secs": 1200,
+      "failover": {
+        "waitlist_rank": 2,
+        "escalate_after_secs": 600
+      }
+    },
+    {
+      "slot": 2,
+      "juror_id": "citizen:ben",
+      "pop_identity": "pop:ben",
+      "grace_period_secs": 900
+    }
+  ],
+  "waitlist": [
+    {
+      "rank": 1,
+      "juror_id": "citizen:dina",
+      "pop_identity": "pop:dina",
+      "expires_at_unix_ms": 1768726800000
+    },
+    {
+      "rank": 2,
+      "juror_id": "citizen:eric",
+      "pop_identity": "pop:eric",
+      "expires_at_unix_ms": 1768726800000
+    }
+  ]
+}

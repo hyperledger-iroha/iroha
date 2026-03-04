@@ -1,0 +1,33 @@
+---
+lang: my
+direction: ltr
+source: docs/portal/docs/reference/torii-swagger.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+'@site/src/components/SwaggerUiPanel.jsx' မှ SwaggerUiPanel ကို တင်သွင်းပါ။
+
+# Torii API (Swagger UI)
+
+ဤစာမျက်နှာသည် Torii OpenAPI စာရွက်စာတမ်းကို `swagger-ui-react` ကို အသုံးပြုထားသည်။ ဘယ်အချိန်မှာသုံးပါ။
+သင်အကျွမ်းတဝင်ရှိသော Swagger အပြင်အဆင်၊ နမူနာများတောင်းဆိုရန်နှင့် ကြိုးစားနိုင်စွမ်းကို လိုချင်သည်။
+browser အတွင်းရှိ တောင်းဆိုချက်များကို တိုက်ရိုက်ထုတ်ပါ။
+
+## အသုံးပြုပုံ အကြံပြုချက်
+
+- တောင်းဆိုမှုတိုင်းကို ကြိုတင်ခွင့်ပြုရန် အကန့်တွင် ကိုင်ဆောင်သူ တိုကင်တစ်ခု ပေးပါ။ တိုကင်များ
+  `X-TryIt-Auth` ခေါင်းစီးကို အသုံးပြု၍ ပရောက်စီသို့ ထပ်ဆင့်ပို့ပြီး ဘယ်တော့မှ ဆက်မလုပ်ပါ။
+- ဝစ်ဂျက်ကို ပေါ်တယ်ကို ဆောင်ရွက်ပေးသည့်အခါ `TRYIT_PROXY_PUBLIC_URL` ကို စီစဉ်သတ်မှတ်ပါ
+  အစုလိုက်အစည်းလိုက် အဆင့်လိုက် ပရောက်စီမှတစ်ဆင့် တောင်းဆိုမှုများကို ပေးပို့သည်။ သတိပေးဆိုင်းဘုတ်တစ်ခု ပေါ်လာသည်။
+  proxy ကိုပိတ်ထားလျှင်။
+- နောက်ဆုံးပေါ် spec များကြားပြောင်းရန် dropdown မှ OpenAPI ကို ရွေးပါ
+  နှင့် `npm run sync-openapi` မှထုတ်ပေးသော မော်ကွန်းတင်ဗားရှင်းများ။
+- ပရောက်စီ-ကျောထောက်နောက်ခံပြုထားသော “[စမ်းကြည့်ပါ](/api/overview#try-it-sandbox-docs-3)” ကွန်ဆိုးလ်ကို စမ်းကြည့်ပါ။
+  CORS သည် တိုက်ရိုက် Torii ဝင်ရောက်မှုကို တားဆီးသည့် အဆင့်လိုက်ပတ်ဝန်းကျင်များအတွက်။
+- OpenAPI လျှပ်တစ်ပြက်ရိုက်ချက်အား `cargo xtask openapi` ဖြင့် လတ်ဆတ်နေအောင်ထားပါ (ကြည့်ပါ
+  `docs/portal/static/openapi/torii.json`)။
+
+<SwaggerUiPanel />

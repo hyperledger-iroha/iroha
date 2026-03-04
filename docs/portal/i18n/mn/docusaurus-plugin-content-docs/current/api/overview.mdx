@@ -1,0 +1,84 @@
+---
+lang: mn
+direction: ltr
+source: docs/portal/docs/api/overview.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+TryItConsole-г '@site/src/components/TryItConsole.jsx'-аас импортлох;
+
+# Torii API тойм
+
+Torii гарц нь Iroha-тай харилцахын тулд REST + WebSocket гадаргууг нээж өгдөг.
+зангилаа. Каноник OpenAPI баримт бичгийг дараах байдлаар үүсгэнэ.
+
+```bash
+cargo xtask openapi
+```
+
+Дээрх командыг ажиллуулснаар `docs/portal/static/openapi/torii.json` болон бичнэ
+`docusaurus-plugin-openapi-docs` интеграцийг тэжээдэг тул энэ хэсэг шинэчлэгдэнэ
+автоматаар. Генератор нь санах ойн Torii чиглүүлэгчийг эргүүлж,
+түүний OpenAPI төгсгөлийн цэгийг асуух; Хэрэв энэ нь амжилтгүй болвол (жишээлбэл, чиглүүлэгчийг эхлүүлэх
+алдаанууд) оронд нь тодорхойлогч орлуулагчийн үзүүлэлт ялгардаг.
+
+## Одоогийн байдал
+
+- **Онцлох эх сурвалж:** `cargo xtask openapi` нь Torii чиглүүлэгчээс шууд асуудаг; нь
+  чиглүүлэгч нь OpenAPI-г гаргаж чадахгүй үед л нөөцийн бүдүүвч гарна.
+  баримт бичиг.
+- **Determinism:** CI-ийн тогтвортой ялгааг хангахын тулд JSON гаралтыг каноник болгосон.
+- **Баталгаажуулалт:** "Оролдоод үзээрэй" хамгаалагдсан хязгаарлагдмал орчин нь хүсэлтийг a-ээр дамжуулдаг
+  хязгаарлагдмал түвшний прокси. Операторууд Torii төгсгөлийн цэг болон зөөгчийг нийлүүлэх ёстой
+  дуудлага хийхээс өмнө токен.
+- **Хувилбар сонгогч:** Swagger UI, RapiDoc болон бүрэн Torii OpenAPI хуудас
+  `openapi/versions.json` гэж уншдаг унадаг цэсийг нээснээр та харьцуулах боломжтой
+  түүхэн агшин зуурын зургууд. `Latest (tracked)` сонголт нь үүнийг зааж байна
+  `/openapi/torii.json`, бусад бүх оруулгууд нь харгалзах ачааллыг
+  `openapi/versions/<version>/torii.json` олдвор.
+- **Ажлын агшин зуурын явц:** `npm run docs:version -- <label>` ажиллуулсны дараа дахин сэргээнэ үү
+  тохирох OpenAPI файл нь `npm run sync-openapi -- --version=<label> --latest`
+  Тиймээс унадаг цэс нь хөлдөөсөн хормын хувилбар болон "Хамгийн сүүлийн" хувилбарыг хоёуланг нь ачаалах боломжтой.
+
+Чиглүүлэгч дээр тулгуурласан олборлогч одоо Torii гадаргууг бүрэн хэмжээгээр ялгаруулж байна. Хэрэв та харвал
+орлуулагчийн stub, үүнийг бүтээх хугацааны алдаа гэж үзэж, Torii-г шалгана уу.
+чиглүүлэгчийг эхлүүлэх бүртгэлүүд.
+
+## Хамгаалалтын хязгаарлагдмал орчинд үзээрэй (DOCS-3)
+
+Хөгжүүлэгчийн портал нь REST хүсэлтийг a дамжуулан дамжуулдаг жижиг консолыг суулгасан
+Зангилаа дээр суурилсан прокси. Прокси нь CORS, ханшийн хязгаарлалт болон нэмэлт эзэмшигчийг хэрэгжүүлдэг
+токенууд тул виджет нь итгэмжлэлийг ил гаргахгүйгээр үе шаттай гарцтай ярих боломжтой.
+Операторын бүрэн хяналтын жагсаалтыг `docs/devportal/try-it.md`-с харна уу.
+
+Docusaurus dev серверийн хажууд прокси эхлүүлнэ үү:
+
+```bash
+cd docs/portal
+# Proxy configuration
+export TRYIT_PROXY_TARGET="https://torii.staging.sora"
+export TRYIT_PROXY_ALLOWED_ORIGINS="http://localhost:3000"
+export TRYIT_PROXY_BEARER="sora-dev-token"
+# Front-end configuration so the widget knows where the proxy lives
+export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
+
+# Run the proxy and the docs site (parallel terminals recommended)
+npm run tryit-proxy
+npm run start
+```
+
+- Прокси нь `TRYIT_PROXY_LISTEN` (анхдагч `127.0.0.1:8787`) дээр сонсдог ба
+  `/proxy/...` хүсэлтийг `TRYIT_PROXY_TARGET` руу дамжуулдаг.
+- `TRYIT_PROXY_BEARER`-ийг статик эзэмшигчийн жетоноор хангах эсвэл залгасан хүмүүст өгөхийг зөвшөөрөх.
+  "Bearer token" талбараар дамжуулан хүсэлт бүрт нэг.
+- Үнийн хэмжээг минутанд 60 хүсэлтээр хязгаарладаг бөгөөд үүнийг тохируулах боломжтой
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
+
+> ⚠️ Прокси нь шатлалт/демо хандалт хийхэд зориулагдсан. Үйлдвэрлэлийн байршуулалт
+> хатуурсан нэвтрэлтийн ард гүйж, ижил хурдыг хязгаарлах бодлогыг дахин ашиглах ёстой
+> Torii урд.
+
+<TryItConsole />

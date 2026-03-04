@@ -22,9 +22,30 @@ New to our project? [Make your first contribution](#your-first-code-contribution
 - Fork [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
 - Fix your issue of choice.
 - Ensure you follow our [style guides](#style-guides) for code and documentation.
-- Write [tests](https://doc.rust-lang.org/cargo/commands/cargo-test.html). Ensure they all pass (`cargo test --workspace`).
+- Write [tests](https://doc.rust-lang.org/cargo/commands/cargo-test.html). Ensure they all pass (`cargo test --workspace`). If you touch the SM cryptography stack, also run `cargo test -p iroha_crypto --features "sm sm_proptest"` to execute the optional fuzz/property harness.
+  - Note: Tests that exercise the IVM executor will automatically synthesize a minimal, deterministic executor bytecode if `defaults/executor.to` is not present. No pre-step is required to run tests. To generate the canonical bytecode for parity, you can run:
+    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
+- If you change derive/proc-macro crates, run the trybuild UI suites via
+  `make check-proc-macro-ui` (or
+  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) and refresh
+  `.stderr` fixtures when diagnostics change to keep messages stable.
+- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`) to execute fmt/clippy/build/test with `--locked` plus `swift test`; expect `cargo test --workspace` to take hours and use `--skip-tests` only for quick local loops. See `docs/source/dev_workflow.md` for the full runbook.
+- Enforce guardrails with `make check-agents-guardrails` to block `Cargo.lock` edits and new workspace crates, `make check-dependency-discipline` to fail on new dependencies unless explicitly allowed, and `make check-missing-docs` to prevent new `#[allow(missing_docs)]` shims, missing crate-level docs on touched crates, or new public items without doc comments (the guard refreshes `docs/source/agents/missing_docs_inventory.{json,md}` via `scripts/inventory_missing_docs.py`). Add `make check-tests-guard` so changed functions fail unless unit tests reference them (inline `#[cfg(test)]`/`#[test]` blocks or crate `tests/`; existing coverage counts) and `make check-docs-tests-metrics` so roadmap changes are paired with docs, tests, and metrics/dashboards. Keep TODO enforcement via `make check-todo-guard` so TODO markers are not dropped without accompanying docs/tests. `make check-env-config-surface` regenerates the env-toggle inventory and now fails when new **production** env shims appear relative to `AGENTS_BASE_REF`; set `ENV_CONFIG_GUARD_ALLOW=1` only after documenting intentional additions in the migration tracker. `make check-serde-guard` refreshes the serde inventory and fails on stale snapshots or new production `serde`/`serde_json` hits; set `SERDE_GUARD_ALLOW=1` only with an approved migration plan. Keep large deferrals visible via TODO breadcrumbs and follow-up tickets instead of deferring silently. Run `make check-std-only` to catch `no_std`/`wasm32` cfgs and `make check-status-sync` to ensure `roadmap.md` open items remain open-only and that roadmap/status changes land together; set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`. For a single invocation, use `make agents-preflight` to run all guardrails together.
+- Run local serialization guards before pushing: `make guards`.
+  - This denies direct `serde_json` in production code, disallows new direct serde deps outside allowlist, and prevents ad‑hoc AoS/NCB helpers outside `crates/norito`.
+- Optionally dry-run Norito feature matrix locally: `make norito-matrix` (uses a fast subset).
+  - For full coverage, run `scripts/run_norito_feature_matrix.sh` without `--fast`.
+  - To include a downstream smoke per combo (default crate `iroha_data_model`): `make norito-matrix-downstream` or `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`.
+- For proc-macro crates, add a `trybuild` UI harness (`tests/ui.rs` + `tests/ui/pass`/`tests/ui/fail`) and commit `.stderr` diagnostics for the failing cases. Keep diagnostics stable and non-panicking; refresh fixtures with `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` and guard them with `cfg(all(feature = "trybuild-tests", not(coverage)))`.
 - Perform pre-commit routine like formatting & artifacts regeneration (see [`pre-commit.sample`](./hooks/pre-commit.sample))
 - With the `upstream` set to track [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha), `git pull -r upstream main`, `git commit -s`, `git push <your-fork>`, and [create a pull request](https://github.com/hyperledger-iroha/iroha/compare) to the `main` branch. Ensure it follows the [pull request guidelines](#pull-request-etiquette).
+
+### AGENTS workflow quickstart
+
+- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`, documented in `docs/source/dev_workflow.md`). It wraps `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build/test --workspace --locked` (tests can take several hours), and `swift test`.
+- Use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift` for faster iterations; rerun the full sequence before opening a pull request.
+- Guardrails: avoid touching `Cargo.lock`, adding new workspace members, introducing new dependencies, adding new `#[allow(missing_docs)]` shims, omitting crate-level docs, skipping tests when changing functions, dropping TODO markers without docs/tests, or reintroducing `no_std`/`wasm32` cfgs without approval. Run `make check-agents-guardrails` (or `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) plus `make check-dependency-discipline`, `make check-missing-docs` (refreshes `docs/source/agents/missing_docs_inventory.{json,md}`), `make check-tests-guard` (fails when production functions change without unit-test evidence—either tests change in the diff or existing tests must reference the function), `make check-docs-tests-metrics` (fails when roadmap changes lack docs/tests/metrics updates), `make check-todo-guard`, `make check-env-config-surface` (fails on stale inventories or new production env toggles; override with `ENV_CONFIG_GUARD_ALLOW=1` only after updating docs), and `make check-serde-guard` (fails on stale serde inventories or new production serde hits; override with `SERDE_GUARD_ALLOW=1` only with an approved migration plan) locally for early signal, `make check-std-only` for the std-only guard, and keep `roadmap.md`/`status.md` in sync with `make check-status-sync` (set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`). Use `make agents-preflight` if you want a single command to run all guards before opening a PR.
 
 ### Reporting Bugs
 
@@ -109,7 +130,7 @@ A question is any discussion that is neither a bug nor a feature or optimization
 
 <details> <summary> How do I ask a question? </summary>
 
-Please post your questions to [one of our instant messaging platforms](#contacts) so that the staff and members of the community could help you in a timely manner.
+Please post your questions to [one of our instant messaging platforms](#contact) so that the staff and members of the community could help you in a timely manner.
 
 You, as part of the aforementioned community, should consider helping others too. If you decide to help, please do so in a [respectful manner](CODE_OF_CONDUCT.md).
 
@@ -130,6 +151,12 @@ Please [fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the
 #### Working on code contribution:
 - Follow the [Rust Style Guide](#rust-style-guide) and the [Documentation Style Guide](#documentation-style-guide).
 - Ensure that the code you've written is covered by tests. If you fixed a bug, please turn the minimum working example that reproduces the bug into a test.
+- When touching derive/proc-macro crates, run `make check-proc-macro-ui` (or
+  filter with `PROC_MACRO_UI_CRATES="crate1 crate2"`) so trybuild UI fixtures
+  stay in sync and diagnostics remain stable.
+- Document new public APIs (crate-level `//!` and `///` on new items), and run
+  `make check-missing-docs` to verify the guardrail. Call out the docs/tests you
+  added in your pull request description.
 
 #### Committing your work:
 - Follow the [Git Style Guide](#git-workflow).
@@ -139,7 +166,7 @@ Please [fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the
   In the interest of making this process easier for everyone, try not to have more than a handful of commits for a pull request, and avoid re-using feature branches.
 
 #### Creating a pull request:
-- Use an appropriate pull request description by filling in the [description template](.github/PULL_REQUEST_TEMPLATE.md). Avoid deviating from this template if possible.
+- Use an appropriate pull request description by following the guidance in the [Pull Request Etiquette](#pull-request-etiquette) section. Avoid deviating from these guidelines if possible.
 - Add an appropriately formatted [pull request title](#pull-request-titles).
 - If you feel like your code isn't ready to merge, but you want the maintainers to look through it, create a draft pull request.
 
@@ -208,6 +235,14 @@ Follow these commit guidelines:
 - Do not remove failing tests. Even tests that are ignored will be run in our pipeline eventually.
 - If possible, please benchmark your code both before and after making your changes, as a significant performance regression can break existing users' installations.
 
+### Serialization guard checks
+
+Run `make guards` to validate repository policies locally:
+
+- Deny-list direct `serde_json` in production sources (prefer `norito::json`).
+- Forbid direct `serde`/`serde_json` dependencies/imports outside the allowlist.
+- Prevent reintroduction of ad‑hoc AoS/NCB helpers outside `crates/norito`.
+
 ### Debugging tests
 
 <details> <summary> Expand to learn how to change the log level or write logs to a JSON.</summary>
@@ -254,7 +289,7 @@ tokio-console http://127.0.0.1:5555
 
 To optimize performance it's useful to profile Iroha.
 
-To do that you should compile Iroha with `profiling` profile and with `profiling` feature:
+Profiling builds currently require a nightly toolchain. To prepare one, compile Iroha with the `profiling` profile and feature using `cargo +nightly`:
 
 ```bash
 RUSTFLAGS="-C force-frame-pointers=on" cargo +nightly -Z build-std build --target your-desired-target --profile profiling --features profiling
@@ -282,13 +317,13 @@ It can be done by running:
 
 ```bash
 # compile executor without optimizations
-cargo run --bin kagami -- wasm build ./path/to/executor --out-file executor.wasm
+cargo run --bin kagami -- ivm build ./path/to/executor --out-file executor.to
 ```
 
 With profiling feature enabled Iroha exposes endpoint to scrap pprof profiles:
 
 ```bash
-# profile Iroha for 30 seconds and get protobuf profile
+# profile Iroha for 30 seconds and download the profile data
 curl host:port/debug/pprof/profile?seconds=30 -o profile.pb
 # analyze profile in browser (required installed go)
 go tool pprof -web profile.pb
@@ -308,7 +343,7 @@ Please follow these guidelines when you make code contributions to our project:
 
 <details> <summary> :book: Read code guidelines</summary>
 
-- Use `cargo +nightly fmt --all` to format code (we use [`group_imports`](https://github.com/rust-lang/rustfmt/issues/5083) and [`imports_granularity`](https://github.com/rust-lang/rustfmt/issues/4991)).
+- Use `cargo fmt --all` (edition 2024) to format code.
 
 Code guidelines:
 
@@ -337,7 +372,7 @@ Naming guidelines:
 - Use only full words in *public* structure, variable, method, trait, constant, and module names. However, abbreviations are allowed if:
   - The name is local (e.g. closure arguments).
   - The name is abbreviated by Rust convention (e.g. `len`, `typ`).
-  - The name is an accepted abbreviation (e.g. `tx`, `wsv` etc) TODO link glossary.
+  - The name is an accepted abbreviation (e.g. `tx`, `wsv` etc); see the [project glossary](https://docs.iroha.tech/reference/glossary.html) for canonical abbreviations.
   - The full name would have been shadowed by a local variable (e.g. `msg <- message`).
   - The full name would have made the code cumbersome with more than 5-6 words in it (e.g. `WorldStateViewReceiverTrait -> WSVRecvTrait`).
 - If you change naming conventions, make sure that the new name that you've chosen is _much_ clearer than what we had before.

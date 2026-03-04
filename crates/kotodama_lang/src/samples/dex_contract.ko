@@ -1,0 +1,22 @@
+// Minimal DEX helpers using supported syntax.
+seiyaku DexContract {
+  fn quote_sell(reserve_in: int, reserve_out: int, amount_in: int) -> int {
+    let effective = (amount_in * 997) / 1000;
+    let num = reserve_out * effective;
+    let den = reserve_in + effective;
+    return num / den;
+  }
+
+  kotoage fn swap(trader: AccountId,
+                  pool: AccountId,
+                  input_asset: AssetDefinitionId,
+                  output_asset: AssetDefinitionId,
+                  amount_in: int,
+                  reserve_in: int,
+                  reserve_out: int) -> int permission(Admin) {
+    let out = quote_sell(reserve_in, reserve_out, amount_in);
+    transfer_asset(trader, pool, input_asset, amount_in);
+    transfer_asset(pool, trader, output_asset, out);
+    return out;
+  }
+}

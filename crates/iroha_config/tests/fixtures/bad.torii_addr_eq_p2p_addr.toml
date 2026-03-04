@@ -1,8 +1,8 @@
 extends = ["base.toml", "base_trusted_peers.toml"]
 
 [network]
-address = "127.0.0.1:8080"
-public_address = "127.0.0.1:8080"
+address = "addr:127.0.0.1:8080#8942"
+public_address = "addr:127.0.0.1:8080#8942"
 
 [torii]
-address = "127.0.0.1:8080"
+address = "addr:127.0.0.1:8080#8942"

@@ -1,0 +1,10 @@
+{
+  "capabilities": 1,
+  "endpoint_count": 2,
+  "expires_at": 960,
+  "issued_at": 360,
+  "public_key_hex": "884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b",
+  "signature_hex": "ee04cc24e8bcb515b0e32b626325b294d6b0fb0aff2d4ab7c760665038554c6e6e04ad595b74d9351e3300de72bf0ff7ec9d162c390e672aabb9ea18fa283c09",
+  "stream_budget": null,
+  "transport_hints": null
+}

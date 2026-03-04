@@ -1,0 +1,80 @@
+{
+  "generated_at": "2026-04-05T18:45:00Z",
+  "governance_playbook_path": "docs/source/sns/governance_playbook.md",
+  "motions": [
+    {
+      "attachments": [
+        "docs/examples/sns/steward_scorecard_2026q1.json",
+        "docs/source/sns/governance_playbook.md",
+        "docs/source/sns/reports/steward_scorecard_2026q1.md",
+        "docs/source/sns/steward_replacement_playbook.md"
+      ],
+      "council_actions": [
+        {
+          "description": "Freeze registrar queue and export registrar/dispute/state snapshots.",
+          "due": "2026-04-07T18:45:00Z",
+          "owner": "guardian board"
+        },
+        {
+          "description": "File interim steward motion with vote window + quorum requirements.",
+          "due": "2026-04-12T18:45:00Z",
+          "owner": "council chair"
+        },
+        {
+          "description": "Publish customer FAQ + transparency log once rotation vote is opened.",
+          "due": "2026-04-12T18:45:00Z",
+          "owner": "steward ops"
+        },
+        {
+          "description": "Record vote outcome and schedule hand-off with replacement steward.",
+          "due": "2026-04-19T18:45:00Z",
+          "owner": "council secretary"
+        }
+      ],
+      "council_motion": {
+        "next_steps": [
+          "Guardians freeze registrar queue and export registrar/dispute state.",
+          "File interim steward motion in the governance tracker with vote window + quorum.",
+          "Publish customer FAQ and transparency log entry once voting starts."
+        ],
+        "summary": "Freeze registrar queue, appoint an interim steward for DAO Launchpad Guild, and attach the KPI evidence bundle.",
+        "title": "Council replacement motion for .dao"
+      },
+      "dao_actions": [
+        {
+          "description": "Publish ratification draft referencing scorecard hash + council motion id.",
+          "due": "2026-04-08T18:45:00Z",
+          "owner": "dao rapporteur"
+        },
+        {
+          "description": "Attach FAQ/freeze log to DAO register and archive vote outcome.",
+          "due": "2026-04-19T18:45:00Z",
+          "owner": "dao secretary"
+        }
+      ],
+      "dao_motion": {
+        "next_steps": [
+          "Post ratification draft referencing the scorecard hash and council motion id.",
+          "Record vote outcome, attach FAQ + freeze log, and file in governance addenda."
+        ],
+        "summary": "Ratify the steward replacement, archive the vote record, and mirror the evidence in the DAO register.",
+        "title": "DAO ratification for .dao"
+      },
+      "deadline_at": "2026-04-19T18:45:00Z",
+      "deadline_days": 14,
+      "reasons": [
+        "Single KPI breach recorded",
+        "1 guardian freeze(s) opened"
+      ],
+      "rotation": "replace",
+      "steward": "DAO Launchpad Guild",
+      "suffix": ".dao",
+      "suffix_id": 2
+    }
+  ],
+  "playbook_path": "docs/source/sns/steward_replacement_playbook.md",
+  "quarter": "2026-Q1",
+  "scorecard_markdown_path": "docs/source/sns/reports/steward_scorecard_2026q1.md",
+  "scorecard_path": "docs/examples/sns/steward_scorecard_2026q1.json",
+  "version": 1
+}

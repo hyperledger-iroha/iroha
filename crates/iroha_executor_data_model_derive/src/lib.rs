@@ -3,7 +3,7 @@
 mod parameter;
 mod permission;
 
-use manyhow::{manyhow, Result};
+use manyhow::{Result, manyhow};
 use proc_macro2::TokenStream;
 
 /// Derive macro for `Parameter` trait.

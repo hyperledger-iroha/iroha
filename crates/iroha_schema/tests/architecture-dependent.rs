@@ -1,8 +1,7 @@
-#![allow(missing_docs)]
-
+//! Architecture-dependent schema tests.
 use impls::impls;
 use iroha_schema::IntoSchema;
-use parity_scale_codec::{Decode, Encode};
+use norito::codec::{Decode, Encode};
 
 #[test]
 fn usize_isize_not_into_schema() {
@@ -10,14 +9,11 @@ fn usize_isize_not_into_schema() {
     assert!(!impls!(usize: IntoSchema));
     assert!(!impls!(isize: IntoSchema));
 
-    // use serde::Serialize;
-    //
-    // assert!(!impls!(usize: Serialize));
-    // `usize` should be `Serialize`.
-
-    // But not `Encode`/`Decode`.
-    assert!(!impls!(usize: Encode | Decode));
-    assert!(!impls!(isize: Encode | Decode));
+    // `usize` and `isize` can now be encoded and decoded in a
+    // platform-independent manner but remain excluded from schema
+    // generation.
+    assert!(impls!(usize: Encode | Decode));
+    assert!(impls!(isize: Encode | Decode));
 
     // There are no other primitive architecture-dependent types, so
     // as long as `IntoSchema` requires all variants and all fields to

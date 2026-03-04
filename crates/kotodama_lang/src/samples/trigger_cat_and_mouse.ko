@@ -1,0 +1,6 @@
+// Increase SmartContract execution depth to 111 in one call.
+seiyaku TriggerCatAndMouse {
+  kotoage fn run() {
+    set_execution_depth(111);
+  }
+}

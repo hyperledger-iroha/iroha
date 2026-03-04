@@ -1,0 +1,7 @@
+profile: Iroha3Nexus
+chain_id: iroha3-nexus
+collectors: k=5 r=2
+vrf_seed: 3E448A9DBA73125E26B0178E036E291374CE17CD39AC321D7BC605963577332D
+peers_with_pop: 4
+consensus_fingerprint: 0xa521ddad8b2d372665bca6e60136333cfd0ad67162a9075ed3c4a91e74fc91b8
+kagami_version: 2.0.0-rc.2.0

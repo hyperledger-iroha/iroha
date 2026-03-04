@@ -1,0 +1,196 @@
+#+LANGUAGE: pt
+#+DIRECTION: ltr
+#+SOURCE: docs/source/lts_selection.org
+#+STATUS: complete
+#+GENERATOR: scripts/sync_docs_i18n.py
+#+SOURCE_HASH: 1535fc970027c05003b4e03135f47b565d1434f8dc3c42946525a1b16252d40d
+#+SOURCE_LAST_MODIFIED: 2026-01-04T16:47:58+00:00
+#+TRANSLATION_LAST_REVIEWED: 2026-02-07
+
+#+TITLE: On selecting versions as LTS candidates
+#+AUTHOR: Aleksandr Petrosyan
+#+DATE: 12-08-2023
+#+TRANSLATOR: machine-google-reviewed
+
+#+TITLE: On selecting versions as LTS candidates
+#+AUTHOR: Aleksandr Petrosyan
+#+DATE: 12-08-2023
+* Sobre
+
+No interesse de preservar os recursos de engenharia, é do nosso
+interesse em limitar o âmbito do apoio pós-libertação. Se alguém tiver
+várias versões do Iroha em execução em paralelo, talvez seja necessário
+replicar o trabalho de suporte quantas vezes houver
+versões.
+
+Em vez de tentar suportar mal múltiplas versões, tentamos
+atender 80% dos casos de uso com 20% do esforço e alcançar um
+compromisso entre suportar todas as versões lançadas igualmente e apenas
+suportando a versão estável mais recente.
+
+Especificamente, oferecemos suporte à versão mais recente do =stable=. Muitas vezes isso
+lançamento não é tão bem testado, bem documentado ou
+bem suportado pelos SDKs, além de mudar frequentemente em termos de
+portanto, tem uma cadência de lançamento mensal e um lançamento por ano é escolhido
+ser alvo de apoio e desenvolvimento a longo prazo.
+
+* Critérios de seleção LTS
+
+A seguir está uma lista não exaustiva de considerações recomendadas
+para selecionar uma versão específica como candidata LTS
+
+1. O lançamento deve ser /improvável/ de conter grandes problemas /conhecidos/ que
+   impediria que fosse útil.
+
+   Mais especificamente, o lançamento deverá ter uma boa cobertura de um
+   caso de uso básico, por exemplo, (Pre-)RC-6[fn:1] foi a última versão que
+   continha o antigo mecanismo de consenso. Dado que o ator baseado
+   consenso teve um rendimento máximo estável de 10 TPS, (Pré-)RC-6 foi
+   não rotulado como LTS, apesar de ser usado como tal.
+
+   RC-9 continha todos os recursos necessários para executar um nó Iroha
+   sobre o novo consenso, algumas mudanças na estrutura do
+   configuração e algumas correções no subsistema =p2p=. Poderia ter
+   preencheu todos os nichos possíveis de qualquer projeto baseado em Iroha, e
+   como tal, foi rotulado como uma versão LTS, apesar de estar menos bem
+   testado.
+
+   Os lançamentos RC8, RC12, RC13 e RC17 foram desclassificados com base neste
+   critério.
+
+2. Se houver um recurso grande que implique uma quebra de API, o
+   lançamento que possui a versão mais estável da "maneira antiga de fazer
+   coisas" deve ser priorizado como candidato LTS.
+
+   Por exemplo, RC12 e RC13, foram as últimas versões do Iroha que
+   ainda usava um validador de permissão codificado. Eles sendo rotulados
+   como candidato LTS foi impedido pelos principais problemas conhecidos,
+   particularmente com estabilidade, cobertura deficiente e porque a liberação
+   um LTS após RC9 teria dividido os recursos de desenvolvimento
+   de corrigir o problema de validadores de permissão rígidos e não modificáveis.
+
+   RC14 e RC15, por outro lado, estavam em processo de lenta
+   migração de recursos. Como tal, estas últimas versões seriam
+   considerados upgrades diretos em relação ao anterior, tendo mais
+   otimizações e melhor cobertura de recursos.
+
+3. A versão deve ter recursos completos para um caso de uso.Isto é diferente do ponto 1, porque enquanto RC10 e RC13 eram gratuitos
+   de problemas graves, não ofereciam uma cobertura suficientemente completa
+   dos recursos necessários para as principais partes interessadas do projeto.
+
+4. A versão deve ser suportada por todos os SDKs.
+
+   Embora o suporte em Iroha Python esteja amplamente confinado ao LTS
+   candidatos, criando uma situação complicada, é uma exceção. O
+   dois outros SDKs principais, nomeadamente Kotlin e TypeScript, devem suportar
+   o candidato LTS. Se o SDK não puder ser feito para suportar o
+   candidato, a liberação do candidato é desqualificada.
+
+5. A versão deve ser bem testada.
+
+   Este ponto complementa o ponto 1, na medida em que a falta de características conhecidas
+   juntamente com uma cobertura de teste ruim não significa, de fato, liberdade de
+   grandes problemas.
+
+   Isso geralmente se aplica a todas as versões posteriores ao RC6 e até o RC17, conforme
+   a equipe de desenvolvimento foi informada sobre uma maneira de reestruturar o
+   testes de integração, mas o processo só terminou com RC17 e o
+   introdução da estrutura =pytest=.
+
+   Embora a aprovação nos testes de integração seja necessária, não é suficiente,
+   os seguintes testes mínimos são necessários para qualificar uma versão como
+   um candidato LTS
+
+   1. Testes unitários e de integração. É preciso ter cuidado para executar todos
+      testes de integração, incluindo os longos e instáveis. Se testes
+      são incomumente escamosos, o que é indicativo de um problema, e o
+      liberação deve ser desqualificada (ver [[../../flakyness.org]]).
+
+   2. Testes =pytest=, que tecnicamente se qualificam como integração
+      testes.
+
+   3. Teste de longevidade. O candidato deverá ser testado por pelo menos dois
+      semanas para se qualificar. Se o candidato for aceito como LTS, o
+      testes de longevidade devem ser realizados por pelo menos quatro semanas.
+
+   4. Teste de carga. O candidato LTS deve satisfazer todos os critérios
+      estabelecido pela equipe de QA como operacionais e de desenvolvimento
+      requisitos sob carga (também conhecidos como extrafuncionais, e
+      erroneamente como não funcional). Falha na produção de blocos em um
+      a moda oportuna é uma desqualificação automática. Outro
+      os critérios de desqualificação ficam a critério do QA
+      equipe.
+
+   5. Deve ser implantado como contêiner =development= em pelo menos um
+      projeto por pelo menos duas semanas, sem maiores problemas. RC9 fez
+      não passar neste teste e teria sido desclassificado com o
+      critérios atualizados listados no presente documento.
+
+6. A liberação deve ser bem documentada.
+
+   Não deve conter vários novos recursos que faltam
+   documentação. Qualquer deficiência em termos de cobertura de documentação
+   deve ser corrigível dentro do prazo máximo da janela de lançamento
+   para o candidato. Não fazer isso é uma desqualificação automática.
+
+Além do procedimento regular de liberação descrito em
+[[release_procedure.org]], o LTS deve aderir aos seguintes requisitos adicionais
+passos.Além de realizar um lançamento regular, um PR separado com o
+título =[release]: <semver> LTS= onde =<semver>= é a semântica
+a versão do código do branch de desenvolvimento deve ser criada. O
+a lista de verificação regular deve ser evitada e, em vez disso, a solicitação pull deve
+ser revisado pelo mesmo pessoal que revisou e aprovou o
+Liberação =stable=. São necessárias no máximo duas revisões, para garantir que todos
+as alterações ocorrerão na ordem correta e que não
+questões não documentadas escaparam.
+
+Assim que o lançamento do LTS for feito, o CI produzirá um contêiner docker
+com o lançamento LTS na plataforma Alpine Linux e no Ubuntu Linux,
+usando a versão nativa da plataforma =glibc=. O CI também deve produzir
+todos os pacotes suportados e publicá-los em seus respectivos
+repositórios. Isto significa, por exemplo, que o pacote AUR é atualizado
+depois que a solicitação pull é mesclada e produz o pacote correto. O
+A página de lançamento do GitHub deve ser preenchida com uma versão separada intitulada
+LTS e contendo o arquivo único =AppImage=. Esses lançamentos devem
+vêm como pacotes separados marcados como não instaláveis junto com o
+versão estável.
+
+* Política de retroportação
+
+Geralmente, o back-porting para o LTS é desencorajado. O seguinte
+motivos de backporting são considerados aceitáveis:
+1. Adição que não está vinculada à API Iroha, como, por exemplo. um general
+   ferramenta auxiliar e/ou documentação.
+2. Corrigindo uma grande vulnerabilidade de segurança.
+3. Corrigindo um bug importante.
+4. Corrigir um grande descuido de projeto que impede o uso, desde que
+   as principais partes interessadas/usuários do atual LTS verbalmente
+   certificado que um backport é uma solução preferível.
+
+Back-ports devem ser anunciados pelos mesmos canais do lançamento
+em si. As alterações necessárias devem ser rotuladas como backportadas tanto no
+versão upstream em que foram corrigidos e a versão na qual
+eles foram portados de volta.
+
+O anúncio deve explicar
+1. Por que o backport foi escolhido (veja os motivos acima)
+2. Qual deve ser o impacto do backport
+3. Qual é o estado atual da funcionalidade, integração e
+   testes de carga/longevidade.
+
+* Aplicabilidade
+
+A política de lançamento LTS/estável deve ser revisada assim que o primeiro
+a versão completa de recursos do Iroha é anunciada (v2.0.0). Dado não mais
+desenvolvimento ativo, a equipe principal de desenvolvimento pode (e deve) ser capaz
+concentrar-se mais no apoio às versões divergentes.
+
+* Notas de rodapé[nota: 1] A convenção de nomenclatura foi estabilizada muito antes de qualquer plano para
+lançar uma versão do Iroha foi feita.  Como tal, chamar qualquer versão de
+Iroha, um release candidate tem algumas implicações.  Chamando-os de pré
+candidatos a lançamento é um tipo de nome impróprio semelhante, mas menos flagrante,
+porque em vez de uma má aplicação de um termo existente, este é um
+invenção de um termo que /poderia/ ter diferenças sutis de um
+candidato liberado.  Na realidade, estes deveriam ter sido chamados
+*instantâneos de desenvolvimento*.  Mas para não quebrar também a continuidade
+muito com os SDKs existentes, foi escolhido um compromisso.

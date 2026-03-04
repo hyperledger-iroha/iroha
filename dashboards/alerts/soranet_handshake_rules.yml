@@ -1,0 +1,56 @@
+groups:
+  - name: soranet-handshake
+    interval: 1m
+    rules:
+      - alert: SoranetSn16MixedMode
+        expr: |
+          (sum by (mode) (increase(sn16_handshake_mode_total{handshake!="nk2"}[5m])))
+          /
+          clamp_min(sum by (mode) (increase(sn16_handshake_mode_total[5m])), 1)
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraNet SNNet-16 mixed-mode detected"
+          description: "More than 5% of handshakes over the last 5 minutes negotiated non-hybrid suites; investigate relay/client capability drift before PQ enforcement."
+      - alert: SoranetSn16DowngradeSpike
+        expr: sum by (mode) (increase(sn16_handshake_downgrade_total[5m])) > 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraNet SNNet-16 downgrade spike"
+          description: "Downgrade detections exceeded the expected burst budget; inspect downgrade reasons and pause proxy policy ratchets if necessary."
+      - alert: SoranetSn16PuzzleLatencyCritical
+        expr: |
+          (sum by (mode) (increase(sn16_puzzle_verify_seconds_sum[5m])))
+          /
+          clamp_min(sum by (mode) (increase(sn16_puzzle_verify_seconds_count[5m])), 1)
+          > 0.35
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraNet SNNet-16 puzzle verification slow"
+          description: "Average Argon2 puzzle verification time exceeded 350ms over the last 5 minutes; verify puzzle services and relay CPU headroom."
+      - alert: SoranetSn16PuzzleSlow
+        expr: |
+          (sum by (mode) (increase(sn16_puzzle_verify_seconds_sum[5m])))
+          /
+          clamp_min(sum by (mode) (increase(sn16_puzzle_verify_seconds_count[5m])), 1)
+          > 0.75
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraNet SNNet-16 puzzle verification degraded"
+          description: "Median Argon2 verification time stayed above 750ms for 10 minutes; check GPU/CPU saturation and puzzle-service backends."
+      - alert: SoranetSn16ProxyToggleStuck
+        expr: soranet_proxy_policy_queue_depth > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraNet SNNet-16 proxy toggle backlog"
+          description: "Proxy remediation queue has not drained in over 5 minutes; orchestration should pull /policy/proxy-toggle and clear downgrade actions."

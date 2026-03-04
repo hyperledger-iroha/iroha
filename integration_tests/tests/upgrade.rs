@@ -1,13 +1,23 @@
-#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+//! Integration tests for executor upgrade workflows and permissions.
 
 use executor_custom_data_model::{complex_isi::NumericQuery, permissions::CanControlDomainLives};
-use eyre::{Context, Result};
-use futures_util::{pin_mut, TryStreamExt as _};
+use eyre::{Context, Result, eyre};
+use futures_util::StreamExt;
+use integration_tests::sandbox;
 use iroha::{client::Client, data_model::prelude::*};
-use iroha_executor_data_model::permission::{domain::CanUnregisterDomain, Permission as _};
+use iroha_executor_data_model::permission::{Permission as _, domain::CanUnregisterDomain};
 use iroha_test_network::*;
-use iroha_test_samples::{load_sample_wasm, ALICE_ID, BOB_ID};
+use iroha_test_samples::{ALICE_ID, BOB_ID, load_sample_ivm};
 use nonzero_ext::nonzero;
+use tokio::runtime::Runtime;
+
+fn start_network(
+    builder: NetworkBuilder,
+    context: &'static str,
+) -> Option<(sandbox::SerializedNetwork, Runtime)> {
+    sandbox::start_network_blocking_or_skip(builder, context).unwrap()
+}
 
 const ADMIN_PUBLIC_KEY_MULTIHASH: &str =
     "ed012076E5CA9698296AF9BE2CA45F525CB3BCFDEB7EE068BA56F973E9DD90564EF4FC";
@@ -24,9 +34,12 @@ fn executor_upgrade_should_work() -> Result<()> {
         .parse::<iroha::crypto::PrivateKey>()
         .unwrap();
 
-    let (network, _rt) = NetworkBuilder::new()
-        .with_wasm_fuel(WasmFuelConfig::Auto)
-        .start_blocking()?;
+    let builder = NetworkBuilder::new().with_ivm_fuel(IvmFuelConfig::Auto);
+    let Some((network, _rt)) =
+        sandbox::start_network_blocking_or_skip(builder, stringify!(executor_upgrade_should_work))?
+    else {
+        return Ok(());
+    };
     let client = network.client();
 
     // Register `admin` domain and account
@@ -39,9 +52,10 @@ fn executor_upgrade_should_work() -> Result<()> {
     client.submit_blocking(register_admin_account)?;
 
     // Check that admin isn't allowed to transfer alice's rose by default
-    let alice_rose: AssetId = format!("rose##{}", ALICE_ID.clone())
+    let rose_def: AssetDefinitionId = "rose#wonderland"
         .parse()
-        .expect("should be valid");
+        .expect("asset definition should be valid");
+    let alice_rose = AssetId::new(rose_def, ALICE_ID.clone());
     let transfer_alice_rose = Transfer::asset_numeric(alice_rose, 1u32, admin_id.clone());
     let transfer_rose_tx = TransactionBuilder::new(chain_id.clone(), admin_id.clone())
         .with_instructions([transfer_alice_rose.clone()])
@@ -66,17 +80,24 @@ fn executor_upgrade_should_work() -> Result<()> {
 
 #[test]
 fn executor_upgrade_should_run_migration() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new()
-        .with_wasm_fuel(WasmFuelConfig::Auto)
-        .start_blocking()?;
+    let builder = NetworkBuilder::new().with_ivm_fuel(IvmFuelConfig::Auto);
+    let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
+        builder,
+        stringify!(executor_upgrade_should_run_migration),
+    )?
+    else {
+        return Ok(());
+    };
     let client = network.client();
 
     // Check that `CanUnregisterDomain` exists
-    assert!(client
-        .query_single(FindExecutorDataModel)?
-        .permissions()
-        .iter()
-        .any(|permission| CanUnregisterDomain::name() == *permission));
+    assert!(
+        client
+            .query_single(FindExecutorDataModel)?
+            .permissions()
+            .iter()
+            .any(|permission| CanUnregisterDomain::name() == *permission)
+    );
 
     // Check that Alice has permission to unregister Wonderland
     let alice_id = ALICE_ID.clone();
@@ -96,15 +117,19 @@ fn executor_upgrade_should_run_migration() -> Result<()> {
 
     // Check that `CanUnregisterDomain` doesn't exist
     let data_model = client.query_single(FindExecutorDataModel)?;
-    assert!(data_model
-        .permissions()
-        .iter()
-        .all(|permission| CanUnregisterDomain::name() != *permission));
+    assert!(
+        data_model
+            .permissions()
+            .iter()
+            .all(|permission| CanUnregisterDomain::name() != *permission)
+    );
 
-    assert!(data_model
-        .permissions()
-        .iter()
-        .any(|permission| CanControlDomainLives::name() == *permission));
+    assert!(
+        data_model
+            .permissions()
+            .iter()
+            .any(|permission| CanControlDomainLives::name() == *permission)
+    );
 
     // Check that Alice has `CanControlDomainLives` permission
     let alice_permissions = client
@@ -121,9 +146,14 @@ fn executor_upgrade_should_run_migration() -> Result<()> {
 
 #[test]
 fn executor_upgrade_should_revoke_removed_permissions() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new()
-        .with_wasm_fuel(WasmFuelConfig::Auto)
-        .start_blocking()?;
+    let builder = NetworkBuilder::new().with_ivm_fuel(IvmFuelConfig::Auto);
+    let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
+        builder,
+        stringify!(executor_upgrade_should_revoke_removed_permissions),
+    )?
+    else {
+        return Ok(());
+    };
     let client = network.client();
 
     // Permission which will be removed by executor
@@ -138,65 +168,77 @@ fn executor_upgrade_should_revoke_removed_permissions() -> Result<()> {
     client.submit_blocking(Register::role(test_role))?;
 
     // Check that permission exists
-    assert!(client
-        .query_single(FindExecutorDataModel)?
-        .permissions()
-        .contains(&CanUnregisterDomain::name()));
+    assert!(
+        client
+            .query_single(FindExecutorDataModel)?
+            .permissions()
+            .contains(&CanUnregisterDomain::name())
+    );
 
     // Check that `TEST_ROLE` has permission
-    assert!(client
-        .query(FindRoles::new())
-        .execute_all()?
-        .into_iter()
-        .find(|role| *role.id() == test_role_id)
-        .expect("Failed to find Role")
-        .permissions()
-        .any(|permission| {
-            CanUnregisterDomain::try_from(permission)
-                .is_ok_and(|permission| permission == can_unregister_domain)
-        }));
+    assert!(
+        client
+            .query(FindRoles::new())
+            .execute_all()?
+            .into_iter()
+            .find(|role| *role.id() == test_role_id)
+            .expect("Failed to find Role")
+            .permissions()
+            .any(|permission| {
+                CanUnregisterDomain::try_from(permission)
+                    .is_ok_and(|permission| permission == can_unregister_domain)
+            })
+    );
 
     // Check that Alice has permission
     let alice_id = ALICE_ID.clone();
-    assert!(client
-        .query(FindPermissionsByAccountId::new(alice_id.clone()))
-        .execute_all()?
-        .iter()
-        .any(|permission| {
-            CanUnregisterDomain::try_from(permission)
-                .is_ok_and(|permission| permission == can_unregister_domain)
-        }));
+    assert!(
+        client
+            .query(FindPermissionsByAccountId::new(alice_id.clone()))
+            .execute_all()?
+            .iter()
+            .any(|permission| {
+                CanUnregisterDomain::try_from(permission)
+                    .is_ok_and(|permission| permission == can_unregister_domain)
+            })
+    );
 
     upgrade_executor(&client, "executor_remove_permission")?;
 
     // Check that permission doesn't exist
-    assert!(!client
-        .query_single(FindExecutorDataModel)?
-        .permissions()
-        .contains(&CanUnregisterDomain::name()));
+    assert!(
+        !client
+            .query_single(FindExecutorDataModel)?
+            .permissions()
+            .contains(&CanUnregisterDomain::name())
+    );
 
     // Check that `TEST_ROLE` doesn't have permission
-    assert!(!client
-        .query(FindRoles::new())
-        .execute_all()?
-        .into_iter()
-        .find(|role| *role.id() == test_role_id)
-        .expect("Failed to find Role")
-        .permissions()
-        .any(|permission| {
-            CanUnregisterDomain::try_from(permission)
-                .is_ok_and(|permission| permission == can_unregister_domain)
-        }));
+    assert!(
+        !client
+            .query(FindRoles::new())
+            .execute_all()?
+            .into_iter()
+            .find(|role| *role.id() == test_role_id)
+            .expect("Failed to find Role")
+            .permissions()
+            .any(|permission| {
+                CanUnregisterDomain::try_from(permission)
+                    .is_ok_and(|permission| permission == can_unregister_domain)
+            })
+    );
 
     // Check that Alice doesn't have permission
-    assert!(!client
-        .query(FindPermissionsByAccountId::new(alice_id.clone()))
-        .execute_all()?
-        .iter()
-        .any(|permission| {
-            CanUnregisterDomain::try_from(permission)
-                .is_ok_and(|permission| permission == can_unregister_domain)
-        }));
+    assert!(
+        !client
+            .query(FindPermissionsByAccountId::new(alice_id.clone()))
+            .execute_all()?
+            .iter()
+            .any(|permission| {
+                CanUnregisterDomain::try_from(permission)
+                    .is_ok_and(|permission| permission == can_unregister_domain)
+            })
+    );
 
     Ok(())
 }
@@ -205,9 +247,14 @@ fn executor_upgrade_should_revoke_removed_permissions() -> Result<()> {
 fn executor_custom_instructions_simple() -> Result<()> {
     use executor_custom_data_model::simple_isi::MintAssetForAllAccounts;
 
-    let (network, _rt) = NetworkBuilder::new()
-        .with_wasm_fuel(WasmFuelConfig::Auto)
-        .start_blocking()?;
+    let builder = NetworkBuilder::new().with_ivm_fuel(IvmFuelConfig::Auto);
+    let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
+        builder,
+        stringify!(executor_custom_instructions_simple),
+    )?
+    else {
+        return Ok(());
+    };
     let client = network.client();
 
     upgrade_executor(&client, "executor_custom_instructions_simple")?;
@@ -218,32 +265,29 @@ fn executor_custom_instructions_simple() -> Result<()> {
     let bob_rose = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     client.submit_blocking(Mint::asset_numeric(Numeric::from(1u32), bob_rose.clone()))?;
 
-    // Check that bob has 1 rose
-    assert_eq!(
-        client
+    let get_value = |id: &AssetId| -> Result<Numeric> {
+        Ok(client
             .query(FindAssets)
-            .filter_with(|asset| asset.id.eq(bob_rose.clone()))
-            .select_with(|asset| asset.value)
-            .execute_single()?,
-        Numeric::from(1u32)
-    );
+            .execute_all()?
+            .into_iter()
+            .find(|asset| asset.id() == id)
+            .expect("asset not found")
+            .value()
+            .clone())
+    };
+
+    // Check that bob has 1 rose
+    assert_eq!(get_value(&bob_rose)?, Numeric::from(1u32));
 
     // Give 1 rose to all
     let isi = MintAssetForAllAccounts {
         asset_definition: asset_definition_id,
         quantity: Numeric::from(1u32),
     };
-    client.submit_blocking(isi)?;
+    client.submit_blocking(InstructionBox::from(isi))?;
 
     // Check that bob has 2 roses
-    assert_eq!(
-        client
-            .query(FindAssets)
-            .filter_with(|asset| asset.id.eq(bob_rose))
-            .select_with(|asset| asset.value)
-            .execute_single()?,
-        Numeric::from(2u32)
-    );
+    assert_eq!(get_value(&bob_rose)?, Numeric::from(2u32));
 
     Ok(())
 }
@@ -254,9 +298,15 @@ fn executor_custom_instructions_complex() -> Result<()> {
         ConditionalExpr, CoreExpr, EvaluatesTo, Expression, Greater,
     };
 
-    let (network, _rt) = NetworkBuilder::new()
-        .with_wasm_fuel(WasmFuelConfig::Value(nonzero!(1_000_000_000_u64)))
-        .start_blocking()?;
+    let builder =
+        NetworkBuilder::new().with_ivm_fuel(IvmFuelConfig::Value(nonzero!(1_000_000_000_u64)));
+    let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
+        builder,
+        stringify!(executor_custom_instructions_complex),
+    )?
+    else {
+        return Ok(());
+    };
     let client = network.client();
 
     upgrade_executor(&client, "executor_custom_instructions_complex")?;
@@ -266,15 +316,19 @@ fn executor_custom_instructions_complex() -> Result<()> {
     let bob_rose = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     client.submit_blocking(Mint::asset_numeric(Numeric::from(6u32), bob_rose.clone()))?;
 
-    // Check that bob has 6 roses
-    assert_eq!(
-        client
+    let get_value = |id: &AssetId| -> Result<Numeric> {
+        Ok(client
             .query(FindAssets)
-            .filter_with(|asset| asset.id.eq(bob_rose.clone()))
-            .select_with(|asset| asset.value)
-            .execute_single()?,
-        Numeric::from(6u32)
-    );
+            .execute_all()?
+            .into_iter()
+            .find(|asset| asset.id() == id)
+            .expect("asset not found")
+            .value()
+            .clone())
+    };
+
+    // Check that bob has 6 roses
+    assert_eq!(get_value(&bob_rose)?, Numeric::from(6u32));
 
     // If bob has more then 5 roses, then burn 1 rose
     let burn_bob_rose_if_more_then_5 = || -> Result<()> {
@@ -288,49 +342,41 @@ fn executor_custom_instructions_complex() -> Result<()> {
         let then: InstructionBox = then.into();
         let then = CoreExpr::new(then);
         let isi = ConditionalExpr::new(condition, then);
-        client.submit_blocking(isi)?;
+        client.submit_blocking(InstructionBox::from(isi))?;
         Ok(())
     };
     burn_bob_rose_if_more_then_5()?;
 
     // Check that bob has 5 roses
-    assert_eq!(
-        client
-            .query(FindAssets)
-            .filter_with(|asset| asset.id.eq(bob_rose.clone()))
-            .select_with(|asset| asset.value)
-            .execute_single()?,
-        Numeric::from(5u32)
-    );
+    assert_eq!(get_value(&bob_rose)?, Numeric::from(5u32));
 
     burn_bob_rose_if_more_then_5()?;
 
     // Check that bob has 5 roses
-    assert_eq!(
-        client
-            .query(FindAssets)
-            .filter_with(|asset| asset.id.eq(bob_rose.clone()))
-            .select_with(|asset| asset.value)
-            .execute_single()?,
-        Numeric::from(5u32)
-    );
+    assert_eq!(get_value(&bob_rose)?, Numeric::from(5u32));
 
     Ok(())
 }
 
 #[test]
 fn migration_fail_should_not_cause_any_effects() {
-    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let builder = NetworkBuilder::new();
+    let Some((network, _rt)) = start_network(
+        builder,
+        stringify!(migration_fail_should_not_cause_any_effects),
+    ) else {
+        return;
+    };
     let client = network.client();
 
     let assert_domain_does_not_exist = |client: &Client, domain_id: &DomainId| {
         assert!(
-            client
+            !client
                 .query(FindDomains::new())
-                .filter_with(|domain| domain.id.eq(domain_id.clone()))
-                .execute_single_opt()
+                .execute_all()
                 .expect("Query failed")
-                .is_none(),
+                .into_iter()
+                .any(|domain| domain.id() == domain_id),
             "There should be no `{domain_id}` domain"
         );
     };
@@ -353,7 +399,12 @@ fn migration_fail_should_not_cause_any_effects() {
 
 #[test]
 fn executor_with_fuel() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let builder = NetworkBuilder::new();
+    let Some((network, _rt)) =
+        sandbox::start_network_blocking_or_skip(builder, stringify!(executor_with_fuel))?
+    else {
+        return Ok(());
+    };
     let client = network.client();
 
     upgrade_executor(&client, "executor_with_fuel")?;
@@ -390,14 +441,14 @@ fn executor_with_fuel() -> Result<()> {
         // Each instruction will use 30_000_000 additional fuel, so this should cover it.
         additional_fuel(90_000_000),
     )?;
-    assert_eq!(
-        client
-            .query(FindAssets)
-            .filter_with(|asset| asset.id.eq(bob_rose.clone()))
-            .select_with(|asset| asset.value)
-            .execute_single()?,
-        Numeric::from(3u32)
-    );
+    let value = client
+        .query(FindAssets)
+        .execute_all()?
+        .into_iter()
+        .find(|asset| asset.id() == &bob_rose)
+        .map(|asset| asset.value().clone())
+        .expect("asset not found");
+    assert_eq!(value, Numeric::from(3u32));
 
     let res = client.submit_all_blocking_with_metadata(
         [
@@ -419,9 +470,16 @@ fn executor_with_fuel() -> Result<()> {
 }
 
 /// Test the same executable as above by invoking it via a trigger.
-#[test] // FIXME #5442: custom executors do not work correctly in the context of triggers.
+#[test]
 fn executor_with_fuel_and_trigger() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let builder = NetworkBuilder::new();
+    let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
+        builder,
+        stringify!(executor_with_fuel_and_trigger),
+    )?
+    else {
+        return Ok(());
+    };
     let client = network.client();
 
     upgrade_executor(&client, "executor_with_fuel")?;
@@ -435,8 +493,7 @@ fn executor_with_fuel_and_trigger() -> Result<()> {
     client.submit_blocking_with_metadata(
         SetParameter::new(Parameter::Executor(
             iroha_data_model::parameter::SmartContractParameter::Fuel(
-                // std::num::NonZeroU64::new(10_000_000_u64).unwrap(),
-                std::num::NonZeroU64::new(30_100_000_u64).unwrap(),
+                std::num::NonZeroU64::new(10_000_000_u64).unwrap(),
             ),
         )),
         additional_fuel(0),
@@ -455,72 +512,96 @@ fn executor_with_fuel_and_trigger() -> Result<()> {
             ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
         ),
     ));
-    // client.submit_blocking_with_metadata(register_trigger, additional_fuel(30_000_000))?;
-    client.submit_blocking_with_metadata(register_trigger, additional_fuel(0))?;
+    client.submit_blocking_with_metadata(register_trigger, additional_fuel(30_000_000))?;
 
     let execute_trigger = ExecuteTrigger::new(trigger_id);
-    client.submit_blocking_with_metadata(
-        execute_trigger.clone(),
-        // additional_fuel(30_000_000 + 90_000_000),
-        additional_fuel(0),
-    )?;
+    client.submit_blocking_with_metadata(execute_trigger.clone(), additional_fuel(90_000_000))?;
 
-    // let res = client.submit_blocking_with_metadata(
-    //     execute_trigger.clone(),
-    //     additional_fuel(30_000_000 + 80_000_000),
-    // );
-    // assert!(matches!(
-    //     res.expect_err("transaction should fail")
-    //         .downcast_ref::<TransactionRejectionReason>()
-    //         .expect("error should be a TransactionRejectionReason"),
-    //     &TransactionRejectionReason::Validation(ValidationFail::TooComplex)
-    // ));
+    let value = client
+        .query(FindAssets)
+        .execute_all()?
+        .into_iter()
+        .find(|asset| asset.id() == &bob_rose)
+        .map(|asset| asset.value().clone())
+        .expect("asset not found");
+    assert_eq!(value, Numeric::from(3u32));
+
+    let res =
+        client.submit_blocking_with_metadata(execute_trigger.clone(), additional_fuel(80_000_000));
+    assert!(matches!(
+        res.expect_err("transaction should fail")
+            .downcast_ref::<TransactionRejectionReason>()
+            .expect("error should be a TransactionRejectionReason"),
+        &TransactionRejectionReason::Validation(ValidationFail::TooComplex)
+    ));
 
     Ok(())
 }
 
 #[test]
 fn migration_should_cause_upgrade_event() {
-    let (network, rt) = NetworkBuilder::new()
-        .with_wasm_fuel(WasmFuelConfig::Auto)
-        .start_blocking()
-        .unwrap();
+    let builder = NetworkBuilder::new().with_ivm_fuel(IvmFuelConfig::Auto);
+    let Some((network, rt)) =
+        start_network(builder, stringify!(migration_should_cause_upgrade_event))
+    else {
+        return;
+    };
     let client = network.client();
 
-    let events_client = client.clone();
-    let task = rt.spawn(async move {
-        let stream = events_client
-            .listen_for_events([ExecutorEventFilter::new()])
+    let event_timeout = network.sync_timeout();
+    let mut events = rt
+        .block_on(async {
+            tokio::time::timeout(
+                event_timeout,
+                client.listen_for_events_async([ExecutorEventFilter::new()]),
+            )
             .await
-            .unwrap();
-        pin_mut!(stream);
-        while let Some(event) = stream.try_next().await.unwrap() {
-            if let EventBox::Data(DataEvent::Executor(ExecutorEvent::Upgraded(executor_upgrade))) =
-                event
-            {
-                assert!(!executor_upgrade.new_data_model().permissions().is_empty());
-                break;
-            }
-        }
-    });
+            .map_err(|_| {
+                eyre!(
+                    "migration_should_cause_upgrade_event: timed out opening executor event stream"
+                )
+            })?
+        })
+        .expect("executor events stream should open");
 
     upgrade_executor(&client, "executor_with_custom_permission").unwrap();
 
-    rt.block_on(async {
-        tokio::time::timeout(core::time::Duration::from_secs(60), task)
-            .await
-            .unwrap()
-    })
-    .expect("should receive upgraded event immediately after upgrade");
+    let result: Result<()> = rt.block_on(async {
+        tokio::time::timeout(core::time::Duration::from_secs(60), async {
+            while let Some(event) = events.next().await {
+                match event {
+                    Ok(EventBox::Data(ev)) => {
+                        if let DataEvent::Executor(ExecutorEvent::Upgraded(upgrade)) = ev.as_ref() {
+                            assert!(
+                                !upgrade.new_data_model().permissions().is_empty(),
+                                "expected upgraded model to carry permissions"
+                            );
+                            return Ok(());
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(err) => return Err(err),
+                }
+            }
+            Err(eyre!("event stream ended before upgrade event"))
+        })
+        .await
+        .map_err(|_| eyre!("timed out waiting for upgrade event"))?
+    });
+    result.expect("should receive upgraded event immediately after upgrade");
+    rt.block_on(events.close());
 }
 
 #[test]
 fn define_custom_parameter() -> Result<()> {
     use executor_custom_data_model::parameters::DomainLimits;
 
-    let (network, _rt) = NetworkBuilder::new()
-        .with_wasm_fuel(WasmFuelConfig::Auto)
-        .start_blocking()?;
+    let builder = NetworkBuilder::new().with_ivm_fuel(IvmFuelConfig::Auto);
+    let Some((network, _rt)) =
+        sandbox::start_network_blocking_or_skip(builder, stringify!(define_custom_parameter))?
+    else {
+        return Ok(());
+    };
     let client = network.client();
 
     let long_domain_name = "0".repeat(2_usize.pow(5)).parse::<DomainId>()?;
@@ -544,9 +625,9 @@ fn define_custom_parameter() -> Result<()> {
 }
 
 fn upgrade_executor(client: &Client, executor: impl AsRef<str>) -> Result<()> {
-    let upgrade_executor = Upgrade::new(Executor::new(load_sample_wasm(executor)));
+    let upgrade_executor = Upgrade::new(Executor::new(load_sample_ivm(executor)));
     client
         .submit_blocking(upgrade_executor)
-        .wrap_err("Have you set WasmFuelConfig::Auto?")?;
+        .wrap_err("Have you set IvmFuelConfig::Auto?")?;
     Ok(())
 }

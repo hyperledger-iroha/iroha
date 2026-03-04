@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "apartment_name": "ops_agent",
+  "container": {
+    "manifest_hash": "hash:2122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F41#FF26",
+    "expected_schema_version": 1
+  },
+  "tool_capabilities": [
+    {
+      "tool": "soracloud.deploy",
+      "max_invocations_per_epoch": 120,
+      "allow_network": true,
+      "allow_filesystem_write": false
+    },
+    {
+      "tool": "wallet.transfer",
+      "max_invocations_per_epoch": 24,
+      "allow_network": false,
+      "allow_filesystem_write": false
+    }
+  ],
+  "policy_capabilities": [
+    "wallet.sign",
+    "governance.audit"
+  ],
+  "spend_limits": [
+    {
+      "asset_definition": "xor#sora",
+      "max_per_tx_nanos": 5000000,
+      "max_per_day_nanos": 20000000
+    },
+    {
+      "asset_definition": "usd#bank",
+      "max_per_tx_nanos": 2000000,
+      "max_per_day_nanos": 10000000
+    }
+  ],
+  "state_quota_bytes": 134217728,
+  "network_egress": {
+    "mode": "Allowlist",
+    "value": [
+      "rpc.sora.internal",
+      "torii.sora.internal"
+    ]
+  },
+  "upgrade_policy": {
+    "upgrade_policy": "Governed",
+    "value": null
+  }
+}

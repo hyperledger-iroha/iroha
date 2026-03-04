@@ -17,7 +17,6 @@ supporting the latest stable version.
 Specifically, we support the latest =stable= release. Often this
 release is either not as well-tested, well-documented, or
 well-supported by the SDKs, in addition to often changing in terms of
-its API and ABI, resulting in a moving target for compatibility.  We
 thus have a monthly release cadence and one release per year is chosen
 to be the target of long-term support and development.
 
@@ -67,13 +66,13 @@ for selecting a particular version as an LTS candidate
    from major problems, they did not offer sufficiently full coverage
    of the features required for the major project stakeholders.
 
-4. The release must be compatible with all SDKs.
+4. The release must be supported by all SDKs.
 
    While the support in Iroha Python is largely confined to LTS
    candidates, creating a catch 22 situation, it is an exception. The
-   two other major SDKs, namely Kotlin, and TypeScript must be
-   compatible with LTS candidate. If the SDK cannot be made compatible
-   with the candidate, the candidate release is disqualified.
+   two other major SDKs, namely Kotlin, and TypeScript must support
+   the LTS candidate. If the SDK cannot be made to support the
+   candidate, the candidate release is disqualified.
 
 5. The release must be well-tested.
 
@@ -143,7 +142,7 @@ repositories. This means, for example, that the AUR package is updated
 after the pull request is merged and produces the correct package. The
 GitHub release page must be populated with a separate release entitled
 LTS and containing the single-file =AppImage=. These releases must
-come as separate packages that are marked as incompatible with the
+come as separate packages that are marked as not installable alongside the
 stable version.
 
 * Back-porting policy

@@ -1,0 +1,809 @@
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_transaction`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  | pub fn visit_transaction<V: Execute + Visit + ?Sized>(
+  |                             ^^^^^^^ required by this bound in `visit_transaction`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_instruction`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  | pub fn visit_instruction<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &InstructionBox) {
+  |                             ^^^^^^^ required by this bound in `visit_instruction`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_register_peer`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_register_peer<V: Execute + Visit + ?Sized>(
+  |                                   ^^^^^^^ required by this bound in `visit_register_peer`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_unregister_peer`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_unregister_peer<V: Execute + Visit + ?Sized>(
+  |                                     ^^^^^^^ required by this bound in `visit_unregister_peer`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_register_domain`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_register_domain<V: Execute + Visit + ?Sized>(
+  |                                     ^^^^^^^ required by this bound in `visit_register_domain`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_unregister_domain`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_unregister_domain<V: Execute + Visit + ?Sized>(
+  |                                       ^^^^^^^ required by this bound in `visit_unregister_domain`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_transfer_domain`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_transfer_domain<V: Execute + Visit + ?Sized>(
+  |                                     ^^^^^^^ required by this bound in `visit_transfer_domain`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_set_domain_key_value`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_set_domain_key_value<V: Execute + Visit + ?Sized>(
+  |                                          ^^^^^^^ required by this bound in `visit_set_domain_key_value`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_remove_domain_key_value`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_remove_domain_key_value<V: Execute + Visit + ?Sized>(
+  |                                             ^^^^^^^ required by this bound in `visit_remove_domain_key_value`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_register_account`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_register_account<V: Execute + Visit + ?Sized>(
+  |                                      ^^^^^^^ required by this bound in `visit_register_account`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_unregister_account`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_unregister_account<V: Execute + Visit + ?Sized>(
+  |                                        ^^^^^^^ required by this bound in `visit_unregister_account`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_set_account_key_value`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_set_account_key_value<V: Execute + Visit + ?Sized>(
+  |                                           ^^^^^^^ required by this bound in `visit_set_account_key_value`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_remove_account_key_value`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_remove_account_key_value<V: Execute + Visit + ?Sized>(
+  |                                              ^^^^^^^ required by this bound in `visit_remove_account_key_value`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_register_nft`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_register_nft<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &Register<Nft>) {
+  |                                  ^^^^^^^ required by this bound in `visit_register_nft`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_unregister_nft`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_unregister_nft<V: Execute + Visit + ?Sized>(
+  |                                    ^^^^^^^ required by this bound in `visit_unregister_nft`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_mint_asset_numeric`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_mint_asset_numeric<V: Execute + Visit + ?Sized>(
+  |                                        ^^^^^^^ required by this bound in `visit_mint_asset_numeric`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_burn_asset_numeric`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_burn_asset_numeric<V: Execute + Visit + ?Sized>(
+  |                                        ^^^^^^^ required by this bound in `visit_burn_asset_numeric`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_transfer_asset_numeric`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_transfer_asset_numeric<V: Execute + Visit + ?Sized>(
+  |                                            ^^^^^^^ required by this bound in `visit_transfer_asset_numeric`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_transfer_nft`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_transfer_nft<V: Execute + Visit + ?Sized>(
+  |                                  ^^^^^^^ required by this bound in `visit_transfer_nft`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_set_nft_key_value`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_set_nft_key_value<V: Execute + Visit + ?Sized>(
+  |                                       ^^^^^^^ required by this bound in `visit_set_nft_key_value`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_remove_nft_key_value`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_remove_nft_key_value<V: Execute + Visit + ?Sized>(
+  |                                          ^^^^^^^ required by this bound in `visit_remove_nft_key_value`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_set_trigger_key_value`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_set_trigger_key_value<V: Execute + Visit + ?Sized>(
+  |                                           ^^^^^^^ required by this bound in `visit_set_trigger_key_value`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_remove_trigger_key_value`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_remove_trigger_key_value<V: Execute + Visit + ?Sized>(
+  |                                              ^^^^^^^ required by this bound in `visit_remove_trigger_key_value`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_register_asset_definition`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_register_asset_definition<V: Execute + Visit + ?Sized>(
+  |                                               ^^^^^^^ required by this bound in `visit_register_asset_definition`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_unregister_asset_definition`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_unregister_asset_definition<V: Execute + Visit + ?Sized>(
+  |                                                 ^^^^^^^ required by this bound in `visit_unregister_asset_definition`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_transfer_asset_definition`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_transfer_asset_definition<V: Execute + Visit + ?Sized>(
+  |                                               ^^^^^^^ required by this bound in `visit_transfer_asset_definition`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_set_asset_definition_key_value`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_set_asset_definition_key_value<V: Execute + Visit + ?Sized>(
+  |                                                    ^^^^^^^ required by this bound in `visit_set_asset_definition_key_value`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_remove_asset_definition_key_value`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_remove_asset_definition_key_value<V: Execute + Visit + ?Sized>(
+  |                                                       ^^^^^^^ required by this bound in `visit_remove_asset_definition_key_value`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_grant_account_permission`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_grant_account_permission<V: Execute + Visit + ?Sized>(
+  |                                              ^^^^^^^ required by this bound in `visit_grant_account_permission`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_revoke_account_permission`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_revoke_account_permission<V: Execute + Visit + ?Sized>(
+  |                                               ^^^^^^^ required by this bound in `visit_revoke_account_permission`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_register_role`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_register_role<V: Execute + Visit + ?Sized>(
+  |                                   ^^^^^^^ required by this bound in `visit_register_role`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_unregister_role`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_unregister_role<V: Execute + Visit + ?Sized>(
+  |                                     ^^^^^^^ required by this bound in `visit_unregister_role`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_grant_account_role`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_grant_account_role<V: Execute + Visit + ?Sized>(
+  |                                        ^^^^^^^ required by this bound in `visit_grant_account_role`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_revoke_account_role`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_revoke_account_role<V: Execute + Visit + ?Sized>(
+  |                                         ^^^^^^^ required by this bound in `visit_revoke_account_role`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_grant_role_permission`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_grant_role_permission<V: Execute + Visit + ?Sized>(
+  |                                           ^^^^^^^ required by this bound in `visit_grant_role_permission`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_revoke_role_permission`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_revoke_role_permission<V: Execute + Visit + ?Sized>(
+  |                                            ^^^^^^^ required by this bound in `visit_revoke_role_permission`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_register_trigger`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_register_trigger<V: Execute + Visit + ?Sized>(
+  |                                      ^^^^^^^ required by this bound in `visit_register_trigger`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_unregister_trigger`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_unregister_trigger<V: Execute + Visit + ?Sized>(
+  |                                        ^^^^^^^ required by this bound in `visit_unregister_trigger`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_mint_trigger_repetitions`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_mint_trigger_repetitions<V: Execute + Visit + ?Sized>(
+  |                                              ^^^^^^^ required by this bound in `visit_mint_trigger_repetitions`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_burn_trigger_repetitions`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_burn_trigger_repetitions<V: Execute + Visit + ?Sized>(
+  |                                              ^^^^^^^ required by this bound in `visit_burn_trigger_repetitions`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_execute_trigger`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_execute_trigger<V: Execute + Visit + ?Sized>(
+  |                                     ^^^^^^^ required by this bound in `visit_execute_trigger`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_set_parameter`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_set_parameter<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &SetParameter) {
+  |                                   ^^^^^^^ required by this bound in `visit_set_parameter`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_upgrade`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_upgrade<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &Upgrade) {
+  |                             ^^^^^^^ required by this bound in `visit_upgrade`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_log`
+ --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
+  |
+  |     pub fn visit_log<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &Log) {
+  |                         ^^^^^^^ required by this bound in `visit_log`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
+ --> tests/ui/fail/executor_missing_field.rs:6:10
+  |
+6 | #[derive(Visit)]
+  |          ^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExecutor`
+ --> tests/ui/fail/executor_missing_field.rs:7:1
+  |
+7 | struct IncompleteExecutor {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `iroha_executor::default::visit_custom_instruction`
+ --> $WORKSPACE/crates/iroha_executor/src/default/isi/mod.rs
+  |
+  | pub fn visit_custom_instruction<V: Execute + Visit + ?Sized>(
+  |                                    ^^^^^^^ required by this bound in `visit_custom_instruction`
+  = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)

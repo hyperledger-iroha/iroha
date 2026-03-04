@@ -1,0 +1,23 @@
++----------------------------------------------------------------------------------------------------+
+| IROHA MONITOR :: Pipeline Deck                        uptime 00:00:12   refresh 500 ms       |
+| Focus: p0 (leader)   CRT: on   VRF: on   Auto-rotate: on                                        |
+|----------------------------------------------------------------------------------------------------|
+| NETWORK COUNTERS                            | DAG / LAYERS                                       |
+| gossip sent      : 128                      | Layer 0  ▒▒▒▒▒▒▒▒▒▒▒▒ (12 tx)                      |
+| gossip received  : 120                      | Layer 1  ▒▒▒▒▒▒▒▒▒ (8 tx)                           |
+| dropped posts    : 0                        | Layer 2  ▒▒▒▒▒ (4 tx)                               |
+| retries          : 1                        | Layer 3  ▒▒ (2 tx)                                  |
+|----------------------------------------------------------------------------------------------------|
+| VRF / NPoS SUMMARY                                                                                |
+| Slot winners: p0  p2  p1  p0                | penalties: none                                    |
+| Next slots:  p1 → p2 → p0 → p1              | randomness: 0x41ec…                                |
+|----------------------------------------------------------------------------------------------------|
+| GAS + FINALITY                                                                                     |
+| recent gas avg: 1.32 M    | max 1.98 M     | commit latency p0: 128 ms                           |
+| finality depth: 2 blocks  | notarised     | commit latency p1: 134 ms                           |
+|----------------------------------------------------------------------------------------------------|
+| ALERT TICKER                                                                                      |
+| ▲ info    CRT mode enabled for overview deck                                                       |
+|----------------------------------------------------------------------------------------------------|
+| QUICK ACTIONS: auto-rotate [✓]  beep [ ]  CRT [✓]  CRT★ [ ]  pipeline overlay [✓]  VRF [✓]        |
++----------------------------------------------------------------------------------------------------+

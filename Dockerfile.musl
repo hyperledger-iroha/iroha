@@ -1,7 +1,5 @@
 FROM --platform=linux/amd64 archlinux:base-devel AS builder
 
-ARG NIGHTLY_VERSION=2024-09-09
-
 RUN <<EOT
   set -eux
   # Force-sync packages, install archlinux-keyring, repopulate keys
@@ -11,27 +9,18 @@ RUN <<EOT
   # Install updates
   pacman -Syu --noconfirm --disable-download-timeout
   # Set up Rust toolchain
-  pacman -S rustup wget --noconfirm --disable-download-timeout
-  # Install musl C++ toolchain to build wasm-opt
-  wget -c https://musl.cc/x86_64-linux-musl-native.tgz -O - | tar -xz
-  ln -s /x86_64-linux-musl-native/bin/x86_64-linux-musl-g++ /x86_64-linux-musl-native/bin/musl-g++
-  ln -s /x86_64-linux-musl-native/bin/x86_64-linux-musl-gcc-ar /x86_64-linux-musl-native/bin/musl-ar
-  ln -s /x86_64-linux-musl-native/bin/x86_64-linux-musl-gcc-ar /x86_64-linux-musl-native/bin/x86_64-linux-musl-ar
-  ln -s /x86_64-linux-musl-native/bin/x86_64-linux-musl-gcc-ranlib /x86_64-linux-musl-native/bin/musl-ranlib
+  pacman -S rustup wget musl --noconfirm --disable-download-timeout
 EOT
 
 RUN <<EOT
   set -eux
-  rustup toolchain install nightly-$NIGHTLY_VERSION \
-    --profile minimal \
-    --component rust-src
-  rustup default nightly-$NIGHTLY_VERSION
-  rustup target add x86_64-unknown-linux-musl wasm32-unknown-unknown
+  rustup set profile minimal
+  rustup component add --toolchain stable rust-src
+  rustup target add --toolchain stable x86_64-unknown-linux-musl
 EOT
 
-ENV PATH="$PATH:/x86_64-linux-musl-native/bin"
 ENV RUSTFLAGS="-C link-arg=-static"
-ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=/x86_64-linux-musl-native/bin/x86_64-linux-musl-gcc
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
 
 WORKDIR /iroha
 COPY . .
@@ -52,7 +41,6 @@ ENV CONFIG_DIR=/config
 ENV KURA_STORE_DIR=$STORAGE
 ENV SNAPSHOT_STORE_DIR=$STORAGE/snapshot
 
-ENV WASM_DIRECTORY=/app/.cache/wasmtime
 ENV USER=iroha
 ENV UID=1001
 ENV GID=1001
@@ -71,9 +59,7 @@ RUN <<EOT
     "$USER"
   mkdir -p $CONFIG_DIR
   mkdir -p $STORAGE
-  mkdir -p $WASM_DIRECTORY
   chown $USER:$USER $STORAGE
-  chown $USER:$USER $WASM_DIRECTORY
   chown $USER:$USER $CONFIG_DIR
 EOT
 
@@ -81,7 +67,6 @@ COPY --from=builder $TARGET_DIR/irohad $BIN_PATH
 COPY --from=builder $TARGET_DIR/iroha $BIN_PATH
 COPY --from=builder $TARGET_DIR/kagami $BIN_PATH
 COPY defaults/genesis.json $CONFIG_DIR
-COPY defaults/executor.wasm $CONFIG_DIR
 COPY defaults/client.toml $CONFIG_DIR
 USER $USER
 CMD ["irohad"]

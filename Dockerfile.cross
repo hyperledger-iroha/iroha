@@ -3,7 +3,7 @@
 # Useful links:
 #
 # - https://docs.docker.com/build/building/multi-platform/#cross-compilation
-# - https://doc.rust-lang.org/nightly/rustc/platform-support.html
+# - https://doc.rust-lang.org/rustc/platform-support.html
 # - https://github.com/tonistiigi/xx
 # - https://users.rust-lang.org/t/cross-compilation-linux-x86-64-host-aarch64-target/105680
 #
@@ -19,7 +19,7 @@ WORKDIR /app
 COPY --from=xx / /
 
 # NOTE: `git` for `VERGEN_GIT_SHA`; `clang` for `xx-cargo`
-RUN apk add mold git clang
+RUN apk add mold git clang jq
 
 COPY Cargo.toml Cargo.lock rust-toolchain.toml .
 COPY crates crates
@@ -35,9 +35,12 @@ RUN --mount=type=cache,target=/root/.cargo/git/db \
     --mount=type=cache,target=/root/.cargo/registry/index \
     cargo fetch
 
-# NOTE: this is needed for profiling image, when `-Z build-std` is set
-# TODO: set up cache mount?
-RUN rustup component add rust-src
+# NOTE: rust-src is required for cross-compilation; clippy and rustfmt are
+#       installed for linting and formatting on stable. Cache the rustup and
+#       cargo homes so component downloads are reused across platform builds.
+RUN --mount=type=cache,target=/root/.rustup \
+    --mount=type=cache,target=/root/.cargo \
+    rustup component add rust-src clippy rustfmt
 
 ARG TARGETPLATFORM
 ARG PROFILE="deploy"
@@ -47,7 +50,7 @@ ARG CARGOFLAGS=""
 
 # HACK: install target platform-specific headers necessary for cross-compilation
 RUN xx-apk add build-base
-# HACK: this is not set by `xx-cargo`, but is used by `cxx` package (dependency of `wasm-opt-sys`)
+# HACK: this is not set by `xx-cargo`, but is used by `cxx` package
 ENV CXX=xx-c++
 # HACK: this resolves clang issues on link stage
 ENV CC=xx-clang
@@ -69,8 +72,12 @@ RUN <<EOF
   set -ex
   mkdir ./bins
   target_triple="$(xx-cargo --print-target-triple)"
-  # TODO: extract bins using `cargo metadata` & `jq`
-  for bin in iroha irohad kagami iroha_wasm_test_runner; do
+  bins="$(cargo metadata --no-deps --format-version 1 \
+    | jq -r 'if .workspace_metadata and .workspace_metadata.docker_bins then .workspace_metadata.docker_bins[] else empty end')"
+  if [ -z "${bins}" ]; then
+    bins="iroha irohad kagami"
+  fi
+  for bin in ${bins}; do
     bin_path="./target/${target_triple}/${PROFILE}/${bin}"
     xx-verify "${bin_path}"
     mv "${bin_path}" ./bins/
@@ -89,8 +96,9 @@ RUN apk add jq curl \
 
 USER iroha
 
-# TODO: Define these paths with VOLUME directive?
 ENV KURA_STORE_DIR=/data/iroha/storage
 ENV SNAPSHOT_STORE_DIR=/data/iroha/snapshot
+
+VOLUME ["/data/iroha/storage", "/data/iroha/snapshot"]
 
 CMD ["irohad"]

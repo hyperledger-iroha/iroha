@@ -1,0 +1,85 @@
+---
+slug: /sdks/recipes/javascript-ledger-flow
+lang: uz
+direction: ltr
+source: docs/portal/docs/sdks/recipes/javascript-ledger-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: JavaScript ledger flow recipe
+description: Register an asset, mint, transfer, and query balances with `@iroha2/torii-client`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+SampleDownloadni '@site/src/components/SampleDownload'dan import qilish;
+
+Bu retsept Node.js `@iroha2/torii-client` va foydalanadi
+`@iroha2/crypto-target-node` to'plamlari CLI daftarini ko'paytirish uchun.
+
+<Namunani yuklab olish
+  href="/sdk-recipes/javascript/ledger-flow.mjs"
+  fayl nomi = "ledger-flow.mjs"
+  description="Ushbu daftar ko'rsatmasida foydalanilgan aniq JavaScript skriptini yuklab oling."
+/>
+
+## Old shartlar
+
+```bash
+npm install @iroha2/torii-client @iroha2/crypto-target-node
+export ADMIN_ACCOUNT="ih58..."
+export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+```
+
+## Misol skript
+
+```ts title="ledger-flow.mjs"
+import {ToriiClient, buildTransaction} from '@iroha2/torii-client';
+import {createKeyPairFromHex} from '@iroha2/crypto-target-node';
+
+const adminAccount = process.env.ADMIN_ACCOUNT!;
+const receiverAccount = process.env.RECEIVER_ACCOUNT!;
+const adminPrivateKey = process.env.ADMIN_PRIVATE_KEY!;
+
+const client = ToriiClient.create({
+  apiUrl: 'http://127.0.0.1:8080',
+});
+
+const {publicKey, privateKey} = createKeyPairFromHex(adminPrivateKey);
+
+const tx = buildTransaction({
+  chain: '00000000-0000-0000-0000-000000000000',
+  authority: adminAccount,
+  instructions: [
+    {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
+    {Mint: {asset: {id: `coffee#wonderland##${adminAccount}`}, value: {quantity: '250'}}},
+    {Transfer: {
+      asset: {id: `coffee#wonderland##${adminAccount}`},
+      destination: receiverAccount,
+      value: {quantity: '50'},
+    }},
+  ],
+});
+
+tx.sign({publicKey, privateKey});
+const receipt = await client.submitTransaction(tx);
+const txHash = receipt?.payload?.tx_hash ?? "<pending>";
+console.log('Submitted tx', txHash);
+
+const balances = await client.listAccountAssets(receiverAccount, {limit: 10});
+for (const asset of balances.items) {
+  if (asset.id.definition === 'coffee#wonderland') {
+    console.log('Receiver holds', asset.value, 'units of', asset.id.definition);
+  }
+}
+```
+
+`node --env-file=.env ledger-flow.mjs` bilan ishga tushiring (yoki muhitni eksport qiling
+o'zgaruvchilar qo'lda). Jurnal tranzaksiya xeshini ko'rsatishi kerak (kvitansiyadan
+foydali yuk) va qabul qiluvchining yangilangan balansi.
+
+## Paritetni tekshiring
+
+- Tranzaksiya tafsilotlarini `iroha --config defaults/client.toml transaction get --hash <hash>` orqali oling.
+- `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` bilan balanslarni o'zaro tekshirish.
+- SDK paritetini ta'minlash uchun chiqarilgan xeshni Rust va Python retseptlari bilan solishtiring.

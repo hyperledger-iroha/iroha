@@ -1,0 +1,18 @@
+// Dynamic range(start, end) example (requires `kotodama_dynamic_bounds`).
+// Semantics: iterate entries in [start, end). With dynamic bounds the compiler
+// inserts runtime guards and currently treats the dynamic start as 0 for
+// addressing, while using n = end - start for the iteration count.
+// Literal `start` continues to adjust the address base. See docs for details.
+// Dynamic bounds are supported on state maps.
+
+seiyaku DynamicRange {
+  state Entries: Map<int, int>;
+
+  kotoage fn bounded_range_sum(start: int, end: int) -> int {
+    let acc = 0;
+    for (k, v) in Entries.range(start, end) {
+      acc = acc + v;
+    }
+    return acc;
+  }
+}

@@ -1,423 +1,233 @@
 //! Iroha Data Model contains structures for Domains, Peers, Accounts and Assets with simple,
 //! non-specific functions like serialization.
 //!
-//! ## Note about WASM and deserialization
-//! Some structs performs validation during deserialization.
+//! ## Note about IVM and deserialization
+//! Some structs perform validation during deserialization
 //! (e.g. `transaction::candidate::SignedTransactionCandidate`).
-//! However such validation was disabled when compiled to WASM,
-//! Validation at WASM side is not necessary,
-//! because validation was already performed on host side,
-//! and host is a trusted entity.
+//! However, when targeting the Iroha Virtual Machine (IVM), this validation
+//! is disabled. Validation inside the IVM is not necessary
+//! because it has already been performed on the host side,
+//! which is a trusted entity.
 //! This gives about 50% performance boost, see #4995.
 
-// Clippy bug
-#![cfg_attr(not(feature = "std"), no_std)]
+#![allow(unexpected_cfgs)]
+#![allow(semicolon_in_expressions_from_macros)]
 
-#[cfg(not(feature = "std"))]
-extern crate alloc;
+#[allow(unused_extern_crates)]
+extern crate self as iroha_data_model;
+// NOTE: Documentation coverage is enforced at the workspace level. If a
+// module lacks coverage, add targeted documentation at the module boundary
+// rather than silencing the lint at the crate root.
 
-#[cfg(not(feature = "std"))]
-use alloc::{boxed::Box, format, string::String, vec::Vec};
+pub use iroha_crypto::PublicKey;
+pub use iroha_data_model_derive::model;
+pub use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+pub use norito::json::{JsonDeserialize, JsonSerialize};
+#[cfg(feature = "json")]
+pub use norito_derive::{
+    FastJson as DeriveFastJson, FastJsonWrite as DeriveFastJsonWrite,
+    JsonDeserialize as DeriveJsonDeserialize, JsonSerialize as DeriveJsonSerialize,
+};
 
-use derive_more::Display;
-use iroha_crypto::PublicKey;
-use iroha_data_model_derive::{model, EnumRef};
-use iroha_macro::FromVariant;
-use iroha_schema::IntoSchema;
-use parity_scale_codec::{Decode, Encode};
-use serde::{Deserialize, Serialize};
-use strum::FromRepr;
-
-pub use self::model::*;
 use crate::name::Name;
 
+/// Data model compatibility version for SDK and node handshakes.
+pub const DATA_MODEL_VERSION: u32 = 1;
+
+#[macro_use]
+mod id_macros;
+
+// NOTE: `iroha_ffi` is an optional dependency used only when the `ffi_export`
+// or `ffi_import` features are enabled. Many types in this crate previously
+// applied the `ffi_type` attribute unconditionally, which forced Cargo to build
+// the heavy `iroha_ffi` procedural macros even when FFI support was not
+// required. To avoid long build times and hangs, all usages of `ffi_type` are
+// now wrapped in `cfg_attr` so that the attribute is only expanded when one of
+// the FFI features is explicitly activated.
+
 pub mod account;
+/// Account domain model types and queries.
+pub mod alias;
+/// Asset definitions, instances, and utilities.
 pub mod asset;
+pub use asset::{AssetDefinitionId, AssetId};
+/// Block-level data structures and helpers.
 pub mod block;
+/// Shared primitives reused across data model modules.
+pub mod common;
+/// Compute lane requests, manifests, and receipts.
+pub mod compute;
+/// Confidential registries and parameter descriptors.
+pub mod confidential;
+/// Consensus-related messages and state representations.
+pub mod consensus;
+/// Static content hosting records.
+pub mod content;
+/// Data availability ingest, manifest, and governance types.
+pub mod da;
+/// Domain metadata and registration structures.
 pub mod domain;
+/// Common error types surfaced by the data model.
+pub mod error;
+/// Canonical error codes and structured contexts surfaced by AMX/DA/settlement.
+pub mod errors;
+/// Event payloads emitted by the ledger.
 pub mod events;
+/// Executor configuration and API types.
 pub mod executor;
+/// FASTPQ-specific transcripts shared between host and prover.
+pub mod fastpq;
+/// Fraud detection and risk scoring data types.
+pub mod fraud;
+/// Hijiri reputation system data types.
+pub mod hijiri;
+/// Identifier newtypes and supporting helpers.
+pub mod id;
+/// IPFS helper types used for off-chain references.
 pub mod ipfs;
+/// Instruction-set interface (ISI) data types.
 pub mod isi;
+mod json_helpers;
+/// Jurisdiction Data Guardian attestations and committee types.
+pub mod jurisdiction;
+/// Kaigi session descriptors and billing profile definitions.
+pub mod kaigi;
+/// Log-level and severity utilities.
+pub mod level;
+/// Merge-ledger data structures.
+pub mod merge;
+/// Generic metadata containers and helpers.
 pub mod metadata;
+/// Ministry transparency/governance payload types.
+pub mod ministry;
+/// Name parsing and validation utilities.
 pub mod name;
+/// Nexus-lane scaffolding and identifiers.
+pub mod nexus;
+/// Non-fungible token structures and specs.
 pub mod nft;
+/// Offline allowance commitments, certificates, and transfer proofs.
+pub mod offline;
+/// Oracle feed schemas and deterministic committee helpers.
+pub mod oracle;
+/// Runtime parameter definitions and schema.
 pub mod parameter;
+/// Peer and network-topology types.
 pub mod peer;
+/// Permission token and grant model.
 pub mod permission;
+/// Petal stream framing for offline payload handoff.
+pub mod petal_stream;
+/// Zero-knowledge proof payload types
+pub mod proof;
+/// QR stream framing types for offline payload handoff.
+pub mod qr_stream;
+/// Query builders, predicates, and parameter types.
 pub mod query;
+/// Repo agreement descriptors and governance knobs.
+pub mod repo;
+/// Role-based access control definitions.
 pub mod role;
+/// Runtime upgrade payloads and manifests.
+pub mod runtime;
+/// Smart contract descriptors and execution metadata.
 pub mod smart_contract;
+/// Sora Name Service registrar data structures.
+pub mod sns;
+/// Viral social incentive records and escrows.
+pub mod social;
+/// SoraCloud manifests for deterministic service hosting.
+pub mod soracloud;
+/// SoraFS data structures (pin registry, manifests).
+pub mod sorafs;
+/// SoraNet transport and privacy data model extensions.
+pub mod soranet;
+/// World state snapshot representations.
+pub mod state;
+/// Subscription metadata schemas for trigger-based billing.
+pub mod subscription;
+/// Taikai broadcast metadata and segment envelope types.
+pub mod taikai;
+/// Transaction structures, payloads, and signatures.
 pub mod transaction;
+/// Extended transaction responses for Torii/SDK integrations.
+pub mod transactions;
+/// Trigger definitions and scheduling utilities.
 pub mod trigger;
+/// Validation failure diagnostics surfaced to clients.
+/// Permission tokens and helpers related to validators.
+pub mod validator;
+/// Verification helper traits and host bindings.
+pub mod verification;
+/// Visitor traits for traversing data-model structures.
 pub mod visit;
 
+/// SoraDNS attestation and directory data structures.
+pub mod soradns;
+/// Zero-knowledge proof payload types.
+pub mod zk;
+
+#[cfg(feature = "json")]
+mod json_key_codec;
+
+/// Bridge-related data types.
+pub mod bridge;
+
+/// Governance-related data types (feature-gated)
+#[cfg(feature = "governance")]
+pub mod governance;
+/// Test fixtures exposed for SDK/guardrail consumers.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod testing;
+/// Helpers for constructing and accessing instruction registries used by the IVM.
+pub mod instruction_registry {
+    pub use crate::isi::{InstructionRegistry, registry::default};
+}
+
+/// Build-time constants generated during the build process (e.g., keyword
+/// tables). Not part of the public API surface.
+mod build_consts {
+    include!(concat!(env!("OUT_DIR"), "/build_consts.rs"));
+}
+
+pub use build_consts::PRECOMPUTED_KEYWORDS;
+
+// Include API version.
+#[cfg(feature = "transparent_api")]
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/transparent_api.rs"));
+
+#[cfg(not(feature = "transparent_api"))]
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/non_transparent_api.rs"
+));
+
+// Slice-based Norito decoders for model types used in packed sequences and
+// options. These forward to the archived Norito representation to avoid
+// duplicating decoding logic.
+mod norito_slice_decode;
+
+/// Private module defining sealing traits for `iroha_data_model`.
 mod seal {
-    use iroha_primitives::numeric::Numeric;
+    /// Seals the [`Instruction`](crate::isi::Instruction) trait.
+    pub trait Instruction {}
 
-    use crate::prelude::*;
+    /// Seals the [`SingularQuery`](crate::query::SingularQuery) trait.
+    pub trait SingularQuery {}
 
-    pub trait Sealed {}
-
-    macro_rules! impl_sealed {
-        ($($ident:ident $(< $($generic:ident $(< $inner_generic:ident >)?),+ >)?),+ $(,)?) => { $(
-            impl Sealed for $ident $(< $($generic $(< $inner_generic >)?),+ >)? {} )+
-        };
-    }
-
-    impl_sealed! {
-        // Boxed instructions
-        InstructionBox,
-
-        SetKeyValue<Domain>,
-        SetKeyValue<AssetDefinition>,
-        SetKeyValue<Account>,
-        SetKeyValue<Nft>,
-        SetKeyValue<Trigger>,
-
-        RemoveKeyValue<Domain>,
-        RemoveKeyValue<AssetDefinition>,
-        RemoveKeyValue<Account>,
-        RemoveKeyValue<Nft>,
-        RemoveKeyValue<Trigger>,
-
-        Register<Peer>,
-        Register<Domain>,
-        Register<Account>,
-        Register<AssetDefinition>,
-        Register<Nft>,
-        Register<Role>,
-        Register<Trigger>,
-
-        Unregister<Peer>,
-        Unregister<Domain>,
-        Unregister<Account>,
-        Unregister<AssetDefinition>,
-        Unregister<Nft>,
-        Unregister<Role>,
-        Unregister<Trigger>,
-
-        Mint<Numeric, Asset>,
-        Mint<u32, Trigger>,
-
-        Burn<Numeric, Asset>,
-        Burn<u32, Trigger>,
-
-        Transfer<Account, DomainId, Account>,
-        Transfer<Account, AssetDefinitionId, Account>,
-        Transfer<Asset, Numeric, Account>,
-        Transfer<Account, NftId, Account>,
-
-        Grant<Permission, Account>,
-        Grant<RoleId, Account>,
-        Grant<Permission, Role>,
-
-        Revoke<Permission, Account>,
-        Revoke<RoleId, Account>,
-        Revoke<Permission, Role>,
-
-        SetParameter,
-        Upgrade,
-        ExecuteTrigger,
-        Log,
-
-        // Boxed queries
-        SingularQueryBox,
-        FindAccounts,
-        FindAccountsWithAsset,
-        FindAssets,
-        FindAssetsDefinitions,
-        FindNfts,
-        FindDomains,
-        FindPeers,
-        FindBlocks,
-        FindBlockHeaders,
-        FindTransactions,
-        FindPermissionsByAccountId,
-        FindExecutorDataModel,
-        FindActiveTriggerIds,
-        FindTriggers,
-        FindRoles,
-        FindRoleIds,
-        FindRolesByAccountId,
-        FindParameters,
-    }
+    /// Seals the [`crate::query::Query`](crate::query::Query) trait.
+    pub trait Query {}
 }
 
-/// Error which occurs when parsing string into a data model entity
-#[derive(Debug, Display, Clone, Copy)]
-#[repr(transparent)]
-pub struct ParseError {
-    reason: &'static str,
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for ParseError {}
-
-/// Error which occurs when converting an enum reference to a variant reference
-#[derive(Debug, Clone, Copy)]
-#[repr(transparent)]
-pub struct EnumTryAsError<EXPECTED, GOT> {
-    expected: core::marker::PhantomData<EXPECTED>,
-    /// Actual enum variant which was being converted
-    pub got: GOT,
-}
-
-// Manual implementation because this allow annotation does not affect `Display` derive
-impl<EXPECTED, GOT: core::fmt::Debug> core::fmt::Display for EnumTryAsError<EXPECTED, GOT> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "Expected: {}\nGot: {:?}",
-            core::any::type_name::<EXPECTED>(),
-            self.got,
-        )
-    }
-}
-
-impl<EXPECTED, GOT> EnumTryAsError<EXPECTED, GOT> {
-    #[allow(missing_docs)]
-    pub const fn got(got: GOT) -> Self {
-        Self {
-            expected: core::marker::PhantomData,
-            got,
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl<EXPECTED: core::fmt::Debug, GOT: core::fmt::Debug> std::error::Error
-    for EnumTryAsError<EXPECTED, GOT>
-{
-}
-
-#[model]
-#[allow(clippy::redundant_pub_crate)]
-mod model {
-    use super::*;
-
-    /// Unique id of blockchain
-    #[derive(
-        Debug,
-        Display,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Encode,
-        Deserialize,
-        Serialize,
-        IntoSchema,
-    )]
-    #[repr(transparent)]
-    #[serde(transparent)]
-    #[ffi_type(unsafe {robust})]
-    pub struct ChainId(Box<str>);
-
-    impl<T> From<T> for ChainId
-    where
-        T: Into<Box<str>>,
-    {
-        fn from(value: T) -> Self {
-            ChainId(value.into())
-        }
-    }
-
-    impl core::str::FromStr for ChainId {
-        type Err = core::convert::Infallible;
-
-        fn from_str(value: &str) -> Result<Self, Self::Err> {
-            Ok(value.into())
-        }
-    }
-
-    /// Sized container for all possible identifications.
-    #[derive(
-        Debug,
-        Display,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        EnumRef,
-        FromVariant,
-        Decode,
-        Encode,
-        Deserialize,
-        Serialize,
-        IntoSchema,
-    )]
-    #[enum_ref(derive(Encode, FromVariant))]
-    #[allow(clippy::enum_variant_names)]
-    #[ffi_type(local)]
-    pub enum IdBox {
-        /// [`DomainId`](`domain::DomainId`) variant.
-        DomainId(domain::DomainId),
-        /// [`AccountId`](`account::AccountId`) variant.
-        #[display(fmt = "{_0}")]
-        AccountId(account::AccountId),
-        /// [`AssetDefinitionId`](`asset::AssetDefinitionId`) variant.
-        #[display(fmt = "{_0}")]
-        AssetDefinitionId(asset::AssetDefinitionId),
-        /// [`AssetId`](`asset::AssetId`) variant.
-        #[display(fmt = "{_0}")]
-        AssetId(asset::AssetId),
-        /// [`NftId`](`nft::NftId`) variant.
-        #[display(fmt = "{_0}")]
-        NftId(nft::NftId),
-        /// [`PeerId`](`peer::PeerId`) variant.
-        PeerId(peer::PeerId),
-        /// [`TriggerId`](trigger::TriggerId) variant.
-        TriggerId(trigger::TriggerId),
-        /// [`RoleId`](`role::RoleId`) variant.
-        RoleId(role::RoleId),
-        /// [`Permission`](`permission::Permission`) variant.
-        Permission(permission::Permission),
-        /// [`CustomParameter`](`parameter::CustomParameter`) variant.
-        CustomParameterId(parameter::CustomParameterId),
-    }
-
-    /// Operation validation failed.
-    ///
-    /// # Note
-    ///
-    /// Keep in mind that *Validation* is not the right term
-    /// (because *Runtime Executor* actually does execution too) and other names
-    /// (like *Verification* or *Execution*) are being discussed.
-    ///
-    /// TODO: Move to `iroha_executor` module
-    #[derive(
-        Debug,
-        displaydoc::Display,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        FromVariant,
-        Decode,
-        Encode,
-        Deserialize,
-        Serialize,
-        IntoSchema,
-    )]
-    #[ignore_extra_doc_attributes]
-    #[ffi_type(opaque)]
-    #[cfg_attr(feature = "std", derive(thiserror::Error))]
-    pub enum ValidationFail {
-        /// Operation is not permitted: {0}
-        NotPermitted(
-            #[skip_from]
-            #[skip_try_from]
-            String,
-        ),
-        /// Instruction execution failed
-        InstructionFailed(
-            #[cfg_attr(feature = "std", source)] isi::error::InstructionExecutionError,
-        ),
-        /// Query execution failed
-        QueryFailed(#[cfg_attr(feature = "std", source)] query::error::QueryExecutionFail),
-        /// Operation is too complex, perhaps `WASM_RUNTIME_CONFIG` blockchain parameters should be increased
-        ///
-        /// For example it's a very big WASM binary.
-        ///
-        /// It's different from [`crate::transaction::error::TransactionRejectionReason::LimitCheck`] because it depends on
-        /// executor.
-        TooComplex,
-        /// Internal error occurred, please contact the support or check the logs if you are the node owner: {0}
-        ///
-        /// Usually means a bug inside **Runtime Executor** or **Iroha** implementation.
-        InternalError(
-            /// Contained error message if its used internally. Empty for external users.
-            /// Never serialized to not to expose internal errors to the end user.
-            #[codec(skip)]
-            #[serde(skip)]
-            #[skip_from]
-            #[skip_try_from]
-            String,
-        ),
-    }
-
-    /// Log level for reading from environment and (de)serializing
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        Default,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Deserialize,
-        Serialize,
-        Encode,
-        Decode,
-        FromRepr,
-        IntoSchema,
-        strum::Display,
-        strum::EnumString,
-    )]
-    #[allow(clippy::upper_case_acronyms)]
-    #[repr(u8)]
-    pub enum Level {
-        /// Trace
-        TRACE,
-        /// Debug
-        DEBUG,
-        /// Info (Default)
-        #[default]
-        INFO,
-        /// Warn
-        WARN,
-        /// Error
-        ERROR,
-    }
-}
-
-macro_rules! impl_encode_as_id_box {
-    ($($ty:ty),+ $(,)?) => { $(
-        impl $ty {
-            /// [`Encode`] [`Self`] as [`IdBox`].
-            ///
-            /// Used to avoid an unnecessary clone
-            pub fn encode_as_id_box(&self) -> Vec<u8> {
-                IdBoxRef::from(self).encode()
-            }
-        } )+
-    }
-}
-
-impl_encode_as_id_box! {
-    peer::PeerId,
-    domain::DomainId,
-    account::AccountId,
-    asset::AssetDefinitionId,
-    asset::AssetId,
-    trigger::TriggerId,
-    permission::Permission,
-    role::RoleId,
-}
-
-impl Decode for ChainId {
-    fn decode<I: parity_scale_codec::Input>(
-        input: &mut I,
-    ) -> Result<Self, parity_scale_codec::Error> {
-        let boxed: String = parity_scale_codec::Decode::decode(input)?;
-        Ok(Self::from(boxed))
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn parse_level_from_str() {
-        assert_eq!("INFO".parse::<Level>().unwrap(), Level::INFO);
-    }
-}
+pub use error::{EnumTryAsError, ParseError};
+pub use errors::{
+    AmxStage, CanonicalError, CanonicalErrorKind, CircuitBreakerKind, SettlementRouterOutage,
+};
+pub use executor::ValidationFail;
+pub use id::{ChainId, IdBox};
+pub use level::Level;
+pub use nexus::{DataSpaceId, LaneId};
 
 /// Uniquely identifiable entity ([`domain::Domain`], [`account::Account`], etc.).
 /// This trait should always be derived with `IdEqOrdHash`.
@@ -476,7 +286,7 @@ mod ffi {
     #[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
     iroha_ffi::handles! {
         account::Account,
-        asset::Asset,
+        asset::value::Asset,
         domain::Domain,
         metadata::Metadata,
         permission::Permission,
@@ -487,18 +297,15 @@ mod ffi {
     iroha_ffi::decl_ffi_fns! { link_prefix="iroha_data_model" Drop, Clone, Eq, Ord }
     #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
     iroha_ffi::def_ffi_fns! { link_prefix="iroha_data_model"
-        Drop: { account::Account, asset::Asset, domain::Domain, metadata::Metadata, permission::Permission, role::Role },
-        Clone: { account::Account, asset::Asset, domain::Domain, metadata::Metadata, permission::Permission, role::Role },
-        Eq: { account::Account, asset::Asset, domain::Domain, metadata::Metadata, permission::Permission, role::Role },
-        Ord: { account::Account, asset::Asset, domain::Domain, metadata::Metadata, permission::Permission, role::Role },
+        Drop: { account::Account, asset::value::Asset, domain::Domain, metadata::Metadata, permission::Permission, role::Role },
+        Clone: { account::Account, asset::value::Asset, domain::Domain, metadata::Metadata, permission::Permission, role::Role },
+        Eq: { account::Account, asset::value::Asset, domain::Domain, metadata::Metadata, permission::Permission, role::Role },
+        Ord: { account::Account, asset::value::Asset, domain::Domain, metadata::Metadata, permission::Permission, role::Role },
     }
 
     // NOTE: Makes sure that only one `dealloc` is exported per generated dynamic library
     #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
     mod dylib {
-        #[cfg(not(feature = "std"))]
-        use alloc::alloc;
-        #[cfg(feature = "std")]
         use std::alloc;
 
         iroha_ffi::def_ffi_fns! {dealloc}
@@ -513,16 +320,47 @@ pub mod prelude {
         Signature, SignatureOf,
     };
     pub use iroha_primitives::{
-        json::*,
-        numeric::{numeric, Numeric, NumericSpec},
+        json::Json,
+        numeric::{Numeric, NumericSpec, numeric},
     };
 
     pub use super::{
-        account::prelude::*, asset::prelude::*, block::prelude::*, domain::prelude::*,
-        events::prelude::*, executor::prelude::*, ipfs::IpfsPath, isi::prelude::*,
-        metadata::prelude::*, name::prelude::*, nft::prelude::*, parameter::prelude::*,
-        peer::prelude::*, permission::prelude::*, query::prelude::*, role::prelude::*,
-        transaction::prelude::*, trigger::prelude::*, ChainId, EnumTryAsError, HasMetadata, IdBox,
-        Identifiable, Level, Registrable, ValidationFail,
+        ChainId, Decode, Encode, HasMetadata, IdBox, Identifiable, Level, Registrable,
+        ValidationFail,
+        account::prelude::*,
+        asset::prelude::*,
+        block::prelude::*,
+        bridge::*,
+        confidential::prelude::*,
+        content::prelude::*,
+        domain::prelude::*,
+        error::EnumTryAsError,
+        events::prelude::*,
+        executor::prelude::*,
+        fastpq::*,
+        ipfs::IpfsPath,
+        isi::prelude::*,
+        kaigi::prelude::*,
+        metadata::prelude::*,
+        name::prelude::*,
+        nexus::{
+            DataSpaceCatalog, DataSpaceCatalogError, DataSpaceId, DataSpaceMetadata,
+            DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementScope,
+            DomainEndorsementSignature, LaneCatalog, LaneCatalogError, LaneConfig, LaneId,
+            LaneIdError, LaneLifecyclePlan, LaneRelayEnvelope, LaneStorageProfile,
+            LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError,
+        },
+        nft::prelude::*,
+        parameter::prelude::*,
+        peer::prelude::*,
+        permission::prelude::*,
+        query::prelude::*,
+        repo::prelude::*,
+        role::prelude::*,
+        sns::prelude::*,
+        social::prelude::*,
+        subscription::prelude::*,
+        transaction::prelude::*,
+        trigger::prelude::*,
     };
 }

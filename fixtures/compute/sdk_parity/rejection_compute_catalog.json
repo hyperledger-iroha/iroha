@@ -1,0 +1,27 @@
+[
+  {
+    "case": "payload_too_large",
+    "status": 413,
+    "message": "payload exceeds route cap"
+  },
+  {
+    "case": "replay",
+    "status": 409,
+    "message": "duplicate compute request (replay detected)"
+  },
+  {
+    "case": "rate_limited",
+    "status": 429,
+    "message": "compute rate limit exceeded"
+  },
+  {
+    "case": "queue_full",
+    "status": 503,
+    "message": "compute queue saturated"
+  },
+  {
+    "case": "unknown_route",
+    "status": 404,
+    "message": "route ComputeRouteId { service: Name(\"payments\"), method: Name(\"quote\") } not found in manifest"
+  }
+]

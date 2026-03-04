@@ -1,15 +1,15 @@
 //! Definition of Iroha default permission tokens
-#![allow(missing_docs, clippy::missing_errors_doc)]
+#![allow(clippy::missing_errors_doc)]
 
-use alloc::{format, string::String, vec::Vec};
+use std::{format, string::String, vec::Vec};
 
 use iroha_data_model::prelude::*;
 pub use iroha_executor_data_model_derive::Permission;
 use iroha_schema::{Ident, IntoSchema};
-use serde::{de::DeserializeOwned, Serialize};
+use norito::json::{JsonDeserializeOwned, JsonSerialize};
 
 /// Used to check if the permission token is owned by the account.
-pub trait Permission: Serialize + DeserializeOwned + IntoSchema {
+pub trait Permission: JsonSerialize + JsonDeserializeOwned + IntoSchema {
     /// Permission id, according to [`IntoSchema`].
     fn name() -> Ident {
         Self::type_name()
@@ -24,212 +24,506 @@ macro_rules! permission {
             PartialEq,
             Eq,
             Permission,
-            serde::Serialize,
-            serde::Deserialize,
+            crate::json_macros::JsonSerialize,
+            crate::json_macros::JsonDeserialize,
             iroha_schema::IntoSchema,
         )]
         $item
     };
 }
 
+/// Permission tokens related to peer management.
 pub mod peer {
     use super::*;
 
     permission! {
+        /// Permission allowing the peer manager to add or remove peers.
         #[derive(Copy)]
         pub struct CanManagePeers;
     }
 }
 
+/// Permission tokens scoped to domains.
 pub mod domain {
     use super::*;
 
     permission! {
+        /// Permission to register a new domain.
         #[derive(Copy)]
         pub struct CanRegisterDomain;
     }
 
     permission! {
+        /// Permission to unregister the specified domain.
         pub struct CanUnregisterDomain {
+            /// Domain identifier governed by this permission.
             pub domain: DomainId,
         }
     }
 
     permission! {
+        /// Permission to modify metadata for the specified domain.
         pub struct CanModifyDomainMetadata {
+            /// Domain identifier whose metadata may be changed.
             pub domain: DomainId,
         }
     }
 }
 
+/// Permission tokens scoped to asset definitions.
 pub mod asset_definition {
     use super::*;
 
     permission! {
+        /// Permission to register an asset definition within the provided domain.
         pub struct CanRegisterAssetDefinition {
+            /// Domain in which the asset definition may be registered.
             pub domain: DomainId,
         }
     }
 
     permission! {
+        /// Permission to unregister the specified asset definition.
         pub struct CanUnregisterAssetDefinition {
+            /// Identifier of the asset definition targeted by the permission.
             pub asset_definition: AssetDefinitionId,
         }
     }
 
     permission! {
+        /// Permission to modify metadata for the specified asset definition.
         pub struct CanModifyAssetDefinitionMetadata {
+            /// Identifier of the asset definition whose metadata may be changed.
             pub asset_definition: AssetDefinitionId,
         }
     }
 }
 
+/// Permission tokens scoped to accounts.
 pub mod account {
     use super::*;
 
     permission! {
+        /// Permission to register an account within the provided domain.
         pub struct CanRegisterAccount {
+            /// Domain in which the account may be registered.
             pub domain: DomainId,
         }
     }
 
     permission! {
+        /// Permission to unregister the specified account.
         pub struct CanUnregisterAccount {
+            /// Identifier of the account targeted by the permission.
             pub account: AccountId,
         }
     }
     permission! {
+        /// Permission to modify metadata for the specified account.
         pub struct CanModifyAccountMetadata {
+            /// Identifier of the account whose metadata may be changed.
             pub account: AccountId,
         }
     }
 }
 
+/// Permission tokens covering asset operations.
 pub mod asset {
     use super::*;
 
     permission! {
+        /// Permission to mint assets belonging to the specified definition.
         pub struct CanMintAssetWithDefinition {
+            /// Definition identifier whose assets may be minted.
             pub asset_definition: AssetDefinitionId,
         }
     }
 
     permission! {
+        /// Permission to burn assets belonging to the specified definition.
         pub struct CanBurnAssetWithDefinition {
+            /// Definition identifier whose assets may be burned.
             pub asset_definition: AssetDefinitionId,
         }
     }
 
     permission! {
+        /// Permission to transfer assets belonging to the specified definition.
         pub struct CanTransferAssetWithDefinition {
+            /// Definition identifier whose assets may be transferred.
             pub asset_definition: AssetDefinitionId,
         }
     }
 
     permission! {
+        /// Permission to mint the specified asset instance.
         pub struct CanMintAsset {
+            /// Identifier of the asset instance that may be minted.
             pub asset: AssetId,
         }
     }
 
     permission! {
+        /// Permission to burn the specified asset instance.
         pub struct CanBurnAsset {
+            /// Identifier of the asset instance that may be burned.
             pub asset: AssetId,
         }
     }
 
     permission! {
+        /// Permission to transfer the specified asset instance.
         pub struct CanTransferAsset {
+            /// Identifier of the asset instance that may be transferred.
+            pub asset: AssetId,
+        }
+    }
+
+    permission! {
+        /// Permission to modify metadata for assets belonging to the specified definition.
+        pub struct CanModifyAssetMetadataWithDefinition {
+            /// Definition identifier whose asset metadata may be changed.
+            pub asset_definition: AssetDefinitionId,
+        }
+    }
+
+    permission! {
+        /// Permission to modify metadata for the specified asset instance.
+        pub struct CanModifyAssetMetadata {
+            /// Identifier of the asset instance whose metadata may be changed.
             pub asset: AssetId,
         }
     }
 }
 
+/// Permission tokens covering NFT operations.
 pub mod nft {
     use super::*;
 
     permission! {
+        /// Permission to register an NFT for the given domain.
         pub struct CanRegisterNft {
+            /// Domain in which an NFT may be registered.
             pub domain: DomainId,
         }
     }
 
     permission! {
+        /// Permission to unregister the specified NFT.
         pub struct CanUnregisterNft {
+            /// Identifier of the NFT that may be unregistered.
             pub nft: NftId,
         }
     }
 
     permission! {
+        /// Permission to transfer the specified NFT.
         pub struct CanTransferNft {
+            /// Identifier of the NFT that may be transferred.
             pub nft: NftId,
         }
     }
 
     permission! {
+        /// Permission to modify metadata for the specified NFT.
         pub struct CanModifyNftMetadata {
+            /// Identifier of the NFT whose metadata may be changed.
             pub nft: NftId,
         }
     }
 }
 
+/// Permission tokens covering trigger management.
 pub mod trigger {
     use super::*;
 
     permission! {
+        /// Permission to register triggers on behalf of the provided authority.
         pub struct CanRegisterTrigger {
+            /// Authority on whose behalf the trigger may be registered.
             pub authority: AccountId,
         }
     }
 
     permission! {
+        /// Permission to unregister the specified trigger.
         pub struct CanUnregisterTrigger {
+            /// Identifier of the trigger that may be removed.
             pub trigger: TriggerId,
         }
     }
 
     permission! {
+        /// Permission to modify the configuration of a trigger.
         pub struct CanModifyTrigger {
+            /// Identifier of the trigger that may be modified.
             pub trigger: TriggerId,
         }
     }
 
     permission! {
+        /// Permission to execute a trigger manually.
         pub struct CanExecuteTrigger {
+            /// Identifier of the trigger that may be executed.
             pub trigger: TriggerId,
         }
     }
 
     permission! {
+        /// Permission to modify metadata of the specified trigger.
         pub struct CanModifyTriggerMetadata {
+            /// Identifier of the trigger whose metadata may be changed.
             pub trigger: TriggerId,
         }
     }
 }
 
+/// Permission tokens for configuration parameters.
 pub mod parameter {
     use super::*;
 
     permission! {
+        /// Permission to set configuration parameters.
         #[derive(Copy)]
         pub struct CanSetParameters;
     }
 }
 
+/// Permission tokens affecting role lifecycle.
 pub mod role {
     use super::*;
 
     permission! {
+        /// Permission to manage role lifecycle.
         #[derive(Copy)]
         pub struct CanManageRoles;
     }
 }
 
+/// Permission tokens affecting executor upgrades.
 pub mod executor {
     use super::*;
 
     permission! {
+        /// Permission to upgrade the executor implementation.
         #[derive(Copy)]
         pub struct CanUpgradeExecutor;
+    }
+}
+
+/// Smart contract related permissions
+pub mod smart_contract {
+    use super::*;
+
+    permission! {
+        /// Permission to register smart contract code artifacts.
+        #[derive(Copy)]
+        pub struct CanRegisterSmartContractCode;
+    }
+}
+
+/// Nexus / Space Directory permissions.
+pub mod nexus {
+    use super::*;
+
+    permission! {
+        /// Permission to publish capability manifests for a dataspace.
+        #[derive(Copy)]
+        pub struct CanPublishSpaceDirectoryManifest {
+            /// Dataspace identifier governed by the manifest.
+            pub dataspace: DataSpaceId,
+        }
+    }
+
+    permission! {
+        /// Permission to charge Nexus fees to the specified sponsor account.
+        pub struct CanUseFeeSponsor {
+            /// Sponsor account that may be debited for fees.
+            pub sponsor: AccountId,
+        }
+    }
+}
+
+/// Governance-related permissions
+pub mod governance {
+    use super::*;
+
+    permission! {
+        /// Allow proposing deployment of a smart contract via governance
+        pub struct CanProposeContractDeployment {
+            /// Target contract identifier (namespace-qualified string)
+            pub contract_id: String,
+        }
+    }
+
+    permission! {
+        /// Allow submitting a governance ballot to a referendum/election
+        pub struct CanSubmitGovernanceBallot {
+            /// Referendum or election identifier (opaque string)
+            pub referendum_id: String,
+        }
+    }
+
+    permission! {
+        /// Allow enacting an approved referendum
+        #[derive(Copy)]
+        pub struct CanEnactGovernance;
+    }
+
+    permission! {
+        /// Allow managing sortition parliament parameters/membership
+        #[derive(Copy)]
+        pub struct CanManageParliament;
+    }
+
+    permission! {
+        /// Allow recording citizen service discipline events.
+        pub struct CanRecordCitizenService {
+            /// Citizen account targeted by the record.
+            pub owner: AccountId,
+        }
+    }
+
+    permission! {
+        /// Allow slashing governance bond locks for a referendum.
+        pub struct CanSlashGovernanceLock {
+            /// Referendum identifier (opaque string)
+            pub referendum_id: String,
+        }
+    }
+
+    permission! {
+        /// Allow restituting governance bond locks after appeal.
+        pub struct CanRestituteGovernanceLock {
+            /// Referendum identifier (opaque string)
+            pub referendum_id: String,
+        }
+    }
+}
+
+/// Permission tokens governing `SoraFS` operations.
+pub mod sorafs {
+    use super::*;
+    use iroha_data_model::sorafs::prelude::ProviderId;
+
+    permission! {
+        /// Permission to register a `SoraFS` manifest pin.
+        #[derive(Copy)]
+        pub struct CanRegisterSorafsPin;
+    }
+
+    permission! {
+        /// Permission to approve a `SoraFS` manifest pin.
+        #[derive(Copy)]
+        pub struct CanApproveSorafsPin;
+    }
+
+    permission! {
+        /// Permission to retire a `SoraFS` manifest pin.
+        #[derive(Copy)]
+        pub struct CanRetireSorafsPin;
+    }
+
+    permission! {
+        /// Permission to bind or update a `SoraFS` manifest alias.
+        #[derive(Copy)]
+        pub struct CanBindSorafsAlias;
+    }
+
+    permission! {
+        /// Permission to declare storage capacity for a `SoraFS` provider.
+        #[derive(Copy)]
+        pub struct CanDeclareSorafsCapacity;
+    }
+
+    permission! {
+        /// Permission to submit capacity telemetry for a `SoraFS` provider.
+        #[derive(Copy)]
+        pub struct CanSubmitSorafsTelemetry;
+    }
+
+    permission! {
+        /// Permission to file a `SoraFS` capacity dispute.
+        #[derive(Copy)]
+        pub struct CanFileSorafsCapacityDispute;
+    }
+
+    permission! {
+        /// Permission to issue `SoraFS` replication orders.
+        #[derive(Copy)]
+        pub struct CanIssueSorafsReplicationOrder;
+    }
+
+    permission! {
+        /// Permission to complete `SoraFS` replication orders.
+        #[derive(Copy)]
+        pub struct CanCompleteSorafsReplicationOrder;
+    }
+
+    permission! {
+        /// Permission to set `SoraFS` pricing schedules.
+        #[derive(Copy)]
+        pub struct CanSetSorafsPricing;
+    }
+
+    permission! {
+        /// Permission to upsert `SoraFS` provider credit records.
+        #[derive(Copy)]
+        pub struct CanUpsertSorafsProviderCredit;
+    }
+
+    permission! {
+        /// Permission to operate `SoraFS` repair tickets for a provider.
+        #[derive(Copy)]
+        pub struct CanOperateSorafsRepair {
+            /// Provider identifier governed by this permission.
+            pub provider_id: ProviderId,
+        }
+    }
+
+    permission! {
+        /// Permission to register or update a `SoraFS` provider owner binding.
+        #[derive(Copy)]
+        pub struct CanRegisterSorafsProviderOwner;
+    }
+
+    permission! {
+        /// Permission to remove a `SoraFS` provider owner binding.
+        #[derive(Copy)]
+        pub struct CanUnregisterSorafsProviderOwner;
+    }
+}
+
+/// Permission tokens governing `SoraNet` privacy ingestion.
+pub mod soranet {
+    use super::*;
+
+    permission! {
+        /// Permission to ingest `SoraNet` privacy events or shares.
+        #[derive(Copy)]
+        pub struct CanIngestSoranetPrivacy;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::asset_definition::CanRegisterAssetDefinition;
+
+    #[test]
+    fn can_register_asset_definition_serializes_as_json_string_field() {
+        let perm = CanRegisterAssetDefinition {
+            domain: "wonderland".parse().expect("valid domain"),
+        };
+
+        let json = norito::json::to_json(&perm).expect("serialize to JSON");
+        assert_eq!(json, "{\"domain\":\"wonderland\"}");
+
+        let value = norito::json::to_value(&perm).expect("serialize to JSON value");
+        assert_eq!(
+            value,
+            norito::json!({
+                "domain": "wonderland",
+            })
+        );
     }
 }

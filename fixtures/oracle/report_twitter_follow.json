@@ -1,0 +1,34 @@
+{
+  "body": {
+    "feed_id": [
+      "twitter_follow_binding"
+    ],
+    "feed_config_version": [
+      1
+    ],
+    "slot": 24,
+    "request_hash": "hash:25BD3C09F859A100396B5FD39066A3AEC5FB2EE6458D8FEDD0E403A35B5B3745#8EF1",
+    "entries": [
+      {
+        "oracle_id": "34mSYnLrmfrui7Ba2h9RbAPY1hHNEQje517tbXn44vUUkA7F8361DR6aQeHKSaNSKFruciKzA@validators",
+        "observation_hash": "hash:072C38761AA51CD563588DC44C218E6197E56F427E20ACD59A292278D1BCBD8D#7FB9",
+        "value": {
+          "mantissa": "36956587003717982388190835231522344358",
+          "scale": 0
+        },
+        "outlier": false
+      },
+      {
+        "oracle_id": "34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA@validators",
+        "observation_hash": "hash:A56D5FD50AA96272C7A7BBD8ED957085AACDE19A3A45A15F402FB0B4E5C0450F#AA08",
+        "value": {
+          "mantissa": "36956587003717982388190835231522344358",
+          "scale": 0
+        },
+        "outlier": false
+      }
+    ],
+    "submitter": "34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA@validators"
+  },
+  "signature": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+}

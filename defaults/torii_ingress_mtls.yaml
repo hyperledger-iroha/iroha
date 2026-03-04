@@ -1,0 +1,150 @@
+# Torii Norito-RPC ingress mTLS reference policy (NRPC-2A deliverable)
+# -----------------------------------------------------------------------------
+# This YAML file documents the canonical client-authentication policy exercised
+# by staging/canary pools while Norito-RPC is introduced. Operators copy the
+# structure into their own automation (Ansible, Terraform, Platform Ops Portal)
+# so `transport.norito_rpc.require_mtls=true` loads deterministic trust anchors,
+# SAN filters, and rotation cadences.  See:
+#   - docs/source/torii/norito_rpc_rollout_plan.md#3-ingress--authentication-changes-nrpc-2a
+#   - docs/source/runbooks/torii_norito_rpc_canary.md
+
+version: 1
+metadata:
+  owner: "Torii Platform TL / NetOps Liaison"
+  last_reviewed: "2026-03-28T00:00:00Z"
+  description: >
+    Sample staging + production mTLS inventory.  CI/devnet inherit the same
+    structure but are allowed to omit OCSP enforcement and SAN whitelisting.
+
+server_policy:
+  require_client_certificate: true
+  tls_versions: ["TLSv1.3"]
+  cipher_suites:
+    - "TLS_AES_256_GCM_SHA384"
+    - "TLS_AES_128_GCM_SHA256"
+  ocsp_stapling: required
+  session_resumption: disabled
+  reject_plain_http: true
+  revoke_runbook: "docs/source/runbooks/torii_norito_rpc_canary.md#revocation-procedure"
+
+trust_anchors:
+  - name: "torii-norito-ops-2026q2"
+    pem_path: "certs/norito_rpc/torii_norito_ops_2026q2.pem"
+    sha256: "3e2f3a7a8dc6a1e0c3ea4b66f5f0e7124c6c9f9d68fd71835ef8a5fa4b1b0c9d"
+    activates_at: "2026-03-01T00:00:00Z"
+    expires_at: "2026-09-30T23:59:59Z"
+    rotation_window_days: 21
+    description: >
+      Primary CA for staging and canary pools.  Certificates minted from this
+      anchor must honour the SAN filters defined below.
+  - name: "torii-norito-ops-2026q3"
+    pem_path: "certs/norito_rpc/torii_norito_ops_2026q3.pem"
+    sha256: "8b9c02e5e1be3fd300b4b71b9c0d22a6a9363b684a4fe6de9d0a7baf3e7dbf30"
+    activates_at: "2026-09-15T00:00:00Z"
+    expires_at: "2027-03-31T23:59:59Z"
+    rotation_window_days: 28
+    description: >
+      Successor CA promoted once telemetry confirms Norito-RPC GA health.  Keep
+      `torii-norito-ops-2026q2` online until all clients re-issue certificates.
+
+client_profiles:
+  - name: "lab-default"
+    stage: "lab"
+    trust_anchor: "torii-norito-ops-2026q2"
+    description: >
+      CI/devnet runners exercising Norito-RPC smoke tests.  Certificates may be
+      short-lived and do not participate in PagerDuty paging.
+    allowed_sans:
+      dns:
+        - "sdk-lab.sora"
+        - "*.sdk-lab.sora"
+      uri:
+        - "spiffe://norito/lab/sdk"
+    subject:
+      organizations: ["Sora Nexus Dev"]
+      organizational_units: ["SDK-Lab"]
+      common_name: "Norito RPC Lab Client"
+    certificate:
+      validity_days: 14
+      renewal_window_days: 5
+    authz:
+      norito_stage: "lab"
+      allowed_tokens: ["nrpc-lab-ci", "nrpc-lab-sdk"]
+      jira_component: "NRPC-LAB"
+
+  - name: "staging-canary"
+    stage: "canary"
+    trust_anchor: "torii-norito-ops-2026q2"
+    description: >
+      Operator-managed staging pool used for NRPC-2 rehearsals.  Requires mTLS,
+      bearer tokens, and telemetry labels before flipping to production.
+    allowed_sans:
+      dns:
+        - "sdk-canary.sora"
+        - "*.sdk-staging.sora"
+      uri:
+        - "spiffe://norito/staging/sdk"
+      ip:
+        - "10.42.0.0/16"
+    subject:
+      organizations: ["Sora Nexus Operators"]
+      organizational_units: ["Platform Ops"]
+      common_name: "Norito RPC Staging Client"
+    certificate:
+      validity_days: 30
+      renewal_window_days: 10
+      require_hardware_slot: true
+    authz:
+      norito_stage: "canary"
+      allowed_tokens: ["nrpc-staging", "nrpc-torii-workshop"]
+      metrics_labels:
+        torii_adoption_window: "2026q2"
+        workload: "sdk-parity"
+
+  - name: "production-ga"
+    stage: "ga"
+    trust_anchor: "torii-norito-ops-2026q3"
+    description: >
+      Canonical production clients (SDKs, gateways, automation).  Certificates
+      must use hardware-backed keys and include the governance ticket reference.
+    allowed_sans:
+      dns:
+        - "sdk.sora"
+        - "*.sdk.sora"
+        - "gw*.torii.sora"
+      uri:
+        - "spiffe://norito/prod/sdk"
+        - "urn:torii:norito:client"
+    subject:
+      organizations: ["Hyperledger Iroha"]
+      organizational_units: ["Norito RPC"]
+      common_name: "Norito RPC Production Client"
+    certificate:
+      validity_days: 60
+      renewal_window_days: 21
+      require_hardware_slot: true
+      require_ocsp_must_staple: true
+      governance_ticket_field: "1.2.3.4.5.6.7.8.1"
+    authz:
+      norito_stage: "ga"
+      allowed_tokens: ["nrpc-ga", "nrpc-ops-override"]
+      metrics_labels:
+        torii_adoption_window: "2026q4"
+        workload: "customer"
+
+rotation_schedule:
+  cadence_days: 90
+  notify_addresses:
+    - "torii-platform@sora.org"
+    - "netops@sora.org"
+  announcement_runbook: "docs/source/torii/norito_rpc_sync_notes.md"
+  verification_steps:
+    - "Run scripts/run_norito_rpc_fixtures.sh --summary before swapping CA"
+    - "Capture Grafana dashboard snapshots (norito_rpc_ingress.json panels 3–6)"
+    - "Record promtool output for address_ingest_rules and norito_rpc_rules"
+  fallback_plan:
+    description: >
+      Revert to the previous trust anchor by reloading Envoy with the prior CA
+      bundle and flipping `transport.norito_rpc.stage=disabled` per the rollout
+      plan if telemetry shows TLS or SAN enforcement regressions.
+    runbook: "docs/source/torii/norito_rpc_canary.md#rollback-checklist"

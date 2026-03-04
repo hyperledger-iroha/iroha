@@ -1,5 +1,8 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "./common.rs"]
 mod common;
+
+use std::sync::Arc;
 
 use common::*;
 use iroha_core::{
@@ -27,11 +30,11 @@ impl StateApplyBlocks {
         let assets_per_domain = 100;
         let (domain_ids, account_ids, asset_definition_ids) =
             generate_ids(domains, accounts_per_domain, assets_per_domain);
-        let peer_key_pair = KeyPair::random();
-        let peer_id = PeerId::new(peer_key_pair.public_key().clone());
+        let (peer_public_key, peer_private_key) = KeyPair::random().into_parts();
+        let peer_id = PeerId::new(peer_public_key);
         let topology = Topology::new(vec![peer_id]);
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let state = build_state(rt, &alice_id);
+        let state = build_state(rt, &alice_id, alice_keypair.private_key());
 
         let nth = 10;
         let instructions = [
@@ -42,7 +45,7 @@ impl StateApplyBlocks {
 
         let blocks = {
             // Create empty state because it will be changed during creation of block
-            let state = build_state(rt, &alice_id);
+            let state = build_state(rt, &alice_id, alice_keypair.private_key());
             instructions
                 .into_iter()
                 .map(|instructions| {
@@ -52,11 +55,17 @@ impl StateApplyBlocks {
                         alice_id.clone(),
                         alice_keypair.private_key(),
                         &topology,
-                        &peer_key_pair,
+                        &peer_private_key,
                     );
                     let _events =
                         state_block.apply_without_execution(&block, topology.as_ref().to_owned());
-                    state_block.commit();
+                    state_block.commit().unwrap();
+                    let block_arc = Arc::new(block.clone().into());
+                    let state_view = state.view();
+                    state_view
+                        .kura()
+                        .store_block(block_arc)
+                        .expect("store block in bench setup");
                     block
                 })
                 .collect::<Vec<_>>()
@@ -84,11 +93,15 @@ impl StateApplyBlocks {
             topology,
         }: &Self,
     ) {
+        let base_height = {
+            let view = state.view();
+            view.height()
+        };
         for (block, i) in blocks.iter().zip(1..) {
-            let mut state_block = state.block(block.as_ref().header().regress());
+            let mut state_block = state.block(block.as_ref().header());
             let _events = state_block.apply(block, topology.as_ref().to_owned());
-            state_block.commit();
-            assert_eq!(state.view().height(), i);
+            state_block.commit().unwrap();
+            assert_eq!(state.view().height(), base_height + i);
         }
     }
 }

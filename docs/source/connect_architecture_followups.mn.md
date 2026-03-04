@@ -1,0 +1,30 @@
+---
+lang: mn
+direction: ltr
+source: docs/source/connect_architecture_followups.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 476331772efe169a7a073b561fa9935e314ff89d6bfff440f7246606c1c02669
+source_last_modified: "2025-12-29T18:16:35.934525+00:00"
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
+---
+
+# Архитектурыг дагаж мөрдөх үйлдлүүдийг холбоно уу
+
+Энэхүү тэмдэглэл нь хөндлөн SDK-ээс бий болсон инженерийн дагалтуудыг агуулна
+Архитектурын тоймыг холбох. Мөр тус бүрийг асуудалд оруулах ёстой (Жира тасалбар эсвэл PR)
+ажлын хуваарь гарсны дараа. Эзэмшигчид хянах тасалбар үүсгэх үед хүснэгтийг шинэчил.| Зүйл | Тодорхойлолт | Эзэмшигч(үүд) | Хяналт | Статус |
+|------|-------------|----------|----------|--------|
+| Хуваалцсан буцаах тогтмолууд | Экспоненциал ухрах + читрийн туслахуудыг (`connect_retry::policy`) хэрэгжүүлж, тэдгээрийг Swift/Android/JS SDK-д үзүүлээрэй. | Swift SDK, Android Networking TL, JS Lead | [IOS-ХОЛБОО-001](project_tracker/connect_architecture_followups_ios.md#ios-connect-001) | Дууссан — `connect_retry::policy` нь тодорхойлогч splitmix64 түүвэрлэлтээр газардсан; Swift (`ConnectRetryPolicy`), Android болон JS SDK-ууд нь толин тусгал туслагч болон алтан тестүүдийг нийлүүлдэг. |
+| Пинг/понгийн хэрэгжилт | Зөвшөөрөгдсөн 30-ийн хэмнэлтэй, хөтчийн хамгийн бага хавчаараар тохируулж болох зүрхний цохилтыг нэмэх; гадаргуугийн хэмжүүр (`connect.ping_miss_total`). | Swift SDK, Android Networking TL, JS Lead | [IOS-ХОЛБОО-002](project_tracker/connect_architecture_followups_ios.md#ios-connect-002) | Дууссан — Torii одоо зүрхний цохилтын тохируулгатай интервалуудыг (`ping_interval_ms`, `ping_miss_tolerance`, `ping_min_interval_ms`) хэрэгжүүлж, `connect.ping_miss_total` хэмжигдэхүүнийг илчилж, гар утасны холболтыг дахин шалгаж байна. SDK функцийн агшин зуурын зургууд нь үйлчлүүлэгчдэд зориулсан шинэ товчлууруудыг харуулж байна. |
+| Офлайн дарааллын тогтвортой байдал | Norito `.to` сэтгүүл бичигч/уншигчдыг холболтын дарааллаар (Swift `FileManager`, Android шифрлэгдсэн хадгалах сан, JS IndexedDB) хуваалцсан схемийг ашиглан хэрэгжүүлээрэй. | Swift SDK, Android Data Model TL, JS Lead | [IOS-ХОЛБОО-003](project_tracker/connect_architecture_followups_ios.md#ios-connect-003) | Дууссан — Swift, Android болон JS нь одоо `ConnectQueueJournal` + оношилгооны туслахуудыг хадгалах/халих тесттэй нийлүүлж байгаа тул нотлох баримтын багцууд тодорхой байх болно. SDK.【IrohaSwift/Sources/IrohaSwift/ConnectQueueJournal.swift:1】【java/iroha_android/src/main/java/org/hype rledger/iroha/android/connect/ConnectQueueJournal.java:1】【javascript/iroha_js/src/connectQueueJournal.js:1】 |
+| StrongBox баталгаажуулалтын ачаалал | `{platform,evidence_b64,statement_hash}`-ийг түрийвчний зөвшөөрлөөр дамжуулж, dApp SDK-д баталгаажуулалт нэмнэ үү. | Android Crypto TL, JS Lead | [IOS-ХОЛБОО-004](project_tracker/connect_architecture_followups_ios.md#ios-connect-004) | Хүлээгдэж байна |
+| Эргэлтийн хяналтын хүрээ | `Control::RotateKeys` + `RotateKeysAck`-г хэрэгжүүлж, `cancelRequest(hash)` / эргүүлэх API-г бүх SDK-д нээнэ үү. | Swift SDK, Android Networking TL, JS Lead | [IOS-ХОЛБОО-005](project_tracker/connect_architecture_followups_ios.md#ios-connect-005) | Хүлээгдэж байна |
+| Телеметрийн экспортлогчид | `connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms` ялгаруулж, одоо байгаа телеметрийн дамжуулах хоолойд тоолуурыг дахин тоглуулаарай (OpenTelemetry). | Telemetry WG, SDK эзэмшигчид | [IOS-ХОЛБОО-006](project_tracker/connect_architecture_followups_ios.md#ios-connect-006) | Хүлээгдэж байна |
+| Swift CI хаалга | Холболттой холбоотой дамжуулах шугамууд нь `make swift-ci`-ийг дуудаж байгаа тул бэхэлгээний паритет, хяналтын самбарын хангамж болон Buildkite `ci/xcframework-smoke:<lane>:device_tag` мета өгөгдөл SDK-д нийцэж байгаа эсэхийг шалгаарай. | Swift SDK тэргүүлэх, Инфра бүтээх | [IOS-ХОЛБОО-007](project_tracker/connect_architecture_followups_ios.md#ios-connect-007) | Хүлээгдэж байна |
+| Буцах тохиолдлын мэдээ | Хуваалцсан харагдах байдлыг хангах үүднээс XCFramework утааны залгуурын ослын (`xcframework_smoke_fallback`, `xcframework_smoke_strongbox_unavailable`) утсыг Холболтын хяналтын самбарт холбоно уу. | Swift QA тэргүүлэх, Инфра бүтээх | [IOS-ХОЛБОО-008](project_tracker/connect_architecture_followups_ios.md#ios-connect-008) | Хүлээгдэж байна || Дагаж мөрдөх хавсралтууд дамжих | SDK-ууд зөвшөөрлийн ачааллын нэмэлт `attachments[]` + `compliance_manifest_id` талбаруудыг алдагдалгүйгээр хүлээн авч, дамжуулж байгаа эсэхийг шалгаарай. | Swift SDK, Android Data Model TL, JS Lead | [IOS-ХОЛБОО-009](project_tracker/connect_architecture_followups_ios.md#ios-connect-009) | Хүлээгдэж байна |
+| Ангилал зүйд нийцүүлэх алдаа | Хуваалцсан тооллогыг (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`) платформ-захиалах алдаатай docif. | Swift SDK, Android Networking TL, JS Lead | [IOS-ХОЛБОО-010](project_tracker/connect_architecture_followups_ios.md#ios-connect-010) | Дууссан — Swift, Android болон JS SDK-ууд нь хуваалцсан `ConnectError` боодол + телеметрийн туслахуудыг README/TypeScript/Java баримтууд болон TLS/timeout/HTTP/codec/queue-г хамарсан регрессийн тесттэй нийлүүлдэг. тохиолдлууд.【docs/source/connect_error_taxonomy.md:1】【IrohaSwift/Sources/IrohaSwift/ConnectError.swift:1】【java/iroha_android/src /test/java/org/hyperledger/iroha/android/connect/ConnectErrorTests.java:1】【javascript/iroha_js/test/connectError.test.js:1】 |
+| Семинарын шийдвэрийн бүртгэл | Зөвлөлийн архивт хүлээн зөвшөөрөгдсөн шийдвэрийг нэгтгэсэн тайлбар бүхий тавцан / тэмдэглэлийг нийтлэх. | SDK хөтөлбөрийн удирдагч | [IOS-ХОЛБОО-011](project_tracker/connect_architecture_followups_ios.md#ios-connect-011) | Хүлээгдэж байна |
+
+> Эзэмшигчид тасалбар нээх үед мөрдөх танигчийг бөглөнө; асуудлын явцын хажуугаар `Status` баганыг шинэчил.

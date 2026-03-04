@@ -1,5 +1,5 @@
-#![allow(missing_docs)]
-#![cfg(not(coverage))]
+//! Trybuild UI tests for `iroha_schema_derive`.
+#![cfg(all(feature = "trybuild-tests", not(coverage)))]
 use trybuild::TestCases;
 
 #[test]

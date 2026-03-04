@@ -5,6 +5,8 @@ edition.workspace = true
 version.workspace = true
 authors.workspace = true
 
+build = "../build-support/script.rs"
+
 description.workspace = true
 repository.workspace = true
 homepage.workspace = true
@@ -18,20 +20,53 @@ categories.workspace = true
 workspace = true
 
 [features]
-default = ["telemetry", "schema-endpoint"]
-
+default = ["telemetry", "schema-endpoint", "build-i3"]
+build-i2 = []
+build-i3 = []
+fastpq-gpu = ["fastpq_prover/fastpq-gpu"]
+zk-stark = ["iroha_core/zk-stark", "iroha_torii/zk-stark"]
+sm = [
+    "iroha_core/sm",
+    "iroha_crypto/sm",
+    "iroha_data_model/sm",
+    "iroha_config/sm",
+]
+beep = ["ivm/beep"]
+## Enable deep DAG recovery diagnostics at startup.
+## Recomputes per-block DAG fingerprints and compares with persisted sidecars.
+## Adds optional deps and is disabled by default to keep the daemon lean.
+dag-recovery-verify = ["dep:sha2", "dep:nonzero_ext"]
 # Support lightweight telemetry, including diagnostics
 telemetry = ["iroha_telemetry", "iroha_core/telemetry", "iroha_torii/telemetry"]
+# Enable ISI counters/timing instrumentation in the core crate.
+expensive-telemetry = ["telemetry", "iroha_core/expensive-telemetry"]
 # Support developer-specific telemetry.
 # Should not be enabled on production builds.
 # Tokio Console is configured via ENV:
 #   https://docs.rs/console-subscriber/0.2.0/console_subscriber/struct.Builder.html#method.with_default_env
 dev-telemetry = ["telemetry", "iroha_telemetry/dev-telemetry", "iroha_logger/tokio-console"]
+# Telegram alerts for telemetry via Telegram Bot API
+telegram-alerts = ["telemetry", "iroha_telemetry/telegram"]
 # Support schema generation from the `schema` endpoint in the local binary.
 # Useful for debugging issues with decoding in SDKs.
 schema-endpoint = ["iroha_torii/schema"]
 # Enable profiling endpoint
 profiling-endpoint = ["iroha_torii/profiling"]
+
+[[bin]]
+name = "iroha3d"
+path = "src/bin/iroha3d.rs"
+required-features = ["build-i3"]
+
+[[bin]]
+name = "iroha2d"
+path = "src/bin/iroha2d.rs"
+required-features = ["build-i2"]
+
+[[bin]]
+name = "irohad"
+path = "src/bin/irohad.rs"
+required-features = ["build-i3"]
 
 [badges]
 is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }
@@ -50,31 +85,37 @@ iroha_crypto = { workspace = true }
 iroha_torii = { workspace = true }
 iroha_genesis = { workspace = true }
 iroha_version = { workspace = true }
+ivm = { workspace = true }
+iroha_p2p = { workspace = true }
+mv = { workspace = true }
+fastpq_prover = { path = "../fastpq_prover" }
+parking_lot = { workspace = true }
+
+# Optional deps for recovery diagnostics (feature: dag-recovery-verify)
+sha2 = { version = "0.10.9", optional = true, default-features = false }
+hex = { workspace = true }
+nonzero_ext = { workspace = true, optional = true }
 
 clap = { workspace = true, features = ["derive", "env", "string"] }
 eyre = { workspace = true }
 error-stack = { workspace = true, features = ["eyre"] }
-thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true, features = ["macros", "signal"] }
-tokio-util = { workspace = true, features = ["rt"] }
-owo-colors = { workspace = true, features = ["supports-colors"] }
 supports-color = { workspace = true }
 toml = { workspace = true }
+norito = {workspace = true}
+iroha_i18n = { workspace = true }
 
 [dev-dependencies]
-serial_test = "3.1.1"
+serial_test = "3.2.0"
 tempfile = { workspace = true }
-json5 = { workspace = true }
-futures = { workspace = true }
 path-absolutize = { workspace = true }
 assertables = { workspace = true }
-serde_json = { workspace = true }
+iroha_config_base = { workspace = true }
+iroha_test_samples = { workspace = true }
 
 [build-dependencies]
-eyre = { workspace = true }
-
-vergen = { workspace = true, features = ["cargo"] }
+build-support = { path = "../build-support", default-features = false }
 
 [package.metadata.cargo-all-features]
 denylist = [

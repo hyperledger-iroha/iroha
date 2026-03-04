@@ -1,0 +1,25 @@
+rule_files:
+  - ../soranet_lane_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'torii_lane_admission_latency_seconds_bucket{lane_id="lane-1", endpoint="/transaction", le="0.512"}'
+        values: '0 0 0 0 10 20 30 40 50'
+      - series: 'torii_lane_admission_latency_seconds_bucket{lane_id="lane-1", endpoint="/transaction", le="1.024"}'
+        values: '0 0 0 0 19 38 57 76 95'
+      - series: 'torii_lane_admission_latency_seconds_bucket{lane_id="lane-1", endpoint="/transaction", le="+Inf"}'
+        values: '0 0 0 0 20 40 60 80 100'
+    alert_rule_test:
+      - alertname: SoranetLaneAdmissionLatencyDegraded
+        eval_time: 4m
+        exp_alerts: []
+      - alertname: SoranetLaneAdmissionLatencyDegraded
+        eval_time: 8m
+        exp_alerts:
+          - exp_labels:
+              endpoint: /transaction
+              lane_id: lane-1
+              severity: warning
+            exp_annotations:
+              summary: "Lane admission latency P95 degraded"

@@ -1,11 +1,10 @@
 use iroha_version_derive::{declare_versioned, version};
-use parity_scale_codec::{Decode, Encode};
-use serde::{Deserialize, Serialize};
+use norito::{Decode as NoritoDecode, Encode as NoritoEncode};
 
 declare_versioned!(VersionedMessage 1..2);
 
 #[version(versioned_alias = "VersionedMessage")]
-#[derive(Debug, Clone, Decode, Encode, Deserialize, Serialize)]
+#[derive(Debug, Clone, NoritoDecode, NoritoEncode)]
 struct Message;
 
 pub fn main() {}

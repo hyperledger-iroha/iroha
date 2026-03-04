@@ -7,11 +7,37 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Drop the SCALE shim; `norito::codec` is now implemented with native Norito serialization.
+- Replace `parity_scale_codec` usages with `norito::codec` across crates.
+- Begin migrating tooling to native Norito serialization.
+- Remove remaining `parity-scale-codec` dependency from the workspace in favor of native Norito serialization.
+- Replace residual SCALE trait derivations with native Norito implementations and rename versioned codec module.
+- Merge `iroha_config_base_derive` and `iroha_futures_derive` into `iroha_derive` with feature-gated macros.
+- *(multisig)* Reject direct signatures from multisig authorities with a stable error code/reason, enforce multisig TTL caps across nested relayers, and surface TTL caps in the CLI before submission (SDK parity pending).
+- Move FFI procedural macros into `iroha_ffi` and remove `iroha_ffi_derive` crate.
+- *(schema_gen)* Remove unnecessary `transparent_api` feature from `iroha_data_model` dependency.
+- *(data_model)* Cache the ICU NFC normalizer for `Name` parsing to reduce repeated initialization overhead.
+- 📚 Document JS quickstart, configuration resolver, publishing workflow, and configuration-aware recipe for the Torii client.
+- *(IrohaSwift)* Raise minimum deployment targets to iOS 15 / macOS 12, adopt Swift concurrency across Torii client APIs, and mark public models as `Sendable`.
+- *(IrohaSwift)* Added `ToriiDaProofSummaryArtifact` and `DaProofSummaryArtifactEmitter.emit` so Swift apps can build/emit CLI-compatible DA proof bundles without shelling out to the CLI, complete with docs and regression tests covering both in-memory and on-disk workflows.【F:IrohaSwift/Sources/IrohaSwift/ToriiDaProofSummaryArtifact.swift:1】【F:IrohaSwift/Tests/IrohaSwiftTests/ToriiDaProofSummaryArtifactTests.swift:1】【F:docs/source/sdk/swift/index.md:260】
+- *(data_model/js_host)* Fix Kaigi Option serialization by removing the archived-reuse flag from `KaigiParticipantCommitment`, add native roundtrip tests, and drop the JS decode fallback so Kaigi instructions now Norito round-trip before submission.【F:crates/iroha_data_model/src/kaigi.rs:128】【F:crates/iroha_js_host/src/lib.rs:1379】【F:javascript/iroha_js/test/instructionBuilders.test.js:30】
+- *(javascript)* Allow `ToriiClient` callers to delete default headers (by passing `null`) so `getMetrics` cleanly switches between JSON and Prometheus text Accept headers.【F:javascript/iroha_js/src/toriiClient.js:488】【F:javascript/iroha_js/src/toriiClient.js:761】
+- *(javascript)* Added iterable helpers for NFTs, per-account asset balances, and asset-definition holders (with TypeScript defs, docs, and tests) so Torii pagination now covers the remaining app endpoints.【F:javascript/iroha_js/src/toriiClient.js:105】【F:javascript/iroha_js/index.d.ts:80】【F:javascript/iroha_js/test/toriiClient.test.js:365】【F:javascript/iroha_js/README.md:470】
+- *(javascript)* Added governance instruction/transaction builders plus a governance recipe so JS clients can stage deploy proposals, ballots, enactment, and council persistence end to end.【F:javascript/iroha_js/src/instructionBuilders.js:1012】【F:javascript/iroha_js/src/transaction.js:1082】【F:javascript/iroha_js/recipes/governance.mjs:1】
+- *(javascript)* Added ISO 20022 pacs.008 submit/status helpers and a matching recipe, letting JS callers exercise the Torii ISO bridge without bespoke HTTP plumbing.【F:javascript/iroha_js/src/toriiClient.js:888】【F:javascript/iroha_js/index.d.ts:706】【F:javascript/iroha_js/recipes/iso_bridge.mjs:1】
+- *(javascript)* Added pacs.008/pacs.009 builder helpers plus a config-driven recipe so JS callers can synthesise ISO 20022 payloads with validated BIC/IBAN metadata before hitting the bridge.【F:javascript/iroha_js/src/isoBridge.js:1】【F:javascript/iroha_js/test/isoBridge.test.js:1】【F:javascript/iroha_js/recipes/iso_bridge_builder.mjs:1】【F:javascript/iroha_js/index.d.ts:1】
+- *(javascript)* Completed the DA ingest/fetch/prove loop: `ToriiClient.fetchDaPayloadViaGateway` now auto-derives chunker handles (via the new `deriveDaChunkerHandle` binding), optional proof summaries reuse the native `generateDaProofSummary`, and the README/typings/tests were refreshed so SDK callers can mirror `iroha da get-blob/prove-availability` without bespoke plumbing.【F:javascript/iroha_js/src/toriiClient.js:1123】【F:javascript/iroha_js/src/dataAvailability.js:1】【F:javascript/iroha_js/test/toriiClient.test.js:1454】【F:javascript/iroha_js/index.d.ts:3275】【F:javascript/iroha_js/README.md:760】
+- *(javascript/js_host)* `sorafsGatewayFetch` scoreboard metadata now records the gateway manifest id/CID whenever gateway providers are used so adoption artefacts align with the CLI captures.【F:crates/iroha_js_host/src/lib.rs:3017】【F:docs/source/sorafs_orchestrator_rollout.md:23】
+- *(torii/cli)* Enforce ISO crosswalks: Torii now rejects `pacs.008` submissions with unknown agent BICs and the DvP CLI preview validates `--delivery-instrument-id` via `--iso-reference-crosswalk`.【F:crates/iroha_torii/src/iso20022_bridge.rs:704】【F:crates/iroha_cli/src/main.rs:3892】
+- *(torii)* Add PvP cash ingestion via `POST /v1/iso20022/pacs009`, enforcing `Purp=SECU` and BIC reference-data checks before building transfers.【F:crates/iroha_torii/src/iso20022_bridge.rs:1070】【F:crates/iroha_torii/src/lib.rs:4759】
+- *(tooling)* Added `cargo xtask iso-bridge-lint` (plus `ci/check_iso_reference_data.sh`) to validate ISIN/CUSIP, BIC↔LEI, and MIC snapshots alongside repository fixtures.【F:xtask/src/main.rs:146】【F:ci/check_iso_reference_data.sh:1】
+- *(javascript)* Hardened npm publishing by declaring repository metadata, an explicit files allowlist, provenance-enabled `publishConfig`, a `prepublishOnly` changelog/test guard, and a GitHub Actions workflow that exercises Node 18/20 in CI【F:javascript/iroha_js/package.json:1】【F:javascript/iroha_js/scripts/check-changelog.mjs:1】【F:docs/source/sdk/js/publishing.md:1】【F:.github/workflows/javascript-sdk.yml:1】
+- *(ivm/cuda)* BN254 field add/sub/mul now execute on the new CUDA kernels with host-side batching via `bn254_launch_kernel`, enabling hardware acceleration for Poseidon and ZK gadgets while preserving deterministic fallbacks.【F:crates/ivm/cuda/bn254.cu:1】【F:crates/ivm/src/cuda.rs:66】【F:crates/ivm/src/cuda.rs:1244】
+
 ## [2.0.0-rc.2.0] - 2025-05-08
 
 ### 🚀 Features
 
-- Add `--release` flag to wasm_builder (#5209)
 - *(cli)* Add `iroha transaction get` and other important commands (#5289)
 - [**breaking**] Separate fungible and non-fungible assets (#5308)
 - [**breaking**] Finalize non-empty blocks by allowing empty blocks after them (#5320)
@@ -24,7 +50,6 @@ All notable changes to this project will be documented in this file.
 - Revise NonZeros (#5278)
 - Typos in documentation files (#5309)
 - *(crypto)* Expose `Signature::payload` getter (#5302) (#5310)
-- *(ci)* Update iroha_wasm_builder usage (#5311)
 - *(core)* Add checks for role presence before granting it (#5300)
 - *(core)* Reconnect disconnected peer (#5325)
 - Fix pytests related to store assets and NFT (#5341)
@@ -107,7 +132,6 @@ All notable changes to this project will be documented in this file.
 - transaction and block predicates (#5025)
 - report amount of remaining items in query (#5016)
 - bounded discrete time (#4928)
-- don't validate transactions inside WASM (#4995)
 - add missing mathematical operations to `Numeric` (#4976)
 - validate block sync messages (#4965)
 - query filters (#4833)
@@ -119,13 +143,11 @@ All notable changes to this project will be documented in this file.
 - rename JsonString to Json (#5154)
 - add client entity to smart contracts (#5073)
 - leader as transaction ordering service (#4967)
-- directly provide payload to WASM entrypoints (#5113)
 - make kura drop old blocks from memory (#5103)
 - use `ConstVec` for instructions in `Executable` (#5096)
 - gossip txs at most once (#5079)
 - reduce memory usage of `CommittedTransaction` (#5089)
 - make query cursor errors more specific (#5086)
-- make `PublicKey` decoding lazy inside WASM (#5048)
 - reorganize crates (#4970)
 - introduce `FindTriggers` query, remove `FindTriggerById` (#5040)
 - dont depend on signatures for update (#5039)
@@ -136,7 +158,6 @@ All notable changes to this project will be documented in this file.
 - sign only block's header, not the whole payload (#5000)
 - use `HashOf<BlockHeader>` as the type of the block hash (#4998)
 - simplify `/health` and `/api_version` (#4960)
-- unnest wasm samples from `client`, exclude it from workspace (#4863)
 - rename `configs` to `defaults`, remove `swarm` (#4862)
 
 ### Fixed
@@ -150,7 +171,6 @@ All notable changes to this project will be documented in this file.
 - check that next block has height +1 (#5111)
 - fix timestamp of genesis block (#5098)
 - fix `iroha_genesis` compilation without `transparent_api` feature (#5056)
-- serialize WASM code for snapshots (#5009)
 - correctly handle `replace_top_block` (#4870)
 - fix cloning of executor (#4955)
 - display more error details (#4973)
@@ -192,11 +212,10 @@ All notable changes to this project will be documented in this file.
 - supply `SignedBlock` instead of `SignedTransaction` to peer (#4739)
 - custom instructions in executor (#4645)
 - extend client cli to request json queries (#4684)
-- add detect support for `parity_scale_decoder` (#4680)
+ - add detect support for `norito_decoder` (#4680)
 - generalize permissions schema to executor data model (#4658)
 - added register trigger permissions in the default executor (#4616)
-- support JSON in `parity_scale_cli`
-- deduplicate triggers with the same wasm code (#4434)
+ - support JSON in `norito_cli`
 - introduce p2p idle timeout
 
 ### Changed
@@ -218,8 +237,8 @@ All notable changes to this project will be documented in this file.
 - rename TransactionValue into CommittedTransaction (#4610)
 - authenticate personal accounts by ID (#4411)
 - use multihash format for private keys (#4541)
-- rename `parity_scale_decoder` to `parity_scale_cli`
-- send blocks to observing peers
+ - rename `parity_scale_decoder` to `norito_cli`
+- send blocks to Set B validators
 - make `Role` transparent (#4886)
 - derive block hash from header (#4890)
 
@@ -229,7 +248,6 @@ All notable changes to this project will be documented in this file.
 - remove logger double initialization (#4800)
 - fix naming convention for assets and permissions (#4741)
 - upgrade executor in separate transaction in genesis block (#4757)
-- make `iroha_smart_contract_utils` `log` and `dbg` functions work outside of wasm (#4725)
 - correct default value for `JsonString` (#4692)
 - improve deserialization error message (#4659)
 - do not panic if the passed Ed25519Sha512 public key is of invalid length (#4650)
@@ -266,7 +284,6 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 
-- sign all query parameters, implement query filters in wasm
 - guard against secrets leakage
 
 ## [2.0.0-pre-rc.21] - 2024-04-19
@@ -292,7 +309,6 @@ All notable changes to this project will be documented in this file.
 - support boxed slices in FFI (#4062)
 - git commit SHA to client CLI (#4042)
 - proc macro for default validator boilerplate (#3856)
-- build progress information to `wasm_builder_cli` (#3237)
 - introduced query request builder into Client API (#3124)
 - lazy queries inside smart contracts (#3929)
 - `fetch_size` query parameter (#3900)
@@ -303,7 +319,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - bump rust toolchain to nightly-2024-04-18
-- send blocks to observing peers (#4387)
+- send blocks to Set B validators (#4387)
 - split pipeline events into block and transaction events (#4366)
 - rename `[telemetry.dev]` config section to `[dev_telemetry]` (#4377)
 - make `Action` and `Filter` non-generic types (#4375)
@@ -352,7 +368,7 @@ All notable changes to this project will be documented in this file.
 - re-architect logger and dynamic configuration (#4100)
 - trigger atomicity (#4106)
 - query store message ordering issue (#4057)
-- set `Content-Type: application/x-parity-scale` for endpoints which reply using SCALE
+- set `Content-Type: application/x-norito` for endpoints which reply using Norito
 
 ### Removed
 
@@ -365,7 +381,6 @@ All notable changes to this project will be documented in this file.
 - flattened events (#3068)
 - expressions (#4089)
 - auto-generated config reference
-- `IROHA_SKIP_WASM_CHECKS` env variable (#4096)
 - `warp` noise in logs (#4097)
 
 ### Security
@@ -377,7 +392,6 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- make FindTrigger queries return original WASM
 - Transfer `Domain` ownership
 - `Domain` owner permissions
 - Add `owned_by` field to `Domain`
@@ -395,11 +409,9 @@ All notable changes to this project will be documented in this file.
 - Fix burn `Trigger` reprtitions
 - Fix transfer `AssetDefinition`
 - Fix `RemoveKeyValue` for `Domain`
-- Fix double free in wasm tests
 - Fix the usage of `Span::join`
 - Fix topology mismatch bug (#3903)
 - Fix `apply_blocks` and `validate_blocks` benchmark
-- Fix wasm memory leak
 - `mkdir -r` with store path, not lock path (#3908)
 - Don't fail if dir exists in test_env.py
 - Fix authentication/authorization docstring (#3876)
@@ -418,7 +430,6 @@ All notable changes to this project will be documented in this file.
 ### Refactor
 
 - remove unused dependencies (#3992)
-- remove optimized WASM from data_model
 - bump dependencies (#3981)
 - Rename validator to executor (#3976)
 - Remove `IsAssetDefinitionOwner` (#3979)
@@ -431,7 +442,7 @@ All notable changes to this project will be documented in this file.
 - Rename ISI from *Box to *Expr (#3930)
 - Remove 'Versioned' prefix from versioned containers (#3913)
 - move `commit_topology` into block payload (#3916)
-- Migrate iroha_futures_derive to syn 2.0
+- Migrate `telemetry_future` macro to syn 2.0
 - Registered with Identifiable in ISI bounds (#3925)
 - Add basic generics support to `derive(HasOrigin)`
 - Clean up Emitter APIs documentation to make clippy happy
@@ -464,17 +475,13 @@ All notable changes to this project will be documented in this file.
 - Rewrite `scripts/test-env.sh`
 - Differentiate between smart contract and trigger entrypoints
 - Elide `.cloned()` in `data_model/src/block.rs`
-- Wasm entrypoint payloads
-- Make wasm entrypoint names to be public constants
 - update `iroha_schema_derive` to use syn 2.0
-- store original contract WASM in TriggerSet
 
 ## [2.0.0-pre-rc.19] - 2023-08-14
 
 ### Added
 
-- hyperledger#3309 Bump `wasmtime` virtual machine for improved
-- hyperledger#3665 remove `max_log` query from WASM
+- hyperledger#3309 Bump IVM runtime for improved
 - hyperledger#3383 Implement macro to parse a socket addresses at compile time
 - hyperledger#2398 Add integration tests for query filters
 - Include the actual error message in `InternalError`
@@ -493,7 +500,6 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- hyperledger#3690 Fix C++ musl docker build which caused `wasmopt` to not compile on some platforms (Alpine Linux)
 - hyperledger#3613 Regression which could allow incorrectly signed transactions to be accepted
 - Reject incorrect Configuration topology early
 - hyperledger#3445 Fix regression and make `POST` on the `/configuration` endpoint work again
@@ -523,11 +529,9 @@ All notable changes to this project will be documented in this file.
 - hyperledger#3624: General purpose permission tokens; specifically
   - Permissions tokens can have any structure
   - Token structure is self-described in the `iroha_schema` and serialised as a JSON string
-  - Token value is `SCALE <https://github.com/paritytech/parity-scale-codec>`_-encoded
+  - Token value is `Norito`-encoded
   - as a consequence of this change permission token naming convention was moved from `snake_case` to `UpeerCamelCase`
 - hyperledger#3615 Preserve wsv after validation
-- hyperledger#3628 Implement `iroha_wasm_builder` optimisations
-- hyperledger#3236 Enhance `iroha_wasm_builder` with cache, and better error messages
 
 ### Fixed
 
@@ -545,9 +549,7 @@ All notable changes to this project will be documented in this file.
 - hyperledger#2622 `u128`/`i128` support in FFI
 - hyperledger#3088 Introduce queue throttling, to prevent DoS
 - hyperledger#2373 `kagami swarm file` and `kagami swarm dir` command variants for generating `docker-compose` files
-- hyperledger#3587 Allow different states in `wasm::Runtime`  and during link-time
 - hyperledger#3597 Permission Token Analysis (Iroha side)
-- hyperledger#3598 Permission token analysis (WASM side)
 - hyperledger#3353 Remove `eyre` from `block.rs` by enumerating error conditions and using strongly-typed errors
 - hyperledger#3318 Interleave rejected and accepted transactions in blocks to preserve transaction processing order
 
@@ -561,7 +563,7 @@ All notable changes to this project will be documented in this file.
 - hyperledger#3162 Forbid 0 height in block streaming requests
 - Configuration macro initial test
 - hyperledger#3592 Fix for  config files being updated on `release`
-- hyperledger#3246 Don't involve `observing peer <https://github.com/hyperledger-iroha/iroha/blob/main/docs/source/iroha_2_whitepaper.md#2-system-architecture>`_ without `fault <https://en.wikipedia.org/wiki/Byzantine_fault>`_
+- hyperledger#3246 Don't involve `Set B validators <https://github.com/hyperledger-iroha/iroha/blob/main/docs/source/iroha_2_whitepaper.md#2-system-architecture>`_ without `fault <https://en.wikipedia.org/wiki/Byzantine_fault>`_
 - hyperledger#3570 Correctly display client-side string query errors
 - hyperledger#3596 `iroha_client_cli` shows blocks/events
 - hyperledger#3473 Make `kagami validator` work from outside the  iroha repository root directory
@@ -604,7 +606,6 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - hyperledger#3231 Monolithic validator
-- hyperledger#3238 Optimise WASM triggers with pre-loading
 - hyperledger#3015 Support for niche optimization in FFI
 - hyperledger#2547 Add logo to `AssetDefinition`
 - hyperledger#3274 Add to `kagami` a sub-command that generates examples (backported into LTS)
@@ -631,8 +632,8 @@ All notable changes to this project will be documented in this file.
 - hyperledger#3362 Migrate to `tokio` actors
 - hyperledger#3349 Remove `EvaluateOnHost` from smart contracts
 - hyperledger#1786 Add `iroha`-native types for socket addresses
-- Disable `wasmtime` cache
-- Revert disable cache
+- Disable IVM cache
+- Re-enable IVM cache
 - Rename permission validator into validator
 - hyperledger#3388 Make `model!` a module-level attribute macro
 - hyperledger#3370 Serialize `hash` as hexadecimal string
@@ -650,7 +651,6 @@ All notable changes to this project will be documented in this file.
 - hyperledger#3153 `iroha_client_cli` output is machine readable
 - hyperledger#3105 Implement `Transfer` for  `AssetDefinition`
 - hyperledger#3010 `Transaction` expire pipeline event added
-- hyperledger#3144 WASM logging
 
 ### Fixed
 
@@ -671,7 +671,6 @@ All notable changes to this project will be documented in this file.
 - hyperledger#2133 Rewrite topology to be closer the whitepaper
 - Remove `iroha_client` dependency on `iroha_core`
 - hyperledger#2943 Derive `HasOrigin`
-- hyperledger#3226 Extract `iroha_wasm_validator` crate from iroha_wasm
 - hyperledger#3232 Share workspace metadata
 - hyperledger#3254 Refactor `commit_block()` and `replace_top_block()`
 - Use stable default allocator handler
@@ -708,7 +707,6 @@ All notable changes to this project will be documented in this file.
 - hyperledger#2899 Add multi-instructions subcommand into 'client_cli'
 - hyperledger#2247 Remove websocket communication noise.
 - hyperledger#2889 Add block streaming support into `iroha_client`
-- hyperledger#2508 Add a new client CLI subcommand that accepts wasm.
 - hyperledger#2280 Produce permission events when role is granted/revoked.
 - hyperledger#2797 Enrich events.
 - hyperledger#2725 Reintroduce timeout into `submit_transaction_blocking`
@@ -719,17 +717,14 @@ All notable changes to this project will be documented in this file.
 - hyperledger#2765 Generate synthetic genesis in `kagami`
 - hyperledger#2698 Fix unclear error message in `iroha_client`
 - hyperledger#2689 Add permission token definition parameters.
-- hyperledger#2596 Add Wasm validators.
 - hyperledger#2502 Store GIT hash of build.
 - hyperledger#2672 Add `ipv4Addr`,  `ipv6Addr` variant and predicates.
-- hyperledger#2677 WASM base64 (de-)serialization.
 - hyperledger#2626 Implement `Combine` derive, split `config` macros.
 - hyperledger#2586 `Builder` and `LoadFromEnv` for proxy structs.
 - hyperledger#2611 Derive `TryFromReprC` and `IntoFfi` for generic opaque structs.
 - hyperledger#2587 Split `Configurable` into two traits. #2587: Split `Configurable` into two traits
 - hyperledger#2488 Add support for trait impls in `ffi_export`
 - hyperledger#2553 Add sorting to asset queries.
-- hyperledger#2511 Restrict FFI types on wasm.
 - hyperledger#2407 Parametrise triggers.
 - hyperledger#2536 Introduce `ffi_import` for FFI clients.
 - hyperledger#2338 Add `cargo-all-features` instrumentation.
@@ -743,12 +738,12 @@ All notable changes to this project will be documented in this file.
 - hyperledger#2098 Block header queries. #2098: add block header queries
 - hyperledger#2467 Add account grant subcommand into iroha_client_cli.
 - hyperledger#2301 Add transaction's block hash when querying it.
-- hyperledger#2454 Add a build script to the parity-scale-decoder tool.
+ - hyperledger#2454 Add a build script to the Norito decoder tool.
 - hyperledger#2061 Derive macro for filters.
 - hyperledger#2228 Add Unauthorized variant to smartcontracts query error.
 - hyperledger#2395 Add panic if genesis cannot be applied.
 - hyperledger#2000 Disallow empty names. #2000: Disallow empty names
-- hyperledger#2127 Add sanity check to ensure that all data decoded by `parity_scale_codec` is consumed.
+ - hyperledger#2127 Add sanity check to ensure that all data decoded by the Norito codec is consumed.
 - hyperledger#2360 Make `genesis.json` optional again.
 - hyperledger#2053 Add tests to all remaining queries in private blockchain.
 - hyperledger#2381 Unify `Role` registration.
@@ -777,8 +772,7 @@ All notable changes to this project will be documented in this file.
 - hyperledger#2050 Add role-related queries.
 - hyperledger#1572 Specialized permission tokens.
 - hyperledger#2121 Check keypair is valid when constructed.
-- hyperledger#2099 Add WASM integration test based on Orillion use-case.
-- hyperledger#2003 Introduce Parity Scale Decoder tool.
+ - hyperledger#2003 Introduce Norito Decoder tool.
 - hyperledger#1952 Add a TPS benchmark as a standard for optimizations.
 - hyperledger#2040 Add integration test with transaction execution limit.
 - hyperledger#1890 Introduce integration tests based on Orillion use-cases.
@@ -791,8 +785,7 @@ All notable changes to this project will be documented in this file.
 - hyperledger#2050 Add role-related queries.
 - hyperledger#1572 Specialized permission tokens.
 - hyperledger#2121 Check keypair is valid when constructed.
-- hyperledger#2099 Add WASM integration test based on Orillion use-case.
-- hyperledger#2003 Introduce Parity Scale Decoder tool.
+ - hyperledger#2003 Introduce Norito Decoder tool.
 - hyperledger#1952 Add a TPS benchmark as a standard for optimizations.
 - hyperledger#2040 Add integration test with transaction execution  limit.
 - hyperledger#1890 Introduce integration tests based on Orillion use-  cases.
@@ -811,17 +804,12 @@ All notable changes to this project will be documented in this file.
 - hyperledger#1619 Introduce event-based triggers.
 - hyperledger#1195 Close a websocket connection cleanly.
 - hyperledger#1606 Add ipfs link to domain logo in Domain structure.
-- hyperledger#1767 restrict linear memory usage for wasm smartcontracts.
-- hyperledger#1766 Wasm permission validation.
 - hyperledger#1754 Add Kura inspector CLI.
 - hyperledger#1790 Improve performance by using stack-based vectors.
-- hyperledger#1425 Wasm helper crate.
-- hyperledger#1425 add limits to wasm execution.
 - hyperledger#1805 Optional terminal colors for panic errors.
 - hyperledger#1749 `no_std` in `data_model`
 - hyperledger#1179 Add revoke-permission-or-role instruction.
 - hyperledger#1782 make iroha_crypto no_std compatible.
-- hyperledger#1425 add wasm runtime.
 - hyperledger#1172 Implement instruction events.
 - hyperledger#1734 Validate `Name` to exclude whitespaces.
 - hyperledger#1144 Add metadata nesting.
@@ -859,7 +847,7 @@ All notable changes to this project will be documented in this file.
 - hyperledger#3046 Ensure Iroha can start gracefully on empty
   `./storage`
 - hyperledger#2599 Remove nursery lints.
-- hyperledger#3087 Collect votes from observing peers after view change.
+- hyperledger#3087 Collect votes from Set B validators after view change.
 - hyperledger#3056 Fix `tps-dev` benchmark hanging.
 - hyperledger#1170 Implement cloning-wsv-style soft-fork handling.
 - hyperledger#2456 Make genesis block unlimited.
@@ -871,7 +859,6 @@ All notable changes to this project will be documented in this file.
 - hyperledger#2165 Remove toolchain fidget.
 - hyperledger#2506 Fix the block validation.
 - hyperledger#3013 Properly chain burn validators.
-- hyperledger#0000 FFI serialization of references, and `wasm` tests.
 - hyperledger#2998 Delete unused Chain code.
 - hyperledger#2816 Move responsibility of access to blocks to kura.
 - hyperledger#2384 Replace decode with decode_all.
@@ -975,7 +962,6 @@ All notable changes to this project will be documented in this file.
 - hyperledger#1939 Proper features for `iroha_config_derive`.
 - hyperledger#1908 fix zero value handling for telemetry analysis script.
 - hyperledger#0000 Make implicitly ignored doc-test explicitly ignored.
-- hyperledger#1865 use latest smallstr to be able to build no_std wasm smartcontracts.
 - hyperledger#1848 Prevent public keys from being burned to nothing.
 - hyperledger#1811 added tests and checks to dedup trusted peer keys.
 - hyperledger#1821 add IntoSchema for MerkleTree and VersionedValidBlock, fix HashOf and SignatureOf schemas.
@@ -1138,8 +1124,7 @@ All notable changes to this project will be documented in this file.
 - hyperledger#2193 Update Iroha client documentation.
 - hyperledger#2193 Update Iroha CLI documentation.
 - hyperledger#2193 Update README for macro crate.
-- hyperledger#2193 Update README for wasm crate.
-- hyperledger#2193 Update Parity Scale Decoder Tool documentation.
+ - hyperledger#2193 Update Norito Decoder Tool documentation.
 - hyperledger#2193 Update Kagami documentation.
 - hyperledger#2193 Update benchmarks documentation.
 - hyperledger#2192 Review contributing guidelines.
@@ -1159,7 +1144,6 @@ All notable changes to this project will be documented in this file.
 - Generate changelog.
 - Update outdated README files.
 - Added missing docs to `api_spec.md`.
-- Add wasm README.
 
 ### CI/CD changes
 
@@ -1191,7 +1175,7 @@ All notable changes to this project will be documented in this file.
 - hyperledger#2309: Re-enable doc tests in CI.
 - hyperledger#2165 Remove codecov install.
 - Move to new container to prevent conflicts with current users.
-- hyperledger#2158 Upgrade `parity_scale_codec` and other dependencies.
+ - hyperledger#2158 Upgrade `parity_scale_codec` and other dependencies. (Norito codec)
 - Fix build.
 - hyperledger#2461 Improve iroha2 CI.
 - Update `syn`.
@@ -1243,8 +1227,6 @@ All notable changes to this project will be documented in this file.
 
 ### Web-Assembly
 
-- Fix return value for QueryBox execution in wasm.
-- Produce events while executing wasm smartcontract.
 
 ### Version bumps
 
@@ -1446,7 +1428,7 @@ All notable changes to this project will be documented in this file.
 - hyperledger#1165: Implementation of peer counts.
 - Check query permissions by account in torii endpoint.
 - Removed exposing CPU and memory usage in system metrics.
-- Replace JSON with SCALE for WS messages.
+ - Replace JSON with Norito for WS messages.
 - Store proof of view changes.
 - hyperledger#1168: Added logging if transaction does not passed signature check condition.
 - Fixed small issues, added connection listen code.
@@ -1552,7 +1534,7 @@ All notable changes to this project will be documented in this file.
 - Add into_v* for versioning.
 - Substitute Error::msg with error macro.
 - Rewrite iroha_http_server and rework torii errors.
-- Upgrades SCALE version to 2.
+ - Upgrades Norito version to 2.
 - Whitepaper versioning description.
 - Infallable pagination. Fix the cases when pagination may unnecessary through errors, not returns empty collections instead.
 - Add derive(Error) for enums.
@@ -1759,7 +1741,7 @@ All notable changes to this project will be documented in this file.
 - Changes in Transactions API: better creation and work with requests.
 - Fix the bug that would create blocks with empty vector of transaction
 - Forward pending transactions.
-- Fix bug with missing byte in u128 scale encoded TCP packet.
+ - Fix bug with missing byte in u128 Norito encoded TCP packet.
 - Attribute macros for methods tracing.
 - P2p module.
 - Usage of iroha_network in torii and client.
@@ -1832,7 +1814,7 @@ All notable changes to this project will be documented in this file.
 ### Other
 
 - Requirement fix for doc build.
-- Reduce text, one important TODO.
+- Trim release documentation to spotlight the remaining critical follow-up item.
 - Fix 'check if docker image exists' /build all skip_testing.
 - /build all skip_testing.
 - /build skip_testing; And more docs.
@@ -1852,7 +1834,7 @@ All notable changes to this project will be documented in this file.
 
 - Add syncing node state
 - Adds metrics for RocksDB
-- Add healthcheck interfaces via http, grpc, and metrics.
+- Add healthcheck interfaces via http and metrics.
 
 ### Fixes
 
@@ -1869,5 +1851,5 @@ All notable changes to this project will be documented in this file.
 
 - Update GHA docker tag.
 - Fix Iroha 1 compile errors when compiling with g++11.
-- Replace deprecated param `max_rounds_delay` with `proposal_creation_timeout`.
-- Update sample config file to have not deprecated DB connection params.
+- Replace `max_rounds_delay` with `proposal_creation_timeout`.
+- Update sample config file to remove old DB connection params.

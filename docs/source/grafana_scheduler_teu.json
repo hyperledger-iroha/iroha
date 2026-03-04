@@ -1,0 +1,107 @@
+{
+  "$schema": "https://grafana.com/schemas/json/dashboard/v1.json",
+  "title": "Nexus Scheduler TEU",
+  "editable": true,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Lane TEU Breakdown",
+      "description": "Stacked TEU consumption per lane split by floor, headroom, must-serve, and circuit-breaker buckets.",
+      "targets": [
+        {
+          "expr": "nexus_scheduler_lane_teu_slot_breakdown{bucket=\"floor\"}",
+          "legendFormat": "{{lane_id}} floor"
+        },
+        {
+          "expr": "nexus_scheduler_lane_teu_slot_breakdown{bucket=\"headroom\"}",
+          "legendFormat": "{{lane_id}} headroom"
+        },
+        {
+          "expr": "nexus_scheduler_lane_teu_slot_breakdown{bucket=\"must_serve\"}",
+          "legendFormat": "{{lane_id}} must-serve"
+        },
+        {
+          "expr": "nexus_scheduler_lane_teu_slot_breakdown{bucket=\"circuit_breaker\"}",
+          "legendFormat": "{{lane_id}} circuit-breaker"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Lane Headroom",
+      "description": "Configured capacity minus consumed TEU for each lane.",
+      "targets": [
+        {
+          "expr": "nexus_scheduler_lane_teu_capacity - nexus_scheduler_lane_teu_slot_committed",
+          "legendFormat": "{{lane_id}} headroom"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Dataspace TEU Backlog",
+      "description": "Queued TEU per dataspace after scheduling completes.",
+      "targets": [
+        {
+          "expr": "nexus_scheduler_dataspace_teu_backlog",
+          "legendFormat": "{{lane_id}}/{{dataspace_id}} backlog"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Starvation Bound vs Observed Age",
+      "description": "Compare maximum dataspace age with the configured starvation bound per lane.",
+      "targets": [
+        {
+          "expr": "max(nexus_scheduler_dataspace_age_slots) by (lane_id)",
+          "legendFormat": "{{lane_id}} max age"
+        },
+        {
+          "expr": "max(nexus_scheduler_starvation_bound_slots) by (lane_id)",
+          "legendFormat": "{{lane_id}} bound"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 }
+    },
+    {
+      "type": "timeseries",
+      "title": "TEU Deferral Rate",
+      "description": "TEU deferred per reason over a rolling window.",
+      "targets": [
+        {
+          "expr": "rate(nexus_scheduler_lane_teu_deferral_total{reason=\"cap_exceeded\"}[5m])",
+          "legendFormat": "{{lane_id}} cap exceeded"
+        },
+        {
+          "expr": "rate(nexus_scheduler_lane_teu_deferral_total{reason=\"envelope_limit\"}[5m])",
+          "legendFormat": "{{lane_id}} envelope"
+        },
+        {
+          "expr": "rate(nexus_scheduler_lane_teu_deferral_total{reason=\"quota\"}[5m])",
+          "legendFormat": "{{lane_id}} quota"
+        },
+        {
+          "expr": "rate(nexus_scheduler_lane_teu_deferral_total{reason=\"circuit_breaker\"}[5m])",
+          "legendFormat": "{{lane_id}} circuit-breaker"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 }
+    },
+    {
+      "type": "stat",
+      "title": "Circuit-breaker Tier",
+      "description": "Current scheduler trigger level per lane (0=normal, 1=CPU throttle, 2=queue pressure).",
+      "targets": [
+        {
+          "expr": "nexus_scheduler_lane_trigger_level",
+          "legendFormat": "{{lane_id}} tier"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 }
+    }
+  ]
+}

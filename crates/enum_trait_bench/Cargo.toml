@@ -1,0 +1,11 @@
+[package]
+name = "enum_trait_bench"
+version.workspace = true
+edition = "2024"
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "enum_vs_trait"
+harness = false

@@ -1,0 +1,11 @@
+[
+  {
+    "case_id": 1,
+    "comment": "invalid tag (bit flip)",
+    "key_hex": "0123456789abcdeffedcba9876543210",
+    "nonce_hex": "00001234567800000000abcd",
+    "aad_hex": "feedfacedeadbeeffeedfacedeadbeefabaddad2",
+    "ciphertext_hex": "42831ec2217774244b7221b784d0d49c",
+    "tag_hex": "5d5c2af327cd64a62cf35abd2ba6fab4"
+  }
+]

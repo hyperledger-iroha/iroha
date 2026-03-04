@@ -1,0 +1,89 @@
+{
+  "generated": "2026-11-22T00:00:00Z",
+  "zones": [
+    {
+      "zone": "docs-preview.sora.link.",
+      "description": "Preview hostname served from the SoraFS gateway and used for resolver staging bakes.",
+      "ds": [
+        {
+          "key_tag": 2371,
+          "algorithm": 13,
+          "digest_type": 2,
+          "digest": "6c9e8df9c6e6ddf5f6b299d9d0b468eae1240dd57cf2f1d1399d0e1df2c2a8c4"
+        }
+      ],
+      "dnskey": [
+        {
+          "key_tag": 2371,
+          "algorithm": 13,
+          "flags": 257,
+          "protocol": 3,
+          "public_key": "AQCvdwR3uRRh9uHRRSdBQfQNxwacCJlxMLTc6vFkxFYNF6ZJZHoYEfgm6FTY95nVb60vMgNKU8gajkQqzBqR7rK3"
+        },
+        {
+          "key_tag": 47345,
+          "algorithm": 8,
+          "flags": 256,
+          "protocol": 3,
+          "public_key": "AwEAAb8uo5e0nYxUv6ufDZE5N8YHfK8XJcLJp8vmlQ2fDxFDDiXv2uWzNEsDd2StM/9SvL7Qv7W/B3Qy1PfiqauS"
+        }
+      ],
+      "expected_records": [
+        {
+          "type": "A",
+          "name": "@",
+          "value": "203.0.113.10",
+          "ttl": 300
+        },
+        {
+          "type": "HTTPS",
+          "name": "@",
+          "priority": 1,
+          "target": ".",
+          "alpn": [
+            "h2",
+            "h3"
+          ],
+          "ech_config_id": "alpha-2026-02"
+        }
+      ],
+      "policies": {
+        "qname_minimisation": "on",
+        "ecs": "opt-in",
+        "serve_stale_seconds": 1800
+      }
+    },
+    {
+      "zone": "sandbox.sora.link.",
+      "description": "Fixture with intentionally weak DS coverage for validation harness warnings.",
+      "ds": [
+        {
+          "key_tag": 4400,
+          "algorithm": 8,
+          "digest_type": 2,
+          "digest": "abcd"
+        }
+      ],
+      "dnskey": [
+        {
+          "key_tag": 4400,
+          "algorithm": 8,
+          "flags": 256,
+          "protocol": 3,
+          "public_key": "AwEAAb7URw4E6/QUnDEvhYt3DxgHNv7W0fGwA3wsb21iX6oQoY3ZBofAfN8fZLQ2PTXvBe8pZq5Gx7YqG8yldsG8"
+        }
+      ],
+      "expected_records": [
+        {
+          "type": "A",
+          "name": "@",
+          "value": "198.51.100.24",
+          "ttl": 300
+        }
+      ],
+      "notes": [
+        "Digest is intentionally short to exercise validation harness warnings."
+      ]
+    }
+  ]
+}

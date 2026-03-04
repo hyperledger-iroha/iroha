@@ -1,9 +1,11 @@
 use darling::{FromAttributes, FromDeriveInput, FromMeta, FromVariant};
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
+
+use crate::utils::darling_error;
 
 pub fn impl_enum_ref(input: &syn::DeriveInput) -> manyhow::Result<TokenStream> {
-    let input = EnumRef::from_derive_input(input)?;
+    let input = EnumRef::from_derive_input(input).map_err(darling_error)?;
     Ok(quote! { #input })
 }
 
@@ -164,13 +166,12 @@ fn gen_enum_ref_ident(ident: &syn::Ident) -> syn::Ident {
 }
 
 fn gen_field_ty(transparent: Transparent, field_ty: &syn::Type) -> syn::Type {
-    if matches!(transparent, Transparent::Transparent) {
-        if let syn::Type::Path(ty) = field_ty {
-            if let Some(ident) = ty.path.get_ident() {
-                let ident = gen_enum_ref_ident(ident);
-                return syn::parse_quote! { #ident<'a> };
-            }
-        }
+    if matches!(transparent, Transparent::Transparent)
+        && let syn::Type::Path(ty) = field_ty
+        && let Some(ident) = ty.path.get_ident()
+    {
+        let ident = gen_enum_ref_ident(ident);
+        return syn::parse_quote! { #ident<'a> };
     }
 
     syn::parse_quote!(&'a #field_ty)

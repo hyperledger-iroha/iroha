@@ -1,0 +1,69 @@
+{
+  "abi_version": 1,
+  "namespace": "compute",
+  "routes": [
+    {
+      "auth": {
+        "mode": "Either",
+        "value": null
+      },
+      "codecs": [
+        {
+          "codec": "NoritoJson",
+          "value": null
+        },
+        {
+          "codec": "OctetStream",
+          "value": null
+        }
+      ],
+      "determinism": {
+        "determinism": "Strict",
+        "value": null
+      },
+      "entrypoint": "quote_entry",
+      "execution_class": {
+        "class": "Cpu",
+        "value": null
+      },
+      "gas_budget": 5000000,
+      "id": {
+        "method": "quote",
+        "service": "payments"
+      },
+      "input_limits": {
+        "chunk_size_bytes": 65536,
+        "max_chunks": 32,
+        "max_inline_bytes": 262144
+      },
+      "max_request_bytes": 262144,
+      "max_response_bytes": 262144,
+      "model": {
+        "bundle_hash": "hash:0A8C7595B88F71EA4262E2EA93EE2CD3C514B8747F26101FBA07BECA481BDF31#810B",
+        "chunk_size_bytes": 131072,
+        "expected_bytes": 1048576,
+        "path": "models/payments.bin"
+      },
+      "price_family": "default",
+      "resource_profile": "cpu-small",
+      "ttl_slots": 64
+    }
+  ],
+  "sandbox": {
+    "allow_gpu_hints": false,
+    "allow_tee_hints": false,
+    "deny_nondeterministic_syscalls": true,
+    "mode": {
+      "mode": "IvmOnly",
+      "value": null
+    },
+    "randomness": {
+      "randomness": "SeededFromRequest",
+      "value": null
+    },
+    "storage": {
+      "storage": "ReadOnly",
+      "value": null
+    }
+  }
+}

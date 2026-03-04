@@ -1,0 +1,10 @@
+{
+  "entries": [
+    {
+      "hash_family": "blake3-256",
+      "hash_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "proposal_id": "AC-2025-019",
+      "note": "Captured during 2025-09 GAR sweep"
+    }
+  ]
+}

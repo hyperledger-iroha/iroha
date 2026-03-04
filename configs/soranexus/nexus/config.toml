@@ -1,0 +1,159 @@
+# Sora Nexus (mainnet) validator configuration
+# Network prefix: `nexus`
+# Start with: `irohad --sora --config configs/soranexus/nexus/config.toml`
+
+chain = "00000000-0000-0000-0000-000000000753"
+chain_discriminant = 753
+public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+
+trusted_peers = [
+  "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@nexus.mof2.sora.org:1337",
+]
+trusted_peers_pop = [
+  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" },
+]
+
+[ivm.banner]
+show = true
+beep = true
+
+[network]
+address = "addr:0.0.0.0:1337#BF18"
+public_address = "addr:nexus.mof2.sora.org:1337#D017"
+
+[torii]
+address = "addr:0.0.0.0:8080#B922"
+
+[torii.da_ingest.replication_policy.default_retention]
+hot_retention_secs = 21600          # 6 h
+cold_retention_secs = 2592000       # 30 d
+required_replicas = 3
+storage_class = "warm"
+governance_tag = "da.default"
+
+[[torii.da_ingest.replication_policy.overrides]]
+class = "taikai_segment"
+[torii.da_ingest.replication_policy.overrides.retention]
+hot_retention_secs = 86400          # 24 h
+cold_retention_secs = 1209600       # 14 d
+required_replicas = 5
+storage_class = "hot"
+governance_tag = "da.taikai.live"
+
+[[torii.da_ingest.replication_policy.overrides]]
+class = "nexus_lane_sidecar"
+[torii.da_ingest.replication_policy.overrides.retention]
+hot_retention_secs = 21600          # 6 h
+cold_retention_secs = 604800        # 7 d
+required_replicas = 4
+storage_class = "warm"
+governance_tag = "da.sidecar"
+
+[[torii.da_ingest.replication_policy.overrides]]
+class = "governance_artifact"
+[torii.da_ingest.replication_policy.overrides.retention]
+hot_retention_secs = 43200          # 12 h
+cold_retention_secs = 15552000      # 180 d
+required_replicas = 3
+storage_class = "cold"
+governance_tag = "da.governance"
+
+[sumeragi.da]
+enabled = true
+
+[genesis]
+public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+
+[streaming]
+identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"
+identity_private_key = "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
+feature_bits = 0b11
+
+[nexus]
+lane_count = 3
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "core"
+description = "Primary execution lane"
+dataspace = "universal"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 1
+alias = "governance"
+description = "Governance & parliament traffic"
+dataspace = "governance"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 2
+alias = "zk"
+description = "Zero-knowledge attachments"
+dataspace = "zk"
+metadata = {}
+
+[[nexus.dataspace_catalog]]
+alias = "universal"
+id = 0
+description = "Single-lane data space"
+
+[[nexus.dataspace_catalog]]
+alias = "governance"
+id = 1
+description = "Governance proposals & manifests"
+
+[[nexus.dataspace_catalog]]
+alias = "zk"
+id = 2
+description = "Zero-knowledge proofs and attachments"
+
+[nexus.routing_policy]
+default_lane = 0
+default_dataspace = "universal"
+
+[[nexus.routing_policy.rules]]
+lane = 1
+dataspace = "governance"
+[nexus.routing_policy.rules.matcher]
+instruction = "governance"
+description = "Route governance instructions to the governance lane"
+
+[[nexus.routing_policy.rules]]
+lane = 2
+dataspace = "zk"
+[nexus.routing_policy.rules.matcher]
+instruction = "smartcontract::deploy"
+description = "Route contract deployments to the zk lane for proof tracking"
+
+[nexus.fusion]
+floor_teu = 4000
+exit_teu = 6000
+observation_slots = 2
+max_window_slots = 16
+
+[nexus.commit]
+window_slots = 2
+
+[nexus.da]
+q_in_slot_total = 2048
+q_in_slot_per_ds_min = 8
+sample_size_base = 64
+sample_size_max = 96
+threshold_base = 43
+per_attester_shards = 25
+
+[nexus.da.audit]
+sample_size = 32
+window_count = 20
+interval_ms = 600000
+
+[nexus.da.recovery]
+request_timeout_ms = 86400000
+
+[nexus.da.rotation]
+max_hits_per_window = 4
+window_slots = 64
+seed_tag = "iroha:da:rotate:v1\u0000"
+latency_decay = 0.25

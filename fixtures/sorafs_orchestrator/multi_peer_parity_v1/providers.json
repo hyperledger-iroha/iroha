@@ -1,0 +1,146 @@
+[
+  {
+    "provider_id": "fixture-provider-0",
+    "profile_aliases": [
+      "fixture-peer-0"
+    ],
+    "availability": "hot",
+    "allow_unknown_capabilities": false,
+    "capability_names": [
+      "chunk-range",
+      "sorafs-fetch",
+      "sorafs-fixture"
+    ],
+    "range_capability": {
+      "max_chunk_span": 403145,
+      "min_granularity": 1,
+      "supports_sparse_offsets": true,
+      "requires_alignment": false,
+      "supports_merkle_proof": true
+    },
+    "stream_budget": {
+      "max_in_flight": 1,
+      "max_bytes_per_sec": 3225160,
+      "burst_bytes": 1612580
+    },
+    "refresh_deadline": 1725000600,
+    "expires_at": 1725086400,
+    "ttl_secs": 86400,
+    "notes": "Deterministic fixture provider",
+    "transport_hints": [
+      {
+        "protocol": "fixture",
+        "protocol_id": 0,
+        "priority": 0
+      }
+    ]
+  },
+  {
+    "provider_id": "fixture-provider-1",
+    "profile_aliases": [
+      "fixture-peer-1"
+    ],
+    "availability": "hot",
+    "allow_unknown_capabilities": false,
+    "capability_names": [
+      "chunk-range",
+      "sorafs-fetch",
+      "sorafs-fixture"
+    ],
+    "range_capability": {
+      "max_chunk_span": 403145,
+      "min_granularity": 1,
+      "supports_sparse_offsets": true,
+      "requires_alignment": false,
+      "supports_merkle_proof": true
+    },
+    "stream_budget": {
+      "max_in_flight": 1,
+      "max_bytes_per_sec": 3225160,
+      "burst_bytes": 1612580
+    },
+    "refresh_deadline": 1725000600,
+    "expires_at": 1725086400,
+    "ttl_secs": 86400,
+    "notes": "Deterministic fixture provider",
+    "transport_hints": [
+      {
+        "protocol": "fixture",
+        "protocol_id": 0,
+        "priority": 0
+      }
+    ]
+  },
+  {
+    "provider_id": "fixture-provider-2",
+    "profile_aliases": [
+      "fixture-peer-2"
+    ],
+    "availability": "hot",
+    "allow_unknown_capabilities": false,
+    "capability_names": [
+      "chunk-range",
+      "sorafs-fetch",
+      "sorafs-fixture"
+    ],
+    "range_capability": {
+      "max_chunk_span": 403145,
+      "min_granularity": 1,
+      "supports_sparse_offsets": true,
+      "requires_alignment": false,
+      "supports_merkle_proof": true
+    },
+    "stream_budget": {
+      "max_in_flight": 1,
+      "max_bytes_per_sec": 3225160,
+      "burst_bytes": 1612580
+    },
+    "refresh_deadline": 1725000600,
+    "expires_at": 1725086400,
+    "ttl_secs": 86400,
+    "notes": "Deterministic fixture provider",
+    "transport_hints": [
+      {
+        "protocol": "fixture",
+        "protocol_id": 0,
+        "priority": 0
+      }
+    ]
+  },
+  {
+    "provider_id": "fixture-provider-3",
+    "profile_aliases": [
+      "fixture-peer-3"
+    ],
+    "availability": "hot",
+    "allow_unknown_capabilities": false,
+    "capability_names": [
+      "chunk-range",
+      "sorafs-fetch",
+      "sorafs-fixture"
+    ],
+    "range_capability": {
+      "max_chunk_span": 403145,
+      "min_granularity": 1,
+      "supports_sparse_offsets": true,
+      "requires_alignment": false,
+      "supports_merkle_proof": true
+    },
+    "stream_budget": {
+      "max_in_flight": 1,
+      "max_bytes_per_sec": 3225160,
+      "burst_bytes": 1612580
+    },
+    "refresh_deadline": 1725000600,
+    "expires_at": 1725086400,
+    "ttl_secs": 86400,
+    "notes": "Deterministic fixture provider",
+    "transport_hints": [
+      {
+        "protocol": "fixture",
+        "protocol_id": 0,
+        "priority": 0
+      }
+    ]
+  }
+]

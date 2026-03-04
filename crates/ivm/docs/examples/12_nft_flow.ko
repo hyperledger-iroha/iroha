@@ -1,0 +1,14 @@
+// Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
+seiyaku NftFlow {
+  #[access(read="*", write="*")]
+  kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
+    let owner = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    let nft = nft_id!("n0$wonderland");
+    nft_mint_asset(nft, owner);
+
+    let to = account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland");
+    nft_transfer_asset(owner, nft, to);
+    nft_set_metadata(nft, json!{ issued: "demo" });
+    nft_burn_asset(nft);
+  }
+}

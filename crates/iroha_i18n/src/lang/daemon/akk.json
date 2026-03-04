@@ -1,0 +1,14 @@
+{
+  "info.welcome": "𒊬𒈬 𒀭𒈾 𒄷𒉺𒇻𒁺 𒄿𒊑𒄩",
+  "error.trace_config_setup": "𒉺𒋛𒍑 𒋾𒈪 𒆷 𒅖𒋳𒀝𒈾",
+  "error.config": "𒄷𒋾𒌋 𒋾𒈪",
+  "error.logger": "𒇻𒂵𒊒 𒆷 𒄿𒁍𒅖",
+  "error.start": "𒄿𒊑𒄩 𒆷 𒅁𒋾𒂊",
+  "error.run": "𒄷𒋾𒌋 𒄿𒈾 𒂊𒉺𒅆 𒄿𒊑𒄩",
+  "error.start_p2p": "𒉈𒋾𒉺𒅗 𒉺𒄿𒊒 𒆷 𒅁𒋾𒂊",
+  "error.init_kura": "𒆪𒊏 𒂍𒍑𒁍 𒆷 𒅖𒋳𒀝𒈾",
+  "error.start_dev_telemetry": "𒉺𒆷𒄩 𒋼𒇻𒅕𒁕 𒆷 𒅁𒋾𒂊",
+  "error.start_telemetry": "𒉺𒆷𒄩 𒋼𒇻𒅕 𒆷 𒅁𒋾𒂊",
+  "error.listen_os_signal": "𒅴𒈬 𒉈𒍑 𒆷 𒅖𒋳𒀝𒈾",
+  "error.start_torii": "𒋻𒊑𒄿 𒆷 𒅁𒋾𒂊"
+}

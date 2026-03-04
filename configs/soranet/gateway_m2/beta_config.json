@@ -1,0 +1,25 @@
+{
+  "pops": [
+    {
+      "name": "soranet-sjc01",
+      "descriptor": "../../fixtures/soranet_pop/lab_pop.json",
+      "edns_resolver": "1.1.1.1",
+      "edns_tool": "drill",
+      "trustless_config": "../gateway_m0/gateway_trustless_verifier.toml",
+      "doq_listen": ["0.0.0.0:8853"],
+      "odoh_relay": "https://odoh.soranet.example/relay"
+    }
+  ],
+  "billing": {
+    "usage": "../gateway_m0/billing_usage_sample.json",
+    "catalog": "../gateway_m0/meter_catalog.json",
+    "guardrails": "../gateway_m0/billing_guardrails.json",
+    "payer": "alice@wonderland",
+    "treasury": "treasury@wonderland",
+    "asset": "xor#wonderland"
+  },
+  "hardening": {
+    "data_retention_days": 30,
+    "log_retention_days": 30
+  }
+}

@@ -1,37 +1,71 @@
 //! Module for client-related configuration and structs
 
 use core::str::FromStr;
-use std::{path::Path, time::Duration};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use derive_more::Display;
-use error_stack::ResultExt;
+use error_stack::{Report, ResultExt};
 use eyre::Result;
+use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_config_base::{env::ReadEnv, read::ConfigReader, toml::TomlSource};
 use iroha_primitives::small::SmallStr;
-use serde::{Deserialize, Serialize};
-use serde_with::{DeserializeFromStr, SerializeDisplay};
+use norito::json::{self, JsonDeserialize, JsonSerialize};
+/// Re-exported `SoraNet` anonymity policy for client configuration.
+pub use sorafs_orchestrator::AnonymityPolicy;
 use url::Url;
 
 use crate::{
     crypto::KeyPair,
-    data_model::{prelude::*, ChainId},
+    data_model::{ChainId, prelude::*},
 };
 
 mod user;
 
-pub use user::Root as UserConfig;
+pub use user::{ParseError, Root as UserConfig};
 
 use crate::secrecy::SecretString;
 
-#[allow(missing_docs)]
+type ReportResult<T, E> = core::result::Result<T, Report<[E]>>;
+
+/// Default time-to-live for transactions submitted via the client API.
 pub const DEFAULT_TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(100);
-#[allow(missing_docs)]
+/// Default timeout for waiting on transaction status updates.
 pub const DEFAULT_TRANSACTION_STATUS_TIMEOUT: Duration = Duration::from_secs(15);
-#[allow(missing_docs)]
+/// Default timeout for Torii HTTP requests issued by the client.
+pub const DEFAULT_TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Whether to add a random transaction nonce by default.
 pub const DEFAULT_TRANSACTION_NONCE: bool = false;
+/// Default Torii API version header sent by the client.
+pub const DEFAULT_TORII_API_VERSION: &str = defaults::torii::API_DEFAULT_VERSION;
+/// Default minimum Torii API version used for proof/staking/fee endpoints.
+pub const DEFAULT_TORII_API_MIN_PROOF_VERSION: &str = defaults::torii::API_MIN_PROOF_VERSION;
+
+/// Default Torii API version as an owned string.
+#[must_use]
+pub fn default_torii_api_version() -> String {
+    DEFAULT_TORII_API_VERSION.to_string()
+}
+
+/// Default Connect queue root (`~/.iroha/connect` on Unix, `%USERPROFILE%\.iroha\connect` on Windows).
+#[must_use]
+pub fn default_connect_queue_root() -> PathBuf {
+    let mut base = if cfg!(windows) {
+        env::var_os("USERPROFILE").map(PathBuf::from)
+    } else {
+        env::var_os("HOME").map(PathBuf::from)
+    }
+    .unwrap_or_else(|| PathBuf::from("."));
+    base.push(".iroha");
+    base.push("connect");
+    base
+}
 
 /// Valid web auth login string. See [`WebLogin::from_str`]
-#[derive(Debug, Display, Clone, PartialEq, Eq, DeserializeFromStr, SerializeDisplay)]
+#[derive(Debug, Display, Clone, PartialEq, Eq)]
 pub struct WebLogin(SmallStr);
 
 impl FromStr for WebLogin {
@@ -50,8 +84,28 @@ impl FromStr for WebLogin {
     }
 }
 
+impl WebLogin {
+    /// Return the underlying login as a string slice.
+    pub fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl JsonSerialize for WebLogin {
+    fn json_serialize(&self, out: &mut String) {
+        self.as_str().json_serialize(out);
+    }
+}
+
+impl JsonDeserialize for WebLogin {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let raw = parser.parse_string()?;
+        Self::from_str(&raw).map_err(|err| json::Error::Message(err.to_string()))
+    }
+}
+
 /// Basic Authentication credentials
-#[derive(Clone, Deserialize, Serialize, Debug)]
+#[derive(Clone, Debug)]
 pub struct BasicAuth {
     /// Login for Basic Authentication
     pub web_login: WebLogin,
@@ -59,18 +113,81 @@ pub struct BasicAuth {
     pub password: SecretString,
 }
 
-/// Complete client configuration
-#[derive(Clone, Debug, Serialize)]
-#[allow(missing_docs)]
+impl JsonSerialize for BasicAuth {
+    fn json_serialize(&self, out: &mut String) {
+        out.push('{');
+        out.push_str("\"web_login\":");
+        self.web_login.json_serialize(out);
+        out.push(',');
+        out.push_str("\"password\":");
+        self.password.json_serialize(out);
+        out.push('}');
+    }
+}
+
+impl JsonDeserialize for BasicAuth {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let mut map = json::MapVisitor::new(parser)?;
+        let mut web_login: Option<WebLogin> = None;
+        let mut password: Option<SecretString> = None;
+        while let Some(key) = map.next_key()? {
+            match key.as_str() {
+                "web_login" => {
+                    if web_login.is_some() {
+                        return Err(json::Error::duplicate_field("web_login"));
+                    }
+                    web_login = Some(map.parse_value::<WebLogin>()?);
+                }
+                "password" => {
+                    if password.is_some() {
+                        return Err(json::Error::duplicate_field("password"));
+                    }
+                    password = Some(map.parse_value::<SecretString>()?);
+                }
+                _ => map.skip_value()?,
+            }
+        }
+        map.finish()?;
+        Ok(Self {
+            web_login: web_login.ok_or_else(|| json::Error::missing_field("web_login"))?,
+            password: password.ok_or_else(|| json::Error::missing_field("password"))?,
+        })
+    }
+}
+
+/// Complete client configuration.
+#[derive(Clone, Debug)]
 pub struct Config {
+    /// Unique chain identifier the client connects to.
     pub chain: ChainId,
+    /// Account ID used for signing and submitting transactions.
     pub account: AccountId,
+    /// Key pair corresponding to the account.
     pub key_pair: KeyPair,
+    /// Optional Basic Auth credentials for HTTP.
     pub basic_auth: Option<BasicAuth>,
+    /// Torii API base URL.
     pub torii_api_url: Url,
+    /// Torii API version label (semantic `major.minor`) sent on every request.
+    pub torii_api_version: String,
+    /// Minimum Torii API version used for proof/staking/fee endpoints.
+    pub torii_api_min_proof_version: String,
+    /// Timeout for Torii HTTP requests.
+    pub torii_request_timeout: Duration,
+    /// Transaction time-to-live.
     pub transaction_ttl: Duration,
+    /// Timeout for waiting on transaction status.
     pub transaction_status_timeout: Duration,
+    /// Whether to add a random nonce to transactions.
     pub transaction_add_nonce: bool,
+    /// Root directory containing Connect queue state for diagnostics and offline replay helpers.
+    pub connect_queue_root: PathBuf,
+    /// Alias cache policy applied when validating `SoraFS` proofs.
+    pub sorafs_alias_cache: sorafs_manifest::alias_cache::AliasCachePolicy,
+    /// Default `SoraNet` anonymity policy stage for gateway fetches.
+    pub sorafs_anonymity_policy: AnonymityPolicy,
+    /// Configured rollout phase for staged PQ activation.
+    pub sorafs_rollout_phase: SorafsRolloutPhase,
 }
 
 /// An error type for [`Config::load`]
@@ -92,14 +209,14 @@ impl Config {
     /// # Errors
     /// - unable to load config from a TOML file
     /// - the config is invalid
-    pub fn load(path: LoadPath<impl AsRef<Path>>) -> error_stack::Result<Self, LoadError> {
+    pub fn load(path: LoadPath<impl AsRef<Path>>) -> ReportResult<Self, LoadError> {
         Self::load_with_env(path, Box::new(iroha_config_base::env::std_env))
     }
 
     fn load_with_env(
         path: LoadPath<impl AsRef<Path>>,
         env: impl ReadEnv + 'static,
-    ) -> error_stack::Result<Self, LoadError> {
+    ) -> ReportResult<Self, LoadError> {
         let toml_source = match path {
             LoadPath::Explicit(path) => {
                 Some(TomlSource::from_file(path).change_context(LoadError)?)
@@ -131,11 +248,28 @@ impl Config {
     }
 }
 
+fn parse_api_version_label(raw: &str) -> Result<String, &'static str> {
+    let trimmed = raw.trim();
+    let trimmed = trimmed.strip_prefix('v').unwrap_or(trimmed);
+    let mut parts = trimmed.split('.');
+    let major = parts
+        .next()
+        .ok_or("missing major")?
+        .parse::<u16>()
+        .map_err(|_| "invalid major")?;
+    let minor = parts
+        .next()
+        .unwrap_or("0")
+        .parse::<u16>()
+        .map_err(|_| "invalid minor")?;
+    Ok(format!("{major}.{minor}"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashSet, io::Write};
 
-    use assertables::{assert_contains, assert_contains_as_result};
+    use assertables::assert_contains;
     use iroha_config_base::env::MockEnv;
     use iroha_crypto::ExposedPrivateKey;
 
@@ -184,7 +318,7 @@ mod tests {
 
     #[test]
     fn torii_url_scheme_support() {
-        fn with_scheme(scheme: &str) -> error_stack::Result<Config, user::ParseError> {
+        fn with_scheme(scheme: &str) -> ReportResult<Config, user::ParseError> {
             ConfigReader::new()
                 .with_toml_source(TomlSource::inline(config_sample()))
                 .with_env(MockEnv::from([(
@@ -250,6 +384,7 @@ mod tests {
         let env = MockEnv::new()
             .set("CHAIN", "wonder")
             .set("TORII_URL", "http://localhost:8080")
+            .set("TORII_API_VERSION", DEFAULT_TORII_API_VERSION)
             .set("ACCOUNT_DOMAIN", "land")
             .set(
                 "ACCOUNT_PRIVATE_KEY",

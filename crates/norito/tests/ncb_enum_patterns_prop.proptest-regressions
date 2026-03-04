@@ -1,0 +1,14 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9d808abd49403e87011cf756e64e7354c925589a2c0ed4ba22b7be9f6d33f1eb # shrinks to prefix = 0, suffix = 0
+cc 9b898409239ec6238b2b8fecc917d74c3433b2248fdfadc6c46e289cca4ca4e7 # shrinks to f1 = 0, f2 = 0, f3 = 0, f4 = 0
+cc 63279fa2572b8a015cd067b644c55fdb52cb19f554cd6217a6ed40a0da2d9b87 # shrinks to prefix = 0, suffix = 0
+cc 66b5031a41b095ee09056dcf0e6fd16629add989cc06ba19fd6a5bc2770970b0 # shrinks to start = 40, steps = [0, 0, 0], prefix = 0, suffix = 0
+cc 7c67fcf7632af6e80a0ce89a653aa178afd0d68411373f48a7dffabc585073ea # shrinks to fill1 = 0, fill2 = 0, fill3 = 0, fill4 = 0
+cc 43f439e0554d32f4cd999d8fa0f8d53ebb357f42fcbbdc455163ecbc5fa129c0 # shrinks to f1 = 0, f2 = 0, f3 = 0, f4 = 0
+cc 67b6d649cdcb4ec6a91442190e5d46de9b7382e55866f088cb127348322a4900 # shrinks to start = 40, steps = [0, 0, 0], prefix = 0, suffix = 0
+cc 0353711f4e8ce3e36466598e2c19a072a6a5cf77567eef3846c259f42f076e8d # shrinks to fill1 = 0, fill2 = 0, fill3 = 0, fill4 = 0

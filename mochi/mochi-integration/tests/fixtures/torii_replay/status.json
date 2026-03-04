@@ -1,0 +1,45 @@
+{
+  "peers": 2,
+  "blocks": 5,
+  "blocks_non_empty": 3,
+  "commit_time_ms": 42,
+  "txs_approved": 7,
+  "txs_rejected": 1,
+  "uptime": { "secs": 123, "nanos": 0 },
+  "view_changes": 0,
+  "queue_size": 4,
+  "crypto": {
+    "sm_helpers_available": true,
+    "sm_openssl_preview_enabled": false,
+    "halo2": {
+      "enabled": false,
+      "curve": "",
+      "backend": "",
+      "max_k": 0,
+      "verifier_budget_ms": 0,
+      "verifier_max_batch": 0
+    }
+  },
+  "sumeragi": null,
+  "governance": {
+    "proposals": {
+      "proposed": 0,
+      "approved": 0,
+      "rejected": 0,
+      "enacted": 0
+    },
+    "protected_namespace": {
+      "total_checks": 0,
+      "allowed": 0,
+      "rejected": 0
+    },
+    "manifest_quorum": {
+      "total_checks": 0,
+      "satisfied": 0,
+      "rejected": 0
+    },
+    "recent_manifest_activations": []
+  },
+  "teu_lane_commit": [],
+  "teu_dataspace_backlog": []
+}

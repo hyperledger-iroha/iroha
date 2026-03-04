@@ -1,0 +1,13 @@
+groups:
+  - name: soranet-lane-latency
+    interval: 1m
+    rules:
+      - alert: SoranetLaneAdmissionLatencyDegraded
+        expr: histogram_quantile(0.95, sum by (lane_id, endpoint, le) (rate(torii_lane_admission_latency_seconds_bucket[5m]))) * 1000 > 750
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Lane admission latency P95 degraded"
+          description: |
+            Lane {{ $labels.lane_id }} via {{ $labels.endpoint }} has admission latency P95 {{ printf "%.0f" $value }} ms (>750 ms budget). Inspect backlog, DA health, and pacemaker timers before rerouting traffic.

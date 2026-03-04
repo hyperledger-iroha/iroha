@@ -1,10 +1,10 @@
 use iroha_version_derive::{declare_versioned_with_scale, version_with_scale};
-use parity_scale_codec::{Decode, Encode};
+use norito::{Decode as NoritoDecode, Encode as NoritoEncode};
 
 declare_versioned_with_scale!(VersionedMessage 1..3, Debug, Clone, iroha_macro::FromVariant);
 
 #[version_with_scale(version = 1, versioned_alias = "VersionedMessage")]
-#[derive(Debug, Clone, Decode, Encode)]
+#[derive(Debug, Clone, NoritoDecode, NoritoEncode)]
 pub struct Message;
 
 impl Message {
@@ -12,7 +12,7 @@ impl Message {
 }
 
 #[version_with_scale(version = 2, versioned_alias = "VersionedMessage")]
-#[derive(Debug, Clone, Decode, Encode)]
+#[derive(Debug, Clone, NoritoDecode, NoritoEncode)]
 pub struct Message2;
 
 impl Message2 {

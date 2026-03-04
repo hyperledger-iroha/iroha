@@ -1,0 +1,15 @@
+[package]
+name = "jsonstage1_metal"
+version.workspace = true
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = []
+
+[dependencies]
+
+[build-dependencies]
+cc = "1.2.45"

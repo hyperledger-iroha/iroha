@@ -1,0 +1,36 @@
+// Perpetual swap funding and simple liquidation check utilities.
+seiyaku PerpFunding {
+  // Compute funding payment: position_size * (mark - index) * funding_bps / 10_000
+  fn funding_payment(position_size: int, mark_price: int, index_price: int, funding_bps: int) -> int {
+    let delta = mark_price - index_price;
+    let num = position_size * delta * funding_bps;
+    let pay = num / 10_000;
+    return pay;
+  }
+
+  // Update position balance by transferring funding between trader and insurance_fund.
+  // Positive payment means trader pays; negative means trader receives.
+  kotoage fn settle_funding(trader: AccountId,
+                            insurance_fund: AccountId,
+                            stable_asset: AssetDefinitionId,
+                            position_size: int,
+                            mark_price: int,
+                            index_price: int,
+                            funding_bps: int) permission(Admin) {
+    let pay = funding_payment(position_size, mark_price, index_price, funding_bps);
+    if pay > 0 {
+      transfer_asset(trader, insurance_fund, stable_asset, pay);
+    } else {
+      let receive = 0 - pay; // absolute value
+      transfer_asset(insurance_fund, trader, stable_asset, receive);
+    }
+  }
+
+  // Basic liquidation check: equity_bps = (equity * 10_000) / notional
+  kotoage fn is_liquidatable(equity: int, notional: int, maintenance_bps: int) -> int {
+    if notional == 0 { return 0; } // not liquidatable if no position
+    let equity_bps = (equity * 10_000) / notional;
+    let liq = (equity_bps < maintenance_bps);
+    return liq; // returns 1 if true, 0 if false
+  }
+}

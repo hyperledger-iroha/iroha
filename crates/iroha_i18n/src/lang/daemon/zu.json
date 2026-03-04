@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Wamukelekile ku-Hyperledger Iroha!",
+  "error.trace_config_setup": "Ayikwazanga ukusetha ukulandelela ukusetha",
+  "error.config": "Iphutha lokumisa!",
+  "error.logger": "Isistimu yokugcinwa kwezibalo ayiqalanga",
+  "error.start": "Iroha ayikwazanga ukuqala",
+  "error.run": "Kube nephutha ngesikhathi kuqhutshwa i-Iroha",
+  "error.start_p2p": "Ayikwazanga ukuqala inethiwekhi ye-P2P",
+  "error.init_kura": "Ayikwazanga ukuqala i-Kura (isiphetho sokugcina izibhalo)",
+  "error.start_dev_telemetry": "Ayikwazanga ukuqala isevisi ye-telemetry yentuthuko",
+  "error.start_telemetry": "Ayikwazanga ukuqala isevisi ye-telemetry",
+  "error.listen_os_signal": "Ayikwazanga ukusetha ukulalela izimpawu zesistimu yokusebenza",
+  "error.start_torii": "Ayikwazanga ukuqala i-Torii (isango le-Iroha HTTP API)"
+}

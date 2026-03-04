@@ -1,0 +1,536 @@
+{
+  "title": "Taikai Viewer Observability",
+  "uid": "taikai-viewer",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": [
+    "taikai",
+    "viewer",
+    "sn13"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(taikai_ingest_segment_latency_ms_bucket, cluster)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      },
+      {
+        "name": "stream",
+        "label": "Stream",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(taikai_ingest_segment_latency_ms_bucket{cluster=~\"$cluster\"}, stream)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      },
+      {
+        "name": "event",
+        "label": "Event",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(taikai_trm_alias_rotations_total{cluster=~\"$cluster\"}, event)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      },
+      {
+        "name": "alias",
+        "label": "Alias",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(taikai_trm_alias_rotations_total{cluster=~\"$cluster\", event=~\"$event\"}, alias_name)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": ".*"
+        }
+      },
+      {
+        "name": "protocol",
+        "label": "Ingest Protocol",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(taikai_ingest_edge_total, protocol)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      },
+      {
+        "name": "lane",
+        "label": "PQ Lane",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(taikai_viewer_cek_fetch_duration_ms_bucket, lane)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      },
+      {
+        "name": "provider",
+        "label": "SoraFS provider",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(torii_sorafs_proof_health_alerts_total, provider_id)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": ".*"
+        }
+      },
+      {
+        "name": "tier",
+        "label": "PoTR tier",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sorafs_potr_latency_ms_bucket, tier)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": ".*"
+        }
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Segment ingest latency p95 (ms)",
+      "description": "Histogram quantile computed from taikai_ingest_segment_latency_ms_bucket.",
+      "id": 1,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(taikai_ingest_segment_latency_ms_bucket{cluster=~\"$cluster\", stream=~\"$stream\"}[5m])))",
+          "legendFormat": "cluster={{cluster}} stream={{stream}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Live-edge drift p99 (ms)",
+      "description": "Positive = ingest ahead of viewer; negative = behind.",
+      "id": 2,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(taikai_ingest_live_edge_drift_ms_bucket{cluster=~\"$cluster\", stream=~\"$stream\"}[5m])))",
+          "legendFormat": "{{stream}} p99 drift",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Ingest edge outcomes (per minute)",
+      "description": "Rate of SRT/RTMP connects grouped by protocol/outcome.",
+      "id": 3,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (protocol, outcome) (rate(taikai_ingest_edge_total{cluster=~\"$cluster\", protocol=~\"$protocol\"}[5m]))",
+          "legendFormat": "{{protocol}}/{{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "1/min",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Segment errors by reason (5m rate)",
+      "id": 4,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(taikai_ingest_segment_errors_total{cluster=~\"$cluster\", stream=~\"$stream\"}[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "1/min",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Rebuffer ratio (5m)",
+      "description": "Ratio of rebuffer events to delivered segments.",
+      "id": 5,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(taikai_viewer_rebuffer_events_total{cluster=~\"$cluster\", stream=~\"$stream\"}[5m])) / sum(rate(taikai_viewer_playback_segments_total{cluster=~\"$cluster\", stream=~\"$stream\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "percentage",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "orange",
+                "value": 0.02
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "CEK fetch duration p95 (ms)",
+      "id": 6,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(taikai_viewer_cek_fetch_duration_ms_bucket{cluster=~\"$cluster\", lane=~\"$lane\"}[5m])))",
+          "legendFormat": "{{lane}} lane",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "PQ circuit health",
+      "description": "Share of PQ segments meeting deterministic checks.",
+      "id": 7,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "avg(taikai_viewer_pq_circuit_health{cluster=~\"$cluster\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "orange",
+                "value": 95
+              },
+              {
+                "color": "green",
+                "value": 99
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ]
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Alert noise floor (firing alerts / 5m)",
+      "id": 8,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (alertname) (increase(taikai_viewer_alerts_firing_total{cluster=~\"$cluster\"}[5m]))",
+          "legendFormat": "{{alertname}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+        "unit": "short",
+        "min": 0
+      },
+      "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Proof-health alerts (24h)",
+      "description": "Count of SorafsProofHealth alerts raised in the last 24 hours for the selected providers.",
+      "id": 9,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(increase(torii_sorafs_proof_health_alerts_total{provider_id=~\"$provider\"}[24h]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Proof-health triggers (alerts / 5m)",
+      "description": "Breaks down proof-health alerts by PDP/PoTR trigger for the selected providers.",
+      "id": 10,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (trigger)(increase(torii_sorafs_proof_health_alerts_total{provider_id=~\"$provider\"}[5m]))",
+          "legendFormat": "{{trigger}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        },
+        "showPoints": "never"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Latest proof-health window",
+      "description": "Most recent PDP/PoTR counts, penalties, and cooldown status reported by capacity telemetry.",
+      "id": 11,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "torii_sorafs_proof_health_pdp_failures{provider_id=~\"$provider\"}",
+          "format": "time_series",
+          "instant": true,
+          "legendFormat": "{{provider_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "torii_sorafs_proof_health_potr_breaches{provider_id=~\"$provider\"}",
+          "format": "time_series",
+          "instant": true,
+          "legendFormat": "{{provider_id}}",
+          "refId": "B"
+        },
+        {
+          "expr": "torii_sorafs_proof_health_penalty_nano{provider_id=~\"$provider\"}",
+          "format": "time_series",
+          "instant": true,
+          "legendFormat": "{{provider_id}}",
+          "refId": "C"
+        },
+        {
+          "expr": "torii_sorafs_proof_health_cooldown{provider_id=~\"$provider\"}",
+          "format": "time_series",
+          "instant": true,
+          "legendFormat": "{{provider_id}}",
+          "refId": "D"
+        },
+        {
+          "expr": "torii_sorafs_proof_health_window_end_epoch{provider_id=~\"$provider\"}",
+          "format": "time_series",
+          "instant": true,
+          "legendFormat": "{{provider_id}}",
+          "refId": "E"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"Time": true},
+            "indexByName": {
+              "provider_id": 0,
+              "Value": 1,
+              "Value #B": 2,
+              "Value #C": 3,
+              "Value #D": 4,
+              "Value #E": 5
+            },
+            "renameByName": {
+              "provider_id": "Provider",
+              "Value": "PDP failures",
+              "Value #B": "PoTR breaches",
+              "Value #C": "Penalty (nano-XOR)",
+              "Value #D": "Cooldown active",
+              "Value #E": "Window end epoch"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Alias rotations (5m)",
+      "description": "Rate of Taikai routing manifest activations grouped by alias.",
+      "id": 12,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (alias_namespace, alias_name) (increase(taikai_trm_alias_rotations_total{cluster=~\"$cluster\", event=~\"$event\", stream=~\"$stream\", alias_name=~\"$alias\"}[5m]))",
+          "legendFormat": "{{alias_namespace}}/{{alias_name}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "1/min",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "showPoints": "never"
+      }
+    }
+  ]
+}

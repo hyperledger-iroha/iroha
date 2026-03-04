@@ -1,0 +1,14 @@
+{
+  "method": "POST",
+  "path": "/admission/verify",
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "body": {
+    "manifest_reference": "../1.0.0/manifest_v1.json",
+    "admission_envelope": "governance/envelope_v1.json"
+  },
+  "notes": [
+    "Send the canonical manifest digest to the admission verifier using an admission envelope whose signature does not cover the payload."
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "order_id_hex": "9999999999999999999999999999999999999999999999999999999999999999",
+  "manifest_cid_hex": "0123456789abcdeffedcba98765432100123456789abcdeffedcba9876543210",
+  "manifest_digest_hex": "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+  "chunking_profile": "sorafs.sf1@1.0.0",
+  "target_replicas": 3,
+  "assignments": [
+    {
+      "provider_id_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "slice_gib": 260,
+      "lane": "global"
+    },
+    {
+      "provider_id_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "slice_gib": 200,
+      "lane": "global"
+    },
+    {
+      "provider_id_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "slice_gib": 140,
+      "lane": "archive"
+    }
+  ],
+  "issued_at": 1700503600,
+  "deadline_at": 1700507200,
+  "sla": {
+    "ingest_deadline_secs": 1200,
+    "min_availability_percent_milli": 98500,
+    "min_por_success_percent_milli": 98000
+  },
+  "metadata": {
+    "priority": "standard",
+    "campaign": "spring-rollout"
+  }
+}

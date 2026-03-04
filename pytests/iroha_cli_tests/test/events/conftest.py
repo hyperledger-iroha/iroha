@@ -1,7 +1,3 @@
-from .. import (
-    GIVEN_currently_authorized_account,
-)
-
 import allure  # type: ignore
 import pytest
 

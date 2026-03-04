@@ -1,0 +1,45 @@
+{
+  "certificate": {
+    "allowance": {
+      "amount": "175.00",
+      "asset": "xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
+      "commitment_hex": "8827412BE183E631B4D8C2304361B3C8648E4DEE194C394CBD4CFCE2FCED4A4A"
+    },
+    "attestation_nonce_hex": null,
+    "attestation_report_b64": "3YjdiA==",
+    "controller": "34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
+    "expires_at_ms": 1745900000000,
+    "issued_at_ms": 1730314876000,
+    "metadata": {
+      "android.integrity.policy": "play_integrity",
+      "android.play_integrity.allowed_app_verdicts": [
+        "play_recognized",
+        "licensed"
+      ],
+      "android.play_integrity.allowed_device_verdicts": [
+        "strong",
+        "device"
+      ],
+      "android.play_integrity.cloud_project_number": 4242424242,
+      "android.play_integrity.environment": "production",
+      "android.play_integrity.max_token_age_ms": 30000,
+      "android.play_integrity.package_names": [
+        "tech.iroha.retail.play"
+      ],
+      "android.play_integrity.signing_digests_sha256": [
+        "778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566"
+      ]
+    },
+    "operator": "34mSYnDgbaJM58rbLoif4Tkp7G7VrmEx2UvM5oSfSY6GU46aEca41RKqHEBCLgaEgkuxPBX6W",
+    "operator_signature_hex": "B6520DB375DF23A5D4081103C7B31211500F23E985499DA691D64E7373CA8925345BCAA22878FD744789B37FAD109EFE8C4E2F25D81A3D9138147C99B203710D",
+    "policy": {
+      "expires_at_ms": 1745900000000,
+      "max_balance": "350.00",
+      "max_tx_value": "90.00"
+    },
+    "refresh_at_ms": null,
+    "spend_public_key": "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016",
+    "verdict_id_hex": null
+  },
+  "instruction": "RegisterOfflineAllowance"
+}

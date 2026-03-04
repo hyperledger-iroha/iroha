@@ -1,0 +1,18 @@
+{
+  "method": "POST",
+  "path": "/proof/verify",
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "body": {
+    "manifest_reference": "../1.0.0/manifest_v1.json",
+    "challenge_reference": "../1.0.0/challenge_v1.json",
+    "proof_reference": "../1.0.0/proof_v1.json",
+    "mutations": {
+      "chunks[0].digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  },
+  "notes": [
+    "Modify the first chunk digest inside the PoR proof before submission to trigger the integrity guard."
+  ]
+}

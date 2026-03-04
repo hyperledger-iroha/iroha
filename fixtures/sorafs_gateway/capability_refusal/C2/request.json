@@ -1,0 +1,12 @@
+{
+  "method": "GET",
+  "path": "/manifest/sorafs.sf1@1.0.0",
+  "headers": {
+    "Accept": "application/json"
+  },
+  "manifest_reference": "../1.0.0/manifest_v1.json",
+  "notes": [
+    "Lookup the governance-approved manifest alias `sorafs.sf1@1.0.0`.",
+    "The gateway fixture for this scenario omits the alias from the admission envelope to trigger a deterministic 412 response."
+  ]
+}

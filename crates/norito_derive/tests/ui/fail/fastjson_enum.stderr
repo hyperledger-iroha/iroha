@@ -1,0 +1,11 @@
+error: FastJson enum support currently requires #[norito(tag = ...)]
+ --> tests/ui/fail/fastjson_enum.rs:4:6
+  |
+4 | enum E {
+  |      ^
+
+error: enum JsonSerialize requires #[norito(tag = ...)]
+ --> tests/ui/fail/fastjson_enum.rs:4:6
+  |
+4 | enum E {
+  |      ^

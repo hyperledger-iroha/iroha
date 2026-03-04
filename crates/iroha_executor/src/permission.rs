@@ -1,17 +1,41 @@
 //! Module with permission related functionality.
 
-use alloc::{borrow::ToOwned as _, vec::Vec};
+use std::{borrow::ToOwned as _, collections::BTreeSet, vec::Vec};
 
 use iroha_executor_data_model::permission::Permission;
 
 use crate::{
+    Execute,
     prelude::Context,
     smart_contract::{
         data_model::{executor::Result, permission::Permission as PermissionObject, prelude::*},
         prelude::*,
     },
-    Execute,
 };
+
+#[cfg(test)]
+pub(crate) mod test_override {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static PERMISSIONS: RefCell<Vec<crate::data_model::permission::Permission>> = const {
+            RefCell::new(Vec::new())
+        };
+    }
+
+    pub fn permissions() -> Vec<crate::data_model::permission::Permission> {
+        PERMISSIONS.with(|permissions| permissions.borrow().clone())
+    }
+
+    pub fn replace_permissions(
+        permissions: Vec<crate::data_model::permission::Permission>,
+    ) -> Vec<crate::data_model::permission::Permission> {
+        PERMISSIONS.with(|current| {
+            let mut current = current.borrow_mut();
+            core::mem::replace(&mut *current, permissions)
+        })
+    }
+}
 
 /// Declare permission types of current module. Use it with a full path to the permission.
 /// Used to iterate over tokens to validate `Grant` and `Revoke` instructions.
@@ -25,9 +49,17 @@ use crate::{
 ///
 ///     use iroha_schema::IntoSchema;
 ///     use iroha_executor_derive::Permission;
-///     use serde::{Deserialize, Serialize};
 ///
-///     #[derive(Clone, PartialEq, Deserialize, Serialize, IntoSchema, Permission)]
+///     use iroha_executor_data_model::json_macros::{JsonDeserialize, JsonSerialize};
+///
+///     #[derive(
+///         Clone,
+///         PartialEq,
+///         JsonDeserialize,
+///         JsonSerialize,
+///         IntoSchema,
+///         Permission,
+///     )]
 ///     #[validate(iroha_executor::permission::OnlyGenesis)]
 ///     pub struct MyToken;
 /// }
@@ -105,9 +137,11 @@ declare_permissions! {
     iroha_executor_data_model::permission::asset::{CanMintAssetWithDefinition},
     iroha_executor_data_model::permission::asset::{CanBurnAssetWithDefinition},
     iroha_executor_data_model::permission::asset::{CanTransferAssetWithDefinition},
+    iroha_executor_data_model::permission::asset::{CanModifyAssetMetadataWithDefinition},
     iroha_executor_data_model::permission::asset::{CanMintAsset},
     iroha_executor_data_model::permission::asset::{CanBurnAsset},
     iroha_executor_data_model::permission::asset::{CanTransferAsset},
+    iroha_executor_data_model::permission::asset::{CanModifyAssetMetadata},
 
     iroha_executor_data_model::permission::nft::{CanRegisterNft},
     iroha_executor_data_model::permission::nft::{CanUnregisterNft},
@@ -124,6 +158,24 @@ declare_permissions! {
     iroha_executor_data_model::permission::trigger::{CanModifyTriggerMetadata},
 
     iroha_executor_data_model::permission::executor::{CanUpgradeExecutor},
+
+    iroha_executor_data_model::permission::smart_contract::{CanRegisterSmartContractCode},
+    iroha_executor_data_model::permission::sorafs::{CanRegisterSorafsPin},
+    iroha_executor_data_model::permission::sorafs::{CanApproveSorafsPin},
+    iroha_executor_data_model::permission::sorafs::{CanRetireSorafsPin},
+    iroha_executor_data_model::permission::sorafs::{CanBindSorafsAlias},
+    iroha_executor_data_model::permission::sorafs::{CanDeclareSorafsCapacity},
+    iroha_executor_data_model::permission::sorafs::{CanSubmitSorafsTelemetry},
+    iroha_executor_data_model::permission::sorafs::{CanFileSorafsCapacityDispute},
+    iroha_executor_data_model::permission::sorafs::{CanIssueSorafsReplicationOrder},
+    iroha_executor_data_model::permission::sorafs::{CanCompleteSorafsReplicationOrder},
+    iroha_executor_data_model::permission::sorafs::{CanSetSorafsPricing},
+    iroha_executor_data_model::permission::sorafs::{CanUpsertSorafsProviderCredit},
+    iroha_executor_data_model::permission::sorafs::{CanRegisterSorafsProviderOwner},
+    iroha_executor_data_model::permission::sorafs::{CanUnregisterSorafsProviderOwner},
+    iroha_executor_data_model::permission::soranet::{CanIngestSoranetPrivacy},
+    iroha_executor_data_model::permission::nexus::{CanPublishSpaceDirectoryManifest},
+    iroha_executor_data_model::permission::nexus::{CanUseFeeSponsor},
 }
 
 /// Trait that enables using permissions on the blockchain
@@ -133,38 +185,41 @@ pub trait ExecutorPermission: Permission + PartialEq {
     where
         for<'a> Self: TryFrom<&'a crate::data_model::permission::Permission>,
     {
-        if host
+        #[cfg(test)]
+        {
+            let override_permissions = test_override::permissions();
+            if !override_permissions.is_empty() {
+                return has_permission_in_account(&override_permissions, self);
+            }
+        }
+
+        let account_permissions: Vec<_> = host
             .query(FindPermissionsByAccountId::new(authority.clone()))
             .execute()
             .expect("INTERNAL BUG: `FindPermissionsByAccountId` must never fail")
             .map(|res| res.dbg_expect("Failed to get permission from cursor"))
-            .filter_map(|permission| Self::try_from(&permission).ok())
-            .any(|permission| *self == permission)
-        {
+            .collect();
+
+        if has_permission_in_account(&account_permissions, self) {
             return true;
         }
 
-        // build a big OR predicate over all roles we are interested in
-        let role_predicate = host
+        // collect all roles assigned to the authority
+        let role_ids: Vec<RoleId> = host
             .query(FindRolesByAccountId::new(authority.clone()))
             .execute()
             .expect("INTERNAL BUG: `FindRolesByAccountId` must never fail")
             .map(|role_id| role_id.dbg_expect("Failed to get role from cursor"))
-            .fold(CompoundPredicate::Or(Vec::new()), |predicate, role_id| {
-                predicate.or(CompoundPredicate::<Role>::build(|role| role.id.eq(role_id)))
-            });
+            .collect();
 
         // check if any of the roles have the permission we need
-        host.query(FindRoles)
-            .filter(role_predicate)
-            .execute()
-            .expect("INTERNAL BUG: `FindRoles` must never fail")
-            .map(|role| role.dbg_expect("Failed to get role from cursor"))
-            .any(|role| {
-                role.permissions()
-                    .filter_map(|permission| Self::try_from(permission).ok())
-                    .any(|permission| *self == permission)
-            })
+        if role_ids.is_empty() {
+            return false;
+        }
+
+        let role_permissions: Vec<_> = roles_permissions(host).collect();
+
+        permission_owned_in_sources(&account_permissions, &role_permissions, &role_ids, self)
     }
 }
 
@@ -181,8 +236,55 @@ pub(super) trait ValidateGrantRevoke {
 
 /// Predicate-like trait used for pass conditions to identify if [`Grant`] or [`Revoke`] should be allowed.
 pub(crate) trait PassCondition {
-    #[allow(missing_docs, clippy::missing_errors_doc)]
+    /// Validate whether the condition permits the grant or revoke operation.
+    ///
+    /// # Errors
+    /// Returns an error if the authority or role context does not satisfy the condition
+    /// or if validation fails due to host lookups.
     fn validate(&self, authority: &AccountId, host: &Iroha, context: &Context) -> Result;
+}
+
+fn ensure_permission_owned<T>(
+    permission: &T,
+    authority: &AccountId,
+    host: &Iroha,
+    permission_name: &str,
+) -> Result
+where
+    T: ExecutorPermission,
+    for<'a> T: TryFrom<&'a crate::data_model::permission::Permission>,
+{
+    if permission.is_owned_by(authority, host) {
+        Ok(())
+    } else {
+        Err(ValidationFail::NotPermitted(format!(
+            "Current authority doesn't have the {permission_name} permission, therefore it can't grant or revoke it"
+        )))
+    }
+}
+
+macro_rules! impl_owned_permission {
+    ($($ty:ty),+ $(,)?) => {$(
+        impl ValidateGrantRevoke for $ty {
+            fn validate_grant(
+                &self,
+                authority: &AccountId,
+                _context: &Context,
+                host: &Iroha,
+            ) -> Result {
+                super::ensure_permission_owned(self, authority, host, stringify!($ty))
+            }
+
+            fn validate_revoke(
+                &self,
+                authority: &AccountId,
+                _context: &Context,
+                host: &Iroha,
+            ) -> Result {
+                super::ensure_permission_owned(self, authority, host, stringify!($ty))
+            }
+        }
+    )+};
 }
 
 mod executor {
@@ -203,6 +305,124 @@ mod executor {
             OnlyGenesis::from(self).validate(authority, host, context)
         }
     }
+}
+
+mod smart_contract {
+    use iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+
+    use super::*;
+
+    impl ValidateGrantRevoke for CanRegisterSmartContractCode {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+    }
+}
+
+mod nexus {
+    use iroha_executor_data_model::permission::nexus::{
+        CanPublishSpaceDirectoryManifest, CanUseFeeSponsor,
+    };
+
+    use super::*;
+
+    impl ValidateGrantRevoke for CanPublishSpaceDirectoryManifest {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct SponsorAccount<'a> {
+        sponsor: &'a AccountId,
+    }
+
+    impl PassCondition for SponsorAccount<'_> {
+        fn validate(&self, authority: &AccountId, _host: &Iroha, _context: &Context) -> Result {
+            if authority == self.sponsor {
+                return Ok(());
+            }
+            Err(ValidationFail::NotPermitted(
+                "only the sponsor account may grant or revoke fee sponsorship".to_owned(),
+            ))
+        }
+    }
+
+    impl<'a> From<&'a CanUseFeeSponsor> for SponsorAccount<'a> {
+        fn from(value: &'a CanUseFeeSponsor) -> Self {
+            Self {
+                sponsor: &value.sponsor,
+            }
+        }
+    }
+
+    impl ValidateGrantRevoke for CanUseFeeSponsor {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            SponsorAccount::from(self).validate(authority, host, context)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            SponsorAccount::from(self).validate(authority, host, context)
+        }
+    }
+}
+
+mod sorafs {
+    use iroha_executor_data_model::permission::sorafs::{
+        CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
+        CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
+        CanRegisterSorafsPin, CanRegisterSorafsProviderOwner, CanRetireSorafsPin,
+        CanSetSorafsPricing, CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
+        CanUpsertSorafsProviderCredit,
+    };
+
+    use super::*;
+
+    impl_owned_permission!(
+        CanRegisterSorafsPin,
+        CanApproveSorafsPin,
+        CanRetireSorafsPin,
+        CanBindSorafsAlias,
+        CanDeclareSorafsCapacity,
+        CanSubmitSorafsTelemetry,
+        CanFileSorafsCapacityDispute,
+        CanIssueSorafsReplicationOrder,
+        CanCompleteSorafsReplicationOrder,
+        CanSetSorafsPricing,
+        CanUpsertSorafsProviderCredit,
+        CanRegisterSorafsProviderOwner,
+        CanUnregisterSorafsProviderOwner,
+    );
+}
+
+mod soranet {
+    use iroha_executor_data_model::permission::soranet::CanIngestSoranetPrivacy;
+
+    use super::*;
+
+    impl_owned_permission!(CanIngestSoranetPrivacy);
 }
 
 mod peer {
@@ -291,7 +511,8 @@ pub mod asset {
 
     use iroha_executor_data_model::permission::asset::{
         CanBurnAsset, CanBurnAssetWithDefinition, CanMintAsset, CanMintAssetWithDefinition,
-        CanTransferAsset, CanTransferAssetWithDefinition,
+        CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition, CanTransferAsset,
+        CanTransferAssetWithDefinition,
     };
 
     use super::*;
@@ -370,6 +591,20 @@ pub mod asset {
         }
     }
 
+    impl ValidateGrantRevoke for CanModifyAssetMetadataWithDefinition {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            super::asset_definition::Owner::from(self).validate(authority, host, context)
+        }
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            super::asset_definition::Owner::from(self).validate(authority, host, context)
+        }
+    }
+
     impl ValidateGrantRevoke for CanMintAsset {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
@@ -422,7 +657,26 @@ pub mod asset {
         };
     }
 
-    impl_froms!(CanMintAsset, CanBurnAsset, CanTransferAsset);
+    impl_froms!(
+        CanMintAsset,
+        CanBurnAsset,
+        CanTransferAsset,
+        CanModifyAssetMetadata
+    );
+
+    impl ValidateGrantRevoke for CanModifyAssetMetadata {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            Owner::from(self).validate(authority, host, context)
+        }
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            Owner::from(self).validate(authority, host, context)
+        }
+    }
 }
 
 pub mod asset_definition {
@@ -434,11 +688,8 @@ pub mod asset_definition {
 
     use super::*;
     use crate::smart_contract::{
-        data_model::{
-            isi::error::InstructionExecutionError,
-            query::{builder::SingleQueryError, error::FindError},
-        },
         Iroha,
+        data_model::{isi::error::InstructionExecutionError, query::error::FindError},
     };
 
     /// Check if `authority` is the owner of asset definition
@@ -455,20 +706,20 @@ pub mod asset_definition {
         authority: &AccountId,
         host: &Iroha,
     ) -> Result<bool> {
-        let asset_definition = host
-            .query(FindAssetsDefinitions)
-            .filter_with(|asset_definition| asset_definition.id.eq(asset_definition_id.clone()))
-            .execute_single()
-            .map_err(|e| match e {
-                SingleQueryError::QueryError(e) => e,
-                SingleQueryError::ExpectedOneGotNone => {
-                    // assuming this can only happen due to such a domain not existing
-                    ValidationFail::InstructionFailed(InstructionExecutionError::Find(
-                        FindError::AssetDefinition(asset_definition_id.clone()),
-                    ))
-                }
-                _ => unreachable!(),
-            })?;
+        let mut asset_definition_opt = None;
+        let iter = host.query(FindAssetsDefinitions).execute()?;
+        for item in iter {
+            let ad = item.dbg_expect("Failed to get asset definition from cursor");
+            if ad.id() == asset_definition_id {
+                asset_definition_opt = Some(ad);
+                break;
+            }
+        }
+        let asset_definition = asset_definition_opt.ok_or_else(|| {
+            ValidationFail::InstructionFailed(InstructionExecutionError::Find(
+                FindError::AssetDefinition(asset_definition_id.clone()),
+            ))
+        })?;
         if asset_definition.owned_by() == authority {
             Ok(true)
         } else {
@@ -557,6 +808,7 @@ pub mod asset_definition {
         iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition,
         iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition,
         iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition,
+        iroha_executor_data_model::permission::asset::CanModifyAssetMetadataWithDefinition,
     );
 }
 
@@ -575,11 +827,8 @@ pub mod nft {
 
     use super::*;
     use crate::smart_contract::{
-        data_model::{
-            isi::error::InstructionExecutionError,
-            query::{builder::SingleQueryError, error::FindError},
-        },
         Iroha,
+        data_model::{isi::error::InstructionExecutionError, query::error::FindError},
     };
 
     /// Check if `authority` is *week* owner of NFT.
@@ -594,20 +843,20 @@ pub mod nft {
     /// - if `FindNfts` fails
     /// - if `is_domain_owner` fails
     pub fn is_nft_weak_owner(nft_id: &NftId, authority: &AccountId, host: &Iroha) -> Result<bool> {
-        let nft = host
-            .query(FindNfts)
-            .filter_with(|nft| nft.id.eq(nft_id.clone()))
-            .execute_single()
-            .map_err(|e| match e {
-                SingleQueryError::QueryError(e) => e,
-                SingleQueryError::ExpectedOneGotNone => {
-                    // assuming this can only happen due to such a NFT not existing
-                    ValidationFail::InstructionFailed(InstructionExecutionError::Find(
-                        FindError::Nft(nft_id.clone()),
-                    ))
-                }
-                _ => unreachable!(),
-            })?;
+        let mut nft_opt = None;
+        let iter = host.query(FindNfts).execute()?;
+        for item in iter {
+            let nft = item.dbg_expect("Failed to get NFT from cursor");
+            if nft.id() == nft_id {
+                nft_opt = Some(nft);
+                break;
+            }
+        }
+        let nft = nft_opt.ok_or_else(|| {
+            ValidationFail::InstructionFailed(InstructionExecutionError::Find(FindError::Nft(
+                nft_id.clone(),
+            )))
+        })?;
         if nft.owned_by() == authority {
             Ok(true)
         } else {
@@ -823,7 +1072,7 @@ pub mod trigger {
     use crate::{
         data_model::{
             isi::error::InstructionExecutionError,
-            query::{builder::SingleQueryError, error::FindError, trigger::FindTriggers},
+            query::{error::FindError, trigger::FindTriggers},
         },
         permission::domain::is_domain_owner,
     };
@@ -849,16 +1098,22 @@ pub mod trigger {
     }
     /// Returns the trigger.
     pub(crate) fn find_trigger(trigger_id: &TriggerId, host: &Iroha) -> Result<Trigger> {
-        host.query(FindTriggers::new())
-            .filter_with(|trigger| trigger.id.eq(trigger_id.clone()))
-            .execute_single()
-            .map_err(|e| match e {
-                SingleQueryError::QueryError(e) => e,
-                SingleQueryError::ExpectedOneGotNone => ValidationFail::InstructionFailed(
-                    InstructionExecutionError::Find(FindError::Trigger(trigger_id.clone())),
-                ),
-                _ => unreachable!(),
+        {
+            let mut found = None;
+            let iter = host.query(FindTriggers::new()).execute()?;
+            for item in iter {
+                let trg = item.dbg_expect("Failed to get trigger from cursor");
+                if trg.id() == trigger_id {
+                    found = Some(trg);
+                    break;
+                }
+            }
+            found.ok_or_else(|| {
+                ValidationFail::InstructionFailed(InstructionExecutionError::Find(
+                    FindError::Trigger(trigger_id.clone()),
+                ))
             })
+        }
     }
 
     /// Pass condition that checks if `authority` is the owner of trigger.
@@ -983,8 +1238,7 @@ pub mod domain {
         nft::CanRegisterNft,
     };
     use iroha_smart_contract::data_model::{
-        isi::error::InstructionExecutionError,
-        query::{builder::SingleQueryError, error::FindError},
+        isi::error::InstructionExecutionError, query::error::FindError,
     };
 
     use super::*;
@@ -998,20 +1252,22 @@ pub mod domain {
         authority: &AccountId,
         host: &Iroha,
     ) -> Result<bool> {
-        host.query(FindDomains)
-            .filter_with(|domain| domain.id.eq(domain_id.clone()))
-            .execute_single()
-            .map(|domain| domain.owned_by() == authority)
-            .map_err(|e| match e {
-                SingleQueryError::QueryError(e) => e,
-                SingleQueryError::ExpectedOneGotNone => {
-                    // assuming this can only happen due to such a domain not existing
-                    ValidationFail::InstructionFailed(InstructionExecutionError::Find(
-                        FindError::Domain(domain_id.clone()),
-                    ))
+        {
+            let mut found = None;
+            let iter = host.query(FindDomains).execute()?;
+            for item in iter {
+                let domain = item.dbg_expect("Failed to get domain from cursor");
+                if domain.id() == domain_id {
+                    found = Some(domain);
+                    break;
                 }
-                _ => unreachable!(),
+            }
+            found.map(|d| d.owned_by() == authority).ok_or_else(|| {
+                ValidationFail::InstructionFailed(InstructionExecutionError::Find(
+                    FindError::Domain(domain_id.clone()),
+                ))
             })
+        }
     }
 
     /// Pass condition that checks if `authority` is the owner of domain.
@@ -1149,6 +1405,53 @@ pub(crate) fn roles_permissions(host: &Iroha) -> impl Iterator<Item = (RoleId, P
         })
 }
 
+fn has_permission_in_roles<P>(
+    roles: impl IntoIterator<Item = (RoleId, PermissionObject)>,
+    role_ids: &[RoleId],
+    target: &P,
+) -> bool
+where
+    P: Permission + PartialEq,
+    for<'a> P: TryFrom<&'a PermissionObject>,
+{
+    if role_ids.is_empty() {
+        return false;
+    }
+
+    let role_filter: BTreeSet<_> = role_ids.iter().cloned().collect();
+
+    roles
+        .into_iter()
+        .filter(|(role_id, _)| role_filter.contains(role_id))
+        .filter_map(|(_, permission)| P::try_from(&permission).ok())
+        .any(|permission| *target == permission)
+}
+
+fn has_permission_in_account<P>(permissions: &[PermissionObject], target: &P) -> bool
+where
+    P: Permission + PartialEq,
+    for<'a> P: TryFrom<&'a PermissionObject>,
+{
+    permissions
+        .iter()
+        .filter_map(|permission| P::try_from(permission).ok())
+        .any(|permission| *target == permission)
+}
+
+pub(crate) fn permission_owned_in_sources<P>(
+    account_permissions: &[PermissionObject],
+    roles: &[(RoleId, PermissionObject)],
+    role_ids: &[RoleId],
+    target: &P,
+) -> bool
+where
+    P: Permission + PartialEq,
+    for<'a> P: TryFrom<&'a PermissionObject>,
+{
+    has_permission_in_account(account_permissions, target)
+        || has_permission_in_roles(roles.iter().cloned(), role_ids, target)
+}
+
 /// Revoked all permissions satisfied given [condition].
 ///
 /// Note: you must manually call `deny!` if this function returns error.
@@ -1158,7 +1461,7 @@ pub(crate) fn revoke_permissions<V: Execute + ?Sized>(
 ) -> Result<(), ValidationFail> {
     for (owner_id, permission) in accounts_permissions(executor.host()) {
         if condition(&permission) {
-            let isi = Revoke::account_permission(permission, owner_id.clone());
+            let isi = RevokeBox::from(Revoke::account_permission(permission, owner_id.clone()));
 
             executor.host().submit(&isi)?;
         }
@@ -1166,11 +1469,154 @@ pub(crate) fn revoke_permissions<V: Execute + ?Sized>(
 
     for (role_id, permission) in roles_permissions(executor.host()) {
         if condition(&permission) {
-            let isi = Revoke::role_permission(permission, role_id.clone());
+            let isi = RevokeBox::from(Revoke::role_permission(permission, role_id.clone()));
 
             executor.host().submit(&isi)?;
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{num::NonZeroU64, vec::Vec};
+
+    use iroha_crypto::PublicKey;
+    use iroha_executor_data_model::permission::{domain::CanRegisterDomain, peer::CanManagePeers};
+
+    use super::{OnlyGenesis, PassCondition, has_permission_in_roles, permission_owned_in_sources};
+    use crate::{
+        data_model::ValidationFail,
+        prelude::Context,
+        smart_contract::{
+            Iroha,
+            data_model::{
+                block::BlockHeader,
+                permission::Permission as PermissionObject,
+                prelude::{AccountId, DomainId, RoleId},
+            },
+        },
+    };
+
+    fn make_context(authority: &AccountId, height: u64) -> Context {
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("height must be non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        Context {
+            authority: authority.clone(),
+            curr_block: header,
+        }
+    }
+
+    fn make_account_id() -> AccountId {
+        let domain: DomainId = "wonderland".parse().unwrap();
+        let public_key: PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .unwrap();
+        AccountId::new(domain, public_key)
+    }
+
+    #[test]
+    fn has_permission_in_roles_filters_by_role_ids() {
+        let role_id: RoleId = "role1".parse().unwrap();
+        let other_role_id: RoleId = "role2".parse().unwrap();
+
+        let permission = PermissionObject::from(CanManagePeers);
+
+        let roles = vec![
+            (role_id.clone(), permission.clone()),
+            (other_role_id, PermissionObject::from(CanManagePeers)),
+        ];
+
+        let role_ids = vec![role_id];
+
+        assert!(has_permission_in_roles(roles, &role_ids, &CanManagePeers));
+    }
+
+    #[test]
+    fn has_permission_in_roles_returns_false_when_role_ids_empty() {
+        let role_id: RoleId = "role1".parse().unwrap();
+        let roles = vec![(role_id, PermissionObject::from(CanManagePeers))];
+        let role_ids: Vec<RoleId> = Vec::new();
+
+        assert!(!has_permission_in_roles(roles, &role_ids, &CanManagePeers));
+    }
+
+    #[test]
+    fn has_permission_in_roles_deduplicates_role_ids() {
+        let role_id: RoleId = "role1".parse().unwrap();
+        let roles = vec![(role_id.clone(), PermissionObject::from(CanManagePeers))];
+        let role_ids = vec![role_id.clone(), role_id];
+
+        assert!(has_permission_in_roles(roles, &role_ids, &CanManagePeers));
+    }
+
+    #[test]
+    fn permission_owned_returns_true_for_direct_permission() {
+        let account_permissions = vec![PermissionObject::from(CanManagePeers)];
+        let role_permissions: Vec<(RoleId, PermissionObject)> = Vec::new();
+        let role_ids: Vec<RoleId> = Vec::new();
+
+        assert!(permission_owned_in_sources(
+            &account_permissions,
+            &role_permissions,
+            &role_ids,
+            &CanManagePeers,
+        ));
+    }
+
+    #[test]
+    fn permission_owned_returns_true_via_roles() {
+        let role_id: RoleId = "validators".parse().unwrap();
+        let account_permissions = Vec::new();
+        let role_permissions = vec![(role_id.clone(), PermissionObject::from(CanManagePeers))];
+        let role_ids = vec![role_id];
+
+        assert!(permission_owned_in_sources(
+            &account_permissions,
+            &role_permissions,
+            &role_ids,
+            &CanManagePeers,
+        ));
+    }
+
+    #[test]
+    fn permission_owned_returns_false_when_missing() {
+        let account_permissions = vec![PermissionObject::from(CanManagePeers)];
+        let role_permissions: Vec<(RoleId, PermissionObject)> = Vec::new();
+        let role_ids: Vec<RoleId> = Vec::new();
+
+        assert!(!permission_owned_in_sources(
+            &account_permissions,
+            &role_permissions,
+            &role_ids,
+            &CanRegisterDomain,
+        ));
+    }
+
+    #[test]
+    fn only_genesis_allows_first_block() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 1);
+
+        assert!(OnlyGenesis.validate(&authority, &Iroha, &context).is_ok());
+    }
+
+    #[test]
+    fn only_genesis_rejects_other_blocks() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+
+        let err = OnlyGenesis
+            .validate(&authority, &Iroha, &context)
+            .expect_err("expected rejection");
+        assert!(matches!(err, ValidationFail::NotPermitted(_)));
+    }
 }

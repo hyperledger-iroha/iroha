@@ -1,13 +1,11 @@
-#![allow(missing_docs)]
+//! Schema metadata test verifying compact vs fixed integer encodings.
 
-extern crate alloc;
-
-use core::any::TypeId;
+use std::any::TypeId;
 
 use iroha_schema::prelude::*;
-use parity_scale_codec::Encode;
+use norito::{Decode, Encode};
 
-#[derive(IntoSchema, Encode)]
+#[derive(IntoSchema, Encode, Decode)]
 struct Foo {
     #[codec(compact)]
     u8_compact: u8,
@@ -29,7 +27,7 @@ struct Foo {
 #[test]
 #[expect(clippy::too_many_lines)]
 fn compact() {
-    use alloc::collections::BTreeMap;
+    use std::collections::BTreeMap;
 
     use IntMode::*;
     use Metadata::*;

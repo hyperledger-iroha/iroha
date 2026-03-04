@@ -1,7 +1,7 @@
-use darling::{util::SpannedValue, FromDeriveInput};
+use darling::{FromDeriveInput, util::SpannedValue};
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, quote_spanned, ToTokens as _};
-use syn::{spanned::Spanned as _, Token};
+use quote::{ToTokens as _, quote, quote_spanned};
+use syn::{Token, spanned::Spanned as _};
 
 /// Attribute for skipping from attribute
 const SKIP_FROM_ATTR: &str = "skip_from";

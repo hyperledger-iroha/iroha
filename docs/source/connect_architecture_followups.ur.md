@@ -1,0 +1,30 @@
+---
+lang: ur
+direction: rtl
+source: docs/source/connect_architecture_followups.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 476331772efe169a7a073b561fa9935e314ff89d6bfff440f7246606c1c02669
+source_last_modified: "2026-01-03T18:07:58.049266+00:00"
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
+---
+
+# آرکیٹیکچر فالو اپ ایکشنز سے رابطہ کریں
+
+اس نوٹ نے انجینئرنگ فالو اپ کو اپنی گرفت میں لے لیا جو کراس ایس ڈی کے سے سامنے آئے
+آرکیٹیکچر ریویو سے رابطہ کریں۔ ہر صف کو کسی مسئلے کا نقشہ بنانا چاہئے (جیرا ٹکٹ یا PR)
+ایک بار جب کام شیڈول ہوجائے۔ ٹیبل کو اپ ڈیٹ کریں کیونکہ مالکان ٹریکنگ ٹکٹ تیار کرتے ہیں۔| آئٹم | تفصیل | مالک (زبانیں) | ٹریکنگ | حیثیت |
+| ------ | --------------- | ---------- | ---------- | -------- |
+| مشترکہ بیک آف مستقل | بیکار بیک آف + جٹر مددگار (`connect_retry::policy`) کو نافذ کریں اور انہیں سوئفٹ/Android/JS SDKs کے سامنے بے نقاب کریں۔ | سوئفٹ ایس ڈی کے ، اینڈروئیڈ نیٹ ورکنگ ٹی ایل ، جے ایس لیڈ | [iOS-Connect-001] (project_tracker/connect_architecture_followups_ios.md#ios-connect-001) | مکمل - `connect_retry::policy` ڈٹرمینسٹک اسپلٹ میکس 64 نمونے لینے کے ساتھ اترا۔ سوئفٹ (`ConnectRetryPolicy`) ، Android ، اور JS SDKs جہاز نے مدد کرنے والوں کے علاوہ گولڈن ٹیسٹوں کی عکس بندی کی۔ |
+| پنگ/پونگ انفورسمنٹ | متفقہ 30s کیڈینس اور براؤزر کم سے کم کلیمپ کے ساتھ قابل عمل دل کی دھڑکن کے نفاذ کو شامل کریں۔ سطح کی پیمائش (`connect.ping_miss_total`)۔ | سوئفٹ ایس ڈی کے ، اینڈروئیڈ نیٹ ورکنگ ٹی ایل ، جے ایس لیڈ | [iOS-Connect-002] (project_tracker/connect_architecture_followups_ios.md#ios-connect-002) | مکمل - Torii اب قابل ترتیب دل کی دھڑکن کے وقفوں کو نافذ کرتا ہے (`ping_interval_ms` ، `ping_miss_tolerance` ، `ping_min_interval_ms`) ، `connect.ping_miss_total` میٹرک کو بے نقاب کرتا ہے ، اور ریگریشن ٹیسٹ کو ڈھکنے والے دل کی دھڑکن کو ختم کرنے والے ٹیسٹوں کو ڈھک دیتا ہے۔ ایس ڈی کے کی خصوصیت اسنیپ شاٹس گاہکوں کے لئے نئے نوبس کی سطح پر ہے۔ |
+| آف لائن قطار استقامت | مشترکہ اسکیما کا استعمال کرتے ہوئے Norito `.to` جرنل رائٹرز/قارئین کو کنیکٹ کی قطار (سوئفٹ `FileManager` ، Android انکرپٹڈ اسٹوریج ، JS IndexedDB) کے لئے مشترکہ اسکیما کا استعمال کرتے ہوئے نافذ کریں۔ | سوئفٹ ایس ڈی کے ، اینڈروئیڈ ڈیٹا ماڈل ٹی ایل ، جے ایس لیڈ | [iOS-Connect-003] (project_tracker/connect_architecture_followups_ios.md#ios-connect-003) | مکمل - سوئفٹ ، اینڈروئیڈ ، اور جے ایس اب مشترکہ `ConnectQueueJournal` + تشخیصی مددگاروں کو برقرار رکھنے/اوور فلو ٹیسٹ کے ساتھ بھیج دیتے ہیں لہذا ثبوت بنڈل اس پار رہتے ہیں SDKS. 【Irohaswift/ذرائع/Irohaswift/connectQueuejorter.swift: 1 】【 جاوا/Iroha_android/src/main/java/org/hype rledger/iroha/android/connect/ConnectQueueJournal.java:1】【javascript/iroha_js/src/connectQueueJournal.js:1】 |
+| مضبوط باکس تصدیقی پے لوڈ | تھریڈ `{platform,evidence_b64,statement_hash}` پرس کی منظوری کے ذریعے اور DAPP SDKs میں توثیق شامل کریں۔ | اینڈروئیڈ کریپٹو ٹی ایل ، جے ایس لیڈ | [iOS-Connect-004] (project_tracker/connect_architecture_followups_ios.md#ios-connect-004) | زیر التواء |
+| گردش کنٹرول فریم | `Control::RotateKeys` + `RotateKeysAck` کو نافذ کریں اور تمام SDKs میں `cancelRequest(hash)` / گردش APIs کو بے نقاب کریں۔ | سوئفٹ ایس ڈی کے ، اینڈروئیڈ نیٹ ورکنگ ٹی ایل ، جے ایس لیڈ | [iOS-Connect-005] (project_tracker/connect_architecture_followups_ios.md#ios-connect-005) | زیر التواء |
+| ٹیلی میٹری برآمد کنندگان | emit `connect.queue_depth` ، `connect.reconnects_total` ، `connect.latency_ms` ، اور موجودہ ٹیلی میٹری پائپ لائنوں (اوپن لیمیٹری) میں کاؤنٹرز کو دوبارہ پلے کریں۔ | ٹیلی میٹری ڈبلیو جی ، ایس ڈی کے مالکان | [iOS-Connect-006] (project_tracker/connect_architecture_followups_ios.md#ios-connect-006) | زیر التواء |
+| سوئفٹ سی آئی گیٹنگ | کنیکٹ سے متعلق پائپ لائنوں کو یقینی بنائیں `make swift-ci` کی درخواست کریں لہذا فکسچر پیریٹی ، ڈیش بورڈ فیڈز ، اور بلڈکائٹ `ci/xcframework-smoke:<lane>:device_tag` میٹا ڈیٹا SDKs میں منسلک رہیں۔ | سوئفٹ ایس ڈی کے لیڈ ، انفرا کی تعمیر | [iOS-Connect-007] (project_tracker/connect_architecture_followups_ios.md#ios-connect-007) | زیر التواء |
+| فال بیک واقعہ کی رپورٹنگ | مشترکہ مرئیت کے لئے کنیکٹ ڈیش بورڈز میں XCFramework دھواں دھواں استعمال کرنے والے واقعات (`xcframework_smoke_fallback` ، `xcframework_smoke_strongbox_unavailable`) | سوئفٹ QA لیڈ ، تعمیر انفرا | [iOS-Connect-008] (project_tracker/connect_architecture_followups_ios.md#ios-connect-008) | زیر التواء || تعمیل منسلکات پاس تھرو | یقینی بنائیں کہ SDKs کو قبول کریں اور اختیاری `attachments[]` + `compliance_manifest_id` فیلڈز کو بغیر کسی نقصان کے منظوری والے پے لوڈ میں۔ | سوئفٹ ایس ڈی کے ، اینڈروئیڈ ڈیٹا ماڈل ٹی ایل ، جے ایس لیڈ | [iOS- ​​کنیکٹ -009] (project_tracker/connect_architecture_followups_ios.md#ios-connect-009) | زیر التواء |
+| غلطی کی درجہ بندی کی صف بندی | مشترکہ انوم (`Transport` ، `Codec` ، `Authorization` ، `Timeout` ، `QueueOverflow` ، `Internal`) دستاویزات/امتحان کے ساتھ پلیٹ فارم سے متعلق مخصوص غلطیوں پر نقشہ بنائیں۔ | سوئفٹ ایس ڈی کے ، اینڈروئیڈ نیٹ ورکنگ ٹی ایل ، جے ایس لیڈ | [iOS-Connect-010] (project_tracker/connect_architecture_followups_ios.md#ios-connect-010) | مکمل - سوئفٹ ، اینڈروئیڈ ، اور جے ایس ایس ڈی کے ایس نے مشترکہ `ConnectError` ریپر + ٹیلی میٹری مددگار README/ٹائپ اسکرپٹ/جاوا دستاویزات اور ریگریشن ٹیسٹ کے ساتھ TLS/ٹائم آؤٹ/HTTP/CODEC/قطار کے ساتھ بھیج دیا۔ مقدمات۔ 【دستاویزات/ماخذ/کنیکٹ_رور_ٹیکسونومی.م ڈی: 1 】【 Irohaswift/ذرائع/Irohaswift/connecteRror.swift: 1 】【 جاوا/Iroha_android/src /test/java/org/hyperledger/iroha/android/connect/connecterrortests.java:1 javascript/iroha_js/test/connecterror.test.js:1】 |
+| ورکشاپ کا فیصلہ لاگ | کونسل آرکائیو میں قبول شدہ فیصلوں کا خلاصہ کرتے ہوئے تشریح شدہ ڈیک / نوٹ شائع کریں۔ | ایس ڈی کے پروگرام لیڈ | [iOS-Connect-011] (project_tracker/connect_architecture_followups_ios.md#ios-connect-011) | زیر التواء |
+
+> ٹریکنگ شناخت کنندگان کو مالکان کے اوپن ٹکٹ کے طور پر پُر کیا جائے گا۔ `Status` کالم کو بھی جاری رکھیں۔

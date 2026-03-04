@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Hyperledger Iroha ਵਿੱਚ ਤੁਹਾਡਾ ਸਵਾਗਤ ਹੈ!",
+  "error.trace_config_setup": "ਕੰਫਿਗਰੇਸ਼ਨ ਟ੍ਰੇਸਿੰਗ ਸੈੱਟ ਨਹੀਂ ਕੀਤੀ ਜਾ ਸਕੀ",
+  "error.config": "ਕੰਫਿਗਰੇਸ਼ਨ ਦੀ ਗਲਤੀ!",
+  "error.logger": "ਲਾਗਿੰਗ ਸਿਸਟਮ ਸ਼ੁਰੂ ਨਹੀਂ ਕੀਤਾ ਜਾ ਸਕਿਆ",
+  "error.start": "Iroha ਸ਼ੁਰੂ ਨਹੀਂ ਕੀਤਾ ਜਾ ਸਕਿਆ",
+  "error.run": "Iroha ਚਲਾਉਂਦੇ ਸਮੇਂ ਗਲਤੀ ਆਈ",
+  "error.start_p2p": "P2P ਨੈੱਟਵਰਕ ਸ਼ੁਰੂ ਨਹੀਂ ਕੀਤਾ ਜਾ ਸਕਿਆ",
+  "error.init_kura": "Kura (ਬਲਾਕ ਸਟੋਰੇਜ) ਸ਼ੁਰੂ ਨਹੀਂ ਕੀਤਾ ਜਾ ਸਕਿਆ",
+  "error.start_dev_telemetry": "ਡਿਵੈਲਪਮੈਂਟ ਟੈਲੀਮੀਟਰੀ ਸੇਵਾ ਸ਼ੁਰੂ ਨਹੀਂ ਹੋਈ",
+  "error.start_telemetry": "ਟੈਲੀਮੀਟਰੀ ਸੇਵਾ ਸ਼ੁਰੂ ਨਹੀਂ ਹੋਈ",
+  "error.listen_os_signal": "OS ਸੰਕੇਤ ਸੁਣਨ ਲਈ ਸੈੱਟਅੱਪ ਨਹੀਂ ਹੋ ਸਕਿਆ",
+  "error.start_torii": "Torii (Iroha HTTP API ਗੇਟਵੇ) ਸ਼ੁਰੂ ਨਹੀਂ ਕੀਤਾ ਜਾ ਸਕਿਆ"
+}

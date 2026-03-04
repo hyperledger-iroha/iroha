@@ -1,0 +1,3 @@
+bundle,capture_timestamp,execution_mode,gpu_backend,host,labels,mode,mean_ms,min_ms,max_ms,columns,states,iterations,trace_log2,warmups,speedup_vs_scalar
+fastpq_metal_bench_full.json,2025-11-09T06:04:07Z,gpu,metal,,,default,1990.492,1847.57,2239.322,64,262144,5,12,1,1.002
+fastpq_metal_bench_full.json,2025-11-09T06:04:07Z,gpu,metal,,,scalar,1994.534,1928.391,2136.453,64,262144,5,12,1,

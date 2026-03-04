@@ -1,0 +1,30 @@
+---
+lang: ka
+direction: ltr
+source: docs/source/connect_architecture_followups.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 476331772efe169a7a073b561fa9935e314ff89d6bfff440f7246606c1c02669
+source_last_modified: "2025-12-29T18:16:35.934525+00:00"
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
+---
+
+# დააკავშირეთ არქიტექტურის შემდგომი მოქმედებები
+
+ეს ჩანაწერი აღწერს საინჟინრო შემდგომ შედეგებს, რომლებიც წარმოიშვა cross-SDK-დან
+დაკავშირება არქიტექტურის მიმოხილვა. თითოეული მწკრივი უნდა იყოს დაკავშირებული პრობლემასთან (Jira ბილეთი ან PR)
+სამუშაოს დაგეგმვის შემდეგ. განაახლეთ ცხრილი, რადგან მფლობელები ქმნიან თვალთვალის ბილეთებს.| ნივთი | აღწერა | მფლობელ(ებ)ი | თვალთვალის | სტატუსი |
+|------|-------------|----------|---------|-------|
+| გაზიარებული უკან დახევის მუდმივები | განახორციელეთ ექსპონენციური უკან დახევა + ჯიტერის დამხმარეები (`connect_retry::policy`) და გამოავლინეთ ისინი Swift/Android/JS SDK-ებზე. | Swift SDK, Android Networking TL, JS Lead | [IOS-CONNECT-001](project_tracker/connect_architecture_followups_ios.md#ios-connect-001) | დასრულებული — `connect_retry::policy` დაეშვა დეტერმინისტული splitmix64 შერჩევით; Swift (`ConnectRetryPolicy`), Android და JS SDK-ები აგზავნიან სარკისებურ დამხმარეებს პლუს ოქროს ტესტებს. |
+| პინგ/პონგის აღსრულება | დაამატეთ გულისცემის კონფიგურირებადი გაძლიერება შეთანხმებული 30-იანი წლებით და ბრაუზერის მინიმალური დამჭერით; ზედაპირის მეტრიკა (`connect.ping_miss_total`). | Swift SDK, Android Networking TL, JS Lead | [IOS-CONNECT-002](project_tracker/connect_architecture_followups_ios.md#ios-connect-002) | დასრულებულია — Torii ახლა ახორციელებს გულისცემის რეგულირებად ინტერვალებს (`ping_interval_ms`, `ping_miss_tolerance`, `ping_min_interval_ms`), ავლენს `connect.ping_miss_total` გამორთვის გულის შეკუმშვის მეტრიკას და ტესტირებას. SDK ფუნქციის სნეპშოტები ასახავს ახალ ღილაკებს კლიენტებისთვის. |
+| ხაზგარეშე რიგის მდგრადობა | დანერგეთ Norito `.to` ჟურნალის მწერლები/მკითხველები Connect რიგებისთვის (Swift `FileManager`, Android დაშიფრული მეხსიერება, JS IndexedDB) საერთო სქემის გამოყენებით. | Swift SDK, Android Data Model TL, JS Lead | [IOS-CONNECT-003](project_tracker/connect_architecture_followups_ios.md#ios-connect-003) | დასრულებულია — Swift, Android და JS ახლა აგზავნიან საერთო `ConnectQueueJournal` + დიაგნოსტიკის დამხმარეებს შეკავების/გადასვლის ტესტებით, რათა მტკიცებულებათა პაკეტები დარჩეს განმსაზღვრელი SDK-ები.【IrohaSwift/Sources/IrohaSwift/ConnectQueueJournal.swift:1】【java/iroha_android/src/main/java/org/hype rledger/iroha/android/connect/ConnectQueueJournal.java:1】【javascript/iroha_js/src/connectQueueJournal.js:1】 |
+| StrongBox ატესტაციის დატვირთვა | გადაიტანეთ `{platform,evidence_b64,statement_hash}` საფულის დამტკიცებების მეშვეობით და დაამატეთ დადასტურება dApp SDK-ებში. | Android Crypto TL, JS Lead | [IOS-CONNECT-004](project_tracker/connect_architecture_followups_ios.md#ios-connect-004) | მომლოდინე |
+| როტაციის მართვის ჩარჩო | დანერგეთ `Control::RotateKeys` + `RotateKeysAck` და გამოავლინეთ `cancelRequest(hash)` / ბრუნვის API-ები ყველა SDK-ში. | Swift SDK, Android Networking TL, JS Lead | [IOS-CONNECT-005](project_tracker/connect_architecture_followups_ios.md#ios-connect-005) | მომლოდინე |
+| ტელემეტრიის ექსპორტიორები | გამოაგზავნეთ `connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms` და ხელახლა დაუკრათ მრიცხველები არსებულ ტელემეტრიულ მილსადენებში (OpenTelemetry). | Telemetry WG, SDK მფლობელები | [IOS-CONNECT-006](project_tracker/connect_architecture_followups_ios.md#ios-connect-006) | მომლოდინე |
+| Swift CI კარიბჭე | დარწმუნდით, რომ დაკავშირებასთან დაკავშირებული მილსადენები გამოიძახებენ `make swift-ci`, რათა დამაგრების პარიტეტი, დაფის არხები და Buildkite `ci/xcframework-smoke:<lane>:device_tag` მეტამონაცემები დარჩეს გასწორებული SDK-ებში. | Swift SDK წამყვანი, Build Infra | [IOS-CONNECT-007](project_tracker/connect_architecture_followups_ios.md#ios-connect-007) | მომლოდინე |
+| სარეზერვო ინციდენტის მოხსენება | შეაერთეთ XCFramework კვამლის აღკაზმვის ინციდენტები (`xcframework_smoke_fallback`, `xcframework_smoke_strongbox_unavailable`) Connect საინფორმაციო დაფებში საერთო ხილვადობისთვის. | Swift QA Lead, Build Infra | [IOS-CONNECT-008](project_tracker/connect_architecture_followups_ios.md#ios-connect-008) | მომლოდინე || შესაბამისობის დანართების გავლა | დარწმუნდით, რომ SDK-ები მიიღებენ და გადააგზავნონ არასავალდებულო `attachments[]` + `compliance_manifest_id` ველები დამტკიცების კეთილმოწყობაში დანაკარგის გარეშე. | Swift SDK, Android Data Model TL, JS Lead | [IOS-CONNECT-009](project_tracker/connect_architecture_followups_ios.md#ios-connect-009) | მომლოდინე |
+| შეცდომა ტაქსონომიის გასწორება | გაზიარებული სია (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`) გამაძლიერებლების/სპეციფიკური პლატფორმებით. | Swift SDK, Android Networking TL, JS Lead | [IOS-CONNECT-010](project_tracker/connect_architecture_followups_ios.md#ios-connect-010) | დასრულებულია - Swift, Android და JS SDK-ები აგზავნიან საერთო `ConnectError` გადასაფარებელს + ტელემეტრიის დამხმარეებს README/TypeScript/Java დოკუმენტებით და რეგრესიის ტესტებით, რომლებიც მოიცავს TLS/timeout/HTTP/codec/რიგს. შემთხვევები.【docs/source/connect_error_taxonomy.md:1】【IrohaSwift/Sources/IrohaSwift/ConnectError.swift:1】【java/iroha_android/src /test/java/org/hyperledger/iroha/android/connect/ConnectErrorTests.java:1】【javascript/iroha_js/test/connectError.test.js:1】 |
+| სემინარის გადაწყვეტილების ჟურნალი | გამოაქვეყნეთ ანოტირებული გემბანი / შენიშვნები, რომლებიც აჯამებს მიღებული გადაწყვეტილებებს საბჭოს არქივში. | SDK პროგრამის წამყვანი | [IOS-CONNECT-011](project_tracker/connect_architecture_followups_ios.md#ios-connect-011) | მომლოდინე |
+
+> მესაკუთრეთა ბილეთების გახსნისას შეივსება თვალთვალის იდენტიფიკატორები; განაახლეთ `Status` სვეტი პრობლემის პროგრესთან ერთად.

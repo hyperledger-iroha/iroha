@@ -1,0 +1,220 @@
+groups:
+  - name: sorafs-capacity
+    interval: 1m
+    rules:
+      - alert: SoraFSReplicationBacklogGrowing
+        expr: torii_sorafs_replication_backlog_total > 10
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS replication backlog above threshold"
+          description: |
+            Pending replication orders stayed above 10 for 10 minutes
+            (value={{ printf "%.0f" $value }}). Reassign manifests or investigate
+            stalled providers before deadlines expire.
+      - alert: SoraFSCapacityPressure
+        expr: torii_sorafs_capacity_utilised_gib / clamp_min(torii_sorafs_capacity_effective_gib, 1) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS provider utilisation over 90%"
+          description: |
+            Provider {{ $labels.provider }} is consuming {{ printf "%.1f" (100 * $value) }}% of
+            its effective capacity for 5 minutes. Add headroom or pause new
+            replication orders for the provider before saturation causes SLA
+            misses.
+      - alert: SoraFSOutstandingDemandSpike
+        expr: torii_sorafs_capacity_outstanding_gib / clamp_min(torii_sorafs_capacity_declared_gib, 1) > 0.4
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS outstanding reservations exceed 40% of declaration"
+          description: |
+            Provider {{ $labels.provider }} has more than 40% of its declared
+            GiB tied up in outstanding reservations (value={{ printf "%.2f" (100 * $value) }}%).
+            Audit replication scheduler backlog and confirm incentives before
+            accepting additional capacity from this provider.
+      - alert: SoraFSReplicationExpiredOrders
+        expr: increase(torii_sorafs_registry_orders_total{status="expired"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS replication orders expired"
+          description: |
+            At least one replication order expired within the last 5 minutes.
+            Review torii_sorafs_registry_orders_total{status="expired"} to
+            identify the provider and manifest combinations that need manual
+            intervention.
+      - alert: SoraFSGCErrorRuns
+        expr: increase(torii_sorafs_gc_runs_total{result="error"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS GC sweeps reporting errors"
+          description: |
+            GC sweeps reported errors within the last 15 minutes. Check
+            torii_sorafs_gc_runs_total{result="error"} and logs for failed
+            evictions or storage access issues before capacity pressure builds.
+      - alert: SoraFSGCStalled
+        expr: torii_sorafs_gc_expired_manifests > 0 and sum(increase(torii_sorafs_gc_evictions_total[30m])) == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS retention expiry backlog is not clearing"
+          description: |
+            At least one manifest is past retention expiry, but no GC evictions
+            were recorded for 30 minutes. Investigate GC scheduling, repair
+            backlogs, and retention grace settings.
+      - alert: SoraFSGCBlocked
+        expr: increase(torii_sorafs_gc_blocked_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS GC evictions blocked"
+          description: |
+            GC reported blocked evictions in the last 15 minutes (reason={{ $labels.reason }}).
+            Resolve active repairs or policy constraints preventing retention cleanup.
+      - alert: SoraFSRepairBacklogHigh
+        expr: sum(torii_sorafs_repair_queue_depth) > 50 or torii_sorafs_repair_backlog_oldest_age_seconds > 14400
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS repair backlog above SLA thresholds"
+          description: |
+            Repair backlog exceeded thresholds for 10 minutes: queue depth over 50 tickets or
+            oldest queued ticket older than 4 hours. Check worker availability, per-provider
+            queue depth, and SLA timer configuration before the backlog escalates to slashes.
+      - alert: SoraFSRepairEscalations
+        expr: increase(torii_sorafs_repair_tasks_total{status="escalated"}[1h]) > 3
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS repair escalations elevated"
+          description: |
+            More than 3 repair tickets escalated within the last hour (SLA breaches). Review
+            audit evidence, verify worker health, and consider pausing new pins for affected
+            providers while the backlog is cleared.
+      - alert: SoraFSRepairLeaseExpirySpike
+        expr: increase(torii_sorafs_repair_lease_expired_total[1h]) > 5
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS repair lease expiries spiking"
+          description: |
+            Repair worker leases expired more than 5 times within the last hour. Investigate
+            worker crashes, clock skew, or stalled repair execution before SLA deadlines are missed.
+      - alert: SoraFSRetentionBlockedEvictions
+        expr: increase(torii_sorafs_gc_blocked_total{reason="repair_active"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS retention evictions blocked by active repairs"
+          description: |
+            Retention evictions were blocked by active repair tickets in the last 15 minutes.
+            Resolve outstanding repairs or reassign workers to unblock retention cleanup.
+      - alert: SoraFSReserveLedgerTopUpRequired
+        expr: sorafs_reserve_ledger_top_up_shortfall_xor > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reserve ledger projects a top-up requirement"
+          description: |
+            The latest `sorafs reserve ledger` digest (label={{ $labels.label }})
+            indicates a positive top-up shortfall (value={{ $value }} XOR).
+            Trigger the reserve funding workflow before rent transfers are posted.
+      - alert: SoraFSReserveLedgerUnderwritingBreach
+        expr: sorafs_reserve_ledger_meets_underwriting < 1
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Reserve ledger fails underwriting gate"
+          description: |
+            Ledger digest (label={{ $labels.label }}) reported `meets_underwriting=0`.
+            Halt rent disbursements and investigate the underwriting inputs before
+            approving the transfer batch.
+      - alert: SoraFSReserveLedgerRentTransferMissing
+        expr: max by (label) (sorafs_reserve_ledger_rent_due_xor > 0)
+          unless on (label) (max by (label) (sorafs_reserve_ledger_transfer_xor{transfer="rent"} > 0))
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reserve ledger missing rent transfer entry"
+          description: |
+            Ledger digest (label={{ $labels.label }}) shows rent due but no rent transfer
+            in the transfer feed. Re-run `sorafs reserve ledger` and ensure the digest
+            includes the rent `Transfer` ISI before publishing or executing the batch.
+      - alert: SoraFSReserveLedgerTopUpTransferMissing
+        expr: max by (label) (sorafs_reserve_ledger_top_up_shortfall_xor > 0)
+          unless on (label) (
+            max by (label) (sorafs_reserve_ledger_transfer_xor{transfer="reserve_top_up"} > 0)
+          )
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reserve ledger missing reserve top-up transfer entry"
+          description: |
+            Ledger digest (label={{ $labels.label }}) reports a top-up shortfall, but the
+            transfer feed has no `reserve_top_up` entry. Regenerate the digest and confirm
+            the Norito transfer plan is included before approving the reserve batch.
+      - alert: SoraFSReserveTransferRentMismatch
+        expr: abs(sorafs_reserve_ledger_rent_due_xor - on(label) (sum by (label) (sorafs_reserve_ledger_transfer_xor{transfer="rent"}) or on(label) sorafs_reserve_ledger_rent_due_xor * 0)) > 0.000001
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reserve ledger rent transfer mismatch"
+          description: |
+            The ledger digest (label={{ $labels.label }}) shows rent due that is not matched
+            by the transfer feed (delta={{ $value }} XOR). Re-run `sorafs reserve ledger`
+            and regenerate the Prometheus textfile export before approving treasury transfers.
+      - alert: SoraFSReserveTransferTopUpMismatch
+        expr: abs(sorafs_reserve_ledger_reserve_shortfall_xor - on(label) (sum by (label) (sorafs_reserve_ledger_transfer_xor{transfer="reserve_top_up"}) or on(label) sorafs_reserve_ledger_reserve_shortfall_xor * 0)) > 0.000001
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reserve ledger reserve top-up mismatch"
+          description: |
+            Ledger digest (label={{ $labels.label }}) reports a reserve shortfall that is not
+            covered by the transfer feed (delta={{ $value }} XOR). Refresh the digest/textfile
+            export so dashboards and treasury runners see the corrected transfer set.
+      - alert: SoraFSReserveLedgerInstructionMissing
+        expr: sorafs_reserve_ledger_instruction_total < 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reserve ledger emitted no transfer instructions"
+          description: |
+            Ledger digest (label={{ $labels.label }}) reported zero transfer instructions
+            for at least 5 minutes. Re-run `sorafs reserve ledger` and confirm the CLI
+            produced both rent and reserve transfers before publishing the digest.
+      - alert: SoraFSCapacityReconciliationMismatch
+        expr: (sum(sorafs_capacity_reconciliation_missing_total) > 0)
+          or (sum(sorafs_capacity_reconciliation_overpaid_total) > 0)
+          or (sum(sorafs_capacity_reconciliation_unexpected_transfers_total) > 0)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Capacity ledger reconciliation drift detected"
+          description: |
+            The capacity reconciliation textfile reported missing/overpaid settlements or
+            unexpected provider transfers. Check the latest `capacity_reconcile.py` run,
+            compare the `/v1/sorafs/capacity/state` snapshot against the executed XOR
+            ledger export, and block treasury approval until the mismatch is resolved.

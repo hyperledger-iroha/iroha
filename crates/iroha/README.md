@@ -16,7 +16,7 @@ Follow the [Iroha 2 tutorial](https://docs.iroha.tech/guide/tutorials/rust.html)
 Add the following to the manifest file of your Rust project:
 
 ```toml
-iroha = { git = "https://github.com/hyperledger-iroha/iroha" }
+iroha = { path = "path/to/iroha" }
 ```
 
 ## Examples

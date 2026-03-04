@@ -29,11 +29,11 @@
 //!
 //! ```
 //! use iroha_config_base::{
+//!     WithOrigin,
 //!     read::{ConfigReader, FinalWrap, ReadConfig},
 //!     toml::TomlSource,
-//!     WithOrigin,
 //! };
-//! use serde::Deserialize;
+//! use norito::derive::JsonDeserialize;
 //! use toml::toml;
 //!
 //! struct Config {
@@ -42,7 +42,7 @@
 //!     more: Option<More>,
 //! }
 //!
-//! #[derive(Deserialize)]
+//! #[derive(JsonDeserialize)]
 //! struct More {
 //!     foo: u8,
 //! }
@@ -86,16 +86,16 @@
 //!
 //! ## Example: using macro
 //!
-//! [`iroha_config_base_derive::ReadConfig`] macro simplifies manual work.
+//! [`iroha_derive::ReadConfig`] macro simplifies manual work.
 //! The previous example might be simplified as follows:
 //!
 //! ```
 //! use iroha_config_base::{
+//!     ReadConfig, WithOrigin,
 //!     read::{ConfigReader, ReadConfig},
 //!     toml::TomlSource,
-//!     ReadConfig, WithOrigin,
 //! };
-//! use serde::Deserialize;
+//! use norito::derive::JsonDeserialize;
 //! use toml::toml;
 //!
 //! #[derive(ReadConfig)]
@@ -113,7 +113,7 @@
 //!     more: Option<More>,
 //! }
 //!
-//! #[derive(Deserialize)]
+//! #[derive(JsonDeserialize)]
 //! struct More {
 //!     foo: u8,
 //! }
@@ -135,7 +135,7 @@
 //!
 //! See macro documentation for details.
 
-#![warn(missing_docs)]
+#![deny(missing_docs)]
 
 pub mod attach;
 pub mod env;
@@ -148,7 +148,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub use iroha_config_base_derive::ReadConfig;
+pub use iroha_derive::ReadConfig;
 
 use crate::attach::ConfigValueAndOrigin;
 
@@ -199,18 +199,33 @@ where
     }
 }
 
-/// Indicates an origin where the value of a config parameter came from.
+/// Indicates the origin where a configuration parameter value came from.
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
 pub enum ParameterOrigin {
-    /// Value came from a file
-    File { id: ParameterId, path: PathBuf },
-    /// Value came from an environment variable
-    Env { id: ParameterId, var: String },
-    /// It is a default value of a parameter
-    Default { id: ParameterId },
-    /// Custom origin
-    Custom { message: String },
+    /// Value came from a file.
+    File {
+        /// Parameter identifier.
+        id: ParameterId,
+        /// Path to the configuration file where it was read.
+        path: PathBuf,
+    },
+    /// Value came from an environment variable.
+    Env {
+        /// Parameter identifier.
+        id: ParameterId,
+        /// Name of the environment variable.
+        var: String,
+    },
+    /// It is a default value of a parameter.
+    Default {
+        /// Parameter identifier.
+        id: ParameterId,
+    },
+    /// Custom origin.
+    Custom {
+        /// Free-form description of the origin.
+        message: String,
+    },
 }
 
 impl ParameterOrigin {
@@ -303,6 +318,35 @@ impl<T> WithOrigin<T> {
             value: fun(value),
             origin,
         }
+    }
+}
+
+impl<T> norito::json::JsonSerialize for WithOrigin<T>
+where
+    T: norito::json::JsonSerialize,
+{
+    fn json_serialize(&self, out: &mut String) {
+        self.value.json_serialize(out);
+    }
+}
+
+impl<T> norito::json::JsonDeserialize for WithOrigin<T>
+where
+    T: norito::json::JsonDeserialize,
+{
+    fn json_deserialize(p: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
+        let value = T::json_deserialize(p)?;
+        Ok(WithOrigin::inline(value))
+    }
+
+    fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+        let inner = T::json_from_value(value)?;
+        Ok(WithOrigin::inline(inner))
+    }
+
+    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
+        let inner = T::json_from_map_key(key)?;
+        Ok(WithOrigin::inline(inner))
     }
 }
 

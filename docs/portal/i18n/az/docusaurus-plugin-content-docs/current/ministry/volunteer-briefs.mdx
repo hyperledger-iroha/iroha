@@ -1,0 +1,42 @@
+---
+lang: az
+direction: ltr
+source: docs/portal/docs/ministry/volunteer-briefs.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Volunteer Briefs
+description: Submit, lint, and publish citizen briefs for Ministry blacklist reviews.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+VolunteerLintStatusTable-ı '@site/src/components/VolunteerLintStatusTable'dan idxal edin;
+
+## Baxış
+
+Könüllü brifinqlər qara siyahı və ya siyasət dəyişiklikləri təklif edildikdə İnformasiya Nazirliyinin nəzərdən keçirdiyi dəstək/müxalif/kontekst baxışlarını əks etdirir. Hər bir təqdimat `iroha_data_model::ministry::VolunteerBriefV1` (versiya `1`) tərəfindən həyata keçirilən kanonik sxemə uyğun olmalıdır, belə ki:
+
+1. İdarəetmə panelləri fakt cədvəllərini deterministik şəkildə müqayisə edə bilər.
+2. Maraqların toqquşması ilə bağlı açıqlamalar dərc edilməzdən əvvəl qüvvəyə minir.
+3. Mövzudan kənar və ya astroturfed təqdimatlar auditdən çıxarılmadan dayandırılır.
+
+Faydalı yük yaratmaq üçün `docs/source/ministry/volunteer_brief_template.md` və ya `cargo xtask ministry-transparency ingest` köməkçisində şablondan istifadə edin. CLI Norito strukturunu təsdiq edir, moderasiya teqlərini silir və neçə fakt sırasının, sitatların və açıqlamaların qəbul edildiyini göstərən xülasə verir.
+
+## Nəşr xətti və SLA| Mərhələ | Pəncərə | Təfərrüatlar |
+|-------|--------|---------|
+| Qəbul və doğrulama | T+0 - 6 saat | Yüklər könüllü forması və ya CLI vasitəsilə yüklənir. `VolunteerBriefV1::validate` sxemi tətbiq edir (versiya, RFC3339 vaxt damğası, açıqlama siyasəti, həzm formatı). Uğursuzluqlar təsirli səhv kodları ilə dərhal rədd edilir. |
+| Tərcümə və moderasiya | T+6 - 24 saat | Rəyçilər moderasiya teqlərini tətbiq edir (`needs-translation`, `duplicate`, `policy-escalation` və s.), kontaktları redaktə edir və mövzudan kənar qeydləri qeyd edir. Teqlər Norito faydalı yükdə saxlanılır, beləliklə, aşağı axın avtomatlaşdırılması girişləri sıxışdıra və ya vurğulaya bilər. |
+| Portal nəşri | T+24 - 48 saat | Etibarlı brifinqlər **Könüllülərin Rəyləri** altında müvafiq təklif səhifəsi ilə yanaşı dərc olunur. Mövzudan kənar yazılar xam arxivdə qalır, lakin ümumi mövqe sayılarından xaric edilir. |
+
+`policy-escalation` və ya `astroturf` teqləri mövcud olduqda sürətləndirilmiş idarəetmə (≤12 saat) avtomatik olaraq işə salınır. Operatorlar uyğunluğu `submitted_at` və portalın dərci arasındakı vaxtı izləyən Könüllü Məlumatlar Grafana paneli vasitəsilə yoxlaya bilərlər.
+
+## Çatdırılma- **Sxem və sənədlər:** `VolunteerBriefV1` paylaşılan məlumat modelində yaşayır və ətraflı sahə təlimatı və nümunə faydalı yük `docs/source/ministry/volunteer_brief_template.md` və `docs/examples/ministry/volunteer_brief_template.json`-də yerləşir.
+- **Validasiya aləti:** `cargo xtask ministry-transparency volunteer-validate --input <file> [--json-output artifacts/ministry/volunteer-lint.json]` portal quruluşu tərəfindən istifadə edilən eyni lintsləri işlədir; `ingest --volunteer <file>` bütün paketi dərc üçün hazırlamaq istədiyiniz zaman əlçatan qalır.
+- **Portal səthi:** Hər bir təklif səhifəsi deşifrə edilmiş dəstək/müxalif/kontekst brifinqlərinə keçid verir və vətəndaşların fikirlərini xam JSON yükləmədən görünən edir. Moderasiya metadatası brifinqlə yanaşı göstərilir ki, münsiflər girişin niyə gecikdiyini və ya xaric edildiyini başa düşsünlər.
+
+Əlavə avtomatlaşdırma (məsələn, toplu idxal API-ləri və ya genişləndirilmiş analitika) tələb olunarsa, yol xəritəsinin **MINFO-3 — Könüllü maraq paneli infrastrukturuna** baxın.
+
+## Lint statusu idarə paneli
+
+Portal quruluşu indi `npm run generate:volunteer-lint`-i idarə edir, bu da hər bir qeydiyyatdan keçmiş könüllü brifinqdə `cargo xtask ministry-transparency volunteer-validate --json-output …`-i işə salır. Nəticə manifest aşağıda göstərilir ki, rəyçilər dərc etməzdən əvvəl hər bir təklifin lint statusunu təsdiq edə bilsinlər.
+

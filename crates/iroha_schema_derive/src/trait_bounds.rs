@@ -6,9 +6,8 @@ use std::iter;
 
 use proc_macro2::Ident;
 use syn::{
-    parse_quote,
+    Generics, Type, TypePath, parse_quote,
     visit::{self, Visit},
-    Generics, Type, TypePath,
 };
 
 use crate::{IntoSchemaData, IntoSchemaField};
@@ -45,11 +44,11 @@ struct TypePathStartsWithIdent<'a> {
 
 impl<'ast> Visit<'ast> for TypePathStartsWithIdent<'_> {
     fn visit_type_path(&mut self, i: &'ast TypePath) {
-        if let Some(segment) = i.path.segments.first() {
-            if &segment.ident == self.ident {
-                self.result = true;
-                return;
-            }
+        if let Some(segment) = i.path.segments.first()
+            && &segment.ident == self.ident
+        {
+            self.result = true;
+            return;
         }
 
         visit::visit_type_path(self, i);
@@ -228,7 +227,7 @@ fn get_types_to_add_trait_bound(
 }
 
 fn collect_types(data: &IntoSchemaData, type_filter: fn(&IntoSchemaField) -> bool) -> Vec<Type> {
-    let types = match *data {
+    match *data {
         IntoSchemaData::Struct(ref data) => data
             .fields
             .iter()
@@ -248,7 +247,5 @@ fn collect_types(data: &IntoSchemaData, type_filter: fn(&IntoSchemaField) -> boo
                     .collect::<Vec<_>>()
             })
             .collect(),
-    };
-
-    types
+    }
 }

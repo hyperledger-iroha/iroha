@@ -6,14 +6,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dashmap::{mapref::entry::Entry, DashMap};
+use dashmap::{DashMap, mapref::entry::Entry};
 use iroha_config::parameters::actual::LiveQueryStore as Config;
 use iroha_data_model::{
     account::AccountId,
     query::{
+        QueryOutput, QueryOutputBatchBoxTuple,
         error::QueryExecutionFail,
         parameters::{ForwardCursor, QueryId},
-        QueryOutput, QueryOutputBatchBoxTuple,
     },
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
@@ -65,9 +65,11 @@ impl LiveQueryStore {
     ///
     /// Not marked as `#[cfg(test)]` because it is used in benches as well.
     pub fn start_test() -> LiveQueryStoreHandle {
-        Self::from_config(Config::default(), ShutdownSignal::new())
-            .start()
-            .0
+        // For tests, avoid spawning the pruning task to remove the dependency
+        // on a running Tokio runtime. Tests typically exercise iterator paths
+        // directly and do not rely on background pruning.
+        let store = Arc::new(Self::from_config(Config::default(), ShutdownSignal::new()));
+        LiveQueryStoreHandle::new(store)
     }
 
     /// Start [`LiveQueryStore`]. Requires a [`tokio::runtime::Runtime`] being run
@@ -93,14 +95,7 @@ impl LiveQueryStore {
             loop {
                 tokio::select! {
                     _ = idle_interval.tick() => {
-                        self.queries.retain(|_, query| {
-                            if query.last_access_time.elapsed() <= self.idle_time {
-                                true
-                            } else {
-                                self.decrease_queries_per_user(query.authority.clone());
-                                false
-                            }
-                        });
+                        self.prune_expired_queries();
                     }
                     () = self.shutdown_signal.receive() => {
                         iroha_logger::debug!("LiveQueryStore is being shut down.");
@@ -110,6 +105,20 @@ impl LiveQueryStore {
                 }
             }
         })
+    }
+
+    fn prune_expired_queries(&self) -> Vec<QueryId> {
+        let mut expired = Vec::new();
+        self.queries.retain(|key, query| {
+            if query.last_access_time.elapsed() <= self.idle_time {
+                true
+            } else {
+                expired.push(key.clone());
+                self.decrease_queries_per_user(query.authority.clone());
+                false
+            }
+        });
+        expired
     }
 
     fn insert(&self, query_id: QueryId, live_query: ErasedQueryIterator, authority: AccountId) {
@@ -129,11 +138,14 @@ impl LiveQueryStore {
     }
 
     fn decrease_queries_per_user(&self, authority: AccountId) {
-        if let Entry::Occupied(mut entry) = self.queries_per_user.entry(authority) {
-            *entry.get_mut() -= 1;
-            if *entry.get() == 0 {
-                entry.remove_entry();
-            }
+        let Entry::Occupied(mut entry) = self.queries_per_user.entry(authority) else {
+            return;
+        };
+
+        let counter = entry.get_mut();
+        *counter -= 1;
+        if *counter == 0 {
+            entry.remove_entry();
         }
     }
 
@@ -153,19 +165,22 @@ impl LiveQueryStore {
     // If query becomes depleted, it will be removed from the store.
     fn get_query_next_batch(
         &self,
-        query_id: QueryId,
+        query_id: &QueryId,
         cursor: NonZeroU64,
     ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<NonZeroU64>), QueryExecutionFail> {
         trace!(%query_id, "Advancing existing query");
-        let QueryInfo {
-            mut live_query,
-            authority,
-            ..
-        } = self.remove(&query_id).ok_or(QueryExecutionFail::NotFound)?;
-        let (next_batch, next_cursor) = live_query.next_batch(cursor.get())?;
-        let remaining = live_query.remaining();
-        if next_cursor.is_some() {
-            self.insert(query_id, live_query, authority);
+        let (next_batch, remaining, next_cursor) = {
+            let mut entry = self
+                .queries
+                .get_mut(query_id)
+                .ok_or(QueryExecutionFail::Expired)?;
+            let (next_batch, next_cursor) = entry.live_query.next_batch(cursor.get())?;
+            let remaining = entry.live_query.remaining();
+            entry.last_access_time = Instant::now();
+            (next_batch, remaining, next_cursor)
+        };
+        if next_cursor.is_none() {
+            self.remove(query_id);
         }
         Ok((next_batch, remaining, next_cursor))
     }
@@ -178,15 +193,17 @@ impl LiveQueryStore {
             );
             return Err(QueryExecutionFail::CapacityLimit);
         }
-        if let Some(value) = self.queries_per_user.get(authority) {
-            if *value >= self.capacity_per_user.get() {
-                warn!(
-                    max_queries_per_user = self.capacity_per_user,
-                    %authority,
-                    "Account reached maximum allowed number of queries in LiveQueryStore"
-                );
-                return Err(QueryExecutionFail::CapacityLimit);
-            }
+        if self
+            .queries_per_user
+            .get(authority)
+            .is_some_and(|value| *value >= self.capacity_per_user.get())
+        {
+            warn!(
+                max_queries_per_user = self.capacity_per_user,
+                %authority,
+                "Account reached maximum allowed number of queries in LiveQueryStore"
+            );
+            return Err(QueryExecutionFail::AuthorityQuotaExceeded);
         }
         Ok(())
     }
@@ -206,14 +223,19 @@ impl LiveQueryStoreHandle {
 
     /// Construct a batched response from a post-processed query output.
     ///
+    /// # Parameters
+    /// * `gas_budget` — optional budget hint that will be echoed in the returned cursor.
+    ///
     /// # Errors
     ///
-    /// - Returns [`QueryExecutionFail::CapacityLimit`] if [`LiveQueryStore`] capacity is reached,
+    /// - Returns [`QueryExecutionFail::CapacityLimit`] if [`LiveQueryStore`] capacity is reached.
+    /// - Returns [`QueryExecutionFail::AuthorityQuotaExceeded`] when the per-authority quota is reached.
     /// - Otherwise throws up query output handling errors.
     pub fn handle_iter_start(
         &self,
         mut live_query: ErasedQueryIterator,
         authority: &AccountId,
+        gas_budget: Option<u64>,
     ) -> Result<QueryOutput, QueryExecutionFail> {
         let query_id = uuid::Uuid::new_v4().to_string();
 
@@ -233,7 +255,25 @@ impl LiveQueryStoreHandle {
             remaining_items,
             query_id,
             next_cursor,
+            gas_budget,
         ))
+    }
+
+    /// Start an iterable query without storing it in the `LiveQueryStore`.
+    ///
+    /// Returns the first batch and the remaining items; the cursor is always `None`.
+    /// Intended for short-lived contexts (e.g., inside smart contracts) where
+    /// cursors must not be reusable after the context ends.
+    /// # Errors
+    /// Returns an error if the first batch cannot be produced by the iterator.
+    pub fn handle_iter_start_ephemeral(
+        &self,
+        mut live_query: ErasedQueryIterator,
+    ) -> Result<QueryOutput, QueryExecutionFail> {
+        let curr_cursor = 0;
+        let (batch, _next_cursor) = live_query.next_batch(curr_cursor)?;
+        let remaining_items = live_query.remaining();
+        Ok(QueryOutput::new(batch, remaining_items, None))
     }
 
     /// Retrieve next batch of query output using `cursor`.
@@ -244,16 +284,20 @@ impl LiveQueryStoreHandle {
     ///   or if cursor position doesn't match or cannot continue.
     pub fn handle_iter_continue(
         &self,
-        ForwardCursor { query, cursor }: ForwardCursor,
+        ForwardCursor {
+            query,
+            cursor,
+            gas_budget,
+        }: ForwardCursor,
     ) -> Result<QueryOutput, QueryExecutionFail> {
-        let (batch, remaining, next_cursor) =
-            self.store.get_query_next_batch(query.clone(), cursor)?;
+        let (batch, remaining, next_cursor) = self.store.get_query_next_batch(&query, cursor)?;
 
         Ok(Self::construct_query_response(
             batch,
             remaining,
             query,
             next_cursor,
+            gas_budget,
         ))
     }
 
@@ -267,6 +311,7 @@ impl LiveQueryStoreHandle {
         remaining_items: u64,
         query_id: QueryId,
         cursor: Option<NonZeroU64>,
+        gas_budget: Option<u64>,
     ) -> QueryOutput {
         QueryOutput::new(
             batch,
@@ -274,6 +319,7 @@ impl LiveQueryStoreHandle {
             cursor.map(|cursor| ForwardCursor {
                 query: query_id,
                 cursor,
+                gas_budget,
             }),
         )
     }
@@ -281,16 +327,22 @@ impl LiveQueryStoreHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::{num::NonZeroU64, time::Duration};
+
     use iroha_data_model::{
         permission::Permission,
         prelude::SelectorTuple,
-        query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        query::{
+            error::QueryExecutionFail,
+            parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        },
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
 
     use super::*;
+    use crate::smartcontracts::isi::query::QueryLimits;
 
     #[test]
     fn query_message_order_preserved() {
@@ -317,11 +369,12 @@ mod tests {
                 query_output,
                 SelectorTuple::default(),
                 &query_params,
+                QueryLimits::default(),
             )
             .unwrap();
 
             let (batch, _remaining_items, mut current_cursor) = query_handle
-                .handle_iter_start(query_output, &ALICE_ID)
+                .handle_iter_start(query_output, &ALICE_ID, None)
                 .unwrap()
                 .into_parts();
 
@@ -340,5 +393,155 @@ mod tests {
 
             assert_eq!(counter, 100, "failed on {i} iteration");
         }
+    }
+
+    #[test]
+    fn cursor_ttl_eviction_returns_expired_error() {
+        let config = Config {
+            idle_time: Duration::from_millis(1),
+            capacity: nonzero!(4_usize),
+            capacity_per_user: nonzero!(4_usize),
+        };
+        let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
+        let handle = LiveQueryStoreHandle::new(Arc::clone(&store));
+
+        let query_output = (0..3).map(|i| Permission::new(format!("p{i}"), Json::from(false)));
+        let query_params = QueryParams {
+            fetch_size: FetchSize {
+                fetch_size: Some(nonzero!(1_u64)),
+            },
+            ..QueryParams::default()
+        };
+        let query_output = crate::smartcontracts::query::apply_query_postprocessing(
+            query_output,
+            SelectorTuple::default(),
+            &query_params,
+            QueryLimits::default(),
+        )
+        .unwrap();
+
+        let response = handle
+            .handle_iter_start(query_output, &ALICE_ID, Some(10))
+            .unwrap();
+        let (_batch, _remaining, cursor) = response.into_parts();
+        let mut cursor = cursor.expect("cursor stored");
+
+        // Age the query beyond idle_time to trigger eviction.
+        if let Some(mut entry) = store.queries.get_mut(cursor.query()) {
+            let now = Instant::now();
+            let drift = config
+                .idle_time
+                .checked_add(Duration::from_millis(1))
+                .unwrap_or(config.idle_time);
+            entry.last_access_time = now.checked_sub(drift).unwrap_or(now);
+        }
+        store.prune_expired_queries();
+
+        cursor.gas_budget = Some(10);
+        let err = handle.handle_iter_continue(cursor).expect_err("expired");
+        assert_eq!(err, QueryExecutionFail::Expired);
+    }
+
+    #[test]
+    fn per_authority_quota_is_enforced() {
+        let config = Config {
+            idle_time: Duration::from_secs(60),
+            capacity: nonzero!(4_usize),
+            capacity_per_user: nonzero!(1_usize),
+        };
+        let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
+        let handle = LiveQueryStoreHandle::new(store);
+
+        let build_iter = || {
+            let query_output = (0..2).map(|_| Permission::new(String::default(), Json::from(true)));
+            let query_params = QueryParams {
+                fetch_size: FetchSize {
+                    fetch_size: Some(nonzero!(1_u64)),
+                },
+                ..QueryParams::default()
+            };
+            crate::smartcontracts::query::apply_query_postprocessing(
+                query_output,
+                SelectorTuple::default(),
+                &query_params,
+                QueryLimits::default(),
+            )
+            .unwrap()
+        };
+
+        handle
+            .handle_iter_start(build_iter(), &ALICE_ID, Some(5))
+            .unwrap();
+        let err = handle
+            .handle_iter_start(build_iter(), &ALICE_ID, Some(5))
+            .expect_err("quota");
+        assert_eq!(err, QueryExecutionFail::AuthorityQuotaExceeded);
+    }
+
+    #[test]
+    fn stored_cursor_echoes_budget_hint() {
+        let handle = LiveQueryStore::start_test();
+        let query_output = (0..2).map(|_| Permission::new(String::default(), Json::from(false)));
+        let query_params = QueryParams {
+            fetch_size: FetchSize {
+                fetch_size: Some(nonzero!(1_u64)),
+            },
+            ..QueryParams::default()
+        };
+        let query_output = crate::smartcontracts::query::apply_query_postprocessing(
+            query_output,
+            SelectorTuple::default(),
+            &query_params,
+            QueryLimits::default(),
+        )
+        .unwrap();
+
+        let (_batch, _remaining, cursor) = handle
+            .handle_iter_start(query_output, &ALICE_ID, Some(42))
+            .unwrap()
+            .into_parts();
+        let cursor = cursor.expect("cursor present");
+        assert_eq!(cursor.gas_budget, Some(42));
+    }
+
+    #[test]
+    fn cursor_mismatch_does_not_evict_query() {
+        let handle = LiveQueryStore::start_test();
+        let query_output = (0..2).map(|i| Permission::new(format!("p{i}"), Json::from(false)));
+        let query_params = QueryParams {
+            fetch_size: FetchSize {
+                fetch_size: Some(nonzero!(1_u64)),
+            },
+            ..QueryParams::default()
+        };
+        let query_output = crate::smartcontracts::query::apply_query_postprocessing(
+            query_output,
+            SelectorTuple::default(),
+            &query_params,
+            QueryLimits::default(),
+        )
+        .unwrap();
+
+        let (_batch, _remaining, cursor) = handle
+            .handle_iter_start(query_output, &ALICE_ID, Some(7))
+            .unwrap()
+            .into_parts();
+        let cursor = cursor.expect("cursor present");
+
+        let mut bad_cursor = cursor.clone();
+        bad_cursor.cursor =
+            NonZeroU64::new(cursor.cursor.get().saturating_add(1)).expect("non-zero");
+        let err = handle
+            .handle_iter_continue(bad_cursor)
+            .expect_err("mismatch");
+        assert_eq!(err, QueryExecutionFail::CursorMismatch);
+
+        let (batch, remaining, next) = handle
+            .handle_iter_continue(cursor)
+            .expect("cursor still valid")
+            .into_parts();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(remaining, 0);
+        assert!(next.is_none(), "query should be drained");
     }
 }

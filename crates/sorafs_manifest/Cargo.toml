@@ -1,0 +1,27 @@
+[package]
+name = "sorafs_manifest"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Norito-encoded manifest types for SoraFS artifacts."
+
+[dependencies]
+blake3 = "1.8.2"
+hex = "0.4.3"
+base64 = { workspace = true, features = ["std"] }
+norito = { workspace = true }
+norito_derive = { workspace = true }
+thiserror = "2.0.17"
+sorafs_chunker = { path = "../sorafs_chunker" }
+ed25519-dalek = "2.2.0"
+iroha_crypto = { workspace = true }
+iroha_schema = { workspace = true }
+sha3 = "0.10.8"
+http = { workspace = true }
+chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core"] }
+rand = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.23.0"
+assert_cmd = "2.1.1"
+rand_chacha = "0.9"

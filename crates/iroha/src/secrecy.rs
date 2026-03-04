@@ -2,10 +2,10 @@
 use std::fmt;
 
 use derive_more::Constructor;
-use serde::{Deserialize, Serialize, Serializer};
+use norito::json::{self, JsonDeserialize, JsonSerialize};
 
 /// String sensitive to printing and serialization
-#[derive(Clone, Deserialize, Constructor)]
+#[derive(Clone, Constructor)]
 pub struct SecretString(String);
 
 impl SecretString {
@@ -17,9 +17,16 @@ impl SecretString {
 
 const REDACTED: &str = "[REDACTED]";
 
-impl Serialize for SecretString {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        REDACTED.serialize(serializer)
+impl JsonSerialize for SecretString {
+    fn json_serialize(&self, out: &mut String) {
+        REDACTED.json_serialize(out);
+    }
+}
+
+impl JsonDeserialize for SecretString {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let value = parser.parse_string()?;
+        Ok(Self(value))
     }
 }
 

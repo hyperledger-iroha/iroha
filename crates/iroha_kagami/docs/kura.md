@@ -18,10 +18,11 @@ kagami kura [OPTIONS] <PATH_TO_BLOCK_STORE> <SUBCOMMAND>
 
 ### Subcommands
 
-|      Command      |                     Description                     |
-| ----------------- | --------------------------------------------------- |
-| [`print`](#print) | Print the contents of a specified number of blocks  |
-| `help`            | Print the help message for the tool or a subcommand |
+|      Command        |                             Description                              |
+| ------------------- | --------------------------------------------------------------------- |
+| [`print`](#print)   | Print the contents of a specified number of blocks                     |
+| [`sidecar`](#sidecar) | Print the pipeline recovery sidecar JSON for a given block height       |
+| `help`              | Print the help message for the tool or a subcommand                    |
 
 ### Errors
 
@@ -45,6 +46,40 @@ An error in `print` occurs if one the following happens:
 - `kura` fails to read `block_store`
 - `kura` fails to print the `output`
 - `kura` tries to print the latest block and there is none
+
+## `sidecar`
+
+The `sidecar` command reads the pipeline recovery sidecar for a given block height and prints the raw JSON to the specified `output` (or to stdout if omitted).
+
+|      Option       |                          Description                          |  Default value  |  Type  |
+| ----------------- | -------------------------------------------------------------- | --------------- | ------ |
+| `-h`, `--height`  | The block height whose sidecar to print                        | required        | number |
+| `-o`, `--output`  | Where to write the sidecar JSON (stdout if not specified)      | `/dev/stdout`   | file   |
+
+Notes:
+- The sidecar is expected under `<store_dir>/pipeline/block_<height>.json`.
+- You can pass the block store directory, or a specific file path like `blocks.index`; the tool normalizes to the parent directory.
+
+### Examples
+
+- Print the sidecar for height 7 to stdout:
+
+  ```bash
+  kagami kura <path> sidecar --height 7
+  ```
+
+- Save the sidecar for height 42 to a file:
+
+  ```bash
+  kagami kura <path> sidecar -h 42 -o sidecar_42.json
+  ```
+
+### `sidecar` errors
+
+An error in `sidecar` occurs if one the following happens:
+- `kura` fails to read `block_store`
+- sidecar file is not found for the requested height
+- `kura` fails to write the `output`
 
 ## Examples
 

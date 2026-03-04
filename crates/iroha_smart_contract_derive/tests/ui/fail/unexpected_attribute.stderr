@@ -1,0 +1,13 @@
+error: Smart contract entrypoint does not accept attributes
+ --> tests/ui/fail/unexpected_attribute.rs:5:1
+  |
+5 | #[main(unexpected)]
+  | ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `main` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/fail/unexpected_attribute.rs:8:2
+  |
+8 | }
+  |  ^ consider adding a `main` function to `$DIR/tests/ui/fail/unexpected_attribute.rs`

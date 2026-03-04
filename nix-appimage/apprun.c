@@ -136,13 +136,32 @@ void child_main(char** argv)
 		// we don't treat failure of the below bind as an actual failure, since
 		// our logic not robust enough to handle weird filesystem scenarios
 
-		// TODO imitate symlinks as symlinks
-
 		struct stat statbuf;
-		if (stat(from, &statbuf) < 0) {
+		if (lstat(from, &statbuf) < 0) {
 			fprintf(stderr, "%s: stat %s: %s\n", argv0, from, strerror(errno));
 		} else {
-			if (S_ISDIR(statbuf.st_mode)) {
+			if (S_ISLNK(statbuf.st_mode)) {
+				char target[PATH_MAX];
+				ssize_t len = readlink(from, target, sizeof(target) - 1);
+				if (len < 0) {
+					fprintf(stderr, "%s: readlink %s: %s\n", argv0, from, strerror(errno));
+				} else {
+					target[len] = '\0';
+					if (symlink(target, to) < 0) {
+						if (errno == EEXIST) {
+							if (unlink(to) < 0) {
+								fprintf(stderr, "%s: unlink existing %s: %s\n",
+								        argv0, to, strerror(errno));
+							} else if (symlink(target, to) < 0) {
+								fprintf(stderr, "%s: symlink %s -> %s (retry): %s\n",
+								        argv0, target, to, strerror(errno));
+							}
+						} else {
+							fprintf(stderr, "%s: symlink %s -> %s: %s\n", argv0, target, to, strerror(errno));
+						}
+					}
+				}
+			} else if (S_ISDIR(statbuf.st_mode)) {
 				die_if(mkdir(to, statbuf.st_mode & ~S_IFMT) < 0, "mkdir %s", to);
 				if (mount(from, to, "none", MS_BIND | MS_REC, 0) < 0) {
 					fprintf(stderr, "%s: mount %s -> %s: %s\n", argv0, from, to, strerror(errno));

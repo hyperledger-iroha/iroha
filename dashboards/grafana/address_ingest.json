@@ -1,0 +1,226 @@
+{
+  "title": "Torii Address Ingest",
+  "uid": "torii-address-ingest",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["torii", "address", "ingest"],
+  "templating": {
+    "list": [
+      {
+        "name": "context",
+        "label": "Context",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(torii_address_invalid_total, context)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Invalid Account Rate (5m)",
+      "id": 1,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (context) (rate(torii_address_invalid_total{context=~\"$context\"}[5m]))",
+          "legendFormat": "{{context}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "req/s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Invalid Address Rate (5m)",
+      "id": 2,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (context) (rate(torii_address_invalid_total{context=~\"$context\"}[5m]))",
+          "legendFormat": "{{context}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "req/s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Local-12 Collision Rate (5m)",
+      "id": 5,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (context) (rate(torii_address_collision_total{kind=\"local12_digest\",context=~\"$context\"}[5m]))",
+          "legendFormat": "{{context}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "req/s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "description": "Collision counters increment when multiple Local-12 labels resolve to the same digest. Production should remain flat; any spike requires manifest review."
+    },
+    {
+      "type": "table",
+      "title": "Collision Domains (1h)",
+      "id": 6,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "topk(10, sum by (context, domain) (increase(torii_address_collision_domain_total{context=~\"$context\"}[1h])))",
+          "refId": "A",
+          "legendFormat": "{{context}} – {{domain}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false
+        }
+      },
+      "description": "Breaks collision increments down by reported domain label so operators can spot staging/test environments before they hit production."
+    },
+    {
+      "type": "timeseries",
+      "title": "Domain Kind Mix (5m)",
+      "id": 7,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (domain_kind) (rate(torii_address_domain_total{context=~\"$context\"}[5m]))",
+          "legendFormat": "{{domain_kind}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "req/s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "description": "Accepted address literals grouped by domain_kind so operators can prove Local-12 traffic has dropped to zero before retiring the archived selectors."
+    },
+    {
+      "type": "stat",
+      "title": "Invalid Submission Ratio (15m)",
+      "id": 3,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(torii_address_invalid_total[15m])) / sum(rate(torii_http_requests_total[15m]))",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 0.001},
+              {"color": "red", "value": 0.0025}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "SLO threshold is 0.1% invalid submissions. Values above the orange threshold require triage before GA."
+    },
+    {
+      "type": "table",
+      "title": "Top Invalid Reasons (1h)",
+      "id": 4,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "topk(10, sum by (context, reason) (increase(torii_address_invalid_total{context=~\"$context\"}[1h])))",
+          "refId": "A",
+          "legendFormat": "{{context}} – {{reason}}"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

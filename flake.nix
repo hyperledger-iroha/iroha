@@ -29,12 +29,6 @@
 
       fenix' = fenix.packages.${system};
 
-      toolchainSpec = {
-        channel = "nightly";
-        date = "2023-08-01";
-        sha256 = "sha256-5y4s05452u5eeCKkgQaBSI/PPcGz6ZavWAdT/7HVtrA=";
-      };
-
       supportedTargets = [
         "x86_64-unknown-linux-gnu"
         "x86_64-unknown-linux-musl"
@@ -74,14 +68,15 @@
         target ? system, # target arch to build for
         binaries ? allBinaries, # which binary to build
         name ? "iroha", # resulting derivation name
+        features ? [], # feature list forwarded to cargo
         ...
       } @ args: let
         systemTriple = (lib.systems.elaborate system).config;
         targetTriple = (lib.systems.elaborate target).config;
         isCross = systemTriple != targetTriple;
-        toolchainHost = fenix'.toolchainOf toolchainSpec;
+        toolchainHost = fenix'.stable;
         toolchainTarget =
-          fenix'.targets.${targetTriple}.toolchainOf toolchainSpec;
+          fenix'.targets.${targetTriple}.stable;
         toolchain = fenix'.combine [
           toolchainHost.rustc
           toolchainHost.cargo
@@ -138,7 +133,8 @@
           cargoBuildOptions = default:
             default
             ++ ["--target" targetTriple]
-            ++ builtins.concatMap (binary: ["-p" binary]) binaries;
+            ++ builtins.concatMap (binary: ["-p" binary]) binaries
+            ++ (if features == [] then [] else ["--features" (builtins.concatStringsSep "," features)]);
 
           CARGO_BUILD_TARGET = targetTriple;
 
@@ -153,32 +149,62 @@
           VERGEN_GIT_SHA = self.rev or "?dirty tree?";
 
         };
-    in rec {
-      inherit mkIroha;
 
-      packages.default = mkIroha {};
-
-      packages.appimage = nix-appimage.mkappimage.${system} {
-        drv = mkIroha {};
-        name = "iroha";
-      };
-
-      packages.targets = builtins.listToAttrs (map (target: {
+      mkTargets = { features, suffix }:
+        builtins.listToAttrs (map (target: {
           name = target;
           value = mkIroha {
             inherit target;
-            # TODO: Cross-compilation doesn't work with multiple
-            # binaries for some reason
             binaries = ["irohad"];
+            name = "iroha${suffix}-${target}";
+            features = features;
           };
-        })
-        supportedTargets);
+        }) supportedTargets);
+      in rec {
+        inherit mkIroha;
+
+      packages.iroha2 = mkIroha {
+        name = "iroha2";
+      };
+
+      packages.iroha3 = mkIroha {
+        name = "iroha3";
+        features = [];
+      };
+
+      packages.default = packages.iroha2;
+
+      packages.appimage_iroha2 = nix-appimage.mkappimage.${system} {
+        drv = packages.iroha2;
+        name = "iroha2";
+      };
+
+      packages.appimage_iroha3 = nix-appimage.mkappimage.${system} {
+        drv = packages.iroha3;
+        name = "iroha3";
+      };
+
+      packages.appimage = packages.appimage_iroha2;
+
+      packages.targets = mkTargets {
+        features = [];
+        suffix = "2";
+      };
+
+      packages.targets_iroha3 = mkTargets {
+        features = [];
+        suffix = "3";
+      };
 
       apps =
         {
           default = {
             type = "app";
             program = "${self.packages.${system}.default}/bin/irohad";
+          };
+          iroha3 = {
+            type = "app";
+            program = "${self.packages.${system}.iroha3}/bin/irohad";
           };
         }
         // builtins.listToAttrs (map (bin: {
@@ -193,7 +219,7 @@
       formatter = alejandra.packages.${system}.default;
 
       devShells.default = let
-        toolchainPkgs = fenix'.toolchainOf toolchainSpec;
+        toolchainPkgs = fenix'.stable;
         toolchain = fenix'.combine [
           toolchainPkgs.rustc
           toolchainPkgs.cargo
@@ -215,3 +241,30 @@
         };
     });
 }
+      checks = {
+        # Shielded Merkle golden vectors check: runs the golden test for iroha_crypto
+        shielded-merkle = pkgs.stdenv.mkDerivation {
+          pname = "shielded-merkle-vectors-check";
+          version = "1";
+          src = ./.;
+          nativeBuildInputs = with pkgs; [
+            pkg-config
+            openssl.dev
+            libiconvReal
+            zlib
+          ] ++ [
+            (fenix'.combine [
+              fenix'.stable.rustc
+              fenix'.stable.cargo
+              fenix'.stable.rustfmt
+            ])
+          ];
+          buildPhase = ''
+            cargo test -p iroha_crypto --test merkle_shielded_golden -- -q
+          '';
+          installPhase = ''
+            mkdir -p $out
+            echo ok > $out/result
+          '';
+        };
+      };

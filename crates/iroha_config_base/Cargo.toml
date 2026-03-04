@@ -11,20 +11,18 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-iroha_config_base_derive = { path = "../iroha_config_base_derive" }
+iroha_derive = { workspace = true, features = ["config_base"] }
 
 drop_bomb = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-serde_with = { workspace = true, features = ["macros", "std"] }
+norito = {workspace = true}
 thiserror = { workspace = true }
 num-traits = "0.2.19"
 toml = { workspace = true }
 error-stack = { workspace = true }
-log = "0.4"
+log = "0.4.28"
 derive_more = { workspace = true, features = ["constructor", "display"] }
 
 [dev-dependencies]
 expect-test = { workspace = true }
 strum = { workspace = true, features = ["derive", "std"] }
 hex = { workspace = true, features = ["std"] }
-serde_with = { workspace = true, features = ["hex"] }

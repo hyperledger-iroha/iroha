@@ -1,14 +1,10 @@
-#![allow(missing_docs)]
-
-extern crate alloc;
-
-use alloc::collections::BTreeMap;
-use core::any::TypeId;
+//! `IntoSchema` derive tests for named fields.
+use std::{any::TypeId, collections::BTreeMap};
 
 use iroha_schema::prelude::*;
-use parity_scale_codec::{Decode, Encode};
+use norito::{Decode, Encode};
 
-#[derive(Decode, Encode, IntoSchema)]
+#[derive(IntoSchema, Encode, Decode)]
 struct Command {
     executable: String,
     args: Vec<String>,
@@ -26,11 +22,11 @@ fn named_fields() {
         declarations: vec![
             Declaration {
                 name: "executable".to_owned(),
-                ty: TypeId::of::<alloc::string::String>(),
+                ty: TypeId::of::<::std::string::String>(),
             },
             Declaration {
                 name: "args".to_owned(),
-                ty: TypeId::of::<alloc::vec::Vec<alloc::string::String>>(),
+                ty: TypeId::of::<::std::vec::Vec<::std::string::String>>(),
             },
             Declaration {
                 name: "num".to_owned(),
@@ -41,7 +37,7 @@ fn named_fields() {
 
     let expected = vec![
         (
-            TypeId::of::<alloc::string::String>(),
+            TypeId::of::<::std::string::String>(),
             MetaMapEntry {
                 type_id: "String".to_owned(),
                 type_name: "String".to_owned(),
@@ -49,12 +45,12 @@ fn named_fields() {
             },
         ),
         (
-            TypeId::of::<alloc::vec::Vec<alloc::string::String>>(),
+            TypeId::of::<::std::vec::Vec<::std::string::String>>(),
             MetaMapEntry {
                 type_id: "Vec<String>".to_owned(),
                 type_name: "Vec<String>".to_owned(),
                 metadata: Vec(VecMeta {
-                    ty: TypeId::of::<alloc::string::String>(),
+                    ty: TypeId::of::<::std::string::String>(),
                 }),
             },
         ),

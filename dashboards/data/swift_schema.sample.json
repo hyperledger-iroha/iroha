@@ -1,0 +1,60 @@
+{
+  "generated_at": "2026-01-12T10:05:00Z",
+  "signals": [
+    {
+      "id": "swift.torii.http.request",
+      "channel": "span",
+      "retention_days": 30,
+      "fields": [
+        { "name": "authority_hash", "type": "bytes", "redacted": true },
+        { "name": "route", "type": "string" },
+        { "name": "status_code", "type": "int" },
+        { "name": "latency_ms", "type": "double" },
+        { "name": "retry_policy", "type": "string" }
+      ]
+    },
+    {
+      "id": "swift.pipeline.status",
+      "channel": "event",
+      "retention_days": 30,
+      "fields": [
+        { "name": "hash_prefix", "type": "string", "notes": "first 12 hex chars" },
+        { "name": "state", "type": "string" },
+        { "name": "duration_ms", "type": "double" },
+        { "name": "authority_hash", "type": "bytes", "redacted": true }
+      ]
+    },
+    {
+      "id": "swift.connect.session_event",
+      "channel": "event",
+      "retention_days": 30,
+      "fields": [
+        { "name": "session_alias_hash", "type": "bytes", "redacted": true },
+        { "name": "event_kind", "type": "string" },
+        { "name": "wallet_role", "type": "string" },
+        { "name": "torii_domain_hash", "type": "bytes", "redacted": true }
+      ]
+    },
+    {
+      "id": "swift.offline.queue_depth",
+      "channel": "gauge",
+      "retention_days": 30,
+      "fields": [
+        { "name": "queue_kind", "type": "string" },
+        { "name": "depth", "type": "int" },
+        { "name": "authority_hash", "type": "bytes", "redacted": true },
+        { "name": "device_profile_bucket", "type": "string" }
+      ]
+    },
+    {
+      "id": "swift.telemetry.redaction.salt_version",
+      "channel": "gauge",
+      "retention_days": 365,
+      "fields": [
+        { "name": "salt_epoch", "type": "string" },
+        { "name": "rotation_id", "type": "string" },
+        { "name": "age_hours", "type": "double" }
+      ]
+    }
+  ]
+}

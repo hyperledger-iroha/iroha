@@ -1,0 +1,26 @@
+{
+  "label": "android-hms-demo",
+  "certificate_id_hex": "AE3CEE7A42A0091D218A7FF6CC96D29BD6FCBCD070B21F617125074069D3318F",
+  "controller": "34mSYnDgbaJM58rbLoif4Tkp7G5jowHzX2wpqErt5uNjSaXGjsQoTGzsyFsSZwxLQRwJhJgfu",
+  "allowance_asset": "jpy#sora#34mSYnDgbaJM58rbLoif4Tkp7G5jowHzX2wpqErt5uNjSaXGjsQoTGzsyFsSZwxLQRwJhJgfu",
+  "allowance_amount": "90",
+  "commitment_hex": "1224573F290A69CC4DEB201F4ABAF2C5C8AA0A2BD8515CFAC5FC306D4E06C365",
+  "blinding_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+  "attestation_bytes": 4,
+  "metadata_keys": [
+    "android.hms_safety_detect.app_id",
+    "android.hms_safety_detect.max_token_age_ms",
+    "android.hms_safety_detect.package_names",
+    "android.hms_safety_detect.required_evaluations",
+    "android.hms_safety_detect.signing_digests_sha256",
+    "android.integrity.policy"
+  ],
+  "verdict_id_hex": null,
+  "attestation_nonce_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+  "refresh_at_ms": 1730318476000,
+  "certificate_json": "android-hms-demo/certificate.json",
+  "certificate_norito": "android-hms-demo/certificate.norito",
+  "register_instruction_json": "android-hms-demo/register_instruction.json",
+  "register_instruction_norito": "android-hms-demo/register_instruction.norito",
+  "submitted": false
+}

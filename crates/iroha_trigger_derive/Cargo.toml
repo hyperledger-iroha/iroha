@@ -10,15 +10,22 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+trybuild-tests = []
+
 
 [lib]
 proc-macro = true
 
 [dependencies]
-iroha_macro_utils = { workspace = true }
+iroha_derive = { workspace = true }
 
 syn = { workspace = true }
 manyhow = { workspace = true }
 quote = { workspace = true }
 proc-macro2 = { workspace = true }
 darling = { workspace = true }
+
+[dev-dependencies]
+iroha_trigger = { path = "../iroha_trigger" }
+trybuild = { workspace = true }

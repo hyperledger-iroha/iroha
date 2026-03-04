@@ -1,0 +1,28 @@
+{
+  "entries": [
+    {
+      "provider_id": "relay-alpha",
+      "normalised_weight": 0.92,
+      "raw_score": 0.87,
+      "eligibility": "eligible"
+    },
+    {
+      "provider_id": "relay-beta",
+      "normalised_weight": 0.84,
+      "raw_score": 0.79,
+      "eligibility": "eligible"
+    },
+    {
+      "provider_id": "relay-gamma",
+      "normalised_weight": 0.71,
+      "raw_score": 0.65,
+      "eligibility": "eligible"
+    },
+    {
+      "provider_id": "relay-delta",
+      "normalised_weight": 0.58,
+      "raw_score": 0.54,
+      "eligibility": "eligible"
+    }
+  ]
+}

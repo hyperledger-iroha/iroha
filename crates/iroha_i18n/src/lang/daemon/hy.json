@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Բարի գալուստ Hyperledger Iroha:",
+  "error.trace_config_setup": "Չհաջողվեց կարգավորել կոնֆիգուրացիայի հետքերը",
+  "error.config": "Կարգավորման սխալ",
+  "error.logger": "Չհաջողվեց սկզբնավորել մատյանակարգը",
+  "error.start": "Չհաջողվեց գործարկել Iroha-ն",
+  "error.run": "Iroha-ն գործարկելու ընթացքում տեղի ունեցավ սխալ",
+  "error.start_p2p": "Չհաջողվեց գործարկել P2P ցանցը",
+  "error.init_kura": "Չհաջողվեց սկսել Kura-ն (բլոկների պահոցը)",
+  "error.start_dev_telemetry": "Չհաջողվեց գործարկել մշակողների հեռաչափական ծառայությունը",
+  "error.start_telemetry": "Չհաջողվեց գործարկել հեռաչափական ծառայությունը",
+  "error.listen_os_signal": "Չհաջողվեց կարգավորել ՕՀ ազդանշանների լսումը",
+  "error.start_torii": "Չհաջողվեց գործարկել Torii (Iroha HTTP API դարպասը)"
+}

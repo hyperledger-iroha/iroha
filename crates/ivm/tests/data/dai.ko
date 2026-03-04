@@ -1,0 +1,53 @@
+// Simplified MakerDAO DAI clone example.
+// Demonstrates token operations like transfer, approve, mint and burn.
+// This is not a full implementation and uses function arguments
+// to represent balances and allowances for illustration purposes.
+
+// Transfer tokens between two accounts using the Iroha syscall.
+fn transfer(src_balance: int, dst_balance: int, from_account: AccountId, to_account: AccountId, asset: AssetDefinitionId, wad: int) {
+    if src_balance >= wad {
+        let new_src = src_balance - wad;
+        let new_dst = dst_balance + wad;
+        transfer_asset(from_account, to_account, asset, wad);
+    } else {
+        assert_eq(1, 0);
+    }
+}
+
+// Approve a spender allowance.
+fn approve(_current_allowance: int, wad: int) {
+    let new_allowance = wad;
+}
+
+// Transfer tokens using an allowance.
+fn transfer_from(src_balance: int, dst_balance: int, allowance: int, from_account: AccountId, to_account: AccountId, asset: AssetDefinitionId, wad: int) {
+    if src_balance >= wad {
+        if allowance >= wad {
+            let new_src = src_balance - wad;
+            let new_dst = dst_balance + wad;
+            let new_allowance = allowance - wad;
+            transfer_asset(from_account, to_account, asset, wad);
+        } else {
+            assert_eq(1, 0);
+        }
+    } else {
+        assert_eq(1, 0);
+    }
+}
+
+// Mint new tokens using the Iroha ledger syscall.
+// `mint_asset` writes to registers r10-r12 and performs the ISI.
+fn mint(account: AccountId, asset: AssetDefinitionId, wad: int) {
+    mint_asset(account, asset, wad);
+}
+
+// Burn tokens from an account using the Iroha syscall.
+fn burn(balance: int, total_supply: int, account: AccountId, asset: AssetDefinitionId, wad: int) {
+    if balance >= wad {
+        let new_balance = balance - wad;
+        let new_supply = total_supply - wad;
+        burn_asset(account, asset, wad);
+    } else {
+        assert_eq(1, 0);
+    }
+}

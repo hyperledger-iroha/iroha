@@ -1,0 +1,10 @@
+{
+  "status": 422,
+  "body": {
+    "error": "proof_mismatch",
+    "reason": "proof sample does not match gateway tree",
+    "details": {
+      "section": "proof.chunks[0]"
+    }
+  }
+}

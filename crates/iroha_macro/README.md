@@ -9,7 +9,7 @@ This crate contains macros and attributes for Iroha projects:
 Add the following to the manifest file of your Rust project:
 
 ```toml
-iroha_derive = { git = "https://github.com/hyperledger-iroha/iroha" }
+iroha_derive = { path = "path/to/iroha_derive" }
 ```
 
 ## Examples
@@ -34,10 +34,7 @@ enum Obj {
 // That would help you avoid doing this:
 impl<T: Into<Obj>> From<Vec<T>> for Obj {
     fn from(vec: Vec<T>) -> Self {
-        // stringify!(
-        // ...
-        // );
-        // todo!()
+        Obj::Vec(vec.into_iter().map(Into::into).collect())
     }
 }
 ```

@@ -1,0 +1,86 @@
+{
+  "operator": {
+    "account": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+    "private_key": "ed25519:8f8c7d6c5b4a392817161514131211100f0e0d0c0b0a09080706050403020100"
+  },
+  "manifests": [
+    {
+      "label": "retail-pos",
+      "manifest_id": "pos-retail-v1",
+      "sequence": 7,
+      "published_at_ms": 1730314876000,
+      "valid_from_ms": 1730314876000,
+      "valid_until_ms": 1745900000000,
+      "rotation_hint_ms": 1736000000000,
+      "metadata": {
+        "jurisdiction": "eu",
+        "program": "oa12"
+      },
+      "roots": [
+        {
+          "label": "torii-admission",
+          "role": "offline_admission_signer",
+          "public_key": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+          "valid_from_ms": 1730314876000,
+          "valid_until_ms": 1745900000000,
+          "metadata": {
+            "channel": "production",
+            "jurisdiction": "eu"
+          }
+        },
+        {
+          "label": "allowance-witness",
+          "role": "offline_allowance_witness",
+          "public_key": "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D",
+          "valid_from_ms": 1730314876000,
+          "valid_until_ms": 1745900000000,
+          "metadata": {
+            "channel": "production"
+          }
+        }
+      ]
+    },
+    {
+      "label": "pilot-kiosk",
+      "manifest_id": "pos-pilot-lab",
+      "sequence": 3,
+      "published_at_ms": 1730314876000,
+      "valid_from_ms": 1730314876000,
+      "valid_until_ms": 1738714876000,
+      "rotation_hint_ms": 1735000000000,
+      "operator_account": "ed01207EAAF3023FA8E1E41975686C5D4D3F131DCE090D869AC0E9B4EB15CDA902C72F@wonderland",
+      "operator_key": "ed25519:7e7d7c7b7a797877767574737271706f6e6d6c6b6a69686766656463626160",
+      "metadata": {
+        "jurisdiction": "pilot",
+        "program": "oa12"
+      },
+      "roots": [
+        {
+          "label": "torii-admission-lab",
+          "role": "offline_admission_signer",
+          "public_key": "ed01207EAAF3023FA8E1E41975686C5D4D3F131DCE090D869AC0E9B4EB15CDA902C72F",
+          "valid_from_ms": 1730314876000,
+          "valid_until_ms": 1738714876000,
+          "metadata": {
+            "channel": "staging",
+            "jurisdiction": "pilot"
+          }
+        }
+      ]
+    }
+  ]
+  ,
+  "revocation_bundles": [
+    {
+      "label": "retail-revocations",
+      "bundle_id": "revocations-retail-v1",
+      "sequence": 4,
+      "published_at_ms": 1730414876000,
+      "metadata": {
+        "channel": "production",
+        "program": "oa11"
+      },
+      "revocations_file": "scripts/offline_pos_provision/revocations.example.json"
+    }
+  ]
+}

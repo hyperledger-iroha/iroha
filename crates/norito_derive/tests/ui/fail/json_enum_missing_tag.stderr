@@ -1,0 +1,11 @@
+error: enum JsonSerialize requires #[norito(tag = ...)]
+ --> tests/ui/fail/json_enum_missing_tag.rs:4:6
+  |
+4 | enum NoTag {
+  |      ^^^^^
+
+error: enum JsonDeserialize requires #[norito(tag = ...)]
+ --> tests/ui/fail/json_enum_missing_tag.rs:4:6
+  |
+4 | enum NoTag {
+  |      ^^^^^

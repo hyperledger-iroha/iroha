@@ -1,0 +1,28 @@
+{
+  "label": "android-play-demo",
+  "certificate_id_hex": "368ED3E75F4B9792BE104C89D739F2C41AC0AF4A36D31A214801FFDE93458BE5",
+  "controller": "34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
+  "allowance_asset": "xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
+  "allowance_amount": "175.00",
+  "commitment_hex": "8827412BE183E631B4D8C2304361B3C8648E4DEE194C394CBD4CFCE2FCED4A4A",
+  "blinding_hex": "5555555555555555555555555555555555555555555555555555555555555555",
+  "attestation_bytes": 4,
+  "metadata_keys": [
+    "android.integrity.policy",
+    "android.play_integrity.allowed_app_verdicts",
+    "android.play_integrity.allowed_device_verdicts",
+    "android.play_integrity.cloud_project_number",
+    "android.play_integrity.environment",
+    "android.play_integrity.max_token_age_ms",
+    "android.play_integrity.package_names",
+    "android.play_integrity.signing_digests_sha256"
+  ],
+  "verdict_id_hex": null,
+  "attestation_nonce_hex": null,
+  "refresh_at_ms": null,
+  "certificate_json": "android-play-demo/certificate.json",
+  "certificate_norito": "android-play-demo/certificate.norito",
+  "register_instruction_json": "android-play-demo/register_instruction.json",
+  "register_instruction_norito": "android-play-demo/register_instruction.norito",
+  "submitted": false
+}

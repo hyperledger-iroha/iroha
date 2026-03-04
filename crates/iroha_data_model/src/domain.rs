@@ -1,19 +1,16 @@
 //! This module contains [`Domain`](`crate::domain::Domain`) structure
 //! and related implementations and trait implementations.
-#[cfg(not(feature = "std"))]
-use alloc::{format, string::String, vec::Vec};
+use std::{format, string::String, vec::Vec};
 
 use derive_more::{Constructor, Display, FromStr};
-use iroha_data_model_derive::{model, IdEqOrdHash};
+use iroha_data_model_derive::{IdEqOrdHash, model};
 use iroha_schema::IntoSchema;
-use parity_scale_codec::{Decode, Encode};
-use serde::{Deserialize, Serialize};
-use serde_with::{DeserializeFromStr, SerializeDisplay};
+use norito::codec::{Decode, Encode};
 
 pub use self::model::*;
 use crate::{
-    ipfs::IpfsPath, metadata::Metadata, prelude::*, HasMetadata, Identifiable, Name, Registered,
-    Registrable,
+    HasMetadata, Identifiable, Name, Registered, Registrable, ipfs::IpfsPath, metadata::Metadata,
+    prelude::*,
 };
 
 #[model]
@@ -37,35 +34,31 @@ mod model {
         Getters,
         Decode,
         Encode,
-        DeserializeFromStr,
-        SerializeDisplay,
         IntoSchema,
     )]
-    #[display(fmt = "{name}")]
+    #[display("{name}")]
     #[getset(get = "pub")]
     #[repr(transparent)]
-    #[ffi_type(opaque)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct DomainId {
         /// [`Name`] unique to a [`Domain`] e.g. company name
         pub name: Name,
     }
 
-    /// Named group of [`Account`] and [`Asset`](`crate::asset::Asset`) entities.
-    #[derive(
-        Debug,
-        Display,
-        Clone,
-        IdEqOrdHash,
-        Getters,
-        Decode,
-        Encode,
-        Deserialize,
-        Serialize,
-        IntoSchema,
-    )]
+    /// Named group of [`Account`] and [`Asset`](`crate::asset::value::Asset`) entities.
+    #[derive(Debug, Display, Clone, IdEqOrdHash, Getters, Decode, Encode, IntoSchema)]
     #[allow(clippy::multiple_inherent_impl)]
-    #[display(fmt = "[{id}]")]
-    #[ffi_type]
+    #[display("[{id}]")]
+    #[cfg_attr(
+        feature = "json",
+        derive(
+            crate::DeriveJsonSerialize,
+            crate::DeriveJsonDeserialize,
+            crate::DeriveFastJson
+        )
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct Domain {
         /// Identification of this [`Domain`].
         pub id: DomainId,
@@ -80,12 +73,19 @@ mod model {
     }
 
     /// Builder which can be submitted in a transaction to create a new [`Domain`]
-    #[derive(
-        Debug, Display, Clone, IdEqOrdHash, Decode, Encode, Deserialize, Serialize, IntoSchema,
+    #[derive(Debug, Display, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        norito(rename = "Domain"),
+        derive(
+            crate::DeriveJsonSerialize,
+            crate::DeriveJsonDeserialize,
+            crate::DeriveFastJson
+        )
     )]
-    #[serde(rename = "Domain")]
-    #[display(fmt = "[{id}]")]
-    #[ffi_type]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[display("[{id}]")]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct NewDomain {
         /// The identification associated with the domain builder.
         pub id: DomainId,
@@ -95,6 +95,8 @@ mod model {
         pub metadata: Metadata,
     }
 }
+
+string_id!(DomainId);
 
 impl HasMetadata for NewDomain {
     #[inline]
@@ -159,6 +161,31 @@ impl Domain {
     #[inline]
     pub fn new(id: DomainId) -> <Self as Registered>::With {
         <Self as Registered>::With::new(id)
+    }
+
+    /// Mutable access to domain metadata for in-place updates.
+    pub fn metadata_mut(&mut self) -> &mut Metadata {
+        &mut self.metadata
+    }
+
+    /// Set the domain owner.
+    pub fn set_owned_by(&mut self, owner: AccountId) {
+        self.owned_by = owner;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::query::dsl::{HasProjection, PredicateMarker, SelectorMarker};
+
+    fn assert_predicate<T: HasProjection<PredicateMarker>>() {}
+    fn assert_selector<T: HasProjection<SelectorMarker>>() {}
+
+    #[test]
+    fn domain_has_projection_impls() {
+        assert_predicate::<Domain>();
+        assert_selector::<Domain>();
     }
 }
 

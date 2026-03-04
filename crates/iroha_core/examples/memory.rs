@@ -20,7 +20,7 @@ fn measure_accounts_in_vec() {
     let (genesis_domain, _genesis_account) = genesis_domain_and_account();
 
     let v = (0..N)
-        .map(|_| gen_account_in(&genesis_domain.id).0)
+        .map(|_| gen_account_in(genesis_domain.id()).0)
         .map(|id| Account::new(id).into_account())
         .collect::<Vec<_>>();
     done(v);
@@ -30,7 +30,7 @@ fn measure_accounts_in_world() {
     let (genesis_domain, _genesis_account) = genesis_domain_and_account();
 
     let accounts = (0..N)
-        .map(|_| gen_account_in(&genesis_domain.id).0)
+        .map(|_| gen_account_in(genesis_domain.id()).0)
         .map(|id| Account::new(id).into_account());
     let world = World::with_assets([], accounts, [], [], []);
     done(world);
@@ -48,7 +48,7 @@ fn measure_assets_in_world() {
 
 fn measure_nfts_in_world() {
     let (genesis_domain, _genesis_account) = genesis_domain_and_account();
-    let owner = gen_account_in(&genesis_domain.id).0;
+    let owner = gen_account_in(genesis_domain.id()).0;
 
     let nfts = (0..N).map(|_| gen_nft(&owner));
     let world = World::with_assets([], [], [], [], nfts);
@@ -56,7 +56,7 @@ fn measure_nfts_in_world() {
 }
 
 fn print_world_memory_usage() {
-    macro_rules! gen {
+    macro_rules! r#gen {
         ($($p:ident,)+) => {
             $(
                 println!(
@@ -69,7 +69,7 @@ fn print_world_memory_usage() {
             )+
         };
     }
-    gen!(Domain, Account, AssetDefinition, Asset, Nft, Role,);
+    r#gen!(Domain, Account, AssetDefinition, Asset, Nft, Role,);
 }
 
 mod util {

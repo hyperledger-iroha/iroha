@@ -1,0 +1,530 @@
+{
+  "title": "SoraFS PDP & PoTR Health",
+  "uid": "sorafs-pdp-potr-health",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["sorafs", "da", "pdp", "potr", "taikai", "cdn"],
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "provider",
+        "label": "Provider",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sorafs_pdp_challenges_total, provider_id)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 1,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": ".*"
+        }
+      },
+      {
+        "name": "tier",
+        "label": "PoTR Tier",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sorafs_potr_latency_ms_bucket, tier)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 1,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": ".*"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "PDP Success Rate (24h)",
+      "id": 1,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(rate(sorafs_pdp_challenges_total{result=\"verified\",provider_id=~\"$provider\"}[24h])) / clamp_min(sum(rate(sorafs_pdp_challenges_total{provider_id=~\"$provider\"}[24h])), 1e-6)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {"metric_id": "sorafs_pdp_success_rate"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "orange", "value": 0.97},
+              {"color": "green", "value": 0.995}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "values": false},
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "description": "Ratio of verified PDP challenges over the last 24h for the selected providers."
+    },
+    {
+      "type": "stat",
+      "title": "PDP Failures (24h)",
+      "id": 2,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(increase(sorafs_pdp_challenges_total{result=~\"failed|timeout\",provider_id=~\"$provider\"}[24h]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {"metric_id": "sorafs_pdp_failure_count"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 1},
+              {"color": "red", "value": 3}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "values": false},
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "description": "Cumulative PDP failures/timeouts recorded in the last 24 hours."
+    },
+    {
+      "type": "stat",
+      "title": "PoTR Success Rate (24h)",
+      "id": 3,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 0},
+      "targets": [
+        {
+          "expr": "1 - clamp_max(sum(rate(sorafs_potr_failures_total{tier=~\"$tier\",provider_id=~\"$provider\"}[24h])) / clamp_min(sum(rate(sorafs_potr_latency_ms_bucket{le=\"+Inf\",tier=~\"$tier\",provider_id=~\"$provider\"}[24h])), 1e-6), 1)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {"metric_id": "sorafs_potr_success_rate"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "orange", "value": 0.95},
+              {"color": "green", "value": 0.99}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "values": false},
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "description": "Share of PoTR receipts meeting the deadline across selected tiers/providers."
+    },
+    {
+      "type": "timeseries",
+      "title": "PDP Challenges by Result",
+      "id": 4,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+      "targets": [
+        {
+          "expr": "sum by (result)(rate(sorafs_pdp_challenges_total{provider_id=~\"$provider\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"metric_id": "sorafs_pdp_challenge_rate"},
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "single"},
+        "showPoints": "never"
+      },
+      "description": "Per-result PDP challenge rates (issued, verified, failed, timeout)."
+    },
+    {
+      "type": "timeseries",
+      "title": "PDP Response P95 (s)",
+      "id": 5,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le)(rate(sorafs_pdp_response_latency_seconds_bucket{provider_id=~\"$provider\"}[5m])))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {"metric_id": "sorafs_pdp_latency_p95"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "tooltip": {"mode": "single"},
+        "showPoints": "never"
+      },
+      "description": "95th percentile PDP response latency over time."
+    },
+    {
+      "type": "stat",
+      "title": "PDP Duplicate Samples (6h)",
+      "id": 6,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 14},
+      "targets": [
+        {
+          "expr": "sum(increase(sorafs_pdp_duplicates_total{provider_id=~\"$provider\"}[6h]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {"metric_id": "sorafs_pdp_duplicates"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 1},
+              {"color": "red", "value": 3}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "values": false},
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "description": "Counts PDP sample collisions over the last six hours."
+    },
+    {
+      "type": "stat",
+      "title": "PDP Slash Proposals (30d)",
+      "id": 7,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 14},
+      "targets": [
+        {
+          "expr": "sum(increase(sorafs_pdp_slash_proposals_total{provider_id=~\"$provider\"}[30d]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {"metric_id": "sorafs_pdp_slash_proposals"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 1},
+              {"color": "red", "value": 2}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "values": false},
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "description": "Number of PDP-driven slash proposals raised in the last 30 days."
+    },
+    {
+      "type": "table",
+      "title": "Top PDP Failure Providers (6h)",
+      "id": 8,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+      "targets": [
+        {
+          "expr": "topk(10, increase(sorafs_pdp_challenges_total{result=~\"failed|timeout\"}[6h]))",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": [{"displayName": "Value", "desc": true}]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {"metric_id": "sorafs_pdp_failure_topk"}
+        },
+        "overrides": []
+      },
+      "description": "Highlights providers with the most PDP failures/timeouts in the last six hours."
+    },
+    {
+      "type": "timeseries",
+      "title": "PoTR P95 Latency (ms)",
+      "id": 9,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le)(rate(sorafs_potr_latency_ms_bucket{tier=~\"$tier\",provider_id=~\"$provider\"}[5m])))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {"metric_id": "sorafs_potr_latency_p95"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "tooltip": {"mode": "single"},
+        "showPoints": "never"
+      },
+      "description": "95th percentile PoTR latency per tier/provider."
+    },
+    {
+      "type": "table",
+      "title": "PoTR Failures by Reason (6h)",
+      "id": 10,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 28},
+      "targets": [
+        {
+          "expr": "increase(sorafs_potr_failures_total{tier=~\"$tier\",provider_id=~\"$provider\"}[6h])",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": [{"displayName": "Value", "desc": true}]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {"metric_id": "sorafs_potr_failures"}
+        },
+        "overrides": []
+      },
+      "description": "Breaks down PoTR failure counts by reason and tier."
+    },
+    {
+      "type": "timeseries",
+      "title": "PoTR Failure Rate",
+      "id": 11,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 28},
+      "targets": [
+        {
+          "expr": "sum by (reason)(rate(sorafs_potr_failures_total{tier=~\"$tier\",provider_id=~\"$provider\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {"metric_id": "sorafs_potr_failure_rate"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "single"},
+        "showPoints": "never"
+      },
+      "description": "Tracks PoTR failure rate over time grouped by reason."
+    },
+    {
+      "type": "timeseries",
+      "title": "Proof Health Alerts by Trigger",
+      "id": 12,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 36},
+      "targets": [
+        {
+          "expr": "sum by (trigger, penalty)(rate(torii_sorafs_proof_health_alerts_total{provider_id=~\"$provider\"}[5m]))",
+          "legendFormat": "{{trigger}}/{{penalty}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {"metric_id": "sorafs_proof_health_alert_rate"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "single"},
+        "showPoints": "never"
+      },
+      "description": "Rate of SorafsProofHealthAlert emissions split by trigger/penalty outcome for the selected providers."
+    },
+    {
+      "type": "stat",
+      "title": "Providers in Cooldown",
+      "id": 13,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 36},
+      "targets": [
+        {
+          "expr": "sum(torii_sorafs_proof_health_cooldown{provider_id=~\"$provider\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {"metric_id": "sorafs_proof_health_cooldown"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 1},
+              {"color": "red", "value": 3}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "values": false},
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "description": "Counts SorafsProofHealthAlert windows that are still enforcing cooldown penalties."
+    },
+    {
+      "type": "table",
+      "title": "Proof Health Window Snapshot",
+      "id": 14,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 44},
+      "targets": [
+        {
+          "expr": "torii_sorafs_proof_health_pdp_failures{provider_id=~\"$provider\"}",
+          "format": "time_series",
+          "instant": true,
+          "legendFormat": "{{provider_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "torii_sorafs_proof_health_potr_breaches{provider_id=~\"$provider\"}",
+          "format": "time_series",
+          "instant": true,
+          "legendFormat": "{{provider_id}}",
+          "refId": "B"
+        },
+        {
+          "expr": "torii_sorafs_proof_health_penalty_nano{provider_id=~\"$provider\"}",
+          "format": "time_series",
+          "instant": true,
+          "legendFormat": "{{provider_id}}",
+          "refId": "C"
+        },
+        {
+          "expr": "torii_sorafs_proof_health_cooldown{provider_id=~\"$provider\"}",
+          "format": "time_series",
+          "instant": true,
+          "legendFormat": "{{provider_id}}",
+          "refId": "D"
+        },
+        {
+          "expr": "torii_sorafs_proof_health_window_end_epoch{provider_id=~\"$provider\"}",
+          "format": "time_series",
+          "instant": true,
+          "legendFormat": "{{provider_id}}",
+          "refId": "E"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"Time": true},
+            "indexByName": {
+              "provider_id": 0,
+              "Value": 1,
+              "Value #B": 2,
+              "Value #C": 3,
+              "Value #D": 4,
+              "Value #E": 5
+            },
+            "renameByName": {
+              "provider_id": "Provider",
+              "Value": "PDP failures",
+              "Value #B": "PoTR breaches",
+              "Value #C": "Penalty (nano-XOR)",
+              "Value #D": "Cooldown active",
+              "Value #E": "Window end epoch"
+            }
+          }
+        }
+      ],
+      "description": "Latest counters emitted via SorafsProofHealthAlert so Taikai/CDN operators can audit penalties and strike windows."
+    }
+  ]
+}

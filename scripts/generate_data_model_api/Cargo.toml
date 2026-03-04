@@ -1,0 +1,10 @@
+[package]
+name = "generate_data_model_api"
+version = "2.0.0-rc.2.0"
+edition = "2024"
+
+[dependencies]
+syn = { version = "2.0.109", features = ["full"] }
+
+[workspace]
+members = []

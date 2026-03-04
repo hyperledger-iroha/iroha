@@ -1,13 +1,11 @@
 //! Path utils.
 
 /// Absolute filesystem path.
-#[derive(serde::Serialize, Clone, PartialEq, Eq, Debug)]
-#[serde(transparent)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct AbsolutePath(std::path::PathBuf);
 
 /// Relative filesystem path.
-#[derive(serde::Serialize, Clone, PartialEq, Eq, Debug)]
-#[serde(transparent)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RelativePath(std::path::PathBuf);
 
 #[derive(displaydoc::Display, Debug)]

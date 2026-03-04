@@ -1,0 +1,35 @@
+<resources>
+    <string name="app_name">Operator Console</string>
+    <string name="operator_console_title">Operator console (preview)</string>
+    <string name="operator_console_body">This preview module will graph StrongBox state, pending queue depth, and `/v1/pipeline` telemetry once the AND2/AND4 integrations land.</string>
+    <string name="operator_console_status">Workstreams: %1$d | Next action: %2$s</string>
+    <string name="operator_console_posture">Hardware providers: %1$d • StrongBox: %2$s</string>
+    <string name="operator_console_hash">Sample transaction hash: %1$s</string>
+    <string name="operator_console_environment">Profile: %1$s</string>
+    <string name="operator_console_torii_endpoint">Torii endpoint: %1$s</string>
+    <string name="operator_console_torii_status_pending">Torii status: pending — %1$s</string>
+    <string name="operator_console_torii_status_online">Torii status: online — %1$s</string>
+    <string name="operator_console_torii_status_offline">Torii status: offline — %1$s</string>
+    <string name="operator_console_queue">Pending queue: %1$d entries (%2$s)</string>
+    <string name="operator_console_updated_at">Last updated: %1$s</string>
+    <string name="operator_console_updated_never">never</string>
+    <string name="operator_console_refresh">Refresh status</string>
+    <string name="operator_console_scoreboard">SoraFS scoreboard: %1$s</string>
+    <string name="operator_console_sorafs_summary">SoraFS summary: %1$s</string>
+    <string name="operator_console_sorafs_receipts">SoraFS receipts: %1$s</string>
+    <string name="operator_console_accounts">Torii account dump: %1$s</string>
+    <string name="operator_console_torii_log">Torii log: %1$s</string>
+    <string name="operator_console_torii_metrics">Torii metrics: %1$s</string>
+    <string name="operator_console_telemetry_log">Telemetry log: %1$s</string>
+    <string name="operator_console_handoff_endpoint">Handoff endpoint: %1$s</string>
+    <string name="operator_console_handoff_inbox">Handoff inbox: %1$s</string>
+    <string name="operator_console_harness_ready">Mock harness assets: ready</string>
+    <string name="operator_console_harness_missing">Mock harness assets missing: %1$s</string>
+    <string name="operator_console_harness_item_scoreboard">scoreboard</string>
+    <string name="operator_console_harness_item_summary">summary</string>
+    <string name="operator_console_harness_item_receipts">receipts</string>
+    <string name="operator_console_harness_item_telemetry">telemetry log</string>
+    <string name="operator_console_error">Sample warning: %1$s</string>
+    <string name="common_yes">Yes</string>
+    <string name="common_no">No</string>
+</resources>

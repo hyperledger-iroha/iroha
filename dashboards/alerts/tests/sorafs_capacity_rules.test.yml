@@ -1,0 +1,276 @@
+rule_files:
+  - ../sorafs_capacity_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_replication_backlog_total'
+        values: '11 11 11 11 11 11 11 11 11 11 11 11 11 11 11'
+      - series: 'torii_sorafs_capacity_utilised_gib{provider="provider-a"}'
+        values: '95 95 95 95 95 95 95 95 95 95 95 95 95 95 95'
+      - series: 'torii_sorafs_capacity_effective_gib{provider="provider-a"}'
+        values: '100 100 100 100 100 100 100 100 100 100 100 100 100 100 100'
+      - series: 'torii_sorafs_capacity_outstanding_gib{provider="provider-a"}'
+        values: '50 50 50 50 50 50 50 50 50 50 50 50 50 50 50'
+      - series: 'torii_sorafs_capacity_declared_gib{provider="provider-a"}'
+        values: '100 100 100 100 100 100 100 100 100 100 100 100 100 100 100'
+      - series: 'torii_sorafs_registry_orders_total{status="expired"}'
+        values: '0 0 0 0 1 2 3 4 5 6 7 8 9 10 11'
+    alert_rule_test:
+      - alertname: SoraFSReplicationBacklogGrowing
+        eval_time: 5m
+        exp_alerts: []
+      - alertname: SoraFSReplicationBacklogGrowing
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS replication backlog above threshold"
+      - alertname: SoraFSCapacityPressure
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: SoraFSCapacityPressure
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              provider: provider-a
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS provider utilisation over 90%"
+      - alertname: SoraFSOutstandingDemandSpike
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: SoraFSOutstandingDemandSpike
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              provider: provider-a
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS outstanding reservations exceed 40% of declaration"
+      - alertname: SoraFSReplicationExpiredOrders
+        eval_time: 2m
+        exp_alerts: []
+      - alertname: SoraFSReplicationExpiredOrders
+        eval_time: 8m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS replication orders expired"
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_replication_backlog_total'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_capacity_utilised_gib{provider="provider-b"}'
+        values: '40 40 40 40 40 40 40 40 40 40 40 40 40 40 40'
+      - series: 'torii_sorafs_capacity_effective_gib{provider="provider-b"}'
+        values: '100 100 100 100 100 100 100 100 100 100 100 100 100 100 100'
+      - series: 'torii_sorafs_capacity_outstanding_gib{provider="provider-b"}'
+        values: '10 10 10 10 10 10 10 10 10 10 10 10 10 10 10'
+      - series: 'torii_sorafs_capacity_declared_gib{provider="provider-b"}'
+        values: '100 100 100 100 100 100 100 100 100 100 100 100 100 100 100'
+      - series: 'torii_sorafs_registry_orders_total{status="expired"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - alertname: SoraFSReplicationBacklogGrowing
+        eval_time: 12m
+        exp_alerts: []
+      - alertname: SoraFSCapacityPressure
+        eval_time: 12m
+        exp_alerts: []
+      - alertname: SoraFSOutstandingDemandSpike
+        eval_time: 12m
+        exp_alerts: []
+      - alertname: SoraFSReplicationExpiredOrders
+        eval_time: 12m
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'sorafs_capacity_reconciliation_missing_total'
+        values: '1 1 1 1 1 1'
+      - series: 'sorafs_capacity_reconciliation_overpaid_total'
+        values: '0 0 0 0 0 0'
+      - series: 'sorafs_capacity_reconciliation_unexpected_transfers_total'
+        values: '0 0 0 0 0 0'
+    alert_rule_test:
+      - alertname: SoraFSCapacityReconciliationMismatch
+        eval_time: 2m
+        exp_alerts: []
+      - alertname: SoraFSCapacityReconciliationMismatch
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Capacity ledger reconciliation drift detected"
+  - interval: 1m
+    input_series:
+      - series: 'sorafs_reserve_ledger_rent_due_xor{label="cycle-a"}'
+        values: '10 10 10 10 10 10 10 10 10'
+      - series: 'sorafs_reserve_ledger_reserve_shortfall_xor{label="cycle-a"}'
+        values: '0 0 5 5 0 0 0 0 0'
+      - series: 'sorafs_reserve_ledger_top_up_shortfall_xor{label="cycle-a"}'
+        values: '0 0 5 5 0 0 0 0 0'
+      - series: 'sorafs_reserve_ledger_meets_underwriting{label="cycle-a"}'
+        values: '1 1 0 0 1 1 1 1 1'
+      - series: 'sorafs_reserve_ledger_instruction_total{label="cycle-a"}'
+        values: '0 0 0 0 0 0 0 1 1'
+      - series: 'sorafs_reserve_ledger_transfer_xor{label="cycle-a",transfer="rent"}'
+        values: '10 10 5 10 10 10 10 10 10'
+      - series: 'sorafs_reserve_ledger_transfer_xor{label="cycle-a",transfer="reserve_top_up"}'
+        values: '0 0 0 5 0 0 0 0 0'
+    alert_rule_test:
+      - alertname: SoraFSReserveLedgerTopUpRequired
+        eval_time: 3m
+        exp_alerts:
+          - exp_labels:
+              label: cycle-a
+              severity: warning
+            exp_annotations:
+              summary: "Reserve ledger projects a top-up requirement"
+      - alertname: SoraFSReserveLedgerUnderwritingBreach
+        eval_time: 3m
+        exp_alerts:
+          - exp_labels:
+              label: cycle-a
+              severity: critical
+            exp_annotations:
+              summary: "Reserve ledger fails underwriting gate"
+      - alertname: SoraFSReserveLedgerInstructionMissing
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              label: cycle-a
+              severity: warning
+            exp_annotations:
+              summary: "Reserve ledger emitted no transfer instructions"
+      - alertname: SoraFSReserveLedgerRentTransferMissing
+        eval_time: 1m
+        exp_alerts: []
+      - alertname: SoraFSReserveLedgerTopUpTransferMissing
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels:
+              label: cycle-a
+              severity: warning
+            exp_annotations:
+              summary: "Reserve ledger missing reserve top-up transfer entry"
+      - alertname: SoraFSReserveTransferRentMismatch
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels:
+              label: cycle-a
+              severity: warning
+            exp_annotations:
+              summary: "Reserve ledger rent transfer mismatch"
+      - alertname: SoraFSReserveTransferTopUpMismatch
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels:
+              label: cycle-a
+              severity: warning
+            exp_annotations:
+              summary: "Reserve ledger reserve top-up mismatch"
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_gc_runs_total{result="error"}'
+        values: '0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_gc_blocked_total{reason="repair_active"}'
+        values: '0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_gc_evictions_total{reason="retention_expired"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_gc_expired_manifests'
+        values: '2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2'
+    alert_rule_test:
+      - alertname: SoraFSGCErrorRuns
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS GC sweeps reporting errors"
+      - alertname: SoraFSGCBlocked
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              reason: repair_active
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS GC evictions blocked"
+      - alertname: SoraFSGCStalled
+        eval_time: 31m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS retention expiry backlog is not clearing"
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_repair_queue_depth{provider="provider-a"}'
+        values: '60 60 60 60 60 60 60 60 60 60 60 60 60 60 60'
+      - series: 'torii_sorafs_repair_backlog_oldest_age_seconds'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - alertname: SoraFSRepairBacklogHigh
+        eval_time: 9m
+        exp_alerts: []
+      - alertname: SoraFSRepairBacklogHigh
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS repair backlog above SLA thresholds"
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_repair_queue_depth{provider="provider-b"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_repair_backlog_oldest_age_seconds'
+        values: '15000 15000 15000 15000 15000 15000 15000 15000 15000 15000 15000 15000 15000 15000 15000'
+    alert_rule_test:
+      - alertname: SoraFSRepairBacklogHigh
+        eval_time: 9m
+        exp_alerts: []
+      - alertname: SoraFSRepairBacklogHigh
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS repair backlog above SLA thresholds"
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_repair_tasks_total{status="escalated"}'
+        values: '0 0 1 2 3 4 4 4 4 4 4 4 4 4 4'
+      - series: 'torii_sorafs_repair_lease_expired_total{outcome="requeued"}'
+        values: '0 1 2 3 4 5 6 6 6 6 6 6 6 6 6'
+    alert_rule_test:
+      - alertname: SoraFSRepairEscalations
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS repair escalations elevated"
+      - alertname: SoraFSRepairLeaseExpirySpike
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS repair lease expiries spiking"
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_gc_blocked_total{reason="repair_active"}'
+        values: '0 0 0 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - alertname: SoraFSRetentionBlockedEvictions
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels:
+              reason: repair_active
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS retention evictions blocked by active repairs"

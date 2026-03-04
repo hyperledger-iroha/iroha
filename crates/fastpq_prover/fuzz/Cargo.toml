@@ -1,0 +1,38 @@
+[package]
+name = "fastpq-prover-fuzz"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { version = "0.4.10", features = ["arbitrary-derive"] }
+arbitrary = { version = "1.4.2", features = ["derive"] }
+fastpq_prover = { path = ".." }
+fastpq_isi = { path = "../../fastpq_isi" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "trace_builder"
+path = "fuzz_targets/trace_builder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "merkle_paths"
+path = "fuzz_targets/merkle_paths.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lookup_grand_product"
+path = "fuzz_targets/lookup_grand_product.rs"
+test = false
+doc = false
+bench = false

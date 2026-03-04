@@ -13,9 +13,11 @@ workspace = true
 [dependencies]
 iroha_schema_derive = { path = "../iroha_schema_derive" }
 
-serde = { workspace = true, features = ["derive", "alloc"] }
-
 [dev-dependencies]
-parity-scale-codec = { workspace = true, default-features = false, features = ["derive", "full"] }
-serde_json = { workspace = true }
+norito = {workspace = true}
 impls = { workspace = true }
+
+[features]
+default = []
+# Silence norito derive unexpected-cfg checks in tests referencing packed layout
+packed-struct = []

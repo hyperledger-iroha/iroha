@@ -1,0 +1,7 @@
+// Public entrypoint using `kotoage fn` inside a contract.
+seiyaku PublicIncrement {
+  kotoage fn inc(n: int) -> int {
+    let one = 1;
+    return n + one;
+  }
+}

@@ -1,0 +1,46 @@
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/norito/examples/call-transfer-asset.ur.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+---
+slug: /norito/examples/call-transfer-asset
+title: Kotodama سے ہوسٹ ٹرانسفر کال کریں
+description: دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن کو inline میٹا ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
+מקור: crates/ivm/docs/examples/08_call_transfer_asset.ko
+---
+
+עמודים 18NT00000002X מכשירי רשת ב-`transfer_asset` מכשירי קו בליין ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
+
+## لیجر واک تھرو
+
+- کنٹریکٹ اتھارٹی (مثلا `ih58...`) کو اس اثاثے سے فنڈ کریں جسے وہ منتقل کرے گی اور اتھارٹی کو `CanTransfer` رول یا مساوی اجازت دیں۔
+- `call_transfer_asset` אוניברסלי 18NI000000014X ہوں، یہ اس طریقے کی عکاسی کرتا ہے کہ آن چین آٹومیشن ہوسٹ کالز کو لپیٹ سکتی ہے۔
+- `FindAccountAssets` ו-`iroha_cli ledger assets list --account ih58...` גירסה לתקשורת. ہو کہ میٹا ڈیٹا گارڈ نے ٹرانسفر کانٹیکسٹ لاگ کیا ہے۔
+
+## תוכנות SDK
+
+- [התחלה מהירה של SDK של חלודה](/sdks/rust)
+- [התחלה מהירה של Python SDK](/sdks/python)
+- [התחלה מהירה של JavaScript SDK](/sdks/javascript)
+
+[Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/call-transfer-asset.ko)
+
+```text
+// Direct builtin call (no contract-style call syntax) inside a contract.
+seiyaku TransferCall {
+  kotoage fn pay() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ih58..."),
+      account!("ih58..."),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

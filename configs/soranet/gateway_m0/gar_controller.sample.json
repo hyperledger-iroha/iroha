@@ -1,0 +1,54 @@
+{
+  "base_subject": "soranet.gar",
+  "operator": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+  "default_expires_at_unix": 1700003600,
+  "pops": [
+    {
+      "label": "soranet-pop-sjc",
+      "nats_subject": "soranet.gar.sjc",
+      "audit_uri": "sora://gar/audit/sjc"
+    },
+    {
+      "label": "soranet-pop-ams",
+      "audit_uri": "sora://gar/audit/ams"
+    }
+  ],
+  "policies": [
+    {
+      "gar_name": "docs.sora",
+      "canonical_host": "docs.gw.sora.net",
+      "policy_version": "m1",
+      "cache_version": "m1",
+      "policy": {
+        "license_sets": [],
+        "moderation_directives": [],
+        "cdn_policy": {
+          "ttl_override_secs": 300,
+          "purge_tags": [
+            "rollout"
+          ],
+          "moderation_slugs": [],
+          "rate_ceiling_rps": 2000,
+          "allow_regions": [
+            "NA",
+            "EU"
+          ],
+          "deny_regions": [],
+          "legal_hold": false
+        },
+        "metrics_policy": null,
+        "telemetry_labels": [
+          "gar.docs"
+        ],
+        "rpt_digest": null
+      },
+      "evidence_uris": [
+        "sora://gar/docs/log"
+      ],
+      "labels": [
+        "snnet-15g"
+      ],
+      "expires_at_unix": 1700007200
+    }
+  ]
+}

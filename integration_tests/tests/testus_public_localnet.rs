@@ -1,0 +1,2883 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+//! Localnet simulation for a public-style Testus rollout with churn and fixed TPS load.
+
+use std::{
+    any::Any,
+    cmp::Reverse,
+    fs,
+    net::SocketAddr as StdSocketAddr,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+use eyre::{Result, WrapErr, ensure, eyre};
+use integration_tests::sandbox;
+use iroha::{
+    client::Client,
+    config::{Config, LoadPath},
+    crypto::{Algorithm, ExposedPrivateKey, KeyPair, bls_normal_pop_prove},
+    data_model::{
+        Level,
+        isi::{InstructionBox, Log, Unregister, register::RegisterPeerWithPop},
+        peer::PeerId,
+        prelude::QueryBuilderExt,
+        query::peer::prelude::FindPeers,
+    },
+};
+use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
+use iroha_test_network::{
+    Program, fslock_ports::AllocatedPortBlock, init_instruction_registry, repo_root,
+};
+use tempfile::TempDir;
+use tokio::time::sleep;
+use toml::{Table, Value as TomlValue};
+
+const TESTUS_VALIDATORS: u16 = 4;
+const TESTUS_TOTAL_PORT_SLOTS: u16 = TESTUS_VALIDATORS + 1;
+const READY_TIMEOUT: Duration = Duration::from_secs(300);
+const STATUS_POLL: Duration = Duration::from_millis(200);
+const MONITOR_PERIOD: Duration = Duration::from_secs(1);
+const DEFAULT_STALL_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_SIM_DURATION_SECS: u64 = 3_600;
+const DEFAULT_LOAD_TPS: u64 = 5;
+const DEFAULT_CHURN_INTERVAL_SECS: u64 = 300;
+const DEFAULT_MAX_HEIGHT_SKEW: u64 = 2;
+const DEFAULT_MAX_HEIGHT_SKEW_GRACE_SECS: u64 = 30;
+const INTERIM_CONVERGENCE_MAX_SKEW: u64 = 6;
+// Under process+membership churn, a rejoining validator can briefly trail by >10 blocks
+// while quorum remains healthy; keep this as a hard guardrail rather than a steady-state SLA.
+const DEFAULT_MAX_TRANSIENT_HEIGHT_SKEW: u64 = 32;
+const DEFAULT_MAX_VIEW_CHANGE_RATE: f64 = 0.2;
+const DEFAULT_MAX_LAGGED_CYCLE_RATIO: f64 = 0.35;
+const DEFAULT_MIN_COMMITTED_TPS_RATIO: f64 = 0.6;
+const MIN_SCHEDULED_TPS_RATIO: f64 = 0.8;
+const MIN_ACCEPTED_TPS_RATIO: f64 = 0.55;
+const PROCESS_DOWNTIME_SECS: u64 = 5;
+const JOINER_CATCHUP_TIMEOUT_SECS: u64 = 60;
+const RESTART_CATCHUP_TIMEOUT_SECS: u64 = 60;
+const INTERIM_CONVERGENCE_TIMEOUT_SECS: u64 = 45;
+const INTERIM_LAG_CHURN_BACKOFF_SECS: u64 = 30;
+const JOINER_STALL_LOG_EVERY: u64 = 5;
+const JOINER_PROGRESS_LOG_EVERY: u64 = 5;
+const JOINER_STALL_WARNING_THRESHOLD: u64 = 3;
+const LOCALNET_BLOCK_TIME_MS: u64 = 1_000;
+const LOCALNET_COMMIT_TIME_MS: u64 = 1_000;
+const LOCALNET_TRANSACTION_TTL_MS: i64 = 7_200_000;
+const MAX_TX_BURST_PER_TICK: u32 = 32;
+const TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+const STATUS_REQUEST_RETRIES: usize = 2;
+const STATUS_REQUEST_RETRY_BACKOFF: Duration = Duration::from_millis(200);
+const PEER_QUERY_REQUEST_RETRIES: usize = 2;
+const PEER_QUERY_REQUEST_RETRY_BACKOFF: Duration = Duration::from_millis(200);
+const STATUS_QUORUM_RETRY_TIMEOUT: Duration = Duration::from_secs(15);
+const FINAL_SETTLE_WINDOW: Duration = Duration::from_secs(120);
+const LOAD_SUBMIT_RETRY_TIMEOUT_SECS: u64 = 3;
+const LOAD_SUBMIT_RETRY_BACKOFF: Duration = Duration::from_millis(200);
+
+#[derive(Clone, Copy)]
+struct SimulationModes {
+    process_churn: bool,
+    membership_churn: bool,
+}
+
+#[derive(Clone, Copy)]
+struct SimulationConfig {
+    duration: Duration,
+    tps: u64,
+    churn_interval: Duration,
+    max_height_skew: u64,
+    max_height_skew_grace: Duration,
+    max_transient_height_skew: u64,
+    stall_timeout: Duration,
+    max_view_change_rate: f64,
+    max_lagged_cycle_ratio: f64,
+    min_committed_tps_ratio: f64,
+    process_downtime: Duration,
+}
+
+impl SimulationConfig {
+    fn from_env() -> Self {
+        Self {
+            duration: Duration::from_secs(env_u64(
+                "IROHA_TESTUS_SIM_DURATION_SECS",
+                DEFAULT_SIM_DURATION_SECS,
+                30,
+            )),
+            tps: env_u64("IROHA_TESTUS_LOAD_TPS", DEFAULT_LOAD_TPS, 1),
+            churn_interval: Duration::from_secs(env_u64(
+                "IROHA_TESTUS_CHURN_INTERVAL_SECS",
+                DEFAULT_CHURN_INTERVAL_SECS,
+                30,
+            )),
+            max_height_skew: env_u64("IROHA_TESTUS_MAX_HEIGHT_SKEW", DEFAULT_MAX_HEIGHT_SKEW, 0),
+            max_height_skew_grace: Duration::from_secs(env_u64(
+                "IROHA_TESTUS_MAX_HEIGHT_SKEW_GRACE_SECS",
+                DEFAULT_MAX_HEIGHT_SKEW_GRACE_SECS,
+                0,
+            )),
+            max_transient_height_skew: env_u64(
+                "IROHA_TESTUS_MAX_TRANSIENT_HEIGHT_SKEW",
+                DEFAULT_MAX_TRANSIENT_HEIGHT_SKEW,
+                0,
+            ),
+            stall_timeout: Duration::from_secs(env_u64(
+                "IROHA_TESTUS_STALL_TIMEOUT_SECS",
+                DEFAULT_STALL_TIMEOUT_SECS,
+                10,
+            )),
+            max_view_change_rate: env_f64(
+                "IROHA_TESTUS_MAX_VIEW_CHANGE_RATE",
+                DEFAULT_MAX_VIEW_CHANGE_RATE,
+                0.0,
+            ),
+            max_lagged_cycle_ratio: env_f64(
+                "IROHA_TESTUS_MAX_LAGGED_CYCLE_RATIO",
+                DEFAULT_MAX_LAGGED_CYCLE_RATIO,
+                0.0,
+            ),
+            min_committed_tps_ratio: env_f64(
+                "IROHA_TESTUS_MIN_COMMITTED_TPS_RATIO",
+                DEFAULT_MIN_COMMITTED_TPS_RATIO,
+                0.0,
+            ),
+            process_downtime: Duration::from_secs(PROCESS_DOWNTIME_SECS),
+        }
+    }
+
+    fn quick(duration_secs: u64, churn_interval_secs: u64) -> Self {
+        Self {
+            duration: Duration::from_secs(duration_secs),
+            tps: DEFAULT_LOAD_TPS,
+            churn_interval: Duration::from_secs(churn_interval_secs),
+            max_height_skew: DEFAULT_MAX_HEIGHT_SKEW,
+            max_height_skew_grace: Duration::from_secs(DEFAULT_MAX_HEIGHT_SKEW_GRACE_SECS),
+            max_transient_height_skew: DEFAULT_MAX_TRANSIENT_HEIGHT_SKEW,
+            stall_timeout: Duration::from_secs(DEFAULT_STALL_TIMEOUT_SECS),
+            max_view_change_rate: DEFAULT_MAX_VIEW_CHANGE_RATE,
+            max_lagged_cycle_ratio: DEFAULT_MAX_LAGGED_CYCLE_RATIO,
+            min_committed_tps_ratio: DEFAULT_MIN_COMMITTED_TPS_RATIO,
+            process_downtime: Duration::from_secs(2),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SimulationSummary {
+    duration_secs: u64,
+    target_tps: u64,
+    tx_attempted: u64,
+    tx_sent: u64,
+    tx_submit_errors: u64,
+    process_churn_cycles: u64,
+    process_churn_lagged_cycles: u64,
+    membership_join_cycles: u64,
+    membership_leave_cycles: u64,
+    membership_churn_lagged_cycles: u64,
+    membership_churn_warning_cycles: u64,
+    max_height_skew_observed: u64,
+    view_changes_start: u64,
+    view_changes_end: u64,
+    view_change_rate_per_sec: f64,
+    scheduled_tps: f64,
+    submitted_tps: f64,
+    committed_tps: f64,
+    committed_txs_min_delta: u64,
+    saturated_samples: u64,
+    total_samples: u64,
+}
+
+impl SimulationSummary {
+    fn to_json_value(&self) -> norito::json::Value {
+        norito::json!({
+            "duration_secs": (self.duration_secs),
+            "target_tps": (self.target_tps),
+            "tx_attempted": (self.tx_attempted),
+            "tx_sent": (self.tx_sent),
+            "tx_submit_errors": (self.tx_submit_errors),
+            "process_churn_cycles": (self.process_churn_cycles),
+            "process_churn_lagged_cycles": (self.process_churn_lagged_cycles),
+            "membership_join_cycles": (self.membership_join_cycles),
+            "membership_leave_cycles": (self.membership_leave_cycles),
+            "membership_churn_lagged_cycles": (self.membership_churn_lagged_cycles),
+            "membership_churn_warning_cycles": (self.membership_churn_warning_cycles),
+            "max_height_skew_observed": (self.max_height_skew_observed),
+            "view_changes_start": (self.view_changes_start),
+            "view_changes_end": (self.view_changes_end),
+            "view_change_rate_per_sec": (self.view_change_rate_per_sec),
+            "scheduled_tps": (self.scheduled_tps),
+            "submitted_tps": (self.submitted_tps),
+            "committed_tps": (self.committed_tps),
+            "committed_txs_min_delta": (self.committed_txs_min_delta),
+            "saturated_samples": (self.saturated_samples),
+            "total_samples": (self.total_samples),
+        })
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct MembershipCycleOutcome {
+    hard_lagged: bool,
+    warning_lagged: bool,
+}
+
+impl MembershipCycleOutcome {
+    fn mark_hard_lag(&mut self) {
+        self.hard_lagged = true;
+    }
+
+    fn mark_warning_lag(&mut self) {
+        self.warning_lagged = true;
+    }
+}
+
+struct JoinerPeer {
+    peer_id: PeerId,
+    pop: Vec<u8>,
+    config_path: PathBuf,
+    client: Client,
+}
+
+struct TestusHarness {
+    out_dir: PathBuf,
+    localnet: ManagedLocalnet,
+    primary_client: Client,
+    validator_clients: Vec<Client>,
+    joiner: JoinerPeer,
+}
+
+impl TestusHarness {
+    fn summary_path(&self) -> PathBuf {
+        self.out_dir.join("testus_simulation_summary.json")
+    }
+}
+
+struct ManagedLocalnet {
+    dir: PathBuf,
+    irohad_bin: PathBuf,
+    validator_count: u16,
+    validator_children: Vec<Option<Child>>,
+    joiner_child: Option<Child>,
+    _port_reservations: (AllocatedPortBlock, AllocatedPortBlock),
+}
+
+impl ManagedLocalnet {
+    fn start(
+        out_dir: &Path,
+        irohad_bin: &Path,
+        validator_count: u16,
+        port_reservations: (AllocatedPortBlock, AllocatedPortBlock),
+    ) -> Result<Self> {
+        let mut this = Self {
+            dir: out_dir.to_path_buf(),
+            irohad_bin: irohad_bin.to_path_buf(),
+            validator_count,
+            validator_children: (0..validator_count).map(|_| None).collect(),
+            joiner_child: None,
+            _port_reservations: port_reservations,
+        };
+        for idx in 0..usize::from(validator_count) {
+            this.start_validator(idx)?;
+        }
+        Ok(this)
+    }
+
+    fn start_validator(&mut self, idx: usize) -> Result<()> {
+        ensure!(
+            idx < usize::from(self.validator_count),
+            "validator index out of bounds: {idx}"
+        );
+        if self
+            .validator_children
+            .get_mut(idx)
+            .and_then(Option::as_mut)
+            .is_some_and(|child| child.try_wait().ok().flatten().is_none())
+        {
+            return Ok(());
+        }
+        let config_path = self.dir.join(format!("peer{idx}.toml"));
+        let snapshot_dir = self
+            .dir
+            .join("storage")
+            .join(format!("peer{idx}"))
+            .join("snapshot");
+        fs::create_dir_all(&snapshot_dir)
+            .wrap_err_with(|| format!("create snapshot dir {}", snapshot_dir.display()))?;
+        let child = self.spawn_with_config(
+            &config_path,
+            &snapshot_dir,
+            &format!("peer{idx}.log"),
+            &format!("peer{idx}"),
+        )?;
+        self.validator_children[idx] = Some(child);
+        Ok(())
+    }
+
+    fn stop_validator(&mut self, idx: usize) -> Result<()> {
+        ensure!(
+            idx < usize::from(self.validator_count),
+            "validator index out of bounds: {idx}"
+        );
+        if let Some(mut child) = self.validator_children[idx].take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Ok(())
+    }
+
+    fn start_joiner(&mut self, config_path: &Path) -> Result<()> {
+        if self
+            .joiner_child
+            .as_mut()
+            .is_some_and(|child| child.try_wait().ok().flatten().is_none())
+        {
+            return Ok(());
+        }
+        let snapshot_dir = self.dir.join("storage").join("joiner").join("snapshot");
+        fs::create_dir_all(&snapshot_dir)
+            .wrap_err_with(|| format!("create joiner snapshot dir {}", snapshot_dir.display()))?;
+        let child = self.spawn_with_config(config_path, &snapshot_dir, "joiner.log", "joiner")?;
+        self.joiner_child = Some(child);
+        Ok(())
+    }
+
+    fn stop_joiner(&mut self) -> Result<()> {
+        if let Some(mut child) = self.joiner_child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Ok(())
+    }
+
+    fn spawn_with_config(
+        &self,
+        config_path: &Path,
+        snapshot_dir: &Path,
+        log_name: &str,
+        node_label: &str,
+    ) -> Result<Child> {
+        let log_path = self.dir.join(log_name);
+        let log_file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .wrap_err_with(|| format!("open log file {}", log_path.display()))?;
+        let log_file_err = log_file
+            .try_clone()
+            .wrap_err_with(|| format!("clone log file {}", log_path.display()))?;
+
+        let mut cmd = Command::new(&self.irohad_bin);
+        cmd.arg("--sora");
+        cmd.arg("--config").arg(config_path);
+        cmd.current_dir(&self.dir);
+        cmd.env("SNAPSHOT_STORE_DIR", snapshot_dir);
+        if std::env::var_os("RUST_LOG").is_none() {
+            cmd.env("RUST_LOG", "info");
+        }
+        cmd.stdout(Stdio::from(log_file));
+        cmd.stderr(Stdio::from(log_file_err));
+
+        cmd.spawn()
+            .wrap_err_with(|| format!("spawn irohad for {node_label}"))
+    }
+}
+
+impl Drop for ManagedLocalnet {
+    fn drop(&mut self) {
+        for idx in 0..usize::from(self.validator_count) {
+            let _ = self.stop_validator(idx);
+        }
+        let _ = self.stop_joiner();
+        if cfg!(unix) {
+            let script = self.dir.join("stop.sh");
+            if script.exists() {
+                let _ = Command::new("bash")
+                    .arg(script)
+                    .current_dir(&self.dir)
+                    .output();
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn testus_localnet_bootstrap_validators() -> Result<()> {
+    init_instruction_registry();
+    let _guard = sandbox::serial_guard();
+
+    let temp_dir = localnet_tempdir("testus-bootstrap")?;
+    let out_dir = temp_dir.path().join("localnet");
+    let result: Result<()> = async {
+        let harness = setup_testus_harness(&out_dir, "testus-bootstrap").await?;
+        wait_for_cluster_convergence(
+            &harness.validator_clients,
+            harness.primary_client.get_status()?.blocks,
+            DEFAULT_MAX_HEIGHT_SKEW,
+            READY_TIMEOUT,
+        )
+        .await?;
+
+        let baseline = harness.primary_client.get_status()?.blocks_non_empty;
+        harness.primary_client.submit::<InstructionBox>(
+            Log::new(Level::INFO, "testus bootstrap probe".to_string()).into(),
+        )?;
+        wait_for_blocks_non_empty(
+            &harness.primary_client,
+            baseline.saturating_add(1),
+            READY_TIMEOUT,
+        )
+        .await?;
+        Ok(())
+    }
+    .await;
+
+    finalize_result(temp_dir, "testus_localnet_bootstrap_validators", result)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires local process orchestration"]
+async fn testus_localnet_joiner_register_unregister_behavior() -> Result<()> {
+    init_instruction_registry();
+    let _guard = sandbox::serial_guard();
+
+    let temp_dir = localnet_tempdir("testus-membership")?;
+    let out_dir = temp_dir.path().join("localnet");
+    let result: Result<()> = async {
+        let mut harness = setup_testus_harness(&out_dir, "testus-membership").await?;
+        let mut joiner_warning_state = JoinerCatchupWarningState::default();
+        let _ = membership_join_cycle(&mut harness, &mut joiner_warning_state).await?;
+        let _ = membership_leave_cycle(&mut harness).await?;
+        Ok(())
+    }
+    .await;
+
+    finalize_result(
+        temp_dir,
+        "testus_localnet_joiner_register_unregister_behavior",
+        result,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires local process orchestration"]
+async fn testus_localnet_restart_catchup_behavior() -> Result<()> {
+    init_instruction_registry();
+    let _guard = sandbox::serial_guard();
+
+    let temp_dir = localnet_tempdir("testus-restart")?;
+    let out_dir = temp_dir.path().join("localnet");
+    let result: Result<()> = async {
+        let mut harness = setup_testus_harness(&out_dir, "testus-restart").await?;
+        let _ = process_churn_cycle(&mut harness, 0, Duration::from_secs(PROCESS_DOWNTIME_SECS))
+            .await?;
+        Ok(())
+    }
+    .await;
+
+    finalize_result(temp_dir, "testus_localnet_restart_catchup_behavior", result)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "long-running testus simulation"]
+async fn testus_public_localnet_5tps_churn_stability() -> Result<()> {
+    init_instruction_registry();
+    let _guard = sandbox::serial_guard();
+
+    let cfg = SimulationConfig::from_env();
+    let seed = std::env::var("IROHA_TESTUS_SIM_SEED")
+        .ok()
+        .filter(|seed| !seed.trim().is_empty())
+        .unwrap_or_else(|| "testus-public-sim".to_owned());
+    let temp_dir = localnet_tempdir("testus-simulation")?;
+    let out_dir = temp_dir.path().join("localnet");
+    let result: Result<()> = async move {
+        let mut harness = setup_testus_harness(&out_dir, &seed).await?;
+        let summary = run_testus_simulation(
+            &mut harness,
+            cfg,
+            SimulationModes {
+                process_churn: true,
+                membership_churn: true,
+            },
+        )
+        .await?;
+        write_summary(&harness.summary_path(), &summary)?;
+        Ok(())
+    }
+    .await;
+
+    finalize_result(
+        temp_dir,
+        "testus_public_localnet_5tps_churn_stability",
+        result,
+    )
+}
+
+async fn run_testus_simulation(
+    harness: &mut TestusHarness,
+    cfg: SimulationConfig,
+    modes: SimulationModes,
+) -> Result<SimulationSummary> {
+    ensure!(cfg.tps > 0, "tps must be greater than zero");
+    ensure!(
+        (0.0..=1.0).contains(&cfg.max_lagged_cycle_ratio),
+        "max lagged cycle ratio must be in [0,1], got {}",
+        cfg.max_lagged_cycle_ratio
+    );
+    ensure!(
+        (0.0..=1.0).contains(&cfg.min_committed_tps_ratio),
+        "min committed tps ratio must be in [0,1], got {}",
+        cfg.min_committed_tps_ratio
+    );
+    ensure!(
+        cfg.max_transient_height_skew >= cfg.max_height_skew,
+        "max transient height skew must be >= max height skew (transient={}, steady={})",
+        cfg.max_transient_height_skew,
+        cfg.max_height_skew
+    );
+    let validator_quorum = min_presence_matches(harness.validator_clients.len());
+
+    let mut tx_attempted = 0_u64;
+    let mut tx_sent = 0_u64;
+    let mut tx_submit_errors = 0_u64;
+    let mut process_churn_cycles = 0_u64;
+    let mut process_churn_lagged_cycles = 0_u64;
+    let mut membership_join_cycles = 0_u64;
+    let mut membership_leave_cycles = 0_u64;
+    let mut membership_churn_lagged_cycles = 0_u64;
+    let mut membership_churn_warning_cycles = 0_u64;
+    let mut max_height_skew_observed = 0_u64;
+    let mut saturated_samples = 0_u64;
+    let mut total_samples = 0_u64;
+    let mut joiner_active = false;
+    let mut joiner_warning_state = JoinerCatchupWarningState::default();
+    let mut restart_idx = first_process_churn_index(harness.validator_clients.len());
+    let mut paused_for_churn = Duration::ZERO;
+    let mut skew_breach_started_at = None;
+
+    let initial_statuses = top_quorum_statuses(
+        &collect_statuses_quorum_with_retry(
+            &harness.validator_clients,
+            validator_quorum,
+            STATUS_QUORUM_RETRY_TIMEOUT,
+        )
+        .await?,
+        validator_quorum,
+    );
+    let view_changes_start = max_view_changes(&initial_statuses);
+    let mut view_changes_end = view_changes_start;
+    let initial_min_txs_approved = min_txs_approved(&initial_statuses);
+    let mut last_progress_height = max_height(&initial_statuses);
+    let mut last_progress_at = Instant::now();
+    let mut last_min_progress_height = min_height(&initial_statuses);
+    let mut last_min_progress_at = Instant::now();
+
+    let mut next_tx = Instant::now();
+    let mut next_monitor = Instant::now();
+    let final_settle_window = effective_final_settle_window(cfg.duration);
+    let churn_window = cfg.duration.saturating_sub(final_settle_window);
+    let mut next_process_churn =
+        Instant::now() + initial_churn_delay(cfg.churn_interval, churn_window);
+    let membership_offset = initial_churn_delay(cfg.churn_interval / 2, churn_window);
+    let mut next_membership_churn = Instant::now() + membership_offset;
+    let tx_period = Duration::from_secs_f64(1.0 / cfg.tps as f64);
+    let start_time = Instant::now();
+    let deadline = start_time + cfg.duration;
+
+    while Instant::now() < deadline {
+        let now = Instant::now();
+        let allow_churn = deadline.saturating_duration_since(now) > final_settle_window;
+
+        if modes.process_churn && allow_churn && now >= next_process_churn {
+            let churn_start = Instant::now();
+            ensure!(
+                refresh_primary_client_from_validators(harness),
+                "no validator endpoint is reachable before process churn"
+            );
+            let selected_restart_idx = select_process_churn_index(
+                &harness.validator_clients,
+                restart_idx,
+                INTERIM_CONVERGENCE_MAX_SKEW,
+            );
+            let lagged =
+                process_churn_cycle(harness, selected_restart_idx, cfg.process_downtime).await?;
+            paused_for_churn = paused_for_churn.saturating_add(churn_start.elapsed());
+            let statuses_after_churn = top_quorum_statuses(
+                &collect_statuses_quorum_with_retry(
+                    &harness.validator_clients,
+                    validator_quorum,
+                    STATUS_QUORUM_RETRY_TIMEOUT,
+                )
+                .await?,
+                validator_quorum,
+            );
+            let max_after_churn = max_height(&statuses_after_churn);
+            if max_after_churn > last_progress_height {
+                last_progress_height = max_after_churn;
+            }
+            last_progress_at = Instant::now();
+            let min_after_churn = min_height(&statuses_after_churn);
+            if min_after_churn > last_min_progress_height {
+                last_min_progress_height = min_after_churn;
+            }
+            last_min_progress_at = Instant::now();
+            restart_idx =
+                next_process_churn_index(selected_restart_idx, harness.validator_clients.len());
+            process_churn_cycles = process_churn_cycles.saturating_add(1);
+            if lagged {
+                process_churn_lagged_cycles = process_churn_lagged_cycles.saturating_add(1);
+                eprintln!(
+                    "process churn lagged; applying next-cycle backoff of {}s",
+                    INTERIM_LAG_CHURN_BACKOFF_SECS
+                );
+            }
+            next_process_churn =
+                next_process_churn_deadline(Instant::now(), cfg.churn_interval, lagged);
+            continue;
+        }
+
+        if modes.membership_churn && allow_churn && now >= next_membership_churn {
+            ensure!(
+                refresh_primary_client_from_validators(harness),
+                "no validator endpoint is reachable before membership churn"
+            );
+            let churn_start = Instant::now();
+            let outcome = if joiner_active {
+                membership_leave_cycle(harness).await?
+            } else {
+                membership_join_cycle(harness, &mut joiner_warning_state).await?
+            };
+            if joiner_active {
+                membership_leave_cycles = membership_leave_cycles.saturating_add(1);
+            } else {
+                membership_join_cycles = membership_join_cycles.saturating_add(1);
+            }
+            paused_for_churn = paused_for_churn.saturating_add(churn_start.elapsed());
+            let statuses_after_churn = top_quorum_statuses(
+                &collect_statuses_quorum_with_retry(
+                    &harness.validator_clients,
+                    validator_quorum,
+                    STATUS_QUORUM_RETRY_TIMEOUT,
+                )
+                .await?,
+                validator_quorum,
+            );
+            let max_after_churn = max_height(&statuses_after_churn);
+            if max_after_churn > last_progress_height {
+                last_progress_height = max_after_churn;
+            }
+            last_progress_at = Instant::now();
+            let min_after_churn = min_height(&statuses_after_churn);
+            if min_after_churn > last_min_progress_height {
+                last_min_progress_height = min_after_churn;
+            }
+            last_min_progress_at = Instant::now();
+            joiner_active = !joiner_active;
+            if outcome.hard_lagged {
+                membership_churn_lagged_cycles = membership_churn_lagged_cycles.saturating_add(1);
+                eprintln!(
+                    "membership churn lagged; applying next-cycle backoff of {}s",
+                    INTERIM_LAG_CHURN_BACKOFF_SECS
+                );
+            }
+            if outcome.warning_lagged {
+                membership_churn_warning_cycles = membership_churn_warning_cycles.saturating_add(1);
+            }
+            next_membership_churn = next_membership_churn_deadline(
+                Instant::now(),
+                cfg.churn_interval,
+                membership_backoff_requires_hard_lag(outcome),
+            );
+            continue;
+        }
+
+        if now >= next_tx {
+            let mut burst_submitted = 0_u32;
+            let mut catchup_now = now;
+            while catchup_now >= next_tx && burst_submitted < MAX_TX_BURST_PER_TICK {
+                tx_attempted = tx_attempted.saturating_add(1);
+                let msg = format!("testus-load-{tx_attempted}");
+                let load_instruction: InstructionBox = Log::new(Level::INFO, msg).into();
+                if let Err(err) = submit_load_instruction_with_retry(
+                    harness,
+                    &load_instruction,
+                    Duration::from_secs(LOAD_SUBMIT_RETRY_TIMEOUT_SECS),
+                )
+                .await
+                {
+                    tx_submit_errors = tx_submit_errors.saturating_add(1);
+                    eprintln!("testus load submit failed after retries: {err:?}");
+                    next_tx = Instant::now() + tx_period;
+                    break;
+                } else {
+                    tx_sent = tx_sent.saturating_add(1);
+                }
+                burst_submitted = burst_submitted.saturating_add(1);
+                next_tx += tx_period;
+                catchup_now = Instant::now();
+            }
+            if catchup_now >= next_tx {
+                next_tx = catchup_now + tx_period;
+            }
+            continue;
+        }
+
+        if now >= next_monitor {
+            let statuses = top_quorum_statuses(
+                &collect_statuses_quorum_with_retry(
+                    &harness.validator_clients,
+                    validator_quorum,
+                    STATUS_QUORUM_RETRY_TIMEOUT,
+                )
+                .await?,
+                validator_quorum,
+            );
+            let max_height = max_height(&statuses);
+            let min_height = min_height(&statuses);
+            let skew = max_height.saturating_sub(min_height);
+            max_height_skew_observed = max_height_skew_observed.max(skew);
+            ensure!(
+                skew <= cfg.max_transient_height_skew,
+                "validator height skew exceeded absolute transient cap: observed={skew}, cap={}, max_height={max_height}, min_height={min_height}",
+                cfg.max_transient_height_skew,
+            );
+            skew_breach_started_at =
+                update_skew_breach_started(skew_breach_started_at, skew, cfg.max_height_skew, now);
+            if let Some(breach_start) = skew_breach_started_at {
+                let breach_duration = now.saturating_duration_since(breach_start);
+                let min_progress_age = now.saturating_duration_since(last_min_progress_at);
+                ensure!(
+                    !is_skew_breach_unrecovering(
+                        breach_duration,
+                        min_progress_age,
+                        cfg.max_height_skew_grace,
+                        cfg.stall_timeout,
+                    ),
+                    "validator height skew exceeded threshold without lagging-peer recovery: observed={skew}, threshold={}, breach_duration={breach_duration:?}, min_progress_age={min_progress_age:?}, grace={:?}, min_progress_timeout={:?}, max_height={max_height}, min_height={min_height}",
+                    cfg.max_height_skew,
+                    cfg.max_height_skew_grace,
+                    cfg.stall_timeout
+                );
+            }
+
+            if min_height > last_min_progress_height {
+                last_min_progress_height = min_height;
+                last_min_progress_at = now;
+            }
+
+            if max_height > last_progress_height {
+                last_progress_height = max_height;
+                last_progress_at = Instant::now();
+            }
+
+            ensure!(
+                Instant::now().saturating_duration_since(last_progress_at) <= cfg.stall_timeout,
+                "consensus stalled: no max-height progression for {:?} (max_height={max_height}, min_height={min_height}, last_progress_height={last_progress_height})",
+                cfg.stall_timeout,
+            );
+
+            view_changes_end = max_view_changes(&statuses);
+            for status in &statuses {
+                if let Some(sumeragi) = status.sumeragi.as_ref() {
+                    total_samples = total_samples.saturating_add(1);
+                    if sumeragi.tx_queue_saturated {
+                        saturated_samples = saturated_samples.saturating_add(1);
+                    }
+                    ensure!(
+                        sumeragi.commit_qc_height
+                            <= status.blocks.saturating_add(cfg.max_height_skew),
+                        "commit_qc height looks inconsistent with status height: commit_qc={} blocks={}",
+                        sumeragi.commit_qc_height,
+                        status.blocks
+                    );
+                }
+            }
+
+            next_monitor = Instant::now() + MONITOR_PERIOD;
+            continue;
+        }
+
+        let mut wakeup = deadline;
+        wakeup = wakeup.min(next_tx);
+        wakeup = wakeup.min(next_monitor);
+        if modes.process_churn {
+            wakeup = wakeup.min(next_process_churn);
+        }
+        if modes.membership_churn {
+            wakeup = wakeup.min(next_membership_churn);
+        }
+        let now = Instant::now();
+        if wakeup > now {
+            sleep(wakeup.saturating_duration_since(now)).await;
+        }
+    }
+
+    if joiner_active {
+        let churn_start = Instant::now();
+        let outcome = membership_leave_cycle(harness).await?;
+        paused_for_churn = paused_for_churn.saturating_add(churn_start.elapsed());
+        membership_leave_cycles = membership_leave_cycles.saturating_add(1);
+        if outcome.hard_lagged {
+            membership_churn_lagged_cycles = membership_churn_lagged_cycles.saturating_add(1);
+        }
+        if outcome.warning_lagged {
+            membership_churn_warning_cycles = membership_churn_warning_cycles.saturating_add(1);
+        }
+    }
+
+    let elapsed = Instant::now().saturating_duration_since(start_time);
+    let duration_secs = elapsed.as_secs().max(1);
+    let active_elapsed = elapsed.saturating_sub(paused_for_churn);
+    let scheduled_tps = tx_attempted as f64 / active_elapsed.as_secs_f64().max(1.0);
+    let submitted_tps = tx_sent as f64 / active_elapsed.as_secs_f64().max(1.0);
+    let membership_churn_cycles = membership_join_cycles.saturating_add(membership_leave_cycles);
+    let view_change_rate_per_sec = (view_changes_end.saturating_sub(view_changes_start)) as f64
+        / elapsed.as_secs_f64().max(1.0);
+
+    if modes.process_churn {
+        ensure!(
+            process_churn_cycles > 0,
+            "process churn did not execute (duration={:?}, churn_interval={:?}, final_settle_window={final_settle_window:?})",
+            cfg.duration,
+            cfg.churn_interval
+        );
+    }
+    if modes.membership_churn {
+        ensure!(
+            membership_join_cycles > 0,
+            "membership join churn did not execute (duration={:?}, churn_interval={:?}, final_settle_window={final_settle_window:?})",
+            cfg.duration,
+            cfg.churn_interval
+        );
+        ensure!(
+            membership_leave_cycles > 0,
+            "membership leave churn did not execute (duration={:?}, churn_interval={:?}, final_settle_window={final_settle_window:?})",
+            cfg.duration,
+            cfg.churn_interval
+        );
+    }
+
+    let max_process_lagged =
+        max_allowed_lagged_cycles(process_churn_cycles, cfg.max_lagged_cycle_ratio);
+    ensure!(
+        process_churn_lagged_cycles <= max_process_lagged,
+        "process churn lagged cycles exceeded threshold: lagged={process_churn_lagged_cycles}, total={process_churn_cycles}, allowed={max_process_lagged}, ratio={}",
+        cfg.max_lagged_cycle_ratio
+    );
+    let max_membership_lagged =
+        max_allowed_lagged_cycles(membership_churn_cycles, cfg.max_lagged_cycle_ratio);
+    ensure!(
+        membership_churn_lagged_cycles <= max_membership_lagged,
+        "membership churn lagged cycles exceeded threshold: lagged={membership_churn_lagged_cycles}, total={membership_churn_cycles}, allowed={max_membership_lagged}, ratio={}",
+        cfg.max_lagged_cycle_ratio
+    );
+
+    ensure!(
+        scheduled_tps >= (cfg.tps as f64 * MIN_SCHEDULED_TPS_RATIO),
+        "scheduled load tps is below threshold: scheduled_tps={scheduled_tps:.2}, target={}, min_ratio={}",
+        cfg.tps,
+        MIN_SCHEDULED_TPS_RATIO
+    );
+    ensure!(
+        submitted_tps >= (cfg.tps as f64 * MIN_ACCEPTED_TPS_RATIO),
+        "accepted submit tps is below threshold: submitted_tps={submitted_tps:.2}, target={}, min_ratio={}",
+        cfg.tps,
+        MIN_ACCEPTED_TPS_RATIO
+    );
+    ensure!(
+        tx_attempted >= tx_sent,
+        "internal load accounting is inconsistent: attempted={tx_attempted}, sent={tx_sent}"
+    );
+    ensure!(
+        tx_submit_errors <= tx_attempted / 20 + 1,
+        "tx submission errors too high: errors={tx_submit_errors}, attempted={tx_attempted}, sent={tx_sent}"
+    );
+    ensure!(tx_sent > 0, "no transactions were accepted during soak run");
+    ensure!(
+        view_change_rate_per_sec <= cfg.max_view_change_rate,
+        "view-change rate exceeded threshold: observed={view_change_rate_per_sec:.4}, threshold={}",
+        cfg.max_view_change_rate
+    );
+
+    let final_target =
+        validator_max_height_with_retry(&harness.validator_clients, READY_TIMEOUT).await?;
+    wait_for_cluster_convergence_quorum(
+        &harness.validator_clients,
+        final_target,
+        cfg.max_height_skew,
+        min_presence_matches(harness.validator_clients.len()),
+        READY_TIMEOUT,
+    )
+    .await?;
+    if let Err(err) = wait_for_cluster_convergence(
+        &harness.validator_clients,
+        final_target,
+        cfg.max_height_skew,
+        READY_TIMEOUT,
+    )
+    .await
+    {
+        eprintln!("final all-validator convergence lagged; quorum convergence is healthy: {err:?}");
+    }
+
+    let final_statuses = top_quorum_statuses(
+        &collect_statuses_quorum_with_retry(
+            &harness.validator_clients,
+            validator_quorum,
+            STATUS_QUORUM_RETRY_TIMEOUT,
+        )
+        .await?,
+        validator_quorum,
+    );
+    view_changes_end = max_view_changes(&final_statuses);
+    let final_min_txs_approved = min_txs_approved(&final_statuses);
+    let committed_txs_min_delta = final_min_txs_approved.saturating_sub(initial_min_txs_approved);
+    let committed_tps = committed_txs_min_delta as f64 / active_elapsed.as_secs_f64().max(1.0);
+    ensure!(
+        committed_tps >= (cfg.tps as f64 * cfg.min_committed_tps_ratio),
+        "committed/finalized tps is below threshold: committed_tps={committed_tps:.2}, target={}, min_ratio={}",
+        cfg.tps,
+        cfg.min_committed_tps_ratio
+    );
+
+    Ok(SimulationSummary {
+        duration_secs,
+        target_tps: cfg.tps,
+        tx_attempted,
+        tx_sent,
+        tx_submit_errors,
+        process_churn_cycles,
+        process_churn_lagged_cycles,
+        membership_join_cycles,
+        membership_leave_cycles,
+        membership_churn_lagged_cycles,
+        membership_churn_warning_cycles,
+        max_height_skew_observed,
+        view_changes_start,
+        view_changes_end,
+        view_change_rate_per_sec,
+        scheduled_tps,
+        submitted_tps,
+        committed_tps,
+        committed_txs_min_delta,
+        saturated_samples,
+        total_samples,
+    })
+}
+
+async fn process_churn_cycle(
+    harness: &mut TestusHarness,
+    idx: usize,
+    downtime: Duration,
+) -> Result<bool> {
+    ensure!(
+        idx < harness.validator_clients.len(),
+        "validator index out of bounds for process churn: {idx}"
+    );
+    let mut lagged = false;
+    let baseline =
+        validator_max_height_with_retry(&harness.validator_clients, READY_TIMEOUT).await?;
+    harness.localnet.stop_validator(idx)?;
+    sleep(downtime).await;
+    harness.localnet.start_validator(idx)?;
+    wait_for_status_ready(&harness.validator_clients[idx], READY_TIMEOUT).await?;
+    let restart_target = validator_restart_catchup_target(baseline);
+    let restart_catchup_timeout = Duration::from_secs(RESTART_CATCHUP_TIMEOUT_SECS);
+    if let Err(err) = wait_for_height_at_least(
+        &harness.validator_clients[idx],
+        restart_target,
+        restart_catchup_timeout,
+    )
+    .await
+    {
+        lagged = true;
+        eprintln!(
+            "validator restart catch-up lagged: baseline={baseline}, target={restart_target}, timeout={restart_catchup_timeout:?}, err={err:?}"
+        );
+    }
+    let interim_convergence_timeout = Duration::from_secs(INTERIM_CONVERGENCE_TIMEOUT_SECS);
+    let validator_quorum = min_presence_matches(harness.validator_clients.len());
+    if let Err(err) = wait_for_cluster_convergence_quorum(
+        &harness.validator_clients,
+        baseline,
+        INTERIM_CONVERGENCE_MAX_SKEW,
+        validator_quorum,
+        interim_convergence_timeout,
+    )
+    .await
+    {
+        lagged = true;
+        eprintln!(
+            "validator restart quorum convergence lagged: timeout={interim_convergence_timeout:?}, err={err:?}"
+        );
+    } else if let Err(err) = wait_for_cluster_convergence(
+        &harness.validator_clients,
+        baseline,
+        INTERIM_CONVERGENCE_MAX_SKEW,
+        interim_convergence_timeout,
+    )
+    .await
+    {
+        eprintln!(
+            "validator restart all-validator convergence lagged; quorum convergence is healthy: timeout={interim_convergence_timeout:?}, err={err:?}"
+        );
+    }
+    Ok(lagged)
+}
+
+fn validator_restart_catchup_target(baseline: u64) -> u64 {
+    baseline.saturating_sub(INTERIM_CONVERGENCE_MAX_SKEW)
+}
+
+async fn membership_join_cycle(
+    harness: &mut TestusHarness,
+    joiner_warning_state: &mut JoinerCatchupWarningState,
+) -> Result<MembershipCycleOutcome> {
+    let mut outcome = MembershipCycleOutcome::default();
+    let baseline =
+        validator_max_height_with_retry(&harness.validator_clients, READY_TIMEOUT).await?;
+    let is_registered = match is_peer_present(&harness.primary_client, &harness.joiner.peer_id) {
+        Ok(is_registered) => is_registered,
+        Err(err) => {
+            outcome.mark_warning_lag();
+            eprintln!(
+                "joiner registration pre-check lagged; proceeding with best-effort register: err={err:?}"
+            );
+            false
+        }
+    };
+    if !is_registered {
+        let register: InstructionBox =
+            RegisterPeerWithPop::new(harness.joiner.peer_id.clone(), harness.joiner.pop.clone())
+                .into();
+        if let Err(err) =
+            submit_instruction_with_retry(&harness.primary_client, &register, READY_TIMEOUT).await
+        {
+            if is_register_duplicate_error(&err) || is_submit_timeout_error(&err) {
+                outcome.mark_hard_lag();
+                eprintln!("joiner register submission lagged: err={err:?}");
+            } else {
+                return Err(err).wrap_err("submit joiner register instruction");
+            }
+        }
+        let join_propagation_timeout = Duration::from_secs(INTERIM_CONVERGENCE_TIMEOUT_SECS);
+        if let Err(err) = wait_for_peer_presence_across_clients(
+            &harness.validator_clients,
+            &harness.joiner.peer_id,
+            true,
+            join_propagation_timeout,
+        )
+        .await
+        {
+            outcome.mark_hard_lag();
+            eprintln!(
+                "joiner register propagation lagged: timeout={join_propagation_timeout:?}, err={err:?}"
+            );
+        }
+    }
+    harness.localnet.start_joiner(&harness.joiner.config_path)?;
+    wait_for_status_ready(&harness.joiner.client, READY_TIMEOUT).await?;
+    let catchup_target = baseline.saturating_sub(INTERIM_CONVERGENCE_MAX_SKEW);
+    let catchup_timeout = Duration::from_secs(JOINER_CATCHUP_TIMEOUT_SECS);
+    match wait_for_height_or_progress(&harness.joiner.client, catchup_target, catchup_timeout).await
+    {
+        Ok((start, current)) => match assess_joiner_catchup(start, current, catchup_target) {
+            JoinerCatchupAssessment::ReachedTarget => {
+                joiner_warning_state.on_reached_target();
+            }
+            JoinerCatchupAssessment::Progressed => {
+                let progress_count = joiner_warning_state.on_progress_below_target();
+                if should_log_on_first_and_every_nth(progress_count, JOINER_PROGRESS_LOG_EVERY) {
+                    eprintln!(
+                        "joiner catch-up is still below validator target after observed progress: baseline={baseline}, target={catchup_target}, start={start}, current={current}, consecutive_progress_cycles={progress_count}"
+                    );
+                }
+            }
+            JoinerCatchupAssessment::Stalled => {
+                let stalled_count = joiner_warning_state.on_stalled();
+                if should_log_on_first_and_every_nth(stalled_count, JOINER_STALL_LOG_EVERY) {
+                    eprintln!(
+                        "joiner catch-up stalled after registration: baseline={baseline}, target={catchup_target}, start={start}, current={current}, consecutive_stalled_cycles={stalled_count}"
+                    );
+                }
+                record_joiner_stall_warning(&mut outcome, stalled_count);
+            }
+        },
+        Err(err) => {
+            let stalled_count = joiner_warning_state.on_stalled();
+            if should_log_on_first_and_every_nth(stalled_count, JOINER_STALL_LOG_EVERY) {
+                eprintln!(
+                    "joiner catch-up stalled after registration: baseline={baseline}, target={catchup_target}, err={err:?}, consecutive_stalled_cycles={stalled_count}"
+                );
+            }
+            record_joiner_stall_warning(&mut outcome, stalled_count);
+        }
+    }
+    let convergence_target =
+        validator_max_height_with_retry(&harness.validator_clients, READY_TIMEOUT).await?;
+    let convergence_timeout = Duration::from_secs(INTERIM_CONVERGENCE_TIMEOUT_SECS);
+    let validator_quorum = min_presence_matches(harness.validator_clients.len());
+    if let Err(err) = wait_for_cluster_convergence_quorum(
+        &harness.validator_clients,
+        convergence_target,
+        INTERIM_CONVERGENCE_MAX_SKEW,
+        validator_quorum,
+        convergence_timeout,
+    )
+    .await
+    {
+        outcome.mark_hard_lag();
+        eprintln!("membership join quorum convergence lagged: {err:?}");
+    } else if let Err(err) = wait_for_cluster_convergence(
+        &harness.validator_clients,
+        convergence_target,
+        INTERIM_CONVERGENCE_MAX_SKEW,
+        convergence_timeout,
+    )
+    .await
+    {
+        outcome.mark_warning_lag();
+        eprintln!(
+            "membership join all-validator convergence lagged; quorum convergence is healthy: {err:?}"
+        );
+    }
+    Ok(outcome)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JoinerCatchupAssessment {
+    ReachedTarget,
+    Progressed,
+    Stalled,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct JoinerCatchupWarningState {
+    consecutive_stalled: u64,
+    consecutive_progress_below_target: u64,
+}
+
+impl JoinerCatchupWarningState {
+    fn on_reached_target(&mut self) {
+        self.consecutive_stalled = 0;
+        self.consecutive_progress_below_target = 0;
+    }
+
+    fn on_progress_below_target(&mut self) -> u64 {
+        self.consecutive_progress_below_target =
+            self.consecutive_progress_below_target.saturating_add(1);
+        self.consecutive_stalled = 0;
+        self.consecutive_progress_below_target
+    }
+
+    fn on_stalled(&mut self) -> u64 {
+        self.consecutive_stalled = self.consecutive_stalled.saturating_add(1);
+        self.consecutive_progress_below_target = 0;
+        self.consecutive_stalled
+    }
+}
+
+fn should_log_on_first_and_every_nth(count: u64, every: u64) -> bool {
+    count == 1 || count % every == 0
+}
+
+fn assess_joiner_catchup(start: u64, current: u64, target: u64) -> JoinerCatchupAssessment {
+    if current >= target {
+        JoinerCatchupAssessment::ReachedTarget
+    } else if current > start {
+        JoinerCatchupAssessment::Progressed
+    } else {
+        JoinerCatchupAssessment::Stalled
+    }
+}
+
+fn should_count_joiner_stall_as_warning(consecutive_stalled_cycles: u64) -> bool {
+    consecutive_stalled_cycles >= JOINER_STALL_WARNING_THRESHOLD
+}
+
+fn record_joiner_stall_warning(
+    outcome: &mut MembershipCycleOutcome,
+    consecutive_stalled_cycles: u64,
+) {
+    if should_count_joiner_stall_as_warning(consecutive_stalled_cycles) {
+        outcome.mark_warning_lag();
+    }
+}
+
+fn membership_backoff_requires_hard_lag(outcome: MembershipCycleOutcome) -> bool {
+    outcome.hard_lagged
+}
+
+async fn wait_for_height_or_progress(
+    client: &Client,
+    target: u64,
+    timeout: Duration,
+) -> Result<(u64, u64)> {
+    let deadline = Instant::now() + timeout;
+    let mut start_height = None;
+    loop {
+        match client.get_status() {
+            Ok(status) => {
+                let start = *start_height.get_or_insert(status.blocks);
+                let current_height = status.blocks;
+                if current_height >= target || current_height > start {
+                    return Ok((start, current_height));
+                }
+                ensure!(
+                    Instant::now() < deadline,
+                    "timed out waiting for joiner catch-up to reach target or show progress: target={target}, start={start}, current={current_height}"
+                );
+            }
+            Err(err) => {
+                ensure!(
+                    Instant::now() < deadline,
+                    "timed out waiting for joiner catch-up to reach target={target}: {err:?}"
+                );
+            }
+        }
+        sleep(STATUS_POLL).await;
+    }
+}
+
+async fn membership_leave_cycle(harness: &mut TestusHarness) -> Result<MembershipCycleOutcome> {
+    let mut outcome = MembershipCycleOutcome::default();
+    let should_unregister = match is_peer_present(&harness.primary_client, &harness.joiner.peer_id)
+    {
+        Ok(is_registered) => is_registered,
+        Err(err) => {
+            outcome.mark_warning_lag();
+            eprintln!(
+                "joiner unregister pre-check lagged; proceeding with best-effort unregister: err={err:?}"
+            );
+            true
+        }
+    };
+    // Stop the joiner process before waiting for peer removal propagation.
+    // This avoids counting active-connection linger as unregister propagation lag.
+    harness.localnet.stop_joiner()?;
+    if should_unregister {
+        let unregister: InstructionBox = Unregister::peer(harness.joiner.peer_id.clone()).into();
+        if let Err(err) =
+            submit_instruction_with_retry(&harness.primary_client, &unregister, READY_TIMEOUT).await
+        {
+            if is_unregister_missing_peer_error(&err) || is_submit_timeout_error(&err) {
+                outcome.mark_hard_lag();
+                eprintln!("joiner unregister submission lagged: err={err:?}");
+            } else {
+                return Err(err).wrap_err("submit joiner unregister instruction");
+            }
+        }
+        let leave_propagation_timeout = Duration::from_secs(INTERIM_CONVERGENCE_TIMEOUT_SECS);
+        if let Err(err) = wait_for_peer_presence_across_clients(
+            &harness.validator_clients,
+            &harness.joiner.peer_id,
+            false,
+            leave_propagation_timeout,
+        )
+        .await
+        {
+            outcome.mark_hard_lag();
+            eprintln!(
+                "joiner unregister propagation lagged: timeout={leave_propagation_timeout:?}, err={err:?}"
+            );
+        }
+    }
+    let convergence_target =
+        validator_max_height_with_retry(&harness.validator_clients, READY_TIMEOUT).await?;
+    let convergence_timeout = Duration::from_secs(INTERIM_CONVERGENCE_TIMEOUT_SECS);
+    let validator_quorum = min_presence_matches(harness.validator_clients.len());
+    if let Err(err) = wait_for_cluster_convergence_quorum(
+        &harness.validator_clients,
+        convergence_target,
+        INTERIM_CONVERGENCE_MAX_SKEW,
+        validator_quorum,
+        convergence_timeout,
+    )
+    .await
+    {
+        outcome.mark_hard_lag();
+        eprintln!("membership leave quorum convergence lagged: {err:?}");
+    } else if let Err(err) = wait_for_cluster_convergence(
+        &harness.validator_clients,
+        convergence_target,
+        INTERIM_CONVERGENCE_MAX_SKEW,
+        convergence_timeout,
+    )
+    .await
+    {
+        outcome.mark_warning_lag();
+        eprintln!(
+            "membership leave all-validator convergence lagged; quorum convergence is healthy: {err:?}"
+        );
+    }
+    Ok(outcome)
+}
+
+async fn setup_testus_harness(out_dir: &Path, seed: &str) -> Result<TestusHarness> {
+    let api_ports = alloc_port_block(TESTUS_TOTAL_PORT_SLOTS)?;
+    let p2p_ports = alloc_port_block(TESTUS_TOTAL_PORT_SLOTS)?;
+    let base_api_port = api_ports.base();
+    let base_p2p_port = p2p_ports.base();
+
+    generate_localnet(
+        out_dir,
+        base_api_port,
+        base_p2p_port,
+        TESTUS_VALIDATORS,
+        seed,
+    )?;
+    let irohad_bin = Program::Irohad
+        .resolve()
+        .wrap_err("resolve irohad binary")?;
+    let localnet = ManagedLocalnet::start(
+        out_dir,
+        &irohad_bin,
+        TESTUS_VALIDATORS,
+        (api_ports, p2p_ports),
+    )?;
+
+    let mut primary_client = load_localnet_client(out_dir)?;
+    primary_client.transaction_status_timeout = READY_TIMEOUT;
+    let validator_clients =
+        build_validator_clients(&primary_client, base_api_port, TESTUS_VALIDATORS)?;
+    let validator_quorum = min_presence_matches(validator_clients.len());
+    wait_for_status_ready_quorum(&validator_clients, validator_quorum, READY_TIMEOUT).await?;
+    if get_status_with_retry(&primary_client).is_err() {
+        if let Some(candidate) = validator_clients
+            .iter()
+            .find(|client| get_status_with_retry(client).is_ok())
+            .cloned()
+        {
+            primary_client = candidate;
+        }
+    }
+    let convergence_target =
+        validator_max_height_with_retry(&validator_clients, READY_TIMEOUT).await?;
+    wait_for_cluster_convergence_quorum(
+        &validator_clients,
+        convergence_target,
+        INTERIM_CONVERGENCE_MAX_SKEW,
+        validator_quorum,
+        READY_TIMEOUT,
+    )
+    .await?;
+    if let Err(err) = wait_for_cluster_convergence(
+        &validator_clients,
+        convergence_target,
+        INTERIM_CONVERGENCE_MAX_SKEW,
+        READY_TIMEOUT,
+    )
+    .await
+    {
+        eprintln!("initial all-validator convergence lagged; continuing on quorum: {err:?}");
+    }
+
+    let joiner_api_port = base_api_port + TESTUS_VALIDATORS;
+    let joiner_p2p_port = base_p2p_port + TESTUS_VALIDATORS;
+    let joiner = build_joiner_peer(
+        out_dir,
+        &primary_client,
+        &out_dir.join("peer0.toml"),
+        joiner_api_port,
+        joiner_p2p_port,
+    )?;
+
+    Ok(TestusHarness {
+        out_dir: out_dir.to_path_buf(),
+        localnet,
+        primary_client,
+        validator_clients,
+        joiner,
+    })
+}
+
+fn build_joiner_peer(
+    out_dir: &Path,
+    template_client: &Client,
+    template_peer_config: &Path,
+    api_port: u16,
+    p2p_port: u16,
+) -> Result<JoinerPeer> {
+    let template = fs::read_to_string(template_peer_config)
+        .wrap_err_with(|| format!("read template config {}", template_peer_config.display()))?;
+    let mut parsed: TomlValue =
+        toml::from_str(&template).wrap_err("parse template peer config as TOML")?;
+    let root = parsed
+        .as_table_mut()
+        .ok_or_else(|| eyre!("template config root must be a TOML table"))?;
+
+    let peer_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer_id = PeerId::new(peer_key.public_key().clone());
+    let pop = bls_normal_pop_prove(peer_key.private_key()).wrap_err("generate BLS PoP")?;
+    root.insert(
+        "public_key".into(),
+        TomlValue::String(peer_key.public_key().to_string()),
+    );
+    root.insert(
+        "private_key".into(),
+        TomlValue::String(ExposedPrivateKey(peer_key.private_key().clone()).to_string()),
+    );
+    if let Some(trusted_peers_pop) = root
+        .get_mut("trusted_peers_pop")
+        .and_then(TomlValue::as_array_mut)
+    {
+        let mut joiner_pop = Table::new();
+        joiner_pop.insert(
+            "public_key".into(),
+            TomlValue::String(peer_key.public_key().to_string()),
+        );
+        joiner_pop.insert("pop_hex".into(), TomlValue::String(hex::encode(&pop)));
+        trusted_peers_pop.push(TomlValue::Table(joiner_pop));
+    }
+
+    let stream_key = KeyPair::random();
+    let streaming = get_subtable_mut(root, "streaming")?;
+    streaming.insert(
+        "identity_public_key".into(),
+        TomlValue::String(stream_key.public_key().to_string()),
+    );
+    streaming.insert(
+        "identity_private_key".into(),
+        TomlValue::String(ExposedPrivateKey(stream_key.private_key().clone()).to_string()),
+    );
+
+    let p2p_addr = canonical_loopback_addr(p2p_port);
+    let network = get_subtable_mut(root, "network")?;
+    network.insert("address".into(), TomlValue::String(p2p_addr.clone()));
+    network.insert("public_address".into(), TomlValue::String(p2p_addr));
+
+    let torii = get_subtable_mut(root, "torii")?;
+    torii.insert(
+        "address".into(),
+        TomlValue::String(canonical_loopback_addr(api_port)),
+    );
+
+    let storage_root = out_dir.join("storage").join("joiner");
+    fs::create_dir_all(&storage_root)
+        .wrap_err_with(|| format!("create joiner storage root {}", storage_root.display()))?;
+
+    let kura = get_subtable_mut(root, "kura")?;
+    kura.insert(
+        "store_dir".into(),
+        TomlValue::String(storage_root.join("kura").to_string_lossy().into_owned()),
+    );
+
+    let tiered_state = get_subtable_mut(root, "tiered_state")?;
+    tiered_state.insert(
+        "cold_store_root".into(),
+        TomlValue::String(storage_root.join("tiered").to_string_lossy().into_owned()),
+    );
+    if tiered_state.contains_key("da_store_root") {
+        tiered_state.insert(
+            "da_store_root".into(),
+            TomlValue::String(storage_root.join("da").to_string_lossy().into_owned()),
+        );
+    }
+
+    let config_path = out_dir.join("joiner.toml");
+    fs::write(
+        &config_path,
+        toml::to_string(&parsed).expect("serialize joiner TOML"),
+    )
+    .wrap_err_with(|| format!("write joiner config {}", config_path.display()))?;
+
+    let client = build_client_for_port(template_client, api_port)?;
+    Ok(JoinerPeer {
+        peer_id,
+        pop,
+        config_path,
+        client,
+    })
+}
+
+fn get_subtable_mut<'a>(root: &'a mut Table, key: &str) -> Result<&'a mut Table> {
+    root.get_mut(key)
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("missing `{key}` table in peer config"))
+}
+
+fn apply_queue_transaction_ttl(root: &mut Table, ttl_ms: i64) -> Result<()> {
+    ensure!(
+        ttl_ms > 0,
+        "queue transaction ttl must be positive, got {ttl_ms}"
+    );
+    let queue = get_subtable_mut(root, "queue")?;
+    queue.insert(
+        "transaction_time_to_live_ms".into(),
+        TomlValue::Integer(ttl_ms),
+    );
+    Ok(())
+}
+
+fn apply_client_transaction_ttl(root: &mut Table, ttl_ms: i64) -> Result<()> {
+    ensure!(
+        ttl_ms > 0,
+        "client transaction ttl must be positive, got {ttl_ms}"
+    );
+    let transaction = get_subtable_mut(root, "transaction")?;
+    transaction.insert("time_to_live_ms".into(), TomlValue::Integer(ttl_ms));
+    if let Some(status_timeout_ms) = transaction
+        .get("status_timeout_ms")
+        .and_then(TomlValue::as_integer)
+        && status_timeout_ms > ttl_ms
+    {
+        transaction.insert("status_timeout_ms".into(), TomlValue::Integer(ttl_ms));
+    }
+    Ok(())
+}
+
+fn override_localnet_transaction_ttl(out_dir: &Path, peers: u16, ttl_ms: i64) -> Result<()> {
+    for idx in 0..peers {
+        let config_path = out_dir.join(format!("peer{idx}.toml"));
+        let config_text = fs::read_to_string(&config_path)
+            .wrap_err_with(|| format!("read peer config {}", config_path.display()))?;
+        let mut parsed: TomlValue = toml::from_str(&config_text)
+            .wrap_err_with(|| format!("parse peer config {}", config_path.display()))?;
+        let root = parsed
+            .as_table_mut()
+            .ok_or_else(|| eyre!("peer config root must be a TOML table"))?;
+        apply_queue_transaction_ttl(root, ttl_ms)?;
+        fs::write(
+            &config_path,
+            toml::to_string(&parsed).expect("serialize peer config TOML"),
+        )
+        .wrap_err_with(|| format!("write peer config {}", config_path.display()))?;
+    }
+
+    let client_path = out_dir.join("client.toml");
+    let client_text = fs::read_to_string(&client_path)
+        .wrap_err_with(|| format!("read client config {}", client_path.display()))?;
+    let mut client_parsed: TomlValue = toml::from_str(&client_text)
+        .wrap_err_with(|| format!("parse client config {}", client_path.display()))?;
+    let client_root = client_parsed
+        .as_table_mut()
+        .ok_or_else(|| eyre!("client config root must be a TOML table"))?;
+    apply_client_transaction_ttl(client_root, ttl_ms)?;
+    fs::write(
+        &client_path,
+        toml::to_string(&client_parsed).expect("serialize client config TOML"),
+    )
+    .wrap_err_with(|| format!("write client config {}", client_path.display()))?;
+
+    Ok(())
+}
+
+fn canonical_loopback_addr(port: u16) -> String {
+    IrohaSocketAddr::from(StdSocketAddr::from(([127, 0, 0, 1], port))).to_literal()
+}
+
+fn build_validator_clients(
+    template: &Client,
+    base_api_port: u16,
+    count: u16,
+) -> Result<Vec<Client>> {
+    (0..count)
+        .map(|idx| build_client_for_port(template, base_api_port + idx))
+        .collect()
+}
+
+fn build_client_for_port(template: &Client, api_port: u16) -> Result<Client> {
+    let mut client = template.clone();
+    client.torii_url = format!("http://127.0.0.1:{api_port}/")
+        .parse()
+        .wrap_err("parse torii URL")?;
+    client.torii_request_timeout = TORII_REQUEST_TIMEOUT;
+    client.transaction_status_timeout = READY_TIMEOUT;
+    Ok(client)
+}
+
+fn collect_statuses(clients: &[Client]) -> Result<Vec<iroha::client::Status>> {
+    clients
+        .iter()
+        .map(get_status_with_retry)
+        .collect::<Result<Vec<_>>>()
+}
+
+fn top_quorum_statuses(
+    statuses: &[iroha::client::Status],
+    quorum_size: usize,
+) -> Vec<iroha::client::Status> {
+    let mut selected = statuses.to_vec();
+    selected.sort_by_key(|status| Reverse(status.blocks));
+    selected.truncate(quorum_size.min(selected.len()));
+    selected
+}
+
+fn observed_validator_heights(clients: &[Client]) -> Vec<Option<u64>> {
+    clients
+        .iter()
+        .map(|client| {
+            get_status_with_retry(client)
+                .ok()
+                .map(|status| status.blocks)
+        })
+        .collect()
+}
+
+fn collect_statuses_quorum(
+    clients: &[Client],
+    min_required: usize,
+) -> Result<Vec<iroha::client::Status>> {
+    ensure!(
+        min_required > 0 && min_required <= clients.len(),
+        "invalid status quorum requirement min_required={min_required} for {} clients",
+        clients.len()
+    );
+    let mut statuses = Vec::with_capacity(clients.len());
+    let mut errored_clients = Vec::new();
+    for client in clients {
+        match get_status_with_retry(client) {
+            Ok(status) => statuses.push(status),
+            Err(err) => errored_clients.push(format!("{}: {err:?}", client.torii_url)),
+        }
+    }
+    ensure!(
+        statuses.len() >= min_required,
+        "failed to collect /status quorum: collected={}/{}, required={min_required}, errored_clients={errored_clients:?}",
+        statuses.len(),
+        clients.len()
+    );
+    Ok(statuses)
+}
+
+async fn collect_statuses_quorum_with_retry(
+    clients: &[Client],
+    min_required: usize,
+    timeout: Duration,
+) -> Result<Vec<iroha::client::Status>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match collect_statuses_quorum(clients, min_required) {
+            Ok(statuses) => return Ok(statuses),
+            Err(err) => {
+                let err_msg = format!("{err:?}");
+                ensure!(
+                    Instant::now() < deadline,
+                    "timed out collecting /status quorum within {timeout:?}: {err_msg}"
+                );
+                sleep(STATUS_POLL).await;
+            }
+        }
+    }
+}
+
+fn refresh_primary_client_from_validators(harness: &mut TestusHarness) -> bool {
+    if get_status_with_retry(&harness.primary_client).is_ok() {
+        return true;
+    }
+    let previous_url = harness.primary_client.torii_url.to_string();
+    for client in &harness.validator_clients {
+        if get_status_with_retry(client).is_ok() {
+            let candidate_url = client.torii_url.to_string();
+            if candidate_url != previous_url {
+                eprintln!(
+                    "switching primary client endpoint for management operations: {previous_url} -> {candidate_url}"
+                );
+                harness.primary_client = client.clone();
+            }
+            return true;
+        }
+    }
+    false
+}
+
+fn get_status_with_retry(client: &Client) -> Result<iroha::client::Status> {
+    let mut last_error = None;
+    for attempt in 0..STATUS_REQUEST_RETRIES {
+        match client.get_status() {
+            Ok(status) => return Ok(status),
+            Err(err) => {
+                let should_retry =
+                    is_http_timeout_error(&err) && attempt + 1 < STATUS_REQUEST_RETRIES;
+                last_error = Some(err);
+                if !should_retry {
+                    break;
+                }
+                thread::sleep(STATUS_REQUEST_RETRY_BACKOFF);
+            }
+        }
+    }
+    Err(last_error.expect("status retry loop should capture at least one error"))
+        .wrap_err_with(|| format!("failed to collect /status from {}", client.torii_url))
+}
+
+fn max_height(statuses: &[iroha::client::Status]) -> u64 {
+    statuses.iter().map(|s| s.blocks).max().unwrap_or(0)
+}
+
+fn min_height(statuses: &[iroha::client::Status]) -> u64 {
+    statuses.iter().map(|s| s.blocks).min().unwrap_or(0)
+}
+
+fn min_txs_approved(statuses: &[iroha::client::Status]) -> u64 {
+    statuses.iter().map(|s| s.txs_approved).min().unwrap_or(0)
+}
+
+fn max_view_changes(statuses: &[iroha::client::Status]) -> u64 {
+    statuses
+        .iter()
+        .map(|s| u64::from(s.view_changes))
+        .max()
+        .unwrap_or(0)
+}
+
+fn update_skew_breach_started(
+    current: Option<Instant>,
+    observed_skew: u64,
+    max_skew: u64,
+    now: Instant,
+) -> Option<Instant> {
+    if observed_skew > max_skew {
+        Some(current.unwrap_or(now))
+    } else {
+        None
+    }
+}
+
+fn is_skew_breach_unrecovering(
+    breach_duration: Duration,
+    min_progress_age: Duration,
+    grace: Duration,
+    min_progress_timeout: Duration,
+) -> bool {
+    breach_duration > grace && min_progress_age > min_progress_timeout
+}
+
+fn is_queue_timeout_error(err: &eyre::Report) -> bool {
+    err.chain()
+        .any(|cause| cause.to_string().contains("queued for too long"))
+}
+
+fn is_http_timeout_error(err: &eyre::Report) -> bool {
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("operation timed out") || message.contains("timed out")
+    })
+}
+
+fn is_submit_timeout_error(err: &eyre::Report) -> bool {
+    is_queue_timeout_error(err) || is_http_timeout_error(err)
+}
+
+fn is_connect_error(err: &eyre::Report) -> bool {
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("Connection refused")
+            || message.contains("client error (Connect)")
+            || message.contains("tcp connect error")
+    })
+}
+
+fn is_query_timeout_error(err: &iroha::client::QueryError) -> bool {
+    err.to_string().contains("timed out")
+}
+
+fn is_register_duplicate_error(err: &eyre::Report) -> bool {
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("RepetitionError") || message.contains("Repetition of")
+    })
+}
+
+fn is_unregister_missing_peer_error(err: &eyre::Report) -> bool {
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("FindError::Peer")
+            || message.contains("Peer with id") && message.contains("not found")
+    })
+}
+
+#[test]
+fn http_timeout_error_detector_matches_timeout_messages() {
+    let err = eyre!("operation timed out");
+    assert!(is_http_timeout_error(&err));
+}
+
+#[test]
+fn http_timeout_error_detector_ignores_non_timeout_messages() {
+    let err = eyre!("connection refused");
+    assert!(!is_http_timeout_error(&err));
+}
+
+#[test]
+fn submit_timeout_error_detector_matches_queue_timeout_messages() {
+    let err = eyre!("queued for too long");
+    assert!(is_submit_timeout_error(&err));
+}
+
+#[test]
+fn submit_timeout_error_detector_matches_http_timeout_messages() {
+    let err = eyre!("operation timed out");
+    assert!(is_submit_timeout_error(&err));
+}
+
+#[test]
+fn connect_error_detector_matches_connection_refused_messages() {
+    let err = eyre!("client error (Connect): Connection refused (os error 61)");
+    assert!(is_connect_error(&err));
+}
+
+#[test]
+fn connect_error_detector_ignores_non_connect_messages() {
+    let err = eyre!("operation timed out");
+    assert!(!is_connect_error(&err));
+}
+
+#[test]
+fn register_duplicate_error_detector_matches_repetition_messages() {
+    let err = eyre!("RepetitionError: Repetition of PeerId");
+    assert!(is_register_duplicate_error(&err));
+}
+
+#[test]
+fn unregister_missing_peer_error_detector_matches_peer_not_found_messages() {
+    let err = eyre!("Peer with id `127.0.0.1:4040#abc` not found");
+    assert!(is_unregister_missing_peer_error(&err));
+}
+
+#[test]
+fn joiner_catchup_assessment_reached_target_when_current_at_or_above_target() {
+    assert_eq!(
+        assess_joiner_catchup(10, 25, 20),
+        JoinerCatchupAssessment::ReachedTarget
+    );
+}
+
+#[test]
+fn joiner_catchup_assessment_progressed_when_current_above_start_but_below_target() {
+    assert_eq!(
+        assess_joiner_catchup(10, 12, 20),
+        JoinerCatchupAssessment::Progressed
+    );
+}
+
+#[test]
+fn joiner_catchup_assessment_stalled_when_no_progress_and_below_target() {
+    assert_eq!(
+        assess_joiner_catchup(10, 10, 20),
+        JoinerCatchupAssessment::Stalled
+    );
+}
+
+#[test]
+fn validator_restart_catchup_target_subtracts_interim_skew() {
+    assert_eq!(validator_restart_catchup_target(31), 25);
+}
+
+#[test]
+fn validator_restart_catchup_target_saturates_at_zero() {
+    assert_eq!(validator_restart_catchup_target(3), 0);
+}
+
+#[test]
+fn warning_state_logs_first_and_every_interval_for_stalls() {
+    let mut warning_state = JoinerCatchupWarningState::default();
+    let first = warning_state.on_stalled();
+    let second = warning_state.on_stalled();
+    let third = warning_state.on_stalled();
+    let fourth = warning_state.on_stalled();
+    let fifth = warning_state.on_stalled();
+    assert!(should_log_on_first_and_every_nth(
+        first,
+        JOINER_STALL_LOG_EVERY
+    ));
+    assert!(!should_log_on_first_and_every_nth(
+        second,
+        JOINER_STALL_LOG_EVERY
+    ));
+    assert!(!should_log_on_first_and_every_nth(
+        third,
+        JOINER_STALL_LOG_EVERY
+    ));
+    assert!(!should_log_on_first_and_every_nth(
+        fourth,
+        JOINER_STALL_LOG_EVERY
+    ));
+    assert!(should_log_on_first_and_every_nth(
+        fifth,
+        JOINER_STALL_LOG_EVERY
+    ));
+}
+
+#[test]
+fn warning_state_resets_stall_counter_after_progress() {
+    let mut warning_state = JoinerCatchupWarningState::default();
+    warning_state.on_stalled();
+    warning_state.on_stalled();
+    let progress_count = warning_state.on_progress_below_target();
+    assert_eq!(progress_count, 1);
+    let stalled_count = warning_state.on_stalled();
+    assert_eq!(stalled_count, 1);
+}
+
+#[test]
+fn top_quorum_statuses_prefers_highest_block_heights() {
+    let statuses = vec![
+        iroha::client::Status {
+            blocks: 10,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 3,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 8,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 11,
+            ..Default::default()
+        },
+    ];
+    let selected = top_quorum_statuses(&statuses, 3);
+    let heights: Vec<u64> = selected.iter().map(|status| status.blocks).collect();
+    assert_eq!(heights, vec![11, 10, 8]);
+}
+
+async fn submit_instruction_with_retry(
+    client: &Client,
+    instruction: &InstructionBox,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match client.submit::<InstructionBox>(instruction.clone()) {
+            Ok(_) => return Ok(()),
+            Err(err) if is_submit_timeout_error(&err) && Instant::now() < deadline => {
+                sleep(STATUS_POLL).await;
+            }
+            Err(err) => return Err(err).wrap_err("submit instruction"),
+        }
+    }
+}
+
+async fn wait_for_cluster_convergence(
+    clients: &[Client],
+    min_height_target: u64,
+    max_skew: u64,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let statuses = collect_statuses(clients)?;
+        let max_h = max_height(&statuses);
+        let min_h = min_height(&statuses);
+        if max_h >= min_height_target
+            && min_h >= min_height_target.saturating_sub(max_skew)
+            && max_h.saturating_sub(min_h) <= max_skew
+        {
+            return Ok(());
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "cluster failed to converge: target_height={min_height_target}, max={max_h}, min={min_h}, max_skew={max_skew}"
+        );
+        sleep(STATUS_POLL).await;
+    }
+}
+
+async fn wait_for_cluster_convergence_quorum(
+    clients: &[Client],
+    min_height_target: u64,
+    max_skew: u64,
+    min_converged_peers: usize,
+    timeout: Duration,
+) -> Result<()> {
+    ensure!(
+        min_converged_peers > 0 && min_converged_peers <= clients.len(),
+        "invalid min_converged_peers={min_converged_peers} for {} clients",
+        clients.len()
+    );
+    let deadline = Instant::now() + timeout;
+    loop {
+        let now = Instant::now();
+        let remaining = deadline.saturating_duration_since(now);
+        ensure!(
+            !remaining.is_zero(),
+            "cluster failed to reach quorum convergence before timeout: target_height={min_height_target}, max_skew={max_skew}, required_converged_peers={min_converged_peers}"
+        );
+        let statuses = collect_statuses_quorum_with_retry(
+            clients,
+            min_converged_peers,
+            remaining.min(STATUS_QUORUM_RETRY_TIMEOUT),
+        )
+        .await?;
+        let max_h = max_height(&statuses);
+        let min_h = min_height(&statuses);
+        let converged_peers = statuses
+            .iter()
+            .filter(|status| max_h.saturating_sub(status.blocks) <= max_skew)
+            .count();
+        if max_h >= min_height_target && converged_peers >= min_converged_peers {
+            return Ok(());
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "cluster failed to reach quorum convergence: target_height={min_height_target}, max={max_h}, min={min_h}, max_skew={max_skew}, converged_peers={converged_peers}, required_converged_peers={min_converged_peers}"
+        );
+        sleep(STATUS_POLL).await;
+    }
+}
+
+async fn wait_for_status_ready(client: &Client, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if client.get_status().is_ok() {
+            return Ok(());
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "timed out waiting for /status readiness"
+        );
+        sleep(STATUS_POLL).await;
+    }
+}
+
+async fn wait_for_status_ready_quorum(
+    clients: &[Client],
+    min_required: usize,
+    timeout: Duration,
+) -> Result<()> {
+    ensure!(
+        min_required > 0 && min_required <= clients.len(),
+        "invalid status readiness quorum min_required={min_required} for {} clients",
+        clients.len()
+    );
+    let deadline = Instant::now() + timeout;
+    loop {
+        let ready = clients
+            .iter()
+            .filter(|client| client.get_status().is_ok())
+            .count();
+        if ready >= min_required {
+            return Ok(());
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "timed out waiting for /status readiness quorum: ready={ready}/{min_required}"
+        );
+        sleep(STATUS_POLL).await;
+    }
+}
+
+async fn wait_for_height_at_least(client: &Client, target: u64, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match client.get_status() {
+            Ok(status) => {
+                if status.blocks >= target {
+                    return Ok(());
+                }
+                ensure!(
+                    Instant::now() < deadline,
+                    "timed out waiting for height {target}, current={}",
+                    status.blocks
+                );
+            }
+            Err(err) => {
+                ensure!(
+                    Instant::now() < deadline,
+                    "timed out waiting for height {target}: {err:?}"
+                );
+            }
+        }
+        sleep(STATUS_POLL).await;
+    }
+}
+
+async fn wait_for_blocks_non_empty(client: &Client, target: u64, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match client.get_status() {
+            Ok(status) => {
+                if status.blocks_non_empty >= target {
+                    return Ok(());
+                }
+                ensure!(
+                    Instant::now() < deadline,
+                    "timed out waiting for non-empty block target {target}, current={}",
+                    status.blocks_non_empty
+                );
+            }
+            Err(err) => {
+                ensure!(
+                    Instant::now() < deadline,
+                    "timed out waiting for non-empty block target {target}: {err:?}"
+                );
+            }
+        }
+        sleep(STATUS_POLL).await;
+    }
+}
+
+async fn wait_for_peer_presence_across_clients(
+    clients: &[Client],
+    peer_id: &PeerId,
+    present: bool,
+    timeout: Duration,
+) -> Result<()> {
+    ensure!(
+        !clients.is_empty(),
+        "cannot wait for peer presence across an empty client set"
+    );
+    let min_required_matches = min_presence_matches(clients.len());
+    let deadline = Instant::now() + timeout;
+    loop {
+        let mut matched_clients = 0_usize;
+        let mut mismatched_clients = Vec::new();
+        let mut errored_clients = Vec::new();
+        let mut last_query_error = None;
+        for client in clients {
+            match query_peer_presence_with_retry(client, peer_id) {
+                Ok(found) => {
+                    if found == present {
+                        matched_clients = matched_clients.saturating_add(1);
+                    } else {
+                        mismatched_clients.push(client.torii_url.to_string());
+                    }
+                }
+                Err(err) => {
+                    errored_clients.push(client.torii_url.to_string());
+                    last_query_error = Some(format!("{err:?}"));
+                }
+            }
+        }
+        if matched_clients >= min_required_matches {
+            return Ok(());
+        }
+
+        ensure!(
+            Instant::now() < deadline,
+            "timed out waiting for peer presence={present} ({peer_id}) across validators; matched={matched_clients}/{min_required_matches}; mismatched_clients={mismatched_clients:?}; errored_clients={errored_clients:?}; last_query_error={last_query_error:?}"
+        );
+        sleep(STATUS_POLL).await;
+    }
+}
+
+fn query_peer_presence_with_retry(client: &Client, peer_id: &PeerId) -> Result<bool> {
+    let mut last_error = None;
+    for attempt in 0..PEER_QUERY_REQUEST_RETRIES {
+        match client.query(FindPeers::new()).execute_all() {
+            Ok(peers) => return Ok(peers.iter().any(|peer| peer == peer_id)),
+            Err(err) => {
+                let should_retry =
+                    is_query_timeout_error(&err) && attempt + 1 < PEER_QUERY_REQUEST_RETRIES;
+                last_error = Some(err);
+                if !should_retry {
+                    break;
+                }
+                thread::sleep(PEER_QUERY_REQUEST_RETRY_BACKOFF);
+            }
+        }
+    }
+    Err(last_error.expect("peer query retry loop should capture at least one error"))
+        .wrap_err_with(|| format!("failed to query peers from {}", client.torii_url))
+}
+
+fn min_presence_matches(validator_count: usize) -> usize {
+    let tolerated_faults = validator_count.saturating_sub(1) / 3;
+    validator_count.saturating_sub(tolerated_faults)
+}
+
+#[test]
+fn min_presence_matches_uses_bft_commit_quorum() {
+    assert_eq!(min_presence_matches(1), 1);
+    assert_eq!(min_presence_matches(4), 3);
+    assert_eq!(min_presence_matches(7), 5);
+}
+
+fn first_process_churn_index(validator_count: usize) -> usize {
+    if validator_count > 1 { 1 } else { 0 }
+}
+
+fn select_process_churn_index(
+    clients: &[Client],
+    fallback_idx: usize,
+    lag_threshold: u64,
+) -> usize {
+    let observed_heights = observed_validator_heights(clients);
+    let selected =
+        select_process_churn_index_from_heights(&observed_heights, fallback_idx, lag_threshold);
+    if selected != fallback_idx {
+        eprintln!(
+            "process churn selected lagging/unresponsive validator index {selected} (fallback={fallback_idx}, observed_heights={observed_heights:?})"
+        );
+    }
+    selected
+}
+
+fn select_process_churn_index_from_heights(
+    observed_heights: &[Option<u64>],
+    fallback_idx: usize,
+    lag_threshold: u64,
+) -> usize {
+    if observed_heights.is_empty() {
+        return 0;
+    }
+    let bounded_fallback = fallback_idx.min(observed_heights.len().saturating_sub(1));
+    if let Some((idx, _)) = observed_heights
+        .iter()
+        .enumerate()
+        .find(|(_, height)| height.is_none())
+    {
+        return idx;
+    }
+    let mut max_height = 0_u64;
+    let mut min_height = u64::MAX;
+    let mut min_idx = bounded_fallback;
+    for (idx, height) in observed_heights.iter().enumerate() {
+        let height = height.expect("status heights should be present after None fast-path");
+        if height > max_height {
+            max_height = height;
+        }
+        if height < min_height {
+            min_height = height;
+            min_idx = idx;
+        }
+    }
+    if max_height.saturating_sub(min_height) >= lag_threshold {
+        min_idx
+    } else {
+        bounded_fallback
+    }
+}
+
+fn next_process_churn_index(current: usize, validator_count: usize) -> usize {
+    if validator_count <= 1 {
+        return 0;
+    }
+    (current + 1) % validator_count
+}
+
+fn next_process_churn_deadline(now: Instant, interval: Duration, lagged: bool) -> Instant {
+    if lagged {
+        return now + Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS);
+    }
+    now + interval
+}
+
+fn next_membership_churn_deadline(now: Instant, interval: Duration, lagged: bool) -> Instant {
+    let mut delay = interval;
+    if lagged {
+        delay = delay.saturating_add(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS));
+    }
+    now + delay
+}
+
+fn effective_final_settle_window(duration: Duration) -> Duration {
+    let scaled = duration / 3;
+    let bounded = FINAL_SETTLE_WINDOW.min(scaled);
+    if duration <= Duration::from_secs(1) {
+        Duration::ZERO
+    } else {
+        bounded.min(duration.saturating_sub(Duration::from_secs(1)))
+    }
+}
+
+fn initial_churn_delay(interval: Duration, churn_window: Duration) -> Duration {
+    if churn_window <= Duration::from_secs(1) {
+        Duration::ZERO
+    } else {
+        interval.min(churn_window.saturating_sub(Duration::from_secs(1)))
+    }
+}
+
+fn max_allowed_lagged_cycles(total_cycles: u64, max_ratio: f64) -> u64 {
+    ((total_cycles as f64) * max_ratio).ceil() as u64
+}
+
+async fn validator_max_height_with_retry(clients: &[Client], timeout: Duration) -> Result<u64> {
+    let min_required = min_presence_matches(clients.len());
+    let deadline = Instant::now() + timeout;
+    loop {
+        match collect_statuses_quorum(clients, min_required) {
+            Ok(statuses) => return Ok(max_height(&statuses)),
+            Err(err) => {
+                ensure!(
+                    Instant::now() < deadline,
+                    "timed out collecting validator heights: {err:?}"
+                );
+                sleep(STATUS_POLL).await;
+            }
+        }
+    }
+}
+
+async fn submit_load_instruction_with_retry(
+    harness: &mut TestusHarness,
+    instruction: &InstructionBox,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match harness
+            .primary_client
+            .submit::<InstructionBox>(instruction.clone())
+        {
+            Ok(_) => return Ok(()),
+            Err(err)
+                if (is_submit_timeout_error(&err) || is_connect_error(&err))
+                    && Instant::now() < deadline =>
+            {
+                let previous_url = harness.primary_client.torii_url.to_string();
+                if refresh_primary_client_from_validators(harness) {
+                    let next_url = harness.primary_client.torii_url.to_string();
+                    if next_url != previous_url {
+                        eprintln!("switching load submit endpoint: {previous_url} -> {next_url}");
+                    }
+                }
+                sleep(LOAD_SUBMIT_RETRY_BACKOFF).await;
+            }
+            Err(err) => return Err(err).wrap_err("submit load instruction"),
+        }
+    }
+}
+
+fn is_peer_present(client: &Client, peer_id: &PeerId) -> Result<bool> {
+    query_peer_presence_with_retry(client, peer_id)
+}
+
+fn write_summary(path: &Path, summary: &SimulationSummary) -> Result<()> {
+    let mut rendered = norito::json::to_json_pretty(&summary.to_json_value())
+        .wrap_err("serialize summary JSON")?;
+    rendered.push('\n');
+    fs::write(path, rendered).wrap_err_with(|| format!("write summary {}", path.display()))?;
+    Ok(())
+}
+
+fn finalize_result(temp_dir: TempDir, context: &str, result: Result<()>) -> Result<()> {
+    if let Err(err) = result {
+        if let Some(reason) = sandbox::sandbox_reason(&err) {
+            eprintln!("sandbox restriction detected while running {context}; skipping ({reason})");
+            return Ok(());
+        }
+        if std::env::var_os("IROHA_TESTUS_KEEP_LOCALNET").is_some() {
+            eprintln!(
+                "keeping localnet artifacts at {}",
+                temp_dir.path().display()
+            );
+            let _ = temp_dir.keep();
+        }
+        return Err(err);
+    }
+    if std::env::var_os("IROHA_TESTUS_KEEP_LOCALNET").is_some() {
+        eprintln!(
+            "keeping localnet artifacts at {}",
+            temp_dir.path().display()
+        );
+        let _ = temp_dir.keep();
+    }
+    Ok(())
+}
+
+fn env_u64(key: &str, default: u64, min: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|value| *value >= min)
+        .unwrap_or(default)
+}
+
+fn env_f64(key: &str, default: f64, min: f64) -> f64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|raw| raw.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value >= min)
+        .unwrap_or(default)
+}
+
+fn localnet_tempdir(label: &str) -> Result<TempDir> {
+    let root = repo_root().join("target").join("testus-localnet");
+    fs::create_dir_all(&root)
+        .wrap_err_with(|| format!("create testus temp root {}", root.display()))?;
+    tempfile::Builder::new()
+        .prefix(label)
+        .tempdir_in(&root)
+        .wrap_err("create testus localnet temp dir")
+}
+
+fn alloc_port_block(count: u16) -> Result<AllocatedPortBlock> {
+    std::panic::catch_unwind(|| AllocatedPortBlock::new(count))
+        .map_err(|panic| eyre!(panic_message(&panic)))
+}
+
+fn panic_message(panic: &Box<dyn Any + Send>) -> String {
+    let panic = panic.as_ref();
+    panic.downcast_ref::<&str>().map_or_else(
+        || {
+            panic
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_else(|| "port allocation panicked".to_owned())
+        },
+        |message| (*message).to_owned(),
+    )
+}
+
+fn generate_localnet(
+    out_dir: &Path,
+    base_api_port: u16,
+    base_p2p_port: u16,
+    peers: u16,
+    seed: &str,
+) -> Result<()> {
+    let kagami_bin = resolve_kagami_bin()?;
+    let output = Command::new(kagami_bin)
+        .arg("localnet")
+        .arg("--build-line")
+        .arg("iroha3")
+        .arg("--sora-profile")
+        .arg("nexus")
+        .arg("--consensus-mode")
+        .arg("npos")
+        .arg("--peers")
+        .arg(peers.to_string())
+        .arg("--seed")
+        .arg(seed)
+        .arg("--bind-host")
+        .arg("127.0.0.1")
+        .arg("--public-host")
+        .arg("127.0.0.1")
+        .arg("--base-api-port")
+        .arg(base_api_port.to_string())
+        .arg("--base-p2p-port")
+        .arg(base_p2p_port.to_string())
+        .arg("--block-time-ms")
+        .arg(LOCALNET_BLOCK_TIME_MS.to_string())
+        .arg("--commit-time-ms")
+        .arg(LOCALNET_COMMIT_TIME_MS.to_string())
+        .arg("--out-dir")
+        .arg(out_dir.to_string_lossy().to_string())
+        .output()
+        .wrap_err("run kagami localnet")?;
+    ensure!(
+        output.status.success(),
+        "kagami localnet failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    override_localnet_transaction_ttl(out_dir, peers, LOCALNET_TRANSACTION_TTL_MS)?;
+    Ok(())
+}
+
+fn resolve_kagami_bin() -> Result<PathBuf> {
+    if let Ok(path) = std::env::var("KAGAMI_BIN") {
+        return Ok(PathBuf::from(path));
+    }
+    if let Ok(path) = std::env::var("CARGO_BIN_EXE_kagami") {
+        return Ok(PathBuf::from(path));
+    }
+
+    let repo = repo_root();
+    let target_dir = resolve_target_dir(&repo);
+    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_owned());
+    let bin = bin_name("kagami");
+    let mut candidates = vec![
+        target_dir.join(format!("{profile}/{bin}")),
+        target_dir.join(format!("debug/{bin}")),
+        target_dir.join(format!("release/{bin}")),
+        repo.join(format!("target/{profile}/{bin}")),
+        repo.join(format!("target/debug/{bin}")),
+        repo.join(format!("target/release/{bin}")),
+    ];
+
+    if let Some(found) = try_candidates(&candidates) {
+        return Ok(found);
+    }
+
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let mut command = Command::new(cargo);
+    command
+        .current_dir(&repo)
+        .arg("build")
+        .arg("-p")
+        .arg("iroha_kagami")
+        .arg("--bin")
+        .arg("kagami");
+    if profile != "debug" {
+        command.arg("--profile").arg(&profile);
+    }
+    let output = command.output().wrap_err("build kagami binary")?;
+    ensure!(
+        output.status.success(),
+        "failed to build kagami: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    candidates.insert(0, target_dir.join(format!("{profile}/{bin}")));
+    try_candidates(&candidates).ok_or_else(|| eyre!("kagami binary not found after build"))
+}
+
+fn resolve_target_dir(repo: &Path) -> PathBuf {
+    std::env::var("CARGO_TARGET_DIR").map_or_else(
+        |_| repo.join("target"),
+        |path| {
+            let candidate = PathBuf::from(path);
+            if candidate.is_absolute() {
+                candidate
+            } else {
+                repo.join(candidate)
+            }
+        },
+    )
+}
+
+fn bin_name(raw: &str) -> String {
+    if cfg!(windows) {
+        format!("{raw}.exe")
+    } else {
+        raw.to_owned()
+    }
+}
+
+fn try_candidates(candidates: &[PathBuf]) -> Option<PathBuf> {
+    for candidate in candidates {
+        if let Ok(path) = candidate.canonicalize() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn load_localnet_client(out_dir: &Path) -> Result<Client> {
+    let client_path = out_dir.join("client.toml");
+    let mut config = Config::load(LoadPath::Explicit(client_path.clone())).map_err(|err| {
+        eyre!(
+            "load localnet client config {}: {err:?}",
+            client_path.display()
+        )
+    })?;
+    config.torii_request_timeout = TORII_REQUEST_TIMEOUT;
+    config.transaction_status_timeout = READY_TIMEOUT;
+    Ok(Client::new(config))
+}
+
+#[test]
+fn simulation_config_defaults_are_valid() {
+    let cfg = SimulationConfig::quick(90, 30);
+    assert!(cfg.duration >= Duration::from_secs(1));
+    assert!(cfg.tps >= 1);
+    assert!(cfg.churn_interval >= Duration::from_secs(1));
+    assert!(cfg.max_height_skew_grace >= Duration::from_secs(1));
+    assert!(cfg.max_transient_height_skew >= cfg.max_height_skew);
+    assert!(cfg.stall_timeout >= Duration::from_secs(10));
+    assert!((0.0..=1.0).contains(&cfg.max_lagged_cycle_ratio));
+    assert!((0.0..=1.0).contains(&cfg.min_committed_tps_ratio));
+}
+
+#[test]
+fn env_u64_respects_minimum() {
+    assert_eq!(env_u64("IROHA_TESTUS_NO_SUCH_VAR", 10, 2), 10);
+}
+
+#[test]
+fn env_f64_respects_minimum() {
+    assert_eq!(env_f64("IROHA_TESTUS_NO_SUCH_VAR_FLOAT", 0.25, 0.0), 0.25);
+}
+
+#[test]
+fn skew_breach_window_tracks_first_exceedance_and_recovers() {
+    let base = Instant::now();
+    let start = update_skew_breach_started(None, 3, 2, base).expect("breach should start");
+    assert_eq!(start, base);
+
+    let sustained = update_skew_breach_started(Some(start), 4, 2, base + Duration::from_secs(2))
+        .expect("breach should stay active");
+    assert_eq!(sustained, start);
+
+    let recovered =
+        update_skew_breach_started(Some(sustained), 2, 2, base + Duration::from_secs(3));
+    assert!(recovered.is_none());
+}
+
+#[test]
+fn skew_breach_is_not_unrecovering_when_min_height_progresses_recently() {
+    assert!(!is_skew_breach_unrecovering(
+        Duration::from_secs(20),
+        Duration::from_secs(5),
+        Duration::from_secs(15),
+        Duration::from_secs(60),
+    ));
+}
+
+#[test]
+fn skew_breach_is_unrecovering_when_duration_and_min_age_exceed_thresholds() {
+    assert!(is_skew_breach_unrecovering(
+        Duration::from_secs(40),
+        Duration::from_secs(61),
+        Duration::from_secs(15),
+        Duration::from_secs(60),
+    ));
+}
+
+#[test]
+fn queue_timeout_error_classifier_matches_expected_message() {
+    let err = eyre!("transaction queued for too long");
+    assert!(is_queue_timeout_error(&err));
+}
+
+#[test]
+fn http_timeout_error_classifier_matches_expected_message() {
+    let err = eyre!("operation timed out");
+    assert!(is_http_timeout_error(&err));
+}
+
+#[test]
+fn process_churn_index_rotates_across_all_validators() {
+    assert_eq!(first_process_churn_index(7), 1);
+    assert_eq!(next_process_churn_index(1, 7), 2);
+    assert_eq!(next_process_churn_index(5, 7), 6);
+    assert_eq!(next_process_churn_index(6, 7), 0);
+    assert_eq!(next_process_churn_index(0, 7), 1);
+}
+
+#[test]
+fn process_churn_index_handles_single_validator() {
+    assert_eq!(first_process_churn_index(1), 0);
+    assert_eq!(next_process_churn_index(0, 1), 0);
+}
+
+#[test]
+fn select_process_churn_index_prioritizes_unresponsive_validator() {
+    let observed = [Some(100), Some(101), None, Some(100)];
+    assert_eq!(select_process_churn_index_from_heights(&observed, 0, 6), 2);
+}
+
+#[test]
+fn select_process_churn_index_prioritizes_lagger_when_skew_is_large() {
+    let observed = [Some(100), Some(84), Some(99), Some(100)];
+    assert_eq!(select_process_churn_index_from_heights(&observed, 0, 6), 1);
+}
+
+#[test]
+fn select_process_churn_index_uses_round_robin_fallback_when_balanced() {
+    let observed = [Some(100), Some(98), Some(99), Some(100)];
+    assert_eq!(select_process_churn_index_from_heights(&observed, 2, 6), 2);
+}
+
+#[test]
+fn select_process_churn_index_clamps_out_of_bounds_fallback() {
+    let observed = [Some(10), Some(10), Some(10)];
+    assert_eq!(select_process_churn_index_from_heights(&observed, 7, 6), 2);
+}
+
+#[test]
+fn next_process_churn_deadline_uses_interval_without_lag() {
+    let now = Instant::now();
+    let interval = Duration::from_secs(30);
+    let deadline = next_process_churn_deadline(now, interval, false);
+    assert_eq!(deadline.duration_since(now), interval);
+}
+
+#[test]
+fn next_process_churn_deadline_retries_soon_when_lagged() {
+    let now = Instant::now();
+    let interval = Duration::from_secs(30);
+    let deadline = next_process_churn_deadline(now, interval, true);
+    assert_eq!(
+        deadline.duration_since(now),
+        Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS)
+    );
+}
+
+#[test]
+fn next_membership_churn_deadline_uses_interval_without_lag() {
+    let now = Instant::now();
+    let interval = Duration::from_secs(30);
+    let deadline = next_membership_churn_deadline(now, interval, false);
+    assert_eq!(deadline.duration_since(now), interval);
+}
+
+#[test]
+fn next_membership_churn_deadline_adds_backoff_when_lagged() {
+    let now = Instant::now();
+    let interval = Duration::from_secs(30);
+    let deadline = next_membership_churn_deadline(now, interval, true);
+    assert_eq!(
+        deadline.duration_since(now),
+        interval.saturating_add(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS))
+    );
+}
+
+#[test]
+fn membership_backoff_triggers_only_on_hard_lag() {
+    let now = Instant::now();
+    let interval = Duration::from_secs(30);
+    let warning_only = MembershipCycleOutcome {
+        hard_lagged: false,
+        warning_lagged: true,
+    };
+    let warning_deadline = next_membership_churn_deadline(
+        now,
+        interval,
+        membership_backoff_requires_hard_lag(warning_only),
+    );
+    assert_eq!(warning_deadline.duration_since(now), interval);
+
+    let hard_lagged = MembershipCycleOutcome {
+        hard_lagged: true,
+        warning_lagged: false,
+    };
+    let hard_deadline = next_membership_churn_deadline(
+        now,
+        interval,
+        membership_backoff_requires_hard_lag(hard_lagged),
+    );
+    assert_eq!(
+        hard_deadline.duration_since(now),
+        interval.saturating_add(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS))
+    );
+}
+
+#[test]
+fn stalled_joiner_catchup_marks_warning_without_hard_lag() {
+    let mut outcome = MembershipCycleOutcome::default();
+    record_joiner_stall_warning(&mut outcome, JOINER_STALL_WARNING_THRESHOLD);
+    assert!(outcome.warning_lagged);
+    assert!(!outcome.hard_lagged);
+}
+
+#[test]
+fn propagation_and_quorum_failures_mark_hard_lag() {
+    let mut propagation_timeout = MembershipCycleOutcome::default();
+    propagation_timeout.mark_hard_lag();
+    assert!(propagation_timeout.hard_lagged);
+    assert!(!propagation_timeout.warning_lagged);
+
+    let mut quorum_timeout = MembershipCycleOutcome::default();
+    quorum_timeout.mark_hard_lag();
+    assert!(quorum_timeout.hard_lagged);
+    assert!(!quorum_timeout.warning_lagged);
+}
+
+#[test]
+fn effective_final_settle_window_scales_with_duration() {
+    assert_eq!(
+        effective_final_settle_window(Duration::from_secs(3_600)),
+        FINAL_SETTLE_WINDOW
+    );
+    assert_eq!(
+        effective_final_settle_window(Duration::from_secs(90)),
+        Duration::from_secs(30)
+    );
+    assert_eq!(
+        effective_final_settle_window(Duration::from_secs(30)),
+        Duration::from_secs(10)
+    );
+}
+
+#[test]
+fn initial_churn_delay_stays_inside_churn_window() {
+    assert_eq!(
+        initial_churn_delay(Duration::from_secs(30), Duration::from_secs(20)),
+        Duration::from_secs(19)
+    );
+    assert_eq!(
+        initial_churn_delay(Duration::from_secs(30), Duration::from_secs(60)),
+        Duration::from_secs(30)
+    );
+}
+
+#[test]
+fn max_allowed_lagged_cycles_uses_ceiling_ratio() {
+    assert_eq!(max_allowed_lagged_cycles(0, 0.35), 0);
+    assert_eq!(max_allowed_lagged_cycles(3, 0.35), 2);
+    assert_eq!(max_allowed_lagged_cycles(10, 0.1), 1);
+}
+
+#[test]
+fn min_txs_approved_returns_lowest_counter() {
+    let mut first = iroha::client::Status::default();
+    first.txs_approved = 42;
+    let mut second = iroha::client::Status::default();
+    second.txs_approved = 17;
+    let mut third = iroha::client::Status::default();
+    third.txs_approved = 99;
+    assert_eq!(min_txs_approved(&[first, second, third]), 17);
+}
+
+#[test]
+fn apply_queue_transaction_ttl_updates_queue_section() {
+    let mut root = Table::new();
+    root.insert("queue".into(), TomlValue::Table(Table::new()));
+    apply_queue_transaction_ttl(&mut root, 7_200_000).expect("queue ttl should apply");
+    let applied = root
+        .get("queue")
+        .and_then(TomlValue::as_table)
+        .and_then(|queue| {
+            queue
+                .get("transaction_time_to_live_ms")
+                .and_then(TomlValue::as_integer)
+        });
+    assert_eq!(applied, Some(7_200_000));
+}
+
+#[test]
+fn apply_client_transaction_ttl_caps_status_timeout() {
+    let mut transaction = Table::new();
+    transaction.insert("time_to_live_ms".into(), TomlValue::Integer(600_000));
+    transaction.insert("status_timeout_ms".into(), TomlValue::Integer(900_000));
+    let mut root = Table::new();
+    root.insert("transaction".into(), TomlValue::Table(transaction));
+
+    apply_client_transaction_ttl(&mut root, 300_000).expect("client ttl should apply");
+
+    let tx = root
+        .get("transaction")
+        .and_then(TomlValue::as_table)
+        .expect("transaction section should exist");
+    assert_eq!(
+        tx.get("time_to_live_ms").and_then(TomlValue::as_integer),
+        Some(300_000)
+    );
+    assert_eq!(
+        tx.get("status_timeout_ms").and_then(TomlValue::as_integer),
+        Some(300_000)
+    );
+}
+
+#[test]
+fn joiner_stall_warning_threshold_matches_policy() {
+    assert!(!should_count_joiner_stall_as_warning(0));
+    assert!(!should_count_joiner_stall_as_warning(1));
+    assert!(!should_count_joiner_stall_as_warning(2));
+    assert!(should_count_joiner_stall_as_warning(3));
+}
+
+#[test]
+fn simulation_summary_json_includes_membership_warning_cycles() {
+    let summary = SimulationSummary {
+        duration_secs: 60,
+        target_tps: 5,
+        tx_attempted: 300,
+        tx_sent: 295,
+        tx_submit_errors: 0,
+        process_churn_cycles: 4,
+        process_churn_lagged_cycles: 0,
+        membership_join_cycles: 3,
+        membership_leave_cycles: 3,
+        membership_churn_lagged_cycles: 1,
+        membership_churn_warning_cycles: 2,
+        max_height_skew_observed: 1,
+        view_changes_start: 0,
+        view_changes_end: 0,
+        view_change_rate_per_sec: 0.0,
+        scheduled_tps: 5.0,
+        submitted_tps: 4.9,
+        committed_tps: 4.8,
+        committed_txs_min_delta: 288,
+        saturated_samples: 0,
+        total_samples: 60,
+    };
+    let value = summary.to_json_value();
+    let object = value
+        .as_object()
+        .expect("summary must render to JSON object");
+    assert_eq!(
+        object
+            .get("membership_churn_warning_cycles")
+            .and_then(norito::json::Value::as_u64),
+        Some(2)
+    );
+}

@@ -1,4 +1,4 @@
-#![allow(missing_docs)]
+//! Compile-test exercising the `FromVariant` derive attributes.
 
 use impls::impls;
 

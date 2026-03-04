@@ -1,0 +1,27 @@
+[
+  {
+    "kind": "register_pin_manifest",
+    "request": {
+      "digest": [[9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9]],
+      "chunker": {
+        "profile_id": 1,
+        "namespace": "sorafs",
+        "name": "sf1",
+        "semver": "1.0.0",
+        "multihash_code": 31
+      },
+      "chunk_digest_sha3_256": [7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7],
+      "policy": {
+        "min_replicas": 2,
+        "storage_class": {
+          "type": "Hot",
+          "value": null
+        },
+        "retention_epoch": 900
+      },
+      "submitted_epoch": 42,
+      "alias": null,
+      "successor_of": null
+    }
+  }
+]

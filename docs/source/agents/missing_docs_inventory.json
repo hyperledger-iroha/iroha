@@ -1,0 +1,8 @@
+[
+  {
+    "crate": "crates/irohad",
+    "name": "irohad",
+    "missing_crate_docs": true,
+    "allow_missing_docs": []
+  }
+]

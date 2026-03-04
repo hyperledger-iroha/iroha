@@ -1,4 +1,5 @@
 //! Oneshot execution of `validate_blocks` benchmark.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Can be useful to profile using flamegraph.
 //!
 //! ```bash
@@ -8,7 +9,7 @@
 mod validate_blocks;
 
 use iroha_config::base::{env::std_env, read::ConfigReader};
-use iroha_logger::InitConfig;
+use iroha_logger::Config;
 use validate_blocks::StateValidateBlocks;
 
 fn main() {
@@ -18,11 +19,11 @@ fn main() {
         .expect("Failed building the Runtime");
     {
         let _guard = rt.enter();
-        let config = ConfigReader::new()
+        let mut config: Config = ConfigReader::new()
             .with_env(std_env)
             .read_and_complete()
             .expect("Failed to load config");
-        let config = InitConfig::new(config, true);
+        config.terminal_colors = true;
         let _ = iroha_logger::init_global(config).expect("Failed to initialize logger");
     }
     iroha_logger::info!("Starting...");

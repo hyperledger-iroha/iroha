@@ -1,0 +1,4 @@
+extends = "minimal_with_trusted_peers.toml"
+
+[nexus.axt]
+slot_length_ms = 1_200_000

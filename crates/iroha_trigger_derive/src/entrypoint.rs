@@ -1,7 +1,6 @@
 //! Module wht [`main`](super::main) macro implementation
 
-use iroha_macro_utils::Emitter;
-use manyhow::emit;
+use manyhow::{Emitter, emit};
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -34,7 +33,7 @@ pub fn impl_entrypoint(emitter: &mut Emitter, item: syn::ItemFn) -> TokenStream 
         iroha_trigger::utils::register_getrandom_err_callback!();
 
         /// Smart contract entrypoint
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         #[doc(hidden)]
         unsafe extern "C" fn #main_fn_name(context: *const u8) {
             let host = ::iroha_trigger::Iroha;
@@ -42,7 +41,7 @@ pub fn impl_entrypoint(emitter: &mut Emitter, item: syn::ItemFn) -> TokenStream 
             #fn_name(host, context)
         }
 
-        // NOTE: Host objects are always passed by value to wasm
+        // NOTE: Host objects are always passed by value to the IVM
         #[allow(clippy::needless_pass_by_value)]
         #(#attrs)*
         #[inline]

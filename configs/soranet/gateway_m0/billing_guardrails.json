@@ -1,0 +1,13 @@
+{
+  "catalog_version": "m0",
+  "currency": "XOR",
+  "soft_cap_micros": 140000000,
+  "hard_cap_micros": 220000000,
+  "alert_threshold_bps": 9000,
+  "min_invoice_micros": 1000000,
+  "notes": [
+    "Soft cap triggers an alert at 90% of the configured spend ceiling.",
+    "Hard cap blocks ledger projection unless explicitly overridden.",
+    "All amounts are denominated in micro-XOR (1e-6 XOR)."
+  ]
+}

@@ -1,55 +1,63 @@
 //! Structures, traits and impls related to versioning.
 //!
 //! For usage examples see [`iroha_version_derive::declare_versioned`].
-#![cfg_attr(not(feature = "std"), no_std)]
+#![allow(unexpected_cfgs)]
 
-#[cfg(not(feature = "std"))]
-extern crate alloc;
-
-#[cfg(not(feature = "std"))]
-use alloc::{format, string::String, vec::Vec};
 use core::ops::Range;
+use std::{format, string::String, vec::Vec};
 
+pub mod build_line;
+/// Re-export derive macros that assist with declaring versioned enums.
 #[cfg(feature = "derive")]
 pub use iroha_version_derive::*;
-#[cfg(feature = "scale")]
-pub use parity_scale_codec::{Decode, Encode};
+/// Re-export Norito codec helpers required by consumers of versioned types.
+pub use norito::codec::{Decode, DecodeAll, Encode};
+
+pub use crate::build_line::BuildLine;
+
+/// JSON field name storing the version discriminator.
+pub const VERSION_FIELD_NAME: &str = "version";
+/// JSON field name storing the versioned payload.
+pub const CONTENT_FIELD_NAME: &str = "content";
+/// Internal helpers used by derive-generated JSON code. Provides a stable path
+/// to JSON facilities so downstream crates do not need to depend on Norito
+/// directly when using `iroha_version_derive` macros with the `json` feature.
+/// JSON utilities used by derive-generated code.
 #[cfg(feature = "json")]
-use serde::{Deserialize, Serialize};
+pub mod json_helpers {
+    pub use norito::json::{
+        Value, from_json, from_slice, from_str, from_value, parse_value, to_json, to_string,
+        to_value,
+    };
+}
 
 /// Module which contains error and result for versioning
+/// Error types emitted while working with versioned containers.
 pub mod error {
-    #[cfg(not(feature = "std"))]
-    use alloc::{borrow::ToOwned, boxed::Box};
-    use core::fmt;
+    use std::{borrow::ToOwned, boxed::Box, fmt};
 
     use iroha_macro::FromVariant;
-    #[cfg(feature = "scale")]
-    use parity_scale_codec::{Decode, Encode};
 
     use super::UnsupportedVersion;
     #[allow(unused_imports)] // False-positive
     use super::*;
 
     /// Versioning errors
-    #[derive(Debug, FromVariant)]
-    #[cfg_attr(feature = "std", derive(thiserror::Error))]
-    #[cfg_attr(feature = "scale", derive(Encode, Decode))]
+    #[derive(Debug, FromVariant, thiserror::Error)]
     pub enum Error {
         /// This is not a versioned object
         NotVersioned,
-        /// Cannot encode unsupported version from JSON to Parity SCALE
+        /// Cannot encode unsupported version from JSON to Norito
         UnsupportedJsonEncode,
         /// Expected JSON object
         ExpectedJson,
-        /// Cannot encode unsupported version from Parity SCALE to JSON
-        UnsupportedScaleEncode,
+        /// Cannot encode unsupported version from Norito to JSON
+        UnsupportedNoritoEncode,
         /// JSON (de)serialization issue
         #[cfg(feature = "json")]
-        Serde,
-        /// Parity SCALE (de)serialization issue
-        #[cfg(feature = "scale")]
-        ParityScale(String),
+        Json,
+        /// Norito (de)serialization issue
+        NoritoCodec(String),
         /// Problem with parsing integers
         ParseInt,
         /// Input version unsupported
@@ -58,22 +66,19 @@ pub mod error {
         ExtraBytesLeft(u64),
     }
 
-    #[cfg(feature = "json")]
-    impl From<serde_json::Error> for Error {
-        fn from(_: serde_json::Error) -> Self {
-            Self::Serde
+    // Map Norito JSON errors into the crate's generic JSON error variant.
+    // This allows `?` on `norito::json` helpers inside derive-generated code
+    // to convert into `iroha_version::error::Error` seamlessly.
+    impl From<norito::json::Error> for Error {
+        fn from(_: norito::json::Error) -> Self {
+            Self::Json
         }
     }
 
-    #[cfg(feature = "scale")]
-    impl From<parity_scale_codec::Error> for Error {
-        fn from(x: parity_scale_codec::Error) -> Self {
-            #[cfg(not(feature = "std"))]
-            use alloc::string::ToString as _;
-            #[cfg(feature = "std")]
+    impl From<norito::Error> for Error {
+        fn from(x: norito::Error) -> Self {
             use std::string::ToString as _;
-
-            Self::ParityScale(x.to_string())
+            Self::NoritoCodec(x.to_string())
         }
     }
 
@@ -88,16 +93,15 @@ pub mod error {
             let msg = match self {
                 Self::NotVersioned => "Not a versioned object".to_owned(),
                 Self::UnsupportedJsonEncode => {
-                    "Cannot encode unsupported version from JSON to SCALE".to_owned()
+                    "Cannot encode unsupported version from JSON to Norito".to_owned()
                 }
                 Self::ExpectedJson => "Expected JSON object".to_owned(),
-                Self::UnsupportedScaleEncode => {
-                    "Cannot encode unsupported version from SCALE to JSON".to_owned()
+                Self::UnsupportedNoritoEncode => {
+                    "Cannot encode unsupported version from Norito to JSON".to_owned()
                 }
                 #[cfg(feature = "json")]
-                Self::Serde => "JSON (de)serialization issue".to_owned(),
-                #[cfg(feature = "scale")]
-                Self::ParityScale(x) => format!("Parity SCALE (de)serialization issue: {x}"),
+                Self::Json => "JSON (de)serialization issue".to_owned(),
+                Self::NoritoCodec(x) => format!("Norito (de)serialization issue: {x}"),
                 Self::ParseInt => "Issue with parsing integers".to_owned(),
                 Self::UnsupportedVersion(v) => {
                     format!("Input version {} is unsupported", v.version)
@@ -128,16 +132,11 @@ pub trait Version {
 }
 
 /// Structure describing a container content which version is not supported.
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "std", derive(thiserror::Error))]
-#[cfg_attr(feature = "scale", derive(Encode, Decode))]
-#[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    error(
-        "Unsupported version. Expected: {}, got: {version}",
-        Self::expected_version()
-    )
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, norito::Encode, norito::Decode)]
+#[allow(unexpected_cfgs)]
+#[error(
+    "Unsupported version. Expected: {}, got: {version}",
+    Self::expected_version()
 )]
 pub struct UnsupportedVersion {
     /// Version of the content.
@@ -161,27 +160,41 @@ impl UnsupportedVersion {
 }
 
 /// Raw versioned content, serialized.
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "scale", derive(Encode, Decode))]
-#[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
 pub enum RawVersioned {
     /// In JSON format.
     Json(String),
-    /// In Parity Scale Codec format.
-    ScaleBytes(Vec<u8>),
+    /// In Norito format.
+    NoritoBytes(Vec<u8>),
 }
 
-/// Scale related versioned (de)serialization traits.
-#[cfg(feature = "scale")]
-pub mod scale {
-    #[cfg(not(feature = "std"))]
-    use alloc::vec::Vec;
+impl<'a> norito::core::DecodeFromSlice<'a> for RawVersioned {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        use norito::core::{DecodeFromSlice, Error};
 
-    use parity_scale_codec::{DecodeAll, Encode};
+        let tag = *bytes.first().ok_or(Error::LengthMismatch)?;
+        let rest = &bytes[1..];
+        match tag {
+            0 => {
+                let (value, used) = <String as DecodeFromSlice>::decode_from_slice(rest)?;
+                Ok((RawVersioned::Json(value), 1 + used))
+            }
+            1 => {
+                let (value, used) = <Vec<u8> as DecodeFromSlice>::decode_from_slice(rest)?;
+                Ok((RawVersioned::NoritoBytes(value), 1 + used))
+            }
+            other => Err(Error::invalid_tag("decoding RawVersioned tag", other)),
+        }
+    }
+}
 
-    use super::{error::Result, Version};
+/// Norito related versioned (de)serialization traits.
+pub mod codec {
+    use norito::codec::{DecodeAll, Encode};
 
-    /// [`parity_scale_codec::Decode`] versioned analog.
+    use super::{Version, error::Result};
+
+    /// [`norito::codec::Decode`] versioned analog.
     pub trait DecodeVersioned: DecodeAll + Version {
         /// Use this function for versioned objects instead of `decode_all`.
         ///
@@ -192,7 +205,7 @@ pub mod scale {
         fn decode_all_versioned(input: &[u8]) -> Result<Self>;
     }
 
-    /// [`parity_scale_codec::Encode`] versioned analog.
+    /// [`norito::codec::Encode`] versioned analog.
     pub trait EncodeVersioned: Encode + Version {
         /// Use this function for versioned objects instead of `encode`.
         fn encode_versioned(&self) -> Vec<u8>;
@@ -202,32 +215,77 @@ pub mod scale {
 /// JSON related versioned (de)serialization traits.
 #[cfg(feature = "json")]
 pub mod json {
-    #[cfg(not(feature = "std"))]
-    use alloc::string::String;
+    use std::{
+        borrow::ToOwned,
+        string::{String, ToString},
+    };
 
-    use serde::{Deserialize, Serialize};
+    use norito::json::Value;
 
-    use super::{error::Result, Version};
+    use super::{
+        Version,
+        error::{Error, Result},
+    };
 
-    /// [`Serialize`] versioned analog, specifically for JSON.
-    pub trait DeserializeVersioned<'de>: Deserialize<'de> + Version {
-        /// Use this function for versioned objects instead of [`serde_json::from_str`].
+    /// JSON-focused versioned deserialize helper.
+    pub trait DeserializeVersioned: Version {
+        /// Use this function for versioned objects instead of [`norito::json::from_json`].
         ///
         /// # Errors
-        /// Return error if:
-        /// * serde fails to decode json
-        /// * if json is not an object
-        /// * if json is has no version field
-        fn from_versioned_json_str(input: &str) -> Result<Self>;
+        ///
+        /// Returns an error if the input cannot be parsed as JSON or does not contain a valid
+        /// versioned payload compatible with the implementor.
+        fn from_versioned_json_str(input: &str) -> Result<Self>
+        where
+            Self: Sized;
     }
 
-    /// [`Deserialize`] versioned analog, specifically for JSON.
-    pub trait SerializeVersioned: Serialize + Version {
-        /// Use this function for versioned objects instead of [`serde_json::to_string`].
+    /// JSON-focused versioned serialize helper.
+    pub trait SerializeVersioned: Version {
+        /// Use this function for versioned objects instead of [`norito::json::to_json`].
         ///
         /// # Errors
-        /// Return error if serde fails to decode json
-        fn to_versioned_json_str(&self) -> Result<String>;
+        ///
+        /// Returns an error if the value cannot be encoded into a versioned JSON representation.
+        fn to_versioned_json_str(&self) -> Result<String>
+        where
+            Self: Sized;
+    }
+
+    /// Extract version and content from a versioned JSON object.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input value is not an object with string `version` and nested
+    /// `content` fields.
+    pub fn extract_version_and_content(value: Value) -> Result<(String, Value)> {
+        match value {
+            Value::Object(mut map) => {
+                let version_val = map
+                    .remove(super::VERSION_FIELD_NAME)
+                    .ok_or(Error::NotVersioned)?;
+                let content_val = map
+                    .remove(super::CONTENT_FIELD_NAME)
+                    .ok_or(Error::ExpectedJson)?;
+                let version_str = match version_val {
+                    Value::String(s) => s,
+                    _ => return Err(Error::NotVersioned),
+                };
+                Ok((version_str, content_val))
+            }
+            _ => Err(Error::ExpectedJson),
+        }
+    }
+
+    /// Construct a `Value::Object` carrying the version metadata alongside the payload.
+    pub fn build_versioned_object(version: &str, content: Value) -> Value {
+        let mut map = norito::json::Map::new();
+        map.insert(
+            super::VERSION_FIELD_NAME.to_string(),
+            Value::String(version.to_owned()),
+        );
+        map.insert(super::CONTENT_FIELD_NAME.to_string(), content);
+        Value::Object(map)
     }
 }
 
@@ -235,9 +293,7 @@ pub mod json {
 pub mod prelude {
     #[cfg(feature = "json")]
     pub use super::json::*;
-    #[cfg(feature = "scale")]
-    pub use super::scale::*;
-    pub use super::*;
+    pub use super::{codec::*, *};
 }
 
 #[cfg(test)]
@@ -264,5 +320,22 @@ mod tests {
         assert!(VersionedContainer(5).is_supported());
         assert!(!VersionedContainer(10).is_supported());
         assert!(!VersionedContainer(11).is_supported());
+    }
+
+    #[test]
+    fn raw_versioned_roundtrip() {
+        let original = RawVersioned::Json("test".to_owned());
+        let bytes = original.encode();
+        let decoded = RawVersioned::decode_all(&mut &bytes[..]).expect("decode");
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn unsupported_version_roundtrip() {
+        let original = UnsupportedVersion::new(2, RawVersioned::Json("test".to_owned()));
+        let bytes = original.encode();
+        let decoded = UnsupportedVersion::decode_all(&mut &bytes[..]).expect("decode");
+        assert_eq!(decoded.version, original.version);
+        assert_eq!(decoded.encode(), bytes);
     }
 }

@@ -1,0 +1,13 @@
+{
+  "capability_type": 257,
+  "capability_value_hex": null,
+  "circuit_id": 20882,
+  "client_id": null,
+  "counter": 1,
+  "observed_at_unix_ms": 1785120000000,
+  "reason_code": "MissingRequiredKEM",
+  "relay_id": "8N3j9SJgQnJhq4nsuMUSg31d2PmH3xXucn71bXQyvYy4",
+  "relay_role": 1,
+  "signature": null,
+  "transcript_hash_hex": "8ff199b86cbc6a80b38321fbe8f6723ea705141f12bdbc940d573cce39379839"
+}

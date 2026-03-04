@@ -1,0 +1,17 @@
+[package]
+name = "gpuzstd_metal"
+version.workspace = true
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+
+[dependencies]
+zstd = { workspace = true }
+zstd-sys = { version = "2.0.16", features = ["experimental"] }
+
+[build-dependencies]
+cc = "1.2.45"

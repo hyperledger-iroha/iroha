@@ -1,0 +1,9 @@
+{
+  "epoch": 42,
+  "downgrade_attempts": 1,
+  "pq_disabled_sessions": 0,
+  "cover_ratio": 0.18,
+  "lagging_clients": 2,
+  "max_latency_ms": 1500,
+  "incident_reference": "INC-42"
+}

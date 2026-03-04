@@ -1,0 +1,272 @@
+{
+  "title": "SoraNet SNNet-16 Handshake Observability",
+  "uid": "soranet-sn16-handshake",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "browser",
+  "refresh": "30s",
+  "tags": ["soranet", "snnet-16", "handshake"],
+  "templating": {
+    "list": [
+      {
+        "name": "mode",
+        "label": "Relay Mode",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sn16_handshake_mode_total, mode)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Handshake Suites (5m increase)",
+      "id": 1,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (handshake) (increase(sn16_handshake_mode_total{mode=~\"$mode\"}[5m]))",
+          "legendFormat": "{{handshake}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Downgrade Reasons (5m increase)",
+      "id": 2,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(sn16_handshake_downgrade_total{mode=~\"$mode\"}[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Mixed-Mode Ratio (5m)",
+      "id": 3,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "100 * (sum by (mode) (increase(sn16_handshake_mode_total{mode=~\"$mode\", handshake!=\"nk2\"}[5m])) / clamp_min(sum by (mode) (increase(sn16_handshake_mode_total{mode=~\"$mode\"}[5m])), 1))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Handshake Bytes (5m increase)",
+      "id": 4,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "increase(sn16_handshake_bytes_total{mode=~\"$mode\"}[5m])",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Avg Puzzle Verify Duration (5m)",
+      "id": 5,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "(increase(sn16_puzzle_verify_seconds_sum{mode=~\"$mode\"}[5m]) / clamp_min(increase(sn16_puzzle_verify_seconds_count{mode=~\"$mode\"}[5m]), 1))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Puzzle Verification Rate (5m increase)",
+      "id": 6,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "increase(sn16_puzzle_verify_seconds_count{mode=~\"$mode\"}[5m])",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Downgrade Ratio (5m)",
+      "id": 7,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "100 * (sum by (mode) (increase(sn16_handshake_downgrade_total{mode=~\"$mode\"}[5m])) / clamp_min(sum by (mode) (increase(sn16_handshake_mode_total{mode=~\"$mode\"}[5m])), 1))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Proxy Toggle Queue Depth",
+      "id": 8,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "soranet_proxy_policy_queue_depth{mode=~\"$mode\"}",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Padding Cells Emitted (5m increase)",
+      "id": 9,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "increase(soranet_padding_cells_sent_total{mode=~\"$mode\"}[5m])",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Padding Bytes Emitted (5m increase)",
+      "id": 10,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "increase(soranet_padding_bytes_sent_total{mode=~\"$mode\"}[5m])",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Padding Throttles (5m increase)",
+      "id": 11,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "increase(soranet_padding_cells_throttled_total{mode=~\"$mode\"}[5m])",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

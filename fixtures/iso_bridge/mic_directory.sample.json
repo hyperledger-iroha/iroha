@@ -1,0 +1,12 @@
+{
+  "version": "2024-05-01",
+  "source": "sample",
+  "entries": [
+    {
+      "mic": "XNAS",
+      "market_name": "Nasdaq Stock Market",
+      "country": "US",
+      "status": "ACTIVE"
+    }
+  ]
+}

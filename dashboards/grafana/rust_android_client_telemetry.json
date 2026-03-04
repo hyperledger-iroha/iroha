@@ -1,0 +1,200 @@
+{
+  "title": "Rust Android Client Telemetry Baseline",
+  "uid": "rust-android-telemetry",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["android", "telemetry", "rust"],
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(torii_http_request_duration_seconds_bucket, cluster)",
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Submission Latency P95 (5m)",
+      "id": 1,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(torii_http_request_duration_seconds_bucket{client=\"android\",cluster=~\"$cluster\"}[5m]))) * 1000",
+          "legendFormat": "cluster={{cluster}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "custom": {
+            "metric_id": "submission_latency_p95"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Pending Queue Depth",
+      "id": 2,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "pipeline_pending_queue_depth{client=\"android\",cluster=~\"$cluster\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "metric_id": "pending_queue_depth"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Offline Replay Errors (1h)",
+      "id": 3,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [
+        {
+          "expr": "increase(pipeline_offline_replay_errors_total{client=\"android\",cluster=~\"$cluster\"}[1h])",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "metric_id": "offline_replay_errors"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "StrongBox Success Rate (15m)",
+      "id": 4,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {
+          "expr": "sum(rate(strongbox_attestation_success_total{client=\"android\",cluster=~\"$cluster\"}[15m])) / clamp_min(sum(rate(strongbox_attestation_attempt_total{client=\"android\",cluster=~\"$cluster\"}[15m])), 1)",
+          "legendFormat": "cluster={{cluster}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "metric_id": "strongbox_success_rate"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Redaction Failures (1h)",
+      "id": 5,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "targets": [
+        {
+          "expr": "increase(streaming_privacy_redaction_fail_total{client=\"android\",cluster=~\"$cluster\"}[1h])",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "metric_id": "redaction_failures"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Active Telemetry Overrides",
+      "id": 6,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 16},
+      "targets": [
+        {
+          "expr": "telemetry_override_tokens_active{client=\"android\",cluster=~\"$cluster\"}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "metric_id": "override_tokens_active"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Telemetry Export Backlog",
+      "id": 7,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 16},
+      "targets": [
+        {
+          "expr": "telemetry_exporter_backlog{client=\"android\",cluster=~\"$cluster\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "metric_id": "telemetry_export_backlog"
+          }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

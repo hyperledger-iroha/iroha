@@ -1,17 +1,32 @@
 //! Crate with derive `IntoSchema` macro
 
 #![allow(clippy::large_enum_variant)]
-// darling-generated code triggers this lint
+// darling-generated code triggers these lints
+#![allow(clippy::needless_continue)]
 #![allow(clippy::option_if_let_else)]
 
 mod trait_bounds;
 
-use darling::{ast::Style, FromAttributes, FromDeriveInput, FromField, FromMeta, FromVariant};
-use iroha_macro_utils::Emitter;
-use manyhow::{emit, error_message, manyhow, Result};
+mod emitter_ext;
+mod rename;
+
+use darling::{FromAttributes, FromDeriveInput, FromField, FromMeta, FromVariant, ast::Style};
+use emitter_ext::EmitterExt;
+use manyhow::{Emitter, Result, ToTokensError, emit, error_message, manyhow};
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use syn::parse_quote;
+
+use crate::rename::RenameRule;
+
+fn consume_unknown_meta(meta: &syn::meta::ParseNestedMeta) -> syn::Result<()> {
+    if meta.input.peek(syn::token::Paren) {
+        meta.parse_nested_meta(|nested| consume_unknown_meta(&nested))?;
+    } else if meta.input.peek(syn::token::Eq) {
+        let _ = meta.value()?.parse::<syn::Expr>()?;
+    }
+    Ok(())
+}
 
 fn add_bounds_to_all_generic_parameters(generics: &mut syn::Generics, bound: &syn::Path) {
     let generic_type_parameters = generics
@@ -93,6 +108,111 @@ struct SchemaAttributes {
     bounds: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+enum NoritoContainerFlag {
+    Transparent = 1 << 0,
+    Untagged = 1 << 1,
+    NoFastFromJson = 1 << 2,
+    ReuseArchived = 1 << 3,
+}
+
+impl NoritoContainerFlag {
+    const fn bit(self) -> u8 {
+        self as u8
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct NoritoContainerFlags {
+    bits: u8,
+}
+
+impl NoritoContainerFlags {
+    fn insert(&mut self, flag: NoritoContainerFlag) {
+        self.bits |= flag.bit();
+    }
+
+    #[cfg(test)]
+    fn contains(self, flag: NoritoContainerFlag) -> bool {
+        self.bits & flag.bit() != 0
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct NoritoContainerAttrs {
+    rename_all: Option<RenameRule>,
+    tag: Option<String>,
+    content: Option<String>,
+    flags: NoritoContainerFlags,
+}
+
+impl NoritoContainerAttrs {
+    fn set_flag(&mut self, flag: NoritoContainerFlag) {
+        self.flags.insert(flag);
+    }
+
+    #[cfg(test)]
+    fn is_transparent(&self) -> bool {
+        self.flags.contains(NoritoContainerFlag::Transparent)
+    }
+
+    #[cfg(test)]
+    fn is_untagged(&self) -> bool {
+        self.flags.contains(NoritoContainerFlag::Untagged)
+    }
+
+    #[cfg(test)]
+    fn disables_fast_from_json(&self) -> bool {
+        self.flags.contains(NoritoContainerFlag::NoFastFromJson)
+    }
+
+    #[cfg(test)]
+    fn reuses_archived(&self) -> bool {
+        self.flags.contains(NoritoContainerFlag::ReuseArchived)
+    }
+
+    fn from_attributes(attrs: &[syn::Attribute]) -> darling::Result<Self> {
+        let mut parsed = Self::default();
+
+        for attr in attrs {
+            if !attr.path().is_ident("norito") {
+                continue;
+            }
+
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("rename_all") {
+                    let lit: syn::LitStr = meta.value()?.parse()?;
+                    if parsed.rename_all.is_some() {
+                        return Err(darling::Error::duplicate_field("rename_all").into());
+                    }
+                    parsed.rename_all = Some(RenameRule::from_string(&lit.value())?);
+                } else if meta.path.is_ident("transparent") {
+                    parsed.set_flag(NoritoContainerFlag::Transparent);
+                } else if meta.path.is_ident("tag") {
+                    let lit: syn::LitStr = meta.value()?.parse()?;
+                    parsed.tag = Some(lit.value());
+                } else if meta.path.is_ident("content") {
+                    let lit: syn::LitStr = meta.value()?.parse()?;
+                    parsed.content = Some(lit.value());
+                } else if meta.path.is_ident("untagged") {
+                    parsed.set_flag(NoritoContainerFlag::Untagged);
+                } else if meta.path.is_ident("no_fast_from_json") {
+                    parsed.set_flag(NoritoContainerFlag::NoFastFromJson);
+                } else if meta.path.is_ident("reuse_archived") {
+                    parsed.set_flag(NoritoContainerFlag::ReuseArchived);
+                } else {
+                    consume_unknown_meta(&meta)?;
+                }
+                Ok(())
+            })
+            .map_err(darling::Error::from)?;
+        }
+
+        Ok(parsed)
+    }
+}
+
 // NOTE: this will fail on unknown attributes.. This is not ideal
 #[derive(Debug, Clone, FromAttributes)]
 #[darling(attributes(codec))]
@@ -112,6 +232,7 @@ struct IntoSchemaInput {
     generics: syn::Generics,
     data: IntoSchemaData,
     schema_attrs: SchemaAttributes,
+    norito_attrs: NoritoContainerAttrs,
 }
 
 impl FromDeriveInput for IntoSchemaInput {
@@ -120,12 +241,14 @@ impl FromDeriveInput for IntoSchemaInput {
         let generics = input.generics.clone();
         let data = darling::ast::Data::try_from(&input.data)?;
         let schema_attrs = SchemaAttributes::from_attributes(&input.attrs)?;
+        let norito_attrs = NoritoContainerAttrs::from_attributes(&input.attrs)?;
 
         Ok(Self {
             ident,
             generics,
             data,
             schema_attrs,
+            norito_attrs,
         })
     }
 }
@@ -136,6 +259,7 @@ struct IntoSchemaVariant {
     discriminant: Option<syn::Expr>,
     fields: IntoSchemaFields,
     codec_attrs: CodecAttributes,
+    norito_attrs: NoritoVariantAttrs,
 }
 
 impl FromVariant for IntoSchemaVariant {
@@ -144,20 +268,78 @@ impl FromVariant for IntoSchemaVariant {
         let discriminant = variant.discriminant.clone().map(|(_, expr)| expr);
         let fields = IntoSchemaFields::try_from(&variant.fields)?;
         let codec_attrs = CodecAttributes::from_attributes(&variant.attrs)?;
+        let norito_attrs = NoritoVariantAttrs::from_attributes(&variant.attrs)?;
 
         Ok(Self {
             ident,
             discriminant,
             fields,
             codec_attrs,
+            norito_attrs,
         })
     }
 }
 
-#[derive(FromField, Default)]
-#[darling(default, attributes(serde))]
-struct SerdeFieldOpts {
+#[derive(Debug, Clone, Default)]
+struct NoritoVariantAttrs {
     rename: Option<String>,
+}
+
+impl NoritoVariantAttrs {
+    fn from_attributes(attrs: &[syn::Attribute]) -> darling::Result<Self> {
+        let mut parsed = Self::default();
+
+        for attr in attrs {
+            if !attr.path().is_ident("norito") {
+                continue;
+            }
+
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("rename") {
+                    let lit: syn::LitStr = meta.value()?.parse()?;
+                    parsed.rename = Some(lit.value());
+                } else {
+                    consume_unknown_meta(&meta)?;
+                }
+
+                Ok(())
+            })
+            .map_err(darling::Error::from)?;
+        }
+
+        Ok(parsed)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct NoritoFieldAttrs {
+    rename: Option<String>,
+}
+
+impl NoritoFieldAttrs {
+    fn from_attributes(attrs: &[syn::Attribute]) -> darling::Result<Self> {
+        let mut parsed = Self::default();
+
+        for attr in attrs {
+            if !attr.path().is_ident("norito") {
+                continue;
+            }
+
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("rename") {
+                    let lit: syn::LitStr = meta.value()?.parse()?;
+                    parsed.rename = Some(lit.value());
+                } else {
+                    consume_unknown_meta(&meta)?;
+                }
+
+                Ok(())
+            })
+            .map_err(darling::Error::from)?;
+        }
+
+        Ok(parsed)
+    }
 }
 
 type IntoSchemaFields = darling::ast::Fields<IntoSchemaField>;
@@ -171,7 +353,7 @@ struct IntoSchemaField {
 
 impl FromField for IntoSchemaField {
     fn from_field(field: &syn::Field) -> darling::Result<Self> {
-        let SerdeFieldOpts { rename } = SerdeFieldOpts::from_field(field).unwrap_or_default();
+        let NoritoFieldAttrs { rename } = NoritoFieldAttrs::from_attributes(&field.attrs)?;
 
         let ident = rename
             .map(|rename| syn::Ident::new(&rename, Span::call_site()))
@@ -202,7 +384,7 @@ struct CodegenField {
 /// - If found invalid `transparent` attribute
 /// - If it's impossible to infer the type for transparent attribute
 #[manyhow]
-#[proc_macro_derive(IntoSchema, attributes(schema, codec))]
+#[proc_macro_derive(IntoSchema, attributes(schema, codec, norito))]
 pub fn schema_derive(input: TokenStream) -> TokenStream {
     let original_input = input.clone();
 
@@ -211,7 +393,9 @@ pub fn schema_derive(input: TokenStream) -> TokenStream {
     let Some(input) = emitter.handle(syn::parse2::<syn::DeriveInput>(input)) else {
         return emitter.finish_token_stream();
     };
-    let Some(mut input) = emitter.handle(IntoSchemaInput::from_derive_input(&input)) else {
+    let Some(mut input) =
+        emitter.handle(darling_result(IntoSchemaInput::from_derive_input(&input)))
+    else {
         return emitter.finish_token_stream();
     };
 
@@ -221,7 +405,7 @@ pub fn schema_derive(input: TokenStream) -> TokenStream {
         &parse_quote!(iroha_schema::IntoSchema),
     );
 
-    // add trait bounds on field types using the same algorithm that parity scale codec uses
+    // add trait bounds on field types using the same algorithm that the Norito codec uses
     trait_bounds::add(
         &input.ident,
         &mut input.generics,
@@ -296,7 +480,7 @@ fn impl_into_schema(
     let name = &input.ident;
     let type_name_body = trait_body(name, &input.generics, false);
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
-    let metadata = metadata(emitter, &input.data);
+    let metadata = metadata(emitter, &input.data, &input.norito_attrs);
     let where_clause = override_where_clause(emitter, where_clause, bounds);
 
     quote! {
@@ -439,9 +623,13 @@ fn trait_body(name: &syn::Ident, generics: &syn::Generics, is_type_id_trait: boo
 }
 
 /// Returns schema method body
-fn metadata(emitter: &mut Emitter, data: &IntoSchemaData) -> TokenStream {
+fn metadata(
+    emitter: &mut Emitter,
+    data: &IntoSchemaData,
+    norito_attrs: &NoritoContainerAttrs,
+) -> TokenStream {
     let (types, expr) = match &data {
-        IntoSchemaData::Enum(variants) => metadata_for_enums(emitter, variants),
+        IntoSchemaData::Enum(variants) => metadata_for_enums(emitter, norito_attrs, variants),
         IntoSchemaData::Struct(IntoSchemaFields {
             style: Style::Struct,
             fields,
@@ -541,6 +729,7 @@ fn variant_field(emitter: &mut Emitter, fields: &IntoSchemaFields) -> Option<syn
 /// Returns types for which schema should be called and metadata for struct
 fn metadata_for_enums(
     emitter: &mut Emitter,
+    norito_attrs: &NoritoContainerAttrs,
     variants: &[IntoSchemaVariant],
 ) -> (Vec<syn::Type>, syn::Expr) {
     let variant_exprs: Vec<_> = variants
@@ -557,13 +746,26 @@ fn metadata_for_enums(
             }
 
             let name = &variant.ident;
+            let name_str = name.to_string();
+            let tag_value = variant
+                .norito_attrs
+                .rename
+                .clone()
+                .or_else(|| {
+                    norito_attrs
+                        .rename_all
+                        .as_ref()
+                        .map(|rule| rule.apply(&name_str))
+                })
+                .unwrap_or(name_str);
+            let tag_lit = syn::LitStr::new(&tag_value, Span::call_site());
             let ty = variant_field(emitter, &variant.fields).map_or_else(
                 || quote! { None },
                 |ty| quote! { Some(core::any::TypeId::of::<#ty>()) },
             );
             quote! {
                 iroha_schema::EnumVariant {
-                    tag: String::from(stringify!(#name)),
+                    tag: String::from(#tag_lit),
                     discriminant: #discriminant,
                     ty: #ty,
                 }
@@ -635,4 +837,45 @@ fn convert_field_to_codegen(field: &IntoSchemaField) -> Option<CodegenField> {
         ident: field.ident.clone(),
         ty,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::*;
+
+    #[test]
+    fn container_flags_are_recorded() {
+        let attrs =
+            vec![parse_quote!(#[norito(transparent, untagged, no_fast_from_json, reuse_archived)])];
+
+        let parsed =
+            NoritoContainerAttrs::from_attributes(&attrs).expect("attributes should parse");
+
+        assert!(parsed.is_transparent());
+        assert!(parsed.is_untagged());
+        assert!(parsed.disables_fast_from_json());
+        assert!(parsed.reuses_archived());
+    }
+
+    #[test]
+    fn unknown_meta_is_consumed() {
+        let attrs = vec![parse_quote!(#[norito(custom(key = "value", nested(flag = true)))])];
+
+        NoritoContainerAttrs::from_attributes(&attrs).expect("unknown meta should be ignored");
+    }
+}
+
+#[derive(Debug)]
+struct DarlingErrorWrapper(darling::Error);
+
+impl ToTokensError for DarlingErrorWrapper {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.0.clone().write_errors().to_tokens(tokens);
+    }
+}
+
+fn darling_result<T>(result: darling::Result<T>) -> manyhow::Result<T, DarlingErrorWrapper> {
+    result.map_err(DarlingErrorWrapper)
 }

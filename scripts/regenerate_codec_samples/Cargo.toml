@@ -1,0 +1,16 @@
+[package]
+name = "regenerate_codec_samples"
+version = "2.0.0-rc.2.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+clap = { version = "4.5.51", features = ["derive"] }
+color-eyre = "0.6.5"
+iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["json", "governance"] }
+iroha_test_samples = { path = "../../crates/iroha_test_samples" }
+iroha_primitives = { path = "../../crates/iroha_primitives", default-features = false, features = ["json"] }
+norito = {path = "../../crates/norito"}
+ivm = { path = "../../crates/ivm", default-features = false }
+
+[workspace]

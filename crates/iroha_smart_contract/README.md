@@ -1,71 +1,73 @@
-# Iroha WASM
+# Iroha Smart Contract
 
-The library crate that is used for writing Iroha-compliant smart contracts in Rust using the WebAssembly format.
+Library crate used for writing Iroha-compliant smart contracts targeting the Iroha Virtual Machine (IVM).
 
 ## Usage
 
-Check the [WASM section of our tutorial](https://docs.iroha.tech/blockchain/wasm.html) for a detailed guide.
+Kotodama sources (`.ko`) compile to IVM bytecode (`.to`) which can be submitted to
+the network or executed locally. The toolchain lives in this repository under the
+`ivm` crate and exposes two binaries:
 
-## Running tests
+- `koto_compile` – Kotodama compiler that produces `.to` bytecode (and optional
+  manifests)
+- `ivm_run` – local runner that executes bytecode with mocked host bindings for
+  quick smoke tests
 
-To be able to run tests compiled for `wasm32-unknown-unknown` target install `iroha_wasm_test_runner` from the root of the Iroha repository:
+### 1. Install the toolchain
+
+Build the helper binaries directly from this workspace:
 
 ```bash
-cargo install --path crates/iroha_wasm_test_runner
+cargo install --path crates/ivm --bin koto_compile --bin ivm_run
 ```
 
-Then run tests:
+Alternatively, invoke them in-place via `cargo run -p ivm --bin <name> -- …` or use
+the convenience targets `make examples-run` / `make examples-inspect`.
+
+### 2. Compile Kotodama source to IVM bytecode
 
 ```bash
-cargo test
+# Compile examples/hello/hello.ko into target/examples/hello.to
+koto_compile examples/hello/hello.ko \
+  --out target/examples/hello.to \
+  --abi 1 \
+  --max-cycles 0
+# Lint runs automatically; use --no-lint to skip or --deny-lint-warnings to fail on lint output.
+
+# Optional: emit a manifest alongside the bytecode
+koto_compile path/to/contract.ko \
+  --out target/contract.to \
+  --manifest-out target/contract.manifest.json \
+  --abi 1
 ```
 
-## Reducing the size of WASM
+The compiler enforces the IVM ABI header (default `abi_version = 1`). You can
+override the defaults with CLI flags or by embedding metadata blocks in Kotodama
+source (`meta { abi_version = 1; max_cycles = … }`).
 
-Since smart contracts are stored directly on the blockchain, you would want to reduce their size.
-By following this list of optimization steps you can reduce the size of your binary by an order of magnitude
-(e.g. from 1.1MB to 100KB):
+### 3. Smoke-test bytecode locally (optional)
 
-1. Create a `Cargo.toml` following this template:
+```bash
+ivm_run target/examples/hello.to --args '{}'
+```
 
-  ```toml
-    [package]
-    name = "smartcontract"
-    version = "0.1.0"
-    edition = "2021"
+`ivm_run` accepts JSON-encoded Norito values via `--args` (default `{}`) and prints
+the resulting state updates plus any emitted events. This is useful for verifying
+logic before shipping contracts to a node.
 
-    [lib]
-      # A smart contract should be linked dynamically so that it may link to functions exported
-      # from the host environment. The host environment executes a smart contract by
-      # calling the function that smart contract exports (entry point of execution)
-    crate-type = ['cdylib']
+### 4. Submit bytecode to an Iroha network
 
-    [profile.release]
-    strip = "debuginfo" # Remove debugging info from the binary
-    panic = "abort"     # Panics are transcribed to Traps when compiling for WASM
-    lto = true          # Link-time-optimization produces notable decrease in binary size
-    opt-level = "z"     # Optimize for size vs speed with "s"/"z" (removes vectorization)
-    codegen-units = 1   # Further reduces binary size but increases compilation time
+Use the CLI to upload the compiled `.to` artifact:
 
-    [dependencies]
-    iroha_data_model = { git = "https://github.com/hyperledger-iroha/iroha/", default-features = false }
-    iroha_smart_contract = { git = "https://github.com/hyperledger-iroha/iroha/" }
-    panic-halt = "0.2.0"
-  ```
+```bash
+# Submit to a running node
+iroha transaction ivm --file target/contract.to
 
-2. Re-build `libcore` and `alloc` with excluded panicking infrastructure:
+# Or pipe the bytecode in
+cat target/contract.to | iroha transaction ivm
+```
 
-  ```
-    cargo +nightly build -Z build-std -Z build-std-features=panic_immediate_abort --target wasm32-unknown-unknown
-  ```
-
-  :exclamation: **NOTE:** This cargo feature is unstable and may not be suitable for production.
-
-3. Use [wasm-opt](https://github.com/WebAssembly/binaryen) to further optimize the built binary:
-
-  ```sh
-  $ wasm-opt -Os -o output.wasm input.wasm
-  ```
-
-Following these steps is the bare minimum that can be done to all WASM smart contracts.
-We encourage you to profile the binaries [using twiggy](https://github.com/AlexEne/twiggy) to further reduce their size.
+The `.to` file can also be embedded into genesis or manifests depending on your
+deployment pipeline. See `examples/README.md` and `docs/source/kotodama_examples.md`
+for additional workflows, including end-to-end examples that exercise the host
+ABI and integration tests that compile and execute the samples automatically.

@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "container": {
+    "schema_version": 1,
+    "runtime": {
+      "runtime": "Ivm",
+      "value": null
+    },
+    "bundle_hash": "hash:0708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20212223242527#81B4",
+    "bundle_path": "/bundles/webapp.to",
+    "entrypoint": "main",
+    "args": [
+      "--http",
+      "--port=8080"
+    ],
+    "env": {
+      "APP_ENV": "production",
+      "LOG_LEVEL": "info"
+    },
+    "capabilities": {
+      "network": {
+        "mode": "Allowlist",
+        "value": [
+          "api.sora.internal",
+          "wallet.sora.internal"
+        ]
+      },
+      "allow_wallet_signing": true,
+      "allow_state_writes": true,
+      "allow_model_training": false
+    },
+    "resources": {
+      "cpu_millis": 750,
+      "memory_bytes": 536870912,
+      "ephemeral_storage_bytes": 2147483648,
+      "max_open_files": 512,
+      "max_tasks": 64
+    },
+    "lifecycle": {
+      "start_grace_secs": 30,
+      "stop_grace_secs": 20,
+      "healthcheck_path": "/healthz"
+    }
+  },
+  "service": {
+    "schema_version": 1,
+    "service_name": "web_portal",
+    "service_version": "2026.02.0",
+    "container": {
+      "manifest_hash": "hash:3B21E9929F3F74465345FFE97514D86F0E2969CC43724B2B8CFC2AFBDD8FE041#2D14",
+      "expected_schema_version": 1
+    },
+    "replicas": 3,
+    "route": {
+      "host": "portal.sora",
+      "path_prefix": "/app",
+      "service_port": 8080,
+      "visibility": {
+        "visibility": "Public",
+        "value": null
+      },
+      "tls_mode": {
+        "tls": "Required",
+        "value": null
+      }
+    },
+    "rollout": {
+      "canary_percent": 20,
+      "max_unavailable_replicas": 1,
+      "health_window_secs": 45,
+      "automatic_rollback_failures": 3
+    },
+    "state_bindings": [
+      {
+        "schema_version": 1,
+        "binding_name": "session_store",
+        "scope": {
+          "scope": "ServiceState",
+          "value": null
+        },
+        "mutability": {
+          "mutability": "ReadWrite",
+          "value": null
+        },
+        "encryption": {
+          "encryption": "ClientCiphertext",
+          "value": null
+        },
+        "key_prefix": "/state/session",
+        "max_item_bytes": 4096,
+        "max_total_bytes": 262144
+      },
+      {
+        "schema_version": 1,
+        "binding_name": "patient_records",
+        "scope": {
+          "scope": "ConfidentialState",
+          "value": null
+        },
+        "mutability": {
+          "mutability": "AppendOnly",
+          "value": null
+        },
+        "encryption": {
+          "encryption": "FheCiphertext",
+          "value": null
+        },
+        "key_prefix": "/state/health",
+        "max_item_bytes": 16384,
+        "max_total_bytes": 16777216
+      }
+    ]
+  }
+}

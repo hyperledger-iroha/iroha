@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Hyperledger Iroha에 오신 것을 환영합니다!",
+  "error.trace_config_setup": "구성 추적을 설정할 수 없습니다",
+  "error.config": "구성 오류!",
+  "error.logger": "로거를 초기화할 수 없습니다",
+  "error.start": "Iroha를 시작할 수 없습니다",
+  "error.run": "Iroha 실행 중 오류가 발생했습니다",
+  "error.start_p2p": "P2P 네트워크를 시작할 수 없습니다",
+  "error.init_kura": "Kura(블록 저장소)를 초기화할 수 없습니다",
+  "error.start_dev_telemetry": "개발용 원격 측정 서비스를 시작할 수 없습니다",
+  "error.start_telemetry": "원격 측정 서비스를 시작할 수 없습니다",
+  "error.listen_os_signal": "OS 신호 수신 대기를 설정할 수 없습니다",
+  "error.start_torii": "Torii(Iroha HTTP API 게이트웨이)를 시작할 수 없습니다"
+}

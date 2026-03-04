@@ -1,50 +1,13 @@
-//! WASM logging utilities
+//! IVM logging utilities
 
-use cfg_if::cfg_if;
 pub use iroha_data_model::Level;
 
-use super::*;
-
-#[cfg(target_family = "wasm")]
-#[cfg(not(test))]
-mod host {
-    #[link(wasm_import_module = "iroha")]
-    extern "C" {
-        /// Log string with the host logging system
-        ///
-        /// # Warning
-        ///
-        /// This function doesn't take ownership of the provided allocation
-        pub(super) fn log(ptr: *const u8, len: usize);
-    }
-}
-
-/// Log `obj` with desired log level
+/// Log `obj` with desired log level.
 ///
-/// When running as a wasm smart contract, prints to the host logging system with the corresponding level.
-/// When running outside of wasm, prints the output along with its level to stderr
+/// Prints the output along with its level to stderr.
 #[doc(hidden)]
-pub fn __log<T: alloc::string::ToString + ?Sized>(log_level: Level, obj: &T) {
-    cfg_if! {
-        if #[cfg(not(target_family = "wasm"))] {
-            // when not on wasm - just print it
-            eprintln!("{}: {}", log_level, obj.to_string());
-        } else {
-            #[cfg(not(test))]
-            use host::log as host_log;
-            #[cfg(test)]
-            use tests::_log_mock as host_log;
-
-            let log_level_id = log_level as u8;
-
-            let msg = obj.to_string();
-            let bytes = (log_level_id, msg).encode();
-            let ptr = bytes.as_ptr();
-            let len = bytes.len();
-
-            unsafe { host_log(ptr, len) }
-        }
-    }
+pub fn __log<T: std::string::ToString + ?Sized>(log_level: Level, obj: &T) {
+    eprintln!("{}: {}", log_level, obj.to_string());
 }
 
 /// Construct a new event
@@ -97,27 +60,10 @@ macro_rules! error {
 
 #[cfg(test)]
 mod tests {
-    use alloc::string::String;
+    const LOG_MESSAGE: &str = "log_message";
 
-    use webassembly_test::webassembly_test;
-
-    use super::*;
-
-    fn get_log_message() -> &'static str {
-        "log_message"
-    }
-
-    #[no_mangle]
-    pub unsafe extern "C" fn _log_mock(ptr: *const u8, len: usize) {
-        // can't use _decode_from_raw here, because we must NOT take the ownership
-        let bytes = core::slice::from_raw_parts(ptr, len);
-        let (log_level, msg) = <(u8, String)>::decode_all(&mut &*bytes).unwrap();
-        assert_eq!(log_level, 3);
-        assert_eq!(msg, get_log_message());
-    }
-
-    #[webassembly_test]
+    #[test]
     fn log_call() {
-        super::warn!(get_log_message());
+        crate::warn!(LOG_MESSAGE);
     }
 }

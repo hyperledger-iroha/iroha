@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if command -v gradle >/dev/null 2>&1; then
+  exec gradle --project-dir "$PROJECT_DIR" "$@"
+fi
+cat <<'MSG' >&2
+Gradle executable not found.
+Install Gradle 8.2+ or run the tasks from Android Studio before executing this helper.
+MSG
+exit 1

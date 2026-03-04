@@ -1,0 +1,7 @@
+// Subscription billing trigger wrapper (uses subscription_ref metadata).
+seiyaku SubscriptionBilling {
+  #[access(read="*", write="*")]
+  kotoage fn run() {
+    subscription_bill();
+  }
+}

@@ -1,0 +1,16 @@
+chain = "00000000-0000-0000-0000-000000000000"
+torii_url = "http://127.0.0.1:18080/"
+
+[transaction]
+time_to_live_ms = 120000
+status_timeout_ms = 120000
+nonce = false
+
+[account]
+domain = "wonderland"
+private_key = "802620A12F86D21980A1F2A85133523327C0FE25086D248A13631714783238E3B873E3"
+public_key  = "ed0120D19E5DC66933ED48ABE85C10C703631783E1EBF529EF16F84B7C1D08B22BB2EF"
+
+[basic_auth]
+password  = "ilovetea"
+web_login = "mad_hatter"

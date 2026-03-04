@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Hyperledger Iroha میں خوش آمدید!",
+  "error.trace_config_setup": "تشکیلات کی نگرانی سیٹ کرنے میں ناکامی ہوئی",
+  "error.config": "تشکیلی خرابی!",
+  "error.logger": "لاگنگ نظام کو شروع نہیں کیا جا سکا",
+  "error.start": "Iroha کو شروع نہیں کیا جا سکا",
+  "error.run": "Iroha چلانے کے دوران خرابی پیش آئی",
+  "error.start_p2p": "P2P نیٹ ورک کو شروع نہیں کیا جا سکا",
+  "error.init_kura": "Kura (بلاک اسٹوریج) کو شروع نہیں کیا جا سکا",
+  "error.start_dev_telemetry": "ترقیاتی ٹیلی میٹری سروس کو شروع نہیں کیا جا سکا",
+  "error.start_telemetry": "ٹیلی میٹری سروس کو شروع نہیں کیا جا سکا",
+  "error.listen_os_signal": "OS سگنلز سننے کے لیے سیٹ اپ نہیں ہو سکا",
+  "error.start_torii": "Torii (Iroha HTTP API گیٹ وے) کو شروع نہیں کیا جا سکا"
+}

@@ -1,14 +1,11 @@
-#![allow(missing_docs)]
+//! Schema metadata test for tuple structs and unnamed field handling.
 
-extern crate alloc;
-
-use alloc::collections::BTreeMap;
-use core::any::TypeId;
+use std::{any::TypeId, collections::BTreeMap};
 
 use iroha_schema::prelude::*;
-use parity_scale_codec::{Decode, Encode};
+use norito::{Decode, Encode};
 
-#[derive(Decode, Encode, IntoSchema)]
+#[derive(IntoSchema, Encode, Decode)]
 struct Command(String, Vec<String>, #[codec(skip)] bool);
 
 #[test]
@@ -17,7 +14,7 @@ fn unnamed() {
 
     let expected = vec![
         (
-            TypeId::of::<alloc::string::String>(),
+            TypeId::of::<::std::string::String>(),
             MetaMapEntry {
                 type_id: "String".to_owned(),
                 type_name: "String".to_owned(),
@@ -25,12 +22,12 @@ fn unnamed() {
             },
         ),
         (
-            TypeId::of::<alloc::vec::Vec<alloc::string::String>>(),
+            TypeId::of::<::std::vec::Vec<::std::string::String>>(),
             MetaMapEntry {
                 type_id: "Vec<String>".to_owned(),
                 type_name: "Vec<String>".to_owned(),
                 metadata: Vec(VecMeta {
-                    ty: TypeId::of::<alloc::string::String>(),
+                    ty: TypeId::of::<::std::string::String>(),
                 }),
             },
         ),
@@ -41,8 +38,8 @@ fn unnamed() {
                 type_name: "Command".to_owned(),
                 metadata: Tuple(UnnamedFieldsMeta {
                     types: vec![
-                        TypeId::of::<alloc::string::String>(),
-                        TypeId::of::<alloc::vec::Vec<alloc::string::String>>(),
+                        TypeId::of::<::std::string::String>(),
+                        TypeId::of::<::std::vec::Vec<::std::string::String>>(),
                     ],
                 }),
             },

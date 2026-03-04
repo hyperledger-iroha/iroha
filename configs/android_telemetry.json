@@ -1,0 +1,241 @@
+{
+  "version": "2026-02-24",
+  "signals": [
+    {
+      "name": "android.torii.http.request",
+      "canonical_name": "torii.http.request",
+      "channel": "trace",
+      "fields": [
+        {
+          "name": "authority_hash",
+          "canonical_name": "authority",
+          "data_type": "string",
+          "representation": "blake2b_256",
+          "parity": "intentional_difference",
+          "status": "accepted",
+          "notes": "Android hashes authority strings with the quarterly salt to satisfy redaction policy."
+        },
+        {
+          "name": "status_code",
+          "canonical_name": "status_code",
+          "data_type": "u16"
+        },
+        {
+          "name": "retry_count",
+          "canonical_name": "retry_count",
+          "data_type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "android.torii.http.retry",
+      "canonical_name": "torii.http.retry",
+      "channel": "event",
+      "fields": [
+        {
+          "name": "authority_hash",
+          "canonical_name": "authority",
+          "data_type": "string",
+          "representation": "blake2b_256",
+          "parity": "intentional_difference",
+          "status": "accepted",
+          "notes": "Android hashes authority strings with the quarterly salt to satisfy redaction policy."
+        },
+        {
+          "name": "route",
+          "canonical_name": "route",
+          "data_type": "string"
+        },
+        {
+          "name": "retry_count",
+          "canonical_name": "retry_count",
+          "data_type": "u8"
+        },
+        {
+          "name": "error_code",
+          "canonical_name": "error_code",
+          "data_type": "string"
+        },
+        {
+          "name": "backoff_ms",
+          "canonical_name": "backoff_ms",
+          "data_type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "android.pending_queue.depth",
+      "canonical_name": "pipeline.pending_queue_depth",
+      "channel": "gauge",
+      "fields": [
+        {
+          "name": "depth",
+          "canonical_name": "depth",
+          "data_type": "u64"
+        },
+        {
+          "name": "queue",
+          "canonical_name": "queue",
+          "data_type": "string"
+        }
+      ]
+    },
+    {
+      "name": "android.telemetry.export.status",
+      "canonical_name": "telemetry.export.status",
+      "channel": "counter",
+      "fields": [
+        {
+          "name": "status",
+          "canonical_name": "status",
+          "data_type": "string"
+        },
+        {
+          "name": "exporter",
+          "canonical_name": "exporter",
+          "data_type": "string"
+        }
+      ]
+    },
+    {
+      "name": "android.keystore.attestation.result",
+      "canonical_name": "attestation.result",
+      "channel": "event",
+      "fields": [
+        {
+          "name": "alias_hash",
+          "canonical_name": "alias",
+          "data_type": "string",
+          "representation": "blake2b_256",
+          "parity": "intentional_difference",
+          "status": "accepted",
+          "notes": "Aliases are hashed on Android devices while Rust retains plain aliases inside the cluster boundary."
+        },
+        {
+          "name": "result",
+          "canonical_name": "result",
+          "data_type": "string"
+        },
+        {
+          "name": "device_tier",
+          "canonical_name": "device_tier",
+          "data_type": "string",
+          "representation": "bucketed"
+        }
+      ]
+    },
+    {
+      "name": "android.telemetry.config.reload",
+      "canonical_name": "telemetry.config.reload",
+      "channel": "event",
+      "fields": [
+        {
+          "name": "epoch",
+          "canonical_name": "epoch",
+          "data_type": "u64"
+        },
+        {
+          "name": "result",
+          "canonical_name": "result",
+          "data_type": "string"
+        }
+      ]
+    },
+    {
+      "name": "android.telemetry.device_profile",
+      "canonical_name": "hardware.profile",
+      "channel": "metric",
+      "fields": [
+        {
+          "name": "profile_bucket",
+          "canonical_name": "profile_bucket",
+          "data_type": "string",
+          "representation": "emulator|consumer|enterprise",
+          "parity": "intentional_difference",
+          "status": "accepted",
+          "notes": "Android only publishes coarse profile buckets while Rust reports the concrete host metadata."
+        }
+      ]
+    },
+    {
+      "name": "android.telemetry.redaction.override",
+      "canonical_name": "android.telemetry.redaction.override",
+      "channel": "event",
+      "parity": "android_only",
+      "status": "accepted",
+      "notes": "Overrides are Android-only and must be mirrored in the audit log.",
+      "fields": [
+        {
+          "name": "actor_role_masked",
+          "canonical_name": "actor_role_masked",
+          "data_type": "string"
+        },
+        {
+          "name": "token_digest",
+          "canonical_name": "token_digest",
+          "data_type": "string"
+        }
+      ]
+    },
+    {
+      "name": "android.telemetry.network_context",
+      "canonical_name": "network.context",
+      "channel": "event",
+      "parity": "intentional_difference",
+      "status": "accepted",
+      "notes": "Android omits carrier metadata and exports only network_type + roaming to satisfy the AND7 redaction policy.",
+      "fields": [
+        {
+          "name": "network_type",
+          "canonical_name": "network_type",
+          "data_type": "string"
+        },
+        {
+          "name": "roaming",
+          "canonical_name": "roaming",
+          "data_type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "android.telemetry.redaction.failure",
+      "canonical_name": "streaming_privacy.redaction_fail_total",
+      "channel": "counter",
+      "parity": "android_only",
+      "status": "accepted",
+      "notes": "Android-only counter that flags client-side redaction guardrail failures during AND7 chaos drills; approved in the Feb 2026 SRE governance review.",
+      "fields": [
+        {
+          "name": "signal_id",
+          "canonical_name": "signal_id",
+          "data_type": "string"
+        },
+        {
+          "name": "reason",
+          "canonical_name": "reason",
+          "data_type": "string"
+        }
+      ]
+    },
+    {
+      "name": "android.telemetry.redaction.salt_version",
+      "canonical_name": "telemetry.redaction.salt_version",
+      "channel": "gauge",
+      "parity": "android_only",
+      "status": "accepted",
+      "notes": "Android-only gauge proving the active redaction salt epoch/rotation so AND7 readiness reviews can confirm parity with Rust.",
+      "fields": [
+        {
+          "name": "salt_epoch",
+          "canonical_name": "salt_epoch",
+          "data_type": "string"
+        },
+        {
+          "name": "rotation_id",
+          "canonical_name": "rotation_id",
+          "data_type": "string"
+        }
+      ]
+    }
+  ]
+}

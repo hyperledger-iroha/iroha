@@ -1,0 +1,14 @@
+// Design example: deterministic map iteration with bounds
+// Note: multi-entry iteration requires a state map.
+
+seiyaku MapDemo {
+  state Entries: Map<int, int>;
+
+  kotoage fn sum_first_two() -> int {
+    let s = 0;
+    for (k, v) in Entries.take(2) {
+      s = s + v;
+    }
+    return s;
+  }
+}

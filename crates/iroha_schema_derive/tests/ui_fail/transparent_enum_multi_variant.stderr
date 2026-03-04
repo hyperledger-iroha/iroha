@@ -1,0 +1,7 @@
+error: Enums with only one variant support transparent type inference, try to specify it explicitly using #[schema(transparent = "Type")]
+ --> tests/ui_fail/transparent_enum_multi_variant.rs:3:10
+  |
+3 | #[derive(IntoSchema)]
+  |          ^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `IntoSchema` (in Nightly builds, run with -Z macro-backtrace for more info)

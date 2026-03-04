@@ -1,0 +1,62 @@
+{
+  "aliases": [
+    {
+      "alias_label": "sora/docs",
+      "bound_by": "34mSYn6ySFTASoiVzNGuyBkedDcPUhgmtD5UQyEPKXz7u1A1NpZLuc7sms8sFTrvTXHfgsaLr",
+      "bound_epoch": 12,
+      "expiry_epoch": 36,
+      "manifest_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "name": "docs",
+      "namespace": "sora",
+      "proof_b64": "TlJUMAAAJ4ldaNYT6P8niV1o1hPo/wBpAQAAAAAAAH/EowcIx+HeAGkAAAAAAAAAEQAAAAAAAAAJAAAAAAAAAHNvcmEvZG9jcygAAAAAAAAAIAAAAAAAAACqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqggAAAAAAAAADAAAAAAAAAAIAAAAAAAAACQAAAAAAAAAIAAAAAAAAABQqShhKIdkfyMGB+q265zDnjLC1mMwtydr7EziJOUchQgAAAAAAAAADAAAAAAAAAAIAAAAAAAAAADxU2UAAAAACAAAAAAAAACAQlVlAAAAAAgAAAAAAAAAAAAAAAAAAACIAAAAAAAAAAEAAAAAAAAAeAAAAAAAAAAgAAAAAAAAANBKsjJ0K7SrOhNovUYV5ObQIkq3GgFrr4UgozLJd4c3SAAAAAAAAABAAAAAAAAAADrobElF6rP2Vv50cfhRVimZzxmzfEmrHQVcBs5Mb5CWZlHyCo6F4hHJUF1pDbPzQyWbkdgiwSvLP2MsPaX5Jgo="
+    }
+  ],
+  "manifests": [
+    {
+      "alias_label": "sora/docs",
+      "chunk_digest_sha3_256_hex": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "chunker_handle": "sorafs.sf1@1.0.0",
+      "council_envelope_digest_hex": "1b36081cc4502d4d8b61880fadaf85b86cd1936db9c3c9c86b58a3a25c9e8669",
+      "digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "policy": {
+        "min_replicas": 3,
+        "retention_epoch": 42,
+        "storage_class": "hot"
+      },
+      "status": "approved",
+      "status_epoch": 7,
+      "submitted_by": "34mSYn6ySFTASoiVzNGuyBkedDcPUhgmtD5UQyEPKXz7u1A1NpZLuc7sms8sFTrvTXHfgsaLr",
+      "submitted_epoch": 5
+    }
+  ],
+  "replication_orders": [
+    {
+      "assignments": [
+        {
+          "provider_id_hex": "5151515151515151515151515151515151515151515151515151515151515151",
+          "slice_gib": 512
+        },
+        {
+          "provider_id_hex": "5252525252525252525252525252525252525252525252525252525252525252",
+          "slice_gib": 512
+        },
+        {
+          "provider_id_hex": "5353535353535353535353535353535353535353535353535353535353535353",
+          "slice_gib": 512
+        }
+      ],
+      "canonical_order_b64": "TlJUMAAA2Mwcpetyx7PYzByl63LHswDzAQAAAAAAAH8+HrLuyz5sAAEAAAAAAAAAASAAAAAAAAAAREREREREREREREREREREREREREREREREREREREREREQhAAAAAAAAABkAAAAAAAAAYmFmeXJlcGxpY2FleGFtcGxlY2lkcm9vdCAAAAAAAAAAqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqoYAAAAAAAAABAAAAAAAAAAc29yYWZzLnNmMUAxLjAuMAIAAAAAAAAAAwDjAAAAAAAAAAMAAAAAAAAAQQAAAAAAAAAgAAAAAAAAAFFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRCAAAAAAAAAAAAgAAAAAAAAEAAAAAAAAAAEEAAAAAAAAAIAAAAAAAAABSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUggAAAAAAAAAAAIAAAAAAAABAAAAAAAAAABBAAAAAAAAACAAAAAAAAAAU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1MIAAAAAAAAAAACAAAAAAAAAQAAAAAAAAAACAAAAAAAAAAA8VNlAAAAAAgAAAAAAAAAgEJVZQAAAAAkAAAAAAAAAAQAAAAAAAAAgFEBAAQAAAAAAAAArIQBAAQAAAAAAAAA0H4BAAgAAAAAAAAAAAAAAAAAAAA=",
+      "deadline_epoch": 28,
+      "issued_by": "34mSYn6ySFTASoiVzNGuyBkedDcPUhgmtD5UQyEPKXz7u1A1NpZLuc7sms8sFTrvTXHfgsaLr",
+      "issued_epoch": 20,
+      "manifest_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "order_id_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "sla_ingest_deadline_secs": 86400,
+      "sla_min_availability_percent_milli": 99500,
+      "sla_min_por_success_percent_milli": 98000,
+      "status": "completed",
+      "status_epoch": 25,
+      "target_replicas": 3
+    }
+  ]
+}

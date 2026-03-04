@@ -1,0 +1,11 @@
+{
+  "method": "GET",
+  "path": "/car/{manifest_cid}",
+  "headers": {
+    "Accept": "application/vnd.ipld.car",
+    "Accept-Encoding": "gzip"
+  },
+  "notes": [
+    "Request gzip-compressed CAR streaming even though the `sorafs.sf1@1.0.0` profile disallows compression."
+  ]
+}

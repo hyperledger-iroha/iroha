@@ -1,0 +1,63 @@
+[
+  {
+    "kind": "provider",
+    "provider_id_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+    "jurisdiction": "US",
+    "reason": "CSAM takedown order",
+    "policy_tier": "emergency",
+    "emergency_canon": "csam-hotline",
+    "issued_at": "2025-01-15T12:00:00Z",
+    "expires_at": "2025-02-12T12:00:00Z"
+  },
+  {
+    "kind": "manifest_digest",
+    "manifest_digest_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+    "reason": "Counterfeit distribution",
+    "policy_tier": "permanent",
+    "governance_reference": "council-resolution-2025-014",
+    "issued_at": "2025-02-01T00:00:00Z"
+  },
+  {
+    "kind": "cid",
+    "cid_b64": "zm9vYmFyLWNpZA==",
+    "jurisdiction": "JP",
+    "reason": "Piracy notice",
+    "policy_tier": "standard",
+    "issued_at": "2025-02-20T00:00:00Z",
+    "expires_at": "2025-05-20T00:00:00Z"
+  },
+  {
+    "kind": "url",
+    "url": "https://example.invalid/malware/dropper.bin",
+    "reason": "Malware distribution",
+    "issued_at": "2025-03-01T08:00:00Z",
+    "expires_at": "2025-06-01T08:00:00Z"
+  },
+  {
+    "kind": "account_id",
+    "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sora",
+    "account_alias": "routing@sora",
+    "reason": "Suspended by governance",
+    "policy_tier": "standard",
+    "issued_at": "2025-03-10T08:30:00Z",
+    "expires_at": "2025-08-30T08:30:00Z"
+  },
+  {
+    "kind": "account_alias",
+    "account_alias": "blocked@sora",
+    "reason": "Alias retired by compliance",
+    "issued_at": "2025-04-15T00:00:00Z",
+    "expires_at": "2025-05-01T00:00:00Z"
+  },
+  {
+    "kind": "perceptual_family",
+    "family_id_hex": "00112233445566778899AABBCCDDEEFF",
+    "variant_id_hex": "FFEEDDCCBBAA99887766554433221100",
+    "attack_vector": "jpeg_jitter",
+    "perceptual_hash_hex": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+    "perceptual_hamming_radius": 4,
+    "reason": "Derivative of suspended corpus",
+    "issued_at": "2025-03-15T09:00:00Z",
+    "expires_at": "2025-09-10T09:00:00Z"
+  }
+]

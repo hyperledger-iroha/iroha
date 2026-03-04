@@ -1,0 +1,107 @@
+{
+  "name": "@iroha/iroha-js",
+  "version": "0.0.2",
+  "description": "Preview Node.js SDK for interacting with Hyperledger Iroha via Norito payloads and Torii APIs.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./index.d.ts"
+    },
+    "./torii": "./dist/toriiClient.js",
+    "./norito": "./dist/norito.js",
+    "./crypto": {
+      "browser": "./dist/crypto.browser.js",
+      "import": "./dist/crypto.js",
+      "types": "./index.d.ts"
+    },
+    "./offline": "./dist/offlineEnvelope.js"
+  },
+  "typesVersions": {
+    "*": {
+      "torii": [
+        "./index.d.ts"
+      ],
+      "norito": [
+        "./index.d.ts"
+      ],
+      "crypto": [
+        "./index.d.ts"
+      ],
+      "offline": [
+        "./index.d.ts"
+      ]
+    }
+  },
+  "scripts": {
+    "lint": "eslint --max-warnings=0 src scripts recipes test --ext .js,.mjs",
+    "lint:test": "npm run lint && npm run build:native && npm test",
+    "build:native": "node ./scripts/build-native.mjs && node ./scripts/copy-native.mjs",
+    "build:dist": "node ./scripts/build-dist.mjs",
+    "bundle:check": "node ./scripts/bundle-size-check.mjs",
+    "test": "npm run build:native && node --test",
+    "test:js": "IROHA_JS_DISABLE_NATIVE=1 node --test",
+    "example:offline": "node ./recipes/offline_queue.mjs",
+    "example:offline:connect": "node ./recipes/offline_queue.mjs",
+    "example:offline:pipeline": "node ./recipes/offline_pipeline.mjs",
+    "check:changelog": "node ./scripts/check-changelog.mjs",
+    "release:update-docs": "node ./scripts/update-release-docs.mjs",
+    "release:provenance": "node ./scripts/record-release-provenance.mjs",
+    "release:verify": "node ./scripts/verify-release-tarball.mjs",
+    "fixtures:axt": "node ./scripts/refresh-axt-fixtures.mjs",
+    "release:matrix": "node ./scripts/release-matrix.mjs",
+    "release:publish": "npm run check:changelog && npm run lint:test && npm run release:provenance && npm publish --access public --provenance",
+    "prepublishOnly": "npm run check:changelog && npm run lint:test && npm run build:dist && npm run bundle:check",
+    "test:integration": "node ./scripts/run_integration.mjs",
+    "telemetry:capture": "node ./scripts/capture_sumeragi_telemetry.mjs",
+    "report:bundle-size": "node ./scripts/report-bundle-size.mjs"
+  },
+  "keywords": [
+    "iroha",
+    "norito",
+    "blockchain",
+    "sdk"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hyperledger-iroha/iroha.git",
+    "directory": "javascript/iroha_js"
+  },
+  "bugs": {
+    "url": "https://github.com/hyperledger-iroha/iroha/issues"
+  },
+  "homepage": "https://github.com/hyperledger-iroha/iroha/tree/master/javascript/iroha_js",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "README.md",
+    "index.d.ts",
+    "package.json",
+    "native/iroha_js_host.checksums.json",
+    "dist",
+    "recipes",
+    "scripts",
+    "src"
+  ],
+  "browser": {
+    "./dist/crypto.js": "./dist/crypto.browser.js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "sideEffects": false,
+  "license": "Apache-2.0",
+  "private": false,
+  "dependencies": {
+    "@noble/curves": "^1.4.0",
+    "@noble/hashes": "^1.5.0",
+    "buffer": "^6.0.3"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
+  }
+}

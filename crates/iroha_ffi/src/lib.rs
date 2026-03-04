@@ -1,17 +1,14 @@
 #![allow(unsafe_code)]
-#![no_std]
 
 //! Structures and macros related to FFI and generation of FFI bindings. Any type that implements
 //! [`FfiType`] can be used in the FFI bindings generated with [`ffi_export`]/[`ffi_import`]. It
 //! is advisable to implement [`Ir`] and benefit from automatic implementation of [`FfiType`]
 
-extern crate alloc;
-
-use alloc::{boxed::Box, vec::Vec};
+use std::{boxed::Box, format, string::String, vec::Vec};
 
 use derive_more::Display;
 use ir::{Ir, Transmute};
-pub use iroha_ffi_derive::*;
+pub use iroha_ffi_proc_macro::*;
 use repr_c::{
     COutPtr, COutPtrRead, COutPtrWrite, CType, CTypeConvert, CWrapperType, Cloned, NonLocal,
 };
@@ -23,6 +20,32 @@ pub mod primitives;
 pub mod repr_c;
 pub mod slice;
 mod std_impls;
+
+/// Panic logging utilities invoked by generated FFI stubs.
+pub mod panic_notifier {
+    use std::any::Any;
+
+    /// Logs the panic payload captured while crossing the FFI boundary.
+    ///
+    /// The notifier prefers human-readable messages (`&str`/`String`) and falls back to
+    /// a generic marker for non-string payloads.
+    pub fn log_panic(payload: &(dyn Any + Send + 'static)) {
+        if let Some(message) = payload.downcast_ref::<&str>() {
+            eprintln!("ffi panic: {message}");
+        } else if let Some(message) = payload.downcast_ref::<String>() {
+            eprintln!("ffi panic: {message}");
+        } else {
+            eprintln!("ffi panic: non-string payload"); // best-effort log
+        }
+    }
+
+    /// Logs an unexpected handle identifier observed on the FFI boundary.
+    pub fn log_unknown_handle(handle_id: crate::handle::Id) {
+        eprintln!("ffi error: unknown handle id {handle_id}");
+    }
+}
+
+pub use option::OptionWithoutNicheRepr;
 
 /// A specialized `Result` type for FFI operations
 pub type Result<T> = core::result::Result<T, FfiReturn>;
@@ -223,7 +246,7 @@ pub struct LocalRef<'data, R>(R, core::marker::PhantomData<&'data ()>);
 /// ```
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
-pub struct LocalSlice<'data, R>(alloc::boxed::Box<[R]>, core::marker::PhantomData<&'data ()>);
+pub struct LocalSlice<'data, R>(Box<[R]>, core::marker::PhantomData<&'data ()>);
 
 /// Result of execution of an FFI function
 #[derive(Debug, Display, Clone, Copy, PartialEq, Eq)]
@@ -245,6 +268,97 @@ pub enum FfiReturn {
     Ok = 0,
 }
 
+/// Trait for converting Rust-side errors into [`FfiReturn`] codes when exporting
+/// functions over FFI.
+pub trait IntoFfiReturn {
+    /// Convert the error into an [`FfiReturn`].
+    fn into_ffi_return(self) -> FfiReturn;
+}
+
+impl IntoFfiReturn for FfiReturn {
+    #[inline]
+    fn into_ffi_return(self) -> FfiReturn {
+        self
+    }
+}
+
+impl IntoFfiReturn for () {
+    #[inline]
+    fn into_ffi_return(self) -> FfiReturn {
+        FfiReturn::ExecutionFail
+    }
+}
+
+impl IntoFfiReturn for core::convert::Infallible {
+    #[inline]
+    fn into_ffi_return(self) -> FfiReturn {
+        match self {}
+    }
+}
+
+impl IntoFfiReturn for &'static str {
+    #[inline]
+    fn into_ffi_return(self) -> FfiReturn {
+        let _ = self;
+        FfiReturn::ExecutionFail
+    }
+}
+
+impl IntoFfiReturn for String {
+    #[inline]
+    fn into_ffi_return(self) -> FfiReturn {
+        let _ = self;
+        FfiReturn::ExecutionFail
+    }
+}
+
+/// Trait for converting [`FfiReturn`] codes back into Rust error values when importing
+/// functions over FFI.
+pub trait FromFfiReturn: Sized {
+    /// Construct an error value from an [`FfiReturn`] produced by the foreign function.
+    fn from_ffi_return(code: FfiReturn) -> Self;
+}
+
+impl FromFfiReturn for FfiReturn {
+    #[inline]
+    fn from_ffi_return(code: FfiReturn) -> Self {
+        code
+    }
+}
+
+impl FromFfiReturn for () {
+    #[inline]
+    fn from_ffi_return(_: FfiReturn) -> Self {}
+}
+
+impl FromFfiReturn for &'static str {
+    #[inline]
+    fn from_ffi_return(_: FfiReturn) -> Self {
+        ""
+    }
+}
+
+impl FromFfiReturn for String {
+    #[inline]
+    fn from_ffi_return(code: FfiReturn) -> Self {
+        format!("{code:?}")
+    }
+}
+
+impl FromFfiReturn for u8 {
+    #[inline]
+    fn from_ffi_return(_: FfiReturn) -> Self {
+        0
+    }
+}
+
+impl FromFfiReturn for core::convert::Infallible {
+    #[inline]
+    fn from_ffi_return(_: FfiReturn) -> Self {
+        unreachable!("FFI returned an error for an infallible result")
+    }
+}
+
 /// Macro for defining FFI types of a known category ([`ir::Robust`] or [`ir::Transmute`]).
 ///
 /// The implementation for an FFI type of one of the categories incurs a lot of bloat that
@@ -258,10 +372,10 @@ pub enum FfiReturn {
 /// # Example
 ///
 /// ```
-/// use iroha_ffi::{ffi_type, ReprC};
+/// use iroha_ffi::{ReprC, ffi_type};
 ///
 /// // Always use a type alias for inner types of transparent items so that if you make
-/// // a change the unsafe code in [`ffi_type!`] will not compile, thus preventing UB
+/// // a change the unsafe code in [`iroha_ffi::ffi_type!`] will not compile, thus preventing UB
 /// type NonNullInner<T> = *mut T;
 /// type WrapperInner = u32;
 ///
@@ -277,9 +391,9 @@ pub enum FfiReturn {
 ///
 /// // SAFETY: Type is robust #[repr(C)]
 /// unsafe impl ReprC for RobustStruct {}
-/// ffi_type! { impl Robust for RobustStruct {} }
+/// iroha_ffi::ffi_type! { impl Robust for RobustStruct {} }
 ///
-/// ffi_type! {
+/// iroha_ffi::ffi_type! {
 ///     unsafe impl<T> Transparent for NonNull<T> {
 ///         type Target = NonNullInner<T>;
 ///
@@ -290,7 +404,7 @@ pub enum FfiReturn {
 ///
 /// // Validation function is `|_| true` implicitly indicating
 /// // this type is robust with respect to the wrapped type
-/// ffi_type! {
+/// iroha_ffi::ffi_type! {
 ///     unsafe impl Transparent for Wrapper {
 ///         type Target = WrapperInner;
 ///     }
@@ -417,7 +531,10 @@ pub struct Extern {
 /// ```
 pub trait WrapperTypeOf<T> {
     /// Correct return type of `T` in a function generated via [`ffi_import`]
-    // TODO: Is associated type necessary if we already have a generic?
+    ///
+    /// The associated type acts as a type-level rewrite; relying solely on generics would
+    /// introduce additional type parameters on every call site and break existing blanket
+    /// implementations. Keeping it as an associated type keeps downstream use ergonomic.
     type Type;
 }
 
@@ -465,7 +582,7 @@ unsafe impl<'itm, R: Transmute> Transmute for LocalRef<'itm, R> {
 
     #[inline]
     unsafe fn is_valid(target: &Self::Target) -> bool {
-        R::is_valid(&target.0)
+        unsafe { R::is_valid(&target.0) }
     }
 }
 // SAFETY: `LocalSlice` is transparent and `R` is transmutable into `R::Target`
@@ -474,7 +591,7 @@ unsafe impl<'itm, R: Transmute> Transmute for LocalSlice<'itm, R> {
 
     #[inline]
     unsafe fn is_valid(target: &Self::Target) -> bool {
-        target.iter().all(|item| R::is_valid(item))
+        target.iter().all(|item| unsafe { R::is_valid(item) })
     }
 }
 
@@ -516,7 +633,7 @@ impl<'itm, R: Ir + CTypeConvert<'itm, R::Type, C>, C: ReprC> FfiConvert<'itm, C>
 
     #[inline]
     unsafe fn try_from_ffi(source: C, store: &'itm mut Self::FfiStore) -> Result<Self> {
-        R::try_from_repr_c(source, store)
+        unsafe { R::try_from_repr_c(source, store) }
     }
 }
 
@@ -533,12 +650,59 @@ impl<R: Ir + COutPtr<R::Type>> FfiOutPtr for R {
 }
 impl<R: Ir + COutPtrWrite<R::Type>> FfiOutPtrWrite for R {
     unsafe fn write_out(self, out_ptr: *mut Self::OutPtr) {
-        R::write_out(self, out_ptr);
+        unsafe { R::write_out(self, out_ptr) };
     }
 }
 impl<R: Ir + COutPtrRead<R::Type>> FfiOutPtrRead for R {
     unsafe fn try_read_out(out_ptr: Self::OutPtr) -> Result<Self> {
-        R::try_read_out(out_ptr)
+        unsafe { R::try_read_out(out_ptr) }
+    }
+}
+
+mod tuple_helpers {
+    use core::mem::MaybeUninit;
+
+    use crate::{FfiConvert, FfiOutPtrRead, FfiOutPtrWrite, ReprC, Result};
+
+    #[inline]
+    pub fn make_out_value<T>(value: T) -> T::OutPtr
+    where
+        T: FfiOutPtrWrite,
+    {
+        let mut slot = MaybeUninit::<T::OutPtr>::uninit();
+        // SAFETY: `slot` is freshly allocated and will be fully initialized by `write_out`.
+        unsafe {
+            T::write_out(value, slot.as_mut_ptr());
+            slot.assume_init()
+        }
+    }
+
+    #[inline]
+    pub fn read_out_value<T>(ptr: T::OutPtr) -> Result<T>
+    where
+        T: FfiOutPtrRead,
+    {
+        // SAFETY: caller guarantees `ptr` originated from a matching write operation.
+        unsafe { T::try_read_out(ptr) }
+    }
+
+    #[inline]
+    pub fn write_final_ptr<T>(ptr: *mut T, value: T) {
+        // SAFETY: tuple writers obtain valid exclusive pointers from the caller.
+        unsafe {
+            ptr.write(value);
+        }
+    }
+
+    /// Convert a single tuple element from its FFI representation.
+    #[inline]
+    pub fn convert_from_repr<'itm, T, C>(value: C, store: &'itm mut T::FfiStore) -> Result<T>
+    where
+        T: FfiConvert<'itm, C>,
+        C: ReprC,
+    {
+        // SAFETY: callers guarantee the representation matches the element type.
+        unsafe { T::try_from_ffi(value, store) }
     }
 }
 
@@ -585,7 +749,7 @@ macro_rules! impl_tuple {
 
                 let $ffi_ty($($ty,)+) = source;
                 let store: private_store::Store<$($ty),+, $($repr_c),+> = store.into();
-                Ok(($( <$ty as FfiConvert<$repr_c>>::try_from_ffi($ty, store.$ty)?, )+))
+                Ok(($( crate::tuple_helpers::convert_from_repr::<$ty, $repr_c>($ty, store.$ty)?, )+))
             }
         }
 
@@ -599,22 +763,16 @@ macro_rules! impl_tuple {
         #[allow(non_snake_case)]
         impl<$($ty: FfiOutPtrWrite),+> COutPtrWrite<Self> for ($($ty,)+) {
             unsafe fn write_out(self, out_ptr: *mut Self::OutPtr) {
-                impl_tuple! {@decl_priv_out_ptr $($ty),+}
-                let mut field_out_ptrs = ($(core::mem::MaybeUninit::<$ty::OutPtr>::uninit(),)+);
-
                 let ($($ty,)+) = self;
-                let field_out_ptrs: private_out_ptr::OutPtr<$($ty),+> = (&mut field_out_ptrs).into();
-                $( FfiOutPtrWrite::write_out($ty, field_out_ptrs.$ty.as_mut_ptr()); )+
-                out_ptr.write($ffi_ty($( unsafe { field_out_ptrs.$ty.assume_init() } ),+));
+                let value = $ffi_ty($( crate::tuple_helpers::make_out_value($ty), )+);
+                crate::tuple_helpers::write_final_ptr(out_ptr, value);
             }
         }
         #[allow(non_snake_case)]
         impl<$($ty: FfiOutPtrRead),+> COutPtrRead<Self> for ($($ty,)+) {
             unsafe fn try_read_out(source: Self::OutPtr) -> Result<Self> {
-                impl_tuple! {@decl_priv_out_ptr $($ty),+}
-
                 let $ffi_ty($($ty,)+) = source;
-                Ok(($( FfiOutPtrRead::try_read_out($ty)?, )+))
+                Ok(($( crate::tuple_helpers::read_out_value($ty)?, )+))
             }
         }
 
@@ -637,22 +795,6 @@ macro_rules! impl_tuple {
 
             impl<'itm, $($ty: $crate::FfiConvert<'itm, $repr_c>),+, $($repr_c: $crate::ReprC),+> From<&'itm mut ($($ty::$store,)+)> for Store<'itm, $($ty,)+ $($repr_c),+> {
                 fn from(($($ty,)+): &'itm mut ($($ty::$store,)+)) -> Self {
-                    Self {$($ty,)+}
-                }
-            }
-        }
-    };
-
-    // NOTE: This is a trick to index tuples
-    ( @decl_priv_out_ptr $( $ty:ident ),+ $(,)? ) => {
-        mod private_out_ptr {
-            #[allow(dead_code)]
-            pub struct OutPtr<'itm, $($ty: $crate::FfiOutPtrWrite),+> {
-                $(pub $ty: &'itm mut core::mem::MaybeUninit::<$ty::OutPtr>),+
-            }
-
-            impl<'itm, $($ty: $crate::FfiOutPtrWrite),+> From<&'itm mut ($(core::mem::MaybeUninit::<$ty::OutPtr>,)+)> for OutPtr<'itm, $($ty),+> {
-                fn from(($($ty,)+): &'itm mut ($(core::mem::MaybeUninit::<$ty::OutPtr>,)+)) -> Self {
                     Self {$($ty,)+}
                 }
             }

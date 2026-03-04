@@ -1,0 +1,79 @@
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/api/overview.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+importar TryItConsole desde '@site/src/components/TryItConsole.jsx';
+
+# Torii Descripción general de la API
+
+La puerta de enlace Torii expone una superficie REST + WebSocket para interactuar con Iroha
+nodos. El documento canónico OpenAPI se genera mediante:
+
+```bash
+cargo xtask openapi
+```
+
+Al ejecutar el comando anterior se escribe `docs/portal/static/openapi/torii.json` y
+alimenta la integración `docusaurus-plugin-openapi-docs` por lo que esta sección se actualiza
+automáticamente. El generador activa un enrutador Torii en memoria e intenta
+consultar su punto final OpenAPI; si eso falla (por ejemplo, inicialización del enrutador
+errores), en su lugar se emite una especificación de marcador de posición determinista.
+
+## Estado actual- **Fuente de especificaciones:** `cargo xtask openapi` consulta el enrutador Torii directamente; el
+  El código auxiliar alternativo solo se emite cuando el enrutador no logra exponer un OpenAPI.
+  documento.
+- **Determinismo:** la salida JSON se canonicaliza para garantizar diferencias estables en CI.
+- **Autenticación:** El entorno limitado "Pruébelo" ahora reenvía solicitudes a través de un
+  proxy de puesta en escena restringido. Los operadores deben proporcionar un punto final y un portador Torii
+  token antes de realizar llamadas.
+- **Selector de versión:** Swagger UI, RapiDoc y la página completa Torii OpenAPI
+  exponer un menú desplegable que dice `openapi/versions.json` para que pueda comparar
+  instantáneas históricas. La opción `Latest (tracked)` apunta a
+  `/openapi/torii.json`, mientras que todas las demás entradas cargan el correspondiente
+  Artefacto `openapi/versions/<version>/torii.json`.
+- **Flujo de trabajo de instantánea:** Después de ejecutar `npm run docs:version -- <label>`, actualice
+  el archivo OpenAPI coincidente con `npm run sync-openapi -- --version=<label> --latest`
+  para que el menú desplegable pueda cargar tanto la instantánea congelada como la compilación "más reciente".
+
+El extractor respaldado por enrutador ahora emite toda la superficie Torii. Si ves el
+trozo de marcador de posición, trátelo como una falla en el tiempo de compilación e inspeccione el Torii
+registros de inicio del enrutador.
+
+## Pruébelo en la zona de pruebas (DOCS-3)El portal para desarrolladores incorpora una pequeña consola que transmite solicitudes REST a través de un
+Proxy basado en nodos. El proxy hace cumplir CORS, límites de tasas y portador opcional
+tokens para que el widget pueda comunicarse con las puertas de enlace provisionales sin exponer las credenciales.
+Consulte `docs/devportal/try-it.md` para obtener la lista de verificación completa del operador.
+
+Inicie el proxy junto con el servidor de desarrollo Docusaurus:
+
+```bash
+cd docs/portal
+# Proxy configuration
+export TRYIT_PROXY_TARGET="https://torii.staging.sora"
+export TRYIT_PROXY_ALLOWED_ORIGINS="http://localhost:3000"
+export TRYIT_PROXY_BEARER="sora-dev-token"
+# Front-end configuration so the widget knows where the proxy lives
+export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
+
+# Run the proxy and the docs site (parallel terminals recommended)
+npm run tryit-proxy
+npm run start
+```
+
+- El proxy escucha en `TRYIT_PROXY_LISTEN` (predeterminado `127.0.0.1:8787`) y
+  reenvía cualquier solicitud `/proxy/...` a `TRYIT_PROXY_TARGET`.
+- Suministre `TRYIT_PROXY_BEARER` para tokens de portador estáticos o permita que las personas que llaman proporcionen
+  uno por solicitud a través del campo "Token al portador".
+- Los límites de velocidad predeterminados son 60 solicitudes por minuto y se pueden ajustar a través de
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
+
+> ⚠️ El proxy está diseñado para acceso de prueba/demostración. Implementaciones de producción
+> debería respaldar el ingreso reforzado y reutilizar la misma política de limitación de tasas en
+> frente de Torii.
+

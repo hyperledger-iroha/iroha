@@ -5,6 +5,4 @@ fn execute(state: &StateTransaction) -> Result<(), ()> {
     Ok(())
 }
 
-fn main() {
-
-}
+fn main() {}

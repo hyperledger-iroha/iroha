@@ -1,0 +1,25 @@
+{
+  "car_digest_hex": "ae5bb8b4a865ad70cbc10cbfebf5e401c5f50d94daf566bceba915c9133c71b7",
+  "car_path": "fixtures/sorafs_manifest/ci_sample/payload.car",
+  "car_payload_bytes": 201,
+  "car_payload_digest_hex": "9f1749501735b04e02ebf5a790015289afc2a4f05534977203ff0f62ec845df8",
+  "car_size": 576,
+  "chunk_count": 1,
+  "chunk_digest_sha3_hex": "d2ea766eacaf9b2eab29bc6d04f31080e96af19be6194ff5dcf97c34a3fa1f04",
+  "chunker_handle": "sorafs.sf1@1.0.0",
+  "chunker_profile_id": 1,
+  "dag_codec": 113,
+  "manifest_car_digest_hex": "ae5bb8b4a865ad70cbc10cbfebf5e401c5f50d94daf566bceba915c9133c71b7",
+  "manifest_digest_hex": "3f61a11d3d3f556e49f4d9a09795b7863bf4d7fce20024df3a0848fbb112e568",
+  "manifest_path": "fixtures/sorafs_manifest/ci_sample/manifest.to",
+  "payload_bytes": 201,
+  "payload_digest_hex": "74813dc4d7de02bcba58c405e40308ec612a149d7788e35d31cf801b9686d80e",
+  "pin_policy": {
+    "min_replicas": 1,
+    "retention_epoch": 0,
+    "storage_class": "hot"
+  },
+  "root_cids_hex": [
+    "01711f20afa75d37145ffadc47028831f40f884dd75630d4dc633e5661369db9c7a0d3f0"
+  ]
+}

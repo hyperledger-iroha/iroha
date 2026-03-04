@@ -1,27 +1,30 @@
-//! Utilities to work with `BTreeMap`/`BTreeSet` `get`/`range` functions.
+//! Utilities for working with ordered collections like [`std::collections::BTreeMap`]
+//! for the map case or [`std::collections::BTreeSet`] when only keys are stored.
+//!
+//! The [`MinMaxExt`] type injects sentinel `Min`/`Max` variants so
+//! prefix range queries can be expressed when using the `range` APIs.
 
 use core::cmp::Ordering;
 
-/// Type which adds two additional values for any type:
-/// - `Min` which is smaller that any value of this type
-/// - `Max` which is greater that any value of this type
+/// Adds two sentinel values to any comparable type:
+/// - [`MinMaxExt::Min`] is smaller than every real value
+/// - [`MinMaxExt::Max`] is greater than every real value
 ///
-/// Used to enable query over prefix of the given key in the b-tree e.g. by account id in the asset id.
+/// This enables prefix queries over composite keys in a `BTreeMap` or
+/// `BTreeSet`.
 ///
-/// Suppose compound key of three parts: `K = (A, B, C)`.
-/// So that in sorting order keys will be sorted firstly by `A` then `B` and `C`.
-/// This keys are stored in `BTreeMap` and it's required to extract all keys which have `A == a`.
-/// To do this it's possible to use `range` provided by `BTreeMap`,
-/// but it would't be enough to simply use `(a..=a)` bound for `K` because ranges bounds are found by binary search
-/// and this way any key which has `A == a` can be treated as bound.
-/// So `MinMaxExt` is used to express precise bound for such query: `(a, MIN, MIN)..(a, MAX, MAX)`.
+/// Suppose a compound key of three parts: `K = (A, B, C)`. Keys are
+/// ordered first by `A`, then `B`, then `C`. To fetch all records with a
+/// specific `A`, range bounds can be expressed as
+/// `(A, Min, Min)..(A, Max, Max)`, ensuring the binary search covers the
+/// entire prefix.
 #[derive(Debug, Clone, Copy)]
 pub enum MinMaxExt<T> {
-    /// Value that is greater than any value
+    /// Sentinel smaller than any real value
     Min,
-    /// Value that is smaller than any value
+    /// Sentinel greater than any real value
     Max,
-    /// Regular value
+    /// Actual data value
     Value(T),
 }
 
@@ -65,8 +68,13 @@ impl<T> From<T> for MinMaxExt<T> {
     }
 }
 
-/// Helper macro to enable cast of key to dyn object and derive required traits for it.
-/// Used to bypass limitation of `Borrow` which wouldn't allow to create object and return reference to it.
+/// Helper macro to enable casting map keys to trait objects and derive
+/// the required comparison traits.
+///
+/// This bypasses the limitation of [`core::borrow::Borrow`], which doesn't allow
+/// constructing a value on the fly and returning a reference to it. The
+/// macro is primarily used when a lookup needs only a subset of the key
+/// fields.
 #[macro_export]
 macro_rules! impl_as_dyn_key {
     (target: $ty:ident, key: $key:ty, trait: $trait:ident) => {
@@ -110,35 +118,29 @@ macro_rules! impl_as_dyn_key {
     };
 }
 
-/// TODO: good candidate for `prop_test`
+/// Property tests validate the ordering semantics for the sentinel values.
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
-
-    #[test]
-    fn any_larger_min() {
-        let values = [u64::MIN, u64::MAX];
-
-        for value in values {
-            assert!(MinMaxExt::Min < value.into());
+    proptest! {
+        // Values greater than `u64::MIN` should compare larger than `MinMaxExt::Min`.
+        #[test]
+        fn any_larger_min(value in 1u64..=u64::MAX) {
+            prop_assert!(MinMaxExt::Min < value.into());
         }
-    }
 
-    #[test]
-    fn any_smaller_max() {
-        let values = [u64::MIN, u64::MAX];
-
-        for value in values {
-            assert!(MinMaxExt::Max > value.into());
+        // Values less than `u64::MAX` should compare smaller than `MinMaxExt::Max`.
+        #[test]
+        fn any_smaller_max(value in u64::MIN..u64::MAX) {
+            prop_assert!(MinMaxExt::Max > value.into());
         }
-    }
 
-    #[test]
-    fn eq_still_eq() {
-        let values = [u64::MIN, u64::MAX];
-
-        for value in values {
-            assert!(MinMaxExt::from(value) == MinMaxExt::from(value));
+        // Identical values wrapped in `MinMaxExt` should be equal.
+        #[test]
+        fn eq_still_eq(value in any::<u64>()) {
+            prop_assert_eq!(MinMaxExt::from(value), MinMaxExt::from(value));
         }
     }
 }

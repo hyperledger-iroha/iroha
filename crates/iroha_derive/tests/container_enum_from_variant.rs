@@ -1,5 +1,4 @@
-#![allow(missing_docs)]
-
+//! Container enum derive tests for `FromVariant`.
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,

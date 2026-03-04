@@ -1,0 +1,148 @@
+{
+  "operator": {
+    "account": "ed0120C0084BBD60967362E7B56FFBE7D25DD0556D9807900033D77C93653875652B86@wonderland",
+    "private_key": "ed25519:8f8c7d6c5b4a392817161514131211100f0e0d0c0b0a09080706050403020100"
+  },
+  "allowances": [
+    {
+      "label": "ios-demo",
+      "controller": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+      "allowance_asset": "xor#sora#ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+      "amount": "250.00",
+      "issued_at_ms": 1730314876000,
+      "expires_at_ms": 1745900000000,
+      "policy": {
+        "max_balance": "500.00",
+        "max_tx_value": "125.00",
+        "expires_at_ms": 1745900000000
+      },
+      "spend_public_key": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+      "metadata": {
+        "ios.app_attest.team_id": "ABCD1234",
+        "ios.app_attest.bundle_id": "tech.iroha.retail",
+        "ios.app_attest.environment": "production"
+      },
+      "attestation_report_hex": "aa55aa55",
+      "blinding_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "label": "android-demo",
+      "controller": "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D@wonderland",
+      "allowance_asset": "usd#sora#ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D@wonderland",
+      "amount": "150.00",
+      "issued_at_ms": 1730314876000,
+      "expires_at_ms": 1745900000000,
+      "policy": {
+        "max_balance": "300.00",
+        "max_tx_value": "75.00",
+        "expires_at_ms": 1745900000000
+      },
+      "spend_public_key": "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D",
+      "metadata": {
+        "android.integrity.policy": "marker_key",
+        "android.attestation.package_names": [
+          "tech.iroha.retail"
+        ],
+        "android.attestation.signing_digests_sha256": [
+          "11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff"
+        ],
+        "android.attestation.require_strongbox": true,
+        "android.attestation.require_rollback_resistance": true
+      },
+      "attestation_report_hex": "bb66bb66",
+      "blinding_hex": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+      "label": "android-hms-demo",
+      "controller": "ed01207233BFC89DCBD68C19FDE6CE6158225298EC1131B6A130D1AEB454C1AB5183C0@wonderland",
+      "allowance_asset": "jpy#sora#ed01207233BFC89DCBD68C19FDE6CE6158225298EC1131B6A130D1AEB454C1AB5183C0@wonderland",
+      "amount": "90",
+      "issued_at_ms": 1730314876000,
+      "expires_at_ms": 1745900000000,
+      "policy": {
+        "max_balance": "180",
+        "max_tx_value": "60",
+        "expires_at_ms": 1745900000000
+      },
+      "spend_public_key": "ed01207233BFC89DCBD68C19FDE6CE6158225298EC1131B6A130D1AEB454C1AB5183C0",
+      "metadata": {
+        "android.integrity.policy": "hms_safety_detect",
+        "android.hms_safety_detect.app_id": "103000042",
+        "android.hms_safety_detect.package_names": [
+          "tech.iroha.retail.harmony"
+        ],
+        "android.hms_safety_detect.signing_digests_sha256": [
+          "1f2e3d4c5b6a79880796a5b4c3d2e1f0ffeeddccbbaa99887766554433221100"
+        ],
+        "android.hms_safety_detect.required_evaluations": [
+          "strong_integrity",
+          "system_integrity"
+        ],
+        "android.hms_safety_detect.max_token_age_ms": 3600000
+      },
+      "attestation_report_hex": "cc77cc77",
+      "attestation_nonce_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "refresh_at_ms": 1730318476000,
+      "blinding_hex": "4444444444444444444444444444444444444444444444444444444444444444"
+    },
+    {
+      "label": "android-play-demo",
+      "controller": "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016@wonderland",
+      "allowance_asset": "xor#sora#ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016@wonderland",
+      "amount": "175.00",
+      "issued_at_ms": 1730314876000,
+      "expires_at_ms": 1745900000000,
+      "policy": {
+        "max_balance": "350.00",
+        "max_tx_value": "90.00",
+        "expires_at_ms": 1745900000000
+      },
+      "spend_public_key": "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016",
+      "metadata": {
+        "android.integrity.policy": "play_integrity",
+        "android.play_integrity.cloud_project_number": 4242424242,
+        "android.play_integrity.environment": "production",
+        "android.play_integrity.package_names": [
+          "tech.iroha.retail.play"
+        ],
+        "android.play_integrity.signing_digests_sha256": [
+          "778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566"
+        ],
+        "android.play_integrity.allowed_app_verdicts": [
+          "play_recognized",
+          "licensed"
+        ],
+        "android.play_integrity.allowed_device_verdicts": [
+          "strong",
+          "device"
+        ],
+        "android.play_integrity.max_token_age_ms": 30000
+      },
+      "attestation_report_hex": "dd88dd88",
+      "blinding_hex": "5555555555555555555555555555555555555555555555555555555555555555"
+    },
+    {
+      "label": "android-provisioned-demo",
+      "controller": "ed0120E9F632D3034BAB6BB26D92AC8FD93EF878D9C5E69E01B61B4C47101884EE2F99@wonderland",
+      "allowance_asset": "xor#sora#ed0120E9F632D3034BAB6BB26D92AC8FD93EF878D9C5E69E01B61B4C47101884EE2F99@wonderland",
+      "amount": "200.00",
+      "issued_at_ms": 1730314876000,
+      "expires_at_ms": 1745900000000,
+      "policy": {
+        "max_balance": "400.00",
+        "max_tx_value": "110.00",
+        "expires_at_ms": 1745900000000
+      },
+      "spend_public_key": "ed0120E9F632D3034BAB6BB26D92AC8FD93EF878D9C5E69E01B61B4C47101884EE2F99",
+      "metadata": {
+        "android.integrity.policy": "provisioned",
+        "android.provisioned.inspector_public_key": "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
+        "android.provisioned.manifest_schema": "offline_provisioning_v1",
+        "android.provisioned.manifest_version": 1,
+        "android.provisioned.max_manifest_age_ms": 604800000
+      },
+      "provisioned_proof_file": "../../fixtures/offline_provision/kiosk-demo/proof.json",
+      "blinding_hex": "6666666666666666666666666666666666666666666666666666666666666666"
+    }
+  ]
+}

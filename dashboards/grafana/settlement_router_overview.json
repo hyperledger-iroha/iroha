@@ -1,0 +1,547 @@
+{
+  "title": "Nexus Settlement Router",
+  "uid": "nexus-settlement-router",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["nexus", "settlement", "sorafs"],
+  "time": {"from": "now-6h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "lane",
+        "label": "Lane",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(iroha_settlement_buffer_xor, lane_id)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ".*"
+        }
+      },
+      {
+        "name": "dataspace",
+        "label": "Dataspace",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(iroha_settlement_buffer_xor, dataspace_id)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ".*"
+        }
+      },
+      {
+        "name": "profile",
+        "label": "Liquidity Profile",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(iroha_settlement_swapline_utilisation, profile)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ".*"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Settlement Buffer (uXOR)",
+      "id": 1,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum by (lane_id, dataspace_id) (iroha_settlement_buffer_xor{lane_id=~\"$lane\", dataspace_id=~\"$dataspace\"})",
+          "legendFormat": "{{lane_id}}/{{dataspace_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "metric_id": "settlement_buffer_xor"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "Live buffer consumption per lane/dataspace (micro XOR debits). Alert when approaching configured limits."
+    },
+    {
+      "type": "timeseries",
+      "title": "Buffer Capacity (uXOR)",
+      "id": 2,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "sum by (lane_id, dataspace_id) (iroha_settlement_buffer_capacity_xor{lane_id=~\"$lane\", dataspace_id=~\"$dataspace\"})",
+          "legendFormat": "{{lane_id}}/{{dataspace_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "metric_id": "settlement_buffer_capacity"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "Reference capacity published via manifests or controller policy, mirrored for each lane/dataspace."
+    },
+    {
+      "type": "timeseries",
+      "title": "Buffer Utilization (%)",
+      "id": 3,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+      "targets": [
+        {
+          "expr": "100 * sum(iroha_settlement_buffer_xor{lane_id=~\"$lane\", dataspace_id=~\"$dataspace\"}) / clamp_min(sum(iroha_settlement_buffer_capacity_xor{lane_id=~\"$lane\", dataspace_id=~\"$dataspace\"}), 1)",
+          "legendFormat": "utilization",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "custom": {
+            "metric_id": "settlement_buffer_utilization"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 75},
+              {"color": "orange", "value": 90},
+              {"color": "red", "value": 98}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "Calculated utilisation ratio. Thresholds match the throttle/XOR-only gates in docs/settlement-router.md."
+    },
+    {
+      "type": "stat",
+      "title": "Buffer Status Code",
+      "id": 4,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+      "targets": [
+        {
+          "expr": "max(iroha_settlement_buffer_status{lane_id=~\"$lane\", dataspace_id=~\"$dataspace\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "metric_id": "settlement_buffer_status"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 1},
+              {"color": "orange", "value": 2},
+              {"color": "red", "value": 3},
+              {"color": "dark-red", "value": 4}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value"
+      },
+      "description": "0 = normal, 1 = alert, 2 = throttle, 3 = XOR-only, 4 = halt."
+    },
+    {
+      "type": "timeseries",
+      "title": "Settlement PnL (uXOR)",
+      "id": 5,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+      "targets": [
+        {
+          "expr": "sum by (lane_id, dataspace_id) (iroha_settlement_pnl_xor{lane_id=~\"$lane\", dataspace_id=~\"$dataspace\"})",
+          "legendFormat": "{{lane_id}}/{{dataspace_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "metric_id": "settlement_pnl_xor"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "Per-lane/dataspace realised haircut variance in micro XOR."
+    },
+    {
+      "type": "timeseries",
+      "title": "Haircut (basis points)",
+      "id": 6,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
+      "targets": [
+        {
+          "expr": "sum by (lane_id, dataspace_id) (iroha_settlement_haircut_bp{lane_id=~\"$lane\", dataspace_id=~\"$dataspace\"})",
+          "legendFormat": "{{lane_id}}/{{dataspace_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "metric_id": "settlement_haircut_bp"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "Effective haircut per block, showing regulator-visible epsilon adjustments."
+    },
+    {
+      "type": "timeseries",
+      "title": "Swap-line Utilisation (uXOR)",
+      "id": 7,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 16, "x": 8, "y": 16},
+      "targets": [
+        {
+          "expr": "iroha_settlement_swapline_utilisation{lane_id=~\"$lane\", dataspace_id=~\"$dataspace\", profile=~\"$profile\"}",
+          "legendFormat": "{{profile}} {{lane_id}}/{{dataspace_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "metric_id": "settlement_swapline_utilisation"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "Tracks swap-line pressure by liquidity profile so AMX incidents can be correlated with settlement throttling."
+    },
+    {
+      "type": "timeseries",
+      "title": "Oracle Price (local/XOR)",
+      "id": 8,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 24},
+      "targets": [
+        {
+          "expr": "iroha_oracle_price_local_per_xor",
+          "legendFormat": "price",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "metric_id": "oracle_price_local"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "TWAP price used for settlement (local tokens per XOR)."
+    },
+    {
+      "type": "timeseries",
+      "title": "Oracle TWAP Window (s)",
+      "id": 9,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 24},
+      "targets": [
+        {
+          "expr": "iroha_oracle_twap_window_seconds",
+          "legendFormat": "window",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "metric_id": "oracle_twap_window"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "Confirms the window advertised via governance manifests."
+    },
+    {
+      "type": "timeseries",
+      "title": "Oracle Haircut (basis points)",
+      "id": 10,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 24},
+      "targets": [
+        {
+          "expr": "iroha_oracle_haircut_basis_points",
+          "legendFormat": "oracle haircut",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "metric_id": "oracle_haircut_bp"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "Tracks haircut delta applied by the pricing oracle prior to settlement."
+    },
+    {
+      "type": "timeseries",
+      "title": "Oracle Staleness (s)",
+      "id": 11,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 32},
+      "targets": [
+        {
+          "expr": "iroha_oracle_staleness_seconds",
+          "legendFormat": "staleness",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "metric_id": "oracle_staleness_seconds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 60},
+              {"color": "orange", "value": 120},
+              {"color": "red", "value": 300}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "Surface stale oracle windows before circuit breakers trigger."
+    },
+    {
+      "type": "timeseries",
+      "title": "Schedule Lag (ms)",
+      "id": 12,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 32},
+      "targets": [
+        {
+          "expr": "iroha_settlement_schedule_lag_ms",
+          "legendFormat": "lag",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "metric_id": "settlement_schedule_lag_ms"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 250},
+              {"color": "orange", "value": 400},
+              {"color": "red", "value": 500}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "TWAMM schedule lag derived from router telemetry (target < 500 ms)."
+    },
+    {
+      "type": "timeseries",
+      "title": "DA Quorum Ratio",
+      "id": 13,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 32},
+      "targets": [
+        {
+          "expr": "iroha_da_quorum_ratio",
+          "legendFormat": "ratio",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "metric_id": "da_quorum_ratio"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.95},
+              {"color": "red", "value": 0.90}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "DA quorum success rate (ties settlement incidents to DA/AMX health)."
+    }
+  ]
+}

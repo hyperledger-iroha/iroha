@@ -1,0 +1,31 @@
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/reference/torii-rapidoc.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+استيراد RapiDocPanel من '@site/src/components/RapiDocPanel.jsx'؛
+
+# Torii API (RapiDoc)
+
+يقدم `RapiDoc` عرضًا مدمجًا للتوثيق أولاً لنفس Torii
+وثيقة OpenAPI. استخدمه عندما تحتاج إلى نظرة عامة أكثر كثافة أو مراجعة للقراءة فقط
+نماذج الطلب/الاستجابة.
+
+## نصائح الاستخدام
+
+- أدخل رمز حامل لتمكين المكالمات التفاعلية. يتم إعادة توجيه القيمة كـ
+  رأس `X-TryIt-Auth` وتم تطبيعه بواسطة الوكيل.
+- تكوين `TRYIT_PROXY_PUBLIC_URL` عند خدمة البوابة بشكل تفاعلي
+  يتم توجيه الطلبات من خلال الوكيل المرحلي. القطعة تحذر عند الوكيل
+  عنوان URL مفقود.
+- استخدم القائمة المنسدلة "لقطة OpenAPI" لتحميل المواصفات التاريخية التي نشرتها
+  `npm run sync-openapi`; الخيار `Latest (tracked)` يتحول دائمًا إلى
+  `/openapi/torii.json`.
+- قم بالدمج مع وحدة التحكم "[جربها](/api/overview#try-it-sandbox-docs-3)" عندما
+  العمل ضد البوابات المرحلية التي تتطلب الوكيل.
+

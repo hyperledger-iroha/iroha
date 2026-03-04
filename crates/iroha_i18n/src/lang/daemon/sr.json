@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Dobro došli u Hyperledger Iroha!",
+  "error.trace_config_setup": "Nije moguće podesiti praćenje konfiguracije",
+  "error.config": "Greška u konfiguraciji",
+  "error.logger": "Nije moguće inicijalizovati систем евидентирања",
+  "error.start": "Pokretanje Irohe nije uspelo",
+  "error.run": "Došlo je do greške prilikom pokretanja Irohe",
+  "error.start_p2p": "Nije moguće pokrenuti peer-to-peer mrežu",
+  "error.init_kura": "Nije moguće inicijalizovati Kura (blok skladištenje)",
+  "error.start_dev_telemetry": "Nije moguće pokrenuti telemetriju za razvoj",
+  "error.start_telemetry": "Nije moguće pokrenuti uslugu telemetrije",
+  "error.listen_os_signal": "Nije moguće podesiti slušanje za OS signale",
+  "error.start_torii": "Nije moguće pokrenuti Torii (Iroha HTTP API prolaz)"
+}

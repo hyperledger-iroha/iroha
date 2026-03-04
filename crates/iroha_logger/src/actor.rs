@@ -7,7 +7,11 @@ use tracing_subscriber::reload::{self, Error as ReloadError};
 
 use crate::telemetry;
 
-/// TODO
+/// Handle for communicating with the logging actor.
+///
+/// `LoggerHandle` is used to dynamically reload log levels and subscribe to
+/// telemetry events. Further functionality is tracked at
+/// <https://github.com/hyperledger-iroha/iroha/issues/5694>.
 #[derive(Clone)]
 pub struct LoggerHandle {
     sender: mpsc::Sender<Message>,

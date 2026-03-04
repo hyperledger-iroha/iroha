@@ -1,0 +1,43 @@
+rule_files:
+  - ../ministry_moderation_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'moderation_requests_total{environment="staging", manifest_id="c9bdf0b2"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'moderation_model_drift_score{environment="prod", manifest_id="c9bdf0b2", model_id="vision"}'
+        values: '0.05 0.06 0.08 0.12 0.18 0.21 0.24 0.27 0.30'
+      - series: 'moderation_quarantine_queue_depth{environment="prod", manifest_id="c9bdf0b2"}'
+        values: '10 12 15 18 25 32 40 55 60 70'
+      - series: 'moderation_inference_latency_seconds_bucket{environment="prod", manifest_id="c9bdf0b2", le="1"}'
+        values: '5 6 7 8 9 10 11 12 13 14'
+      - series: 'moderation_inference_latency_seconds_bucket{environment="prod", manifest_id="c9bdf0b2", le="2"}'
+        values: '10 12 14 16 18 20 22 24 26 28'
+      - series: 'moderation_inference_latency_seconds_bucket{environment="prod", manifest_id="c9bdf0b2", le="+Inf"}'
+        values: '15 18 22 26 30 34 38 42 46 50'
+    alert_rule_test:
+      - alertname: ModerationIngestStalled
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              environment: staging
+      - alertname: ModerationDriftSpike
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              environment: prod
+              manifest_id: c9bdf0b2
+              model_id: vision
+      - alertname: ModerationQueueBacklog
+        eval_time: 8m
+        exp_alerts:
+          - exp_labels:
+              environment: prod
+              manifest_id: c9bdf0b2
+      - alertname: ModerationLatencyDegraded
+        eval_time: 8m
+        exp_alerts:
+          - exp_labels:
+              environment: prod
+              manifest_id: c9bdf0b2

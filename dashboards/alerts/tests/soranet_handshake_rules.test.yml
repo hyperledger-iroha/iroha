@@ -1,0 +1,90 @@
+rule_files:
+  - ../soranet_handshake_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'sn16_handshake_mode_total{mode="entry",handshake="nk2"}'
+        values: '0 2 4 6 8 10 12 14'
+      - series: 'sn16_handshake_mode_total{mode="entry",handshake="nk3"}'
+        values: '0 0 0 0 0 1 2 3'
+    alert_rule_test:
+      - alertname: SoranetSn16MixedMode
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: SoranetSn16MixedMode
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              mode: entry
+              severity: warning
+            exp_annotations:
+              summary: "SoraNet SNNet-16 mixed-mode detected"
+  - interval: 1m
+    input_series:
+      - series: 'sn16_handshake_downgrade_total{mode="entry",reason="downgrade"}'
+        values: '0 0 0 1 2 3 9 9'
+    alert_rule_test:
+      - alertname: SoranetSn16DowngradeSpike
+        eval_time: 4m
+        exp_alerts: []
+      - alertname: SoranetSn16DowngradeSpike
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              mode: entry
+              severity: critical
+            exp_annotations:
+              summary: "SoraNet SNNet-16 downgrade spike"
+  - interval: 1m
+    input_series:
+      - series: 'sn16_puzzle_verify_seconds_sum{mode="entry"}'
+        values: '0 0.2 0.5 0.9 1.4 2.0 2.7 3.5'
+      - series: 'sn16_puzzle_verify_seconds_count{mode="entry"}'
+        values: '0 1 2 3 4 5 6 7'
+    alert_rule_test:
+      - alertname: SoranetSn16PuzzleLatencyCritical
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: SoranetSn16PuzzleLatencyCritical
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              mode: entry
+              severity: critical
+            exp_annotations:
+              summary: "SoraNet SNNet-16 puzzle verification slow"
+  - interval: 1m
+    input_series:
+      - series: 'sn16_puzzle_verify_seconds_sum{mode="entry"}'
+        values: '0 0.8 1.6 2.4 3.2 4.0 4.8 5.6 6.4 7.2 8.0 8.8 9.6 10.4'
+      - series: 'sn16_puzzle_verify_seconds_count{mode="entry"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11 12 13'
+    alert_rule_test:
+      - alertname: SoranetSn16PuzzleSlow
+        eval_time: 6m
+        exp_alerts: []
+      - alertname: SoranetSn16PuzzleSlow
+        eval_time: 13m
+        exp_alerts:
+          - exp_labels:
+              mode: entry
+              severity: warning
+            exp_annotations:
+              summary: "SoraNet SNNet-16 puzzle verification degraded"
+  - interval: 1m
+    input_series:
+      - series: 'soranet_proxy_policy_queue_depth{mode="entry"}'
+        values: '0 0 1 1 1 1 1 1'
+    alert_rule_test:
+      - alertname: SoranetSn16ProxyToggleStuck
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: SoranetSn16ProxyToggleStuck
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              mode: entry
+              severity: warning
+            exp_annotations:
+              summary: "SoraNet SNNet-16 proxy toggle backlog"

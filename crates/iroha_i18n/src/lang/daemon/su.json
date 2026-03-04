@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Wilujeng sumping di Hyperledger Iroha!",
+  "error.trace_config_setup": "Teu bisa nyetel tracing konfigurasi",
+  "error.config": "Kasalahan konfigurasi",
+  "error.logger": "Logger teu bisa dimimitian",
+  "error.start": "Gagal ngamimitian Iroha",
+  "error.run": "Kasalahan lumangsung nalika ngajalankeun Iroha",
+  "error.start_p2p": "Teu bisa ngamimitian jaringan peer-to-peer",
+  "error.init_kura": "Teu bisa inisialisasi Kura (block storage)",
+  "error.start_dev_telemetry": "Teu bisa ngamimitian layanan telemetry dev",
+  "error.start_telemetry": "Teu bisa ngamimitian layanan telemetry",
+  "error.listen_os_signal": "Teu bisa nyetel ngadangukeun sinyal OS",
+  "error.start_torii": "Teu bisa ngamimitian Torii (HTTP API Gateway Iroha)"
+}

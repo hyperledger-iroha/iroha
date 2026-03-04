@@ -1,0 +1,94 @@
+{
+  "targets": [
+    {
+      "id": "fee_path",
+      "label": "Fee path latency",
+      "scenario": "fee_payer",
+      "objective_ms": 50.0,
+      "description": "payer-funded fee debit path (per instruction batch)",
+      "burn_rate_fast": 14.4,
+      "burn_rate_slow": 6.0
+    },
+    {
+      "id": "fee_sponsor",
+      "label": "Sponsored fee latency",
+      "scenario": "fee_sponsor",
+      "objective_ms": 50.0,
+      "description": "sponsor-fallback fee debit",
+      "burn_rate_fast": 14.4,
+      "burn_rate_slow": 6.0
+    },
+    {
+      "id": "staking",
+      "label": "Staking path latency",
+      "scenario": "staking_bond",
+      "objective_ms": 50.0,
+      "description": "bond + withdrawal queue accounting per call",
+      "burn_rate_fast": 14.4,
+      "burn_rate_slow": 6.0
+    },
+    {
+      "id": "staking_slash",
+      "label": "Slash path latency",
+      "scenario": "staking_slash",
+      "objective_ms": 50.0,
+      "description": "slash before apply",
+      "burn_rate_fast": 14.4,
+      "burn_rate_slow": 6.0
+    },
+    {
+      "id": "commit_cert_verify",
+      "label": "Commit cert verify",
+      "scenario": "commit_cert_verify",
+      "objective_ms": 80.0,
+      "description": "validator commit-certificate signature verification",
+      "burn_rate_fast": 14.4,
+      "burn_rate_slow": 6.0
+    },
+    {
+      "id": "jdg_attestation_verify",
+      "label": "JDG attestation verify",
+      "scenario": "jdg_attestation_verify",
+      "objective_ms": 80.0,
+      "description": "jurisdiction data guardian attestation verification",
+      "burn_rate_fast": 14.4,
+      "burn_rate_slow": 6.0
+    },
+    {
+      "id": "bridge_proof_verify",
+      "label": "Bridge proof verify",
+      "scenario": "bridge_proof_verify",
+      "objective_ms": 80.0,
+      "description": "bridge proof signature verification",
+      "burn_rate_fast": 14.4,
+      "burn_rate_slow": 6.0
+    },
+    {
+      "id": "commit_cert_assembly",
+      "label": "Commit cert assembly",
+      "scenario": "commit_cert_assembly",
+      "objective_ms": 80.0,
+      "description": "assemble commit certificate digest",
+      "burn_rate_fast": 14.4,
+      "burn_rate_slow": 6.0
+    },
+    {
+      "id": "access_scheduler",
+      "label": "Access scheduler",
+      "scenario": "access_scheduler",
+      "objective_ms": 50.0,
+      "description": "derive batches from access sets",
+      "burn_rate_fast": 14.4,
+      "burn_rate_slow": 6.0
+    },
+    {
+      "id": "proof_endpoint",
+      "label": "Torii proof endpoint",
+      "scenario": "torii_proof_endpoint",
+      "objective_ms": 120.0,
+      "description": "Axum proof endpoint parse + verify",
+      "burn_rate_fast": 14.4,
+      "burn_rate_slow": 6.0
+    }
+  ]
+}

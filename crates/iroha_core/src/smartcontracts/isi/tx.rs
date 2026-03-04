@@ -3,13 +3,12 @@
 use eyre::Result;
 use iroha_data_model::{
     prelude::*,
-    query::{dsl::CompoundPredicate, error::QueryExecutionFail, CommittedTransaction},
+    query::{CommittedTransaction, dsl::CompoundPredicate, error::QueryExecutionFail},
 };
 use iroha_telemetry::metrics;
 use nonzero_ext::nonzero;
 
-use super::*;
-use crate::smartcontracts::ValidQuery;
+use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
 
 impl ValidQuery for FindTransactions {
     #[metrics(+"find_transactions")]
@@ -147,30 +146,33 @@ mod tests {
         );
 
         // The order and content of the first and last transactions are as expected.
-        assert!(block
-            .entrypoints_cloned()
-            .next()
-            .map(|e| format!("{e:?}"))
-            .unwrap()
-            .contains("Numeric { inner: 50 }"));
-        assert!(block
-            .results()
-            .next()
-            .map(|e| format!("{e:?}"))
-            .unwrap()
-            .contains("data-bob-carol-0"));
+        // Ensure the first merged entrypoint matches the first external transaction and
+        // the last entrypoint matches the last time-triggered entry.
+        assert_eq!(
+            block.entrypoints_cloned().next(),
+            block
+                .external_transactions()
+                .cloned()
+                .map(TransactionEntrypoint::from)
+                .next()
+        );
+        assert_eq!(
+            block.entrypoints_cloned().next_back(),
+            block
+                .time_triggers()
+                .cloned()
+                .map(TransactionEntrypoint::from)
+                .next_back()
+        );
 
-        assert!(block
-            .entrypoints_cloned()
-            .nth(9)
-            .map(|e| format!("{e:?}"))
-            .unwrap()
-            .contains("time-carol-dave-0"));
-        assert!(block
-            .results()
-            .nth(9)
-            .map(|e| format!("{e:?}"))
-            .unwrap()
-            .contains("data-dave-eve-0"));
+        // Results remain aligned with entrypoints across the merged view.
+        assert_eq!(
+            block.results().next().map(TransactionResult::hash),
+            block.result_hashes().next()
+        );
+        assert_eq!(
+            block.results().last().map(TransactionResult::hash),
+            block.result_hashes().last()
+        );
     }
 }

@@ -1,0 +1,42 @@
+{
+  "total": 2,
+  "items": [
+    {
+      "verdict_id_hex": "0000000000000000000000000000000000000000000000000000000000000101",
+      "issuer_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+      "issuer_display": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+      "revoked_at_ms": 1730314876000,
+      "reason": "device_compromised",
+      "note": "Retail kiosk tamper alert",
+      "metadata": {
+        "ticket": "INC-4012",
+        "jurisdiction": "EU"
+      },
+      "record": {
+        "verdict_id": "0000000000000000000000000000000000000000000000000000000000000101",
+        "issuer": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+        "revoked_at_ms": 1730314876000,
+        "reason": "device_compromised",
+        "note": "Retail kiosk tamper alert",
+        "metadata": {
+          "ticket": "INC-4012",
+          "jurisdiction": "EU"
+        }
+      }
+    },
+    {
+      "verdict_id_hex": "0000000000000000000000000000000000000000000000000000000000000202",
+      "issuer_id": "ed01207EAAF3023FA8E1E41975686C5D4D3F131DCE090D869AC0E9B4EB15CDA902C72F@wonderland",
+      "issuer_display": "ed01207EAAF3023FA8E1E41975686C5D4D3F131DCE090D869AC0E9B4EB15CDA902C72F@wonderland",
+      "revoked_at_ms": 1730414876000,
+      "reason": "issuer_request",
+      "record": {
+        "verdict_id": "0000000000000000000000000000000000000000000000000000000000000202",
+        "issuer": "ed01207EAAF3023FA8E1E41975686C5D4D3F131DCE090D869AC0E9B4EB15CDA902C72F@wonderland",
+        "revoked_at_ms": 1730414876000,
+        "reason": "issuer_request",
+        "metadata": {}
+      }
+    }
+  ]
+}

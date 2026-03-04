@@ -7,6 +7,7 @@ For quick access to a topic that interests you, select one of the following:
 - [Overview](#overview)
 	- [Framework Structure](#framework-structure)
 	- [Iroha 2 Test Model](#iroha-2-test-model)
+		- [Configurations](#configurations)
 	- [Using Test Suites](#using-test-suites)
 		- [Custom Test Environment with Docker Compose](#custom-test-environment-with-docker-compose)
 		- [Poetry Configuration](#poetry-configuration)
@@ -41,7 +42,19 @@ The test model has the following structure:
 - **Domains**: Test cases for domain-related operations.
 - **Roles**: Test cases for roles management.
 
-<!-- TODO: Add once implemented: - **Configurations**: Test configurations for the Iroha 2 platform. -->
+### Configurations
+
+Sample configuration assets live in the [`defaults`](../../defaults/) directory and are used by the test harness out of the box:
+
+- `client.toml` – default CLI configuration consumed by the tests.
+- `docker-compose*.yml` – Docker Compose manifests generated via `kagami swarm` for single-node, local, and default multi-peer networks.
+- `genesis.json` – default genesis block produced by `kagami genesis generate`, aligned with the CLI tests.
+
+To customise the environment:
+
+1. Regenerate the Compose and genesis files with [`kagami`](../../crates/iroha_kagami/) (the workflow is automated in [`scripts/test_env.py`](../../scripts/test_env.py)).
+2. Adjust the CLI configuration (for example, host, ports, or credentials) and point the test suite to the new files by updating the `.env` variables described in [Tests Configuration](#tests-configuration).
+3. When running in CI, ensure any regenerated artefacts are committed so the fixtures remain deterministic.
 
 ## Using Test Suites
 

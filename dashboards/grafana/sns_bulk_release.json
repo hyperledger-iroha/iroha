@@ -1,0 +1,194 @@
+{
+  "title": "SNS Bulk Release Monitor",
+  "uid": "sns-bulk-release",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "tags": ["sns", "registrar", "governance"],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "release",
+        "label": "Release",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sns_bulk_release_requests_total, release)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": false,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Requests (selected release)",
+      "id": 1,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(sns_bulk_release_requests_total{release=~\"$release\",suffix_id=\"all\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 100},
+              {"color": "red", "value": 500}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value",
+        "colorMode": "value"
+      },
+      "description": "Total number of requests processed by the selected release. Powered by metrics output from sns_bulk_release.sh."
+    },
+    {
+      "type": "table",
+      "title": "Requests per suffix",
+      "id": 2,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 9, "w": 8, "x": 8, "y": 0},
+      "targets": [
+        {
+          "expr": "sum by (suffix_id) (sns_bulk_release_requests_total{release=~\"$release\",suffix_id!=\"all\"})",
+          "legendFormat": "{{suffix_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"Time": true},
+            "renameByName": {
+              "suffix_id": "Suffix ID",
+              "Value": "Requests"
+            }
+          }
+        }
+      ],
+      "description": "Breakdown of the manifest across suffix ids to confirm steward allocations."
+    },
+    {
+      "type": "table",
+      "title": "Payment volume by asset",
+      "id": 3,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 9, "w": 8, "x": 0, "y": 8},
+      "targets": [
+        {
+          "expr": "sum by (asset_id) (sns_bulk_release_payment_gross_units{release=~\"$release\"})",
+          "refId": "A",
+          "legendFormat": "{{asset_id}} gross"
+        },
+        {
+          "expr": "sum by (asset_id) (sns_bulk_release_payment_net_units{release=~\"$release\"})",
+          "refId": "B",
+          "legendFormat": "{{asset_id}} net"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"Time": true},
+            "indexByName": {
+              "asset_id": 0,
+              "Value": 1,
+              "Value #B": 2
+            },
+            "renameByName": {
+              "asset_id": "Asset",
+              "Value": "Gross units",
+              "Value #B": "Net units"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "description": "Gross vs net payment units per asset for each release."
+    },
+    {
+      "type": "table",
+      "title": "Submission outcomes",
+      "id": 4,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 9, "w": 8, "x": 8, "y": 9},
+      "targets": [
+        {
+          "expr": "sum by (mode,success) (sns_bulk_release_submission_events_total{release=~\"$release\"})",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"Time": true},
+            "renameByName": {
+              "mode": "Mode",
+              "success": "Success",
+              "Value": "Events"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "description": "Torii vs CLI submission counts plus poll confirmations per release, grouped by success flag."
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "proposal_id": "AC-2026-001",
+  "submitted_at_unix_ms": 1770000000000,
+  "language": "en",
+  "action": "add-to-denylist",
+  "summary": {
+    "title": "Add newly discovered CSAM hash cluster",
+    "motivation": "Citizen reviewers and moderators flagged recurring uploads referencing the same digest family across two operators.",
+    "expected_impact": "Quarantining this family prevents known abusive media from resurfacing while appeals are processed."
+  },
+  "tags": [
+    "csam",
+    "policy-escalation"
+  ],
+  "targets": [
+    {
+      "label": "Incident sample A",
+      "hash_family": "blake3-256",
+      "hash_hex": "0d714bed4b7c63c23a2cf8ee9ce6c3cde1007907c427b4a0754e8ad31c91338d",
+      "reason": "Matched quarantine queue entry QA-2026-041 for two separate providers."
+    },
+    {
+      "label": "Incident sample B",
+      "hash_family": "blake3-256",
+      "hash_hex": "18f47f8da6ccbf81a902f13b64527bd2f7cb8d7797a8ff72dbe1f16b4fcb9a2e",
+      "reason": "Derived from the same capture session with identical metadata."
+    }
+  ],
+  "evidence": [
+    {
+      "kind": "sorafs-cid",
+      "uri": "sorafs://bafybeiaxqzryhkzwhd5vnc5e2uqeglplkwdkpx3wt2bnjbetb6levgbewi/manifest.car",
+      "digest_blake3_hex": "6f90754d74fe89ae79f2c0017655bc908eb7f98f249c3ba1dc5c0bd1d8861e58",
+      "description": "Encrypted CAR bundle quarantined by the GAR."
+    },
+    {
+      "kind": "url",
+      "uri": "https://incidents.sora.example/cases/CSAM-2026-041",
+      "description": "Incident timeline + moderator review log."
+    },
+    {
+      "kind": "torii-case",
+      "uri": "CASE-2026-04-118",
+      "description": "Torii governance ticket cross-referencing the same hashes."
+    }
+  ],
+  "submitter": {
+    "name": "Citizen Reviewer 42",
+    "contact": "citizen42@example.org",
+    "organization": "Wonderland Watch",
+    "pgp_fingerprint": "A2B3C4D5E6F70123456789ABCDEF0123456789AB"
+  },
+  "duplicates": [
+    "AC-2025-014"
+  ]
+}

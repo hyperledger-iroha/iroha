@@ -19,15 +19,17 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [features]
-# FIXME: it doesn't work https://github.com/hyperledger-iroha/iroha/issues/5134
+# Enable `#[metrics]` instrumentation when consumed via `iroha_telemetry`.
 metric-instrumentation = []
+# Test-only feature for mirroring `cfg(feature = "telemetry")` in trybuild cases.
+telemetry = []
+trybuild-tests = ["metric-instrumentation", "telemetry"]
 
 [dependencies]
 syn = { workspace = true }
 quote = { workspace = true }
 proc-macro2 = { workspace = true }
 manyhow = { workspace = true }
-iroha_macro_utils = { workspace = true }
 
 [dev-dependencies]
 trybuild = { workspace = true }

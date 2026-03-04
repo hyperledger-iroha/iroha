@@ -1,0 +1,37 @@
+// Minimal lending market primitives.
+// Shows collateral ratio checks and minting borrowed asset.
+seiyaku LendingSimple {
+  // Compute collateralization ratio in basis points (bps = 1/100 of a percent).
+  fn collateral_ratio_bps(collateral_value: int, debt_value: int) -> int {
+    if debt_value == 0 { return 1_000_000; } // effectively infinite
+    let ratio = (collateral_value * 10_000) / debt_value;
+    return ratio;
+  }
+
+  // Borrow after checking ratio >= min_ratio_bps.
+  kotoage fn borrow(user: AccountId,
+                    _vault_account: AccountId,
+                    debt_asset: AssetDefinitionId,
+                    amount: int,
+                    collateral_value: int,
+                    current_debt_value: int,
+                    min_ratio_bps: int) permission(Admin) {
+    let new_debt_value = current_debt_value + amount;
+    let ratio = collateral_ratio_bps(collateral_value, new_debt_value);
+    // assert(ratio >= min_ratio_bps)
+    let ok = (ratio >= min_ratio_bps) ? 1 : 0;
+    // assert_eq emits a VM assertion; 1 means true
+    assert_eq(ok, 1);
+    // Mint borrowed asset to user
+    mint_asset(user, debt_asset, amount);
+  }
+
+  // Repay by transferring tokens from user to vault and burning.
+  kotoage fn repay(user: AccountId,
+                   vault_account: AccountId,
+                   debt_asset: AssetDefinitionId,
+                   amount: int) permission(Admin) {
+    transfer_asset(user, vault_account, debt_asset, amount);
+    burn_asset(vault_account, debt_asset, amount);
+  }
+}

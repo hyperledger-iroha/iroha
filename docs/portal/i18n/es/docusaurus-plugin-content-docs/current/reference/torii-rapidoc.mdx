@@ -1,0 +1,31 @@
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/reference/torii-rapidoc.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+importar RapiDocPanel desde '@site/src/components/RapiDocPanel.jsx';
+
+# Torii API (RapiDoc)
+
+`RapiDoc` ofrece una representación compacta y documentada del mismo Torii
+Documento OpenAPI. Úselo cuando necesite una descripción general más detallada o una revisión de solo lectura de
+Modelos de solicitud/respuesta.
+
+## Consejos de uso
+
+- Ingrese un token de portador para habilitar llamadas interactivas. El valor se envía como un
+  Encabezado `X-TryIt-Auth` y normalizado por el proxy.
+- Configurar `TRYIT_PROXY_PUBLIC_URL` al dar servicio al portal de forma interactiva
+  las solicitudes se enrutan a través del proxy provisional. El widget advierte cuando el proxy
+  Falta la URL.
+- Utilice el menú desplegable "Instantánea OpenAPI" para cargar especificaciones históricas publicadas por
+  `npm run sync-openapi`; la opción `Latest (tracked)` siempre se resuelve en
+  `/openapi/torii.json`.
+- Combínelo con la consola “[Pruébelo](/api/overview#try-it-sandbox-docs-3)” cuando
+  trabajando contra puertas de enlace preparadas que requieren el proxy.
+

@@ -1,0 +1,12 @@
+// Demonstrates several built-in operations in sequence.
+// Computes a hash, generates a public key, commits a value
+// and combines the results.
+seiyaku Example {
+    kotoage fn complex(a, b) {
+        let c = a + b;
+        let d = poseidon2(c, b);
+        let e = pubkgen(d);
+        let f = valcom(e, a);
+        let g = f + d;
+    }
+}

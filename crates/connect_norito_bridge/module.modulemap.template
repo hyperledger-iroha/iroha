@@ -1,0 +1,5 @@
+module NoritoBridge {
+  header "connect_norito_bridge.h"
+  export *
+}
+
