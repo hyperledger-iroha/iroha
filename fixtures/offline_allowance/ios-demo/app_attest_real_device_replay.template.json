@@ -1,0 +1,15 @@
+{
+  "fixture": "ios_app_attest_real_device_replay_v1",
+  "description": "Template for replaying a redacted real-device App Attest settlement capture against strict/non-strict verifier modes.",
+  "redaction_note": "Replace certificate/receipt with redacted capture data and remove secrets before committing.",
+  "chain_id": "test-chain",
+  "block_timestamp_ms": 1730314877000,
+  "expect_non_strict_ok": true,
+  "expect_strict_ok": false,
+  "certificate": {
+    "TODO": "Paste OfflineWalletCertificate JSON"
+  },
+  "receipt": {
+    "TODO": "Paste OfflineSpendReceipt JSON"
+  }
+}

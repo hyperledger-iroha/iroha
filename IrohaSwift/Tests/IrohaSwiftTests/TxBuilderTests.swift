@@ -77,9 +77,9 @@ private final class PipelineURLProtocol: URLProtocol {
         client.urlProtocolDidFinishLoading(self)
     }
 
-    static func configure(statuses: [String]) {
+    static func configure(statuses: [String], rejectionReason: String? = nil) {
         lock.lock()
-        statusBodies = statuses.map { makeStatusBody(kind: $0) }
+        statusBodies = statuses.map { makeStatusBody(kind: $0, rejectionReason: rejectionReason) }
         lock.unlock()
     }
 
@@ -134,15 +134,19 @@ private final class PipelineURLProtocol: URLProtocol {
         return (submitStatusCode, submitBody)
     }
 
-    private static func makeStatusBody(kind: String) -> Data {
+    private static func makeStatusBody(kind: String, rejectionReason: String? = nil) -> Data {
+        var status: [String: Any] = [
+            "kind": kind,
+            "content": NSNull()
+        ]
+        if let rejectionReason {
+            status["rejection_reason"] = rejectionReason
+        }
         let payload: [String: Any] = [
             "kind": "PipelineTransactionStatus",
             "content": [
                 "hash": "abc",
-                "status": [
-                    "kind": kind,
-                    "content": NSNull()
-                ]
+                "status": status
             ]
         ]
         return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
@@ -1577,6 +1581,36 @@ final class TxBuilderTests: XCTestCase {
             switch error {
             case .failure(_, let status, _):
                 XCTAssertEqual(status, "Rejected")
+            default:
+                XCTFail("Unexpected error: \(error)")
+            }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitAndWaitAsyncFailureIncludesRejectionReason() async throws {
+        try requireEd25519Encoder()
+        PipelineURLProtocol.reset()
+        PipelineURLProtocol.configure(statuses: ["Rejected"], rejectionReason: "build_claim_missing")
+        let sdk = try makePipelineSDK()
+        let keypair = try makeFixtureKeypair()
+        let request = TransferRequest(chainId: Self.fixtureChainId,
+                                      authority: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      assetDefinitionId: Self.fixtureAssetDefinition,
+                                      quantity: "1",
+                                      destination: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      description: nil,
+                                      ttlMs: 60)
+        do {
+            _ = try await sdk.submitAndWait(transfer: request, keypair: keypair)
+            XCTFail("Expected pipeline failure")
+        } catch let error as PipelineStatusError {
+            switch error {
+            case .failure:
+                XCTAssertEqual(error.rejectionReason, "build_claim_missing")
+                XCTAssertTrue(error.localizedDescription.contains("build_claim_missing"))
             default:
                 XCTFail("Unexpected error: \(error)")
             }

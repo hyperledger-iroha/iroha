@@ -3,7 +3,7 @@
 use std::{fs, path::PathBuf};
 
 use base64::Engine as _;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr, bail, eyre};
 use iroha::data_model::{
     asset::AssetId,
@@ -19,6 +19,13 @@ use iroha_crypto::{Hash, Signature};
 use iroha_primitives::numeric::Numeric;
 use norito::codec::{Decode, Encode};
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum DecodeKind {
+    Auto,
+    Transfer,
+    Receipt,
+}
+
 #[derive(Parser, Debug)]
 #[command(about = "Decode OfflineToOnlineTransfer Norito payload into canonical JSON")]
 struct Args {
@@ -28,6 +35,9 @@ struct Args {
     /// Output JSON file path.
     #[arg(long)]
     output: PathBuf,
+    /// Payload kind. `auto` detects transfer (8/9 fields) or wire receipt (10/11 fields).
+    #[arg(long, value_enum, default_value_t = DecodeKind::Auto)]
+    kind: DecodeKind,
 }
 
 fn parse_input(bytes: &[u8]) -> Result<Vec<u8>> {
@@ -116,6 +126,13 @@ fn decode_bare<T: Decode>(bytes: &[u8], label: &str) -> Result<T> {
 }
 
 fn decode_wire_receipt(payload: &[u8]) -> Result<OfflineSpendReceipt> {
+    let (receipt, _) = decode_wire_receipt_with_certificate(payload)?;
+    Ok(receipt)
+}
+
+fn decode_wire_receipt_with_certificate(
+    payload: &[u8],
+) -> Result<(OfflineSpendReceipt, OfflineWalletCertificate)> {
     let fields = split_fields(payload, "receipt")?;
     if fields.len() != 10 && fields.len() != 11 {
         bail!("receipt: expected 10 or 11 fields, got {}", fields.len());
@@ -148,20 +165,29 @@ fn decode_wire_receipt(payload: &[u8]) -> Result<OfflineSpendReceipt> {
     let sender_signature: Signature = decode_bare(signature_field, "receipt.sender_signature")?;
     let sender_certificate_id = certificate.certificate_id();
 
-    Ok(OfflineSpendReceipt {
-        tx_id,
-        from,
-        to,
-        asset,
-        amount,
-        issued_at_ms,
-        invoice_id,
-        platform_proof,
-        platform_snapshot,
-        sender_certificate_id,
-        sender_signature,
-        build_claim: None,
-    })
+    Ok((
+        OfflineSpendReceipt {
+            tx_id,
+            from,
+            to,
+            asset,
+            amount,
+            issued_at_ms,
+            invoice_id,
+            platform_proof,
+            platform_snapshot,
+            sender_certificate_id,
+            sender_signature,
+            build_claim: None,
+        },
+        certificate,
+    ))
+}
+
+fn decode_wire_receipt_payload(
+    payload: &[u8],
+) -> Result<(OfflineSpendReceipt, OfflineWalletCertificate)> {
+    decode_wire_receipt_with_certificate(payload)
 }
 
 fn decode_wire_receipts(payload: &[u8]) -> Result<Vec<OfflineSpendReceipt>> {
@@ -254,17 +280,78 @@ fn main() -> Result<()> {
         .wrap_err_with(|| format!("failed to read {}", args.input.display()))?;
     let frame = parse_input(&raw)?;
     let payload = parse_frame_payload(&frame)?;
-    let transfer =
-        decode_wire_transfer(payload).wrap_err("failed to decode wire bundle payload")?;
+    let field_count = split_fields(payload, "payload")
+        .map(|fields| fields.len())
+        .wrap_err("failed to inspect payload fields")?;
 
-    let _encoded_bundle_id_payload: Vec<u8> = transfer.bundle_id.encode();
-
-    let json =
-        norito::json::to_json_pretty(&transfer).wrap_err("failed to encode transfer as JSON")?;
-    fs::write(&args.output, format!("{json}\n"))
-        .wrap_err_with(|| format!("failed to write {}", args.output.display()))?;
-
-    println!("decoded_bundle_id={}", transfer.bundle_id);
-    println!("output={}", args.output.display());
+    match args.kind {
+        DecodeKind::Transfer => {
+            let transfer =
+                decode_wire_transfer(payload).wrap_err("failed to decode wire transfer payload")?;
+            let _encoded_bundle_id_payload: Vec<u8> = transfer.bundle_id.encode();
+            let json = norito::json::to_json_pretty(&transfer)
+                .wrap_err("failed to encode transfer as JSON")?;
+            fs::write(&args.output, format!("{json}\n"))
+                .wrap_err_with(|| format!("failed to write {}", args.output.display()))?;
+            println!("decoded_kind=transfer");
+            println!("decoded_bundle_id={}", transfer.bundle_id);
+            println!("output={}", args.output.display());
+        }
+        DecodeKind::Receipt => {
+            let (receipt, sender_certificate) = decode_wire_receipt_payload(payload)
+                .wrap_err("failed to decode wire receipt payload")?;
+            let receipt_json =
+                norito::json::to_json(&receipt).wrap_err("failed to encode receipt as JSON")?;
+            let cert_json = norito::json::to_json(&sender_certificate)
+                .wrap_err("failed to encode sender certificate as JSON")?;
+            let json = format!(
+                "{{\n  \"receipt\": {receipt_json},\n  \"sender_certificate\": {cert_json}\n}}"
+            );
+            fs::write(&args.output, format!("{json}\n"))
+                .wrap_err_with(|| format!("failed to write {}", args.output.display()))?;
+            println!("decoded_kind=receipt");
+            println!(
+                "decoded_sender_certificate_id={}",
+                receipt.sender_certificate_id
+            );
+            println!("output={}", args.output.display());
+        }
+        DecodeKind::Auto => {
+            if field_count == 8 || field_count == 9 {
+                let transfer = decode_wire_transfer(payload)
+                    .wrap_err("failed to decode wire transfer payload")?;
+                let _encoded_bundle_id_payload: Vec<u8> = transfer.bundle_id.encode();
+                let json = norito::json::to_json_pretty(&transfer)
+                    .wrap_err("failed to encode transfer as JSON")?;
+                fs::write(&args.output, format!("{json}\n"))
+                    .wrap_err_with(|| format!("failed to write {}", args.output.display()))?;
+                println!("decoded_kind=transfer");
+                println!("decoded_bundle_id={}", transfer.bundle_id);
+                println!("output={}", args.output.display());
+            } else if field_count == 10 || field_count == 11 {
+                let (receipt, sender_certificate) = decode_wire_receipt_payload(payload)
+                    .wrap_err("failed to decode wire receipt payload")?;
+                let receipt_json =
+                    norito::json::to_json(&receipt).wrap_err("failed to encode receipt as JSON")?;
+                let cert_json = norito::json::to_json(&sender_certificate)
+                    .wrap_err("failed to encode sender certificate as JSON")?;
+                let json = format!(
+                    "{{\n  \"receipt\": {receipt_json},\n  \"sender_certificate\": {cert_json}\n}}"
+                );
+                fs::write(&args.output, format!("{json}\n"))
+                    .wrap_err_with(|| format!("failed to write {}", args.output.display()))?;
+                println!("decoded_kind=receipt");
+                println!(
+                    "decoded_sender_certificate_id={}",
+                    receipt.sender_certificate_id
+                );
+                println!("output={}", args.output.display());
+            } else {
+                bail!(
+                    "payload has {field_count} fields; expected transfer (8/9) or receipt (10/11)"
+                );
+            }
+        }
+    }
     Ok(())
 }

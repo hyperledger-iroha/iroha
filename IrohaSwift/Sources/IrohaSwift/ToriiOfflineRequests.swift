@@ -7,10 +7,16 @@ public extension ToriiOfflineSpendReceiptsSubmitRequest {
 }
 
 public extension ToriiOfflineSettlementSubmitRequest {
-    init(authority: String, privateKey: String, transfer: OfflineToOnlineTransfer) throws {
+    init(authority: String,
+         privateKey: String,
+         transfer: OfflineToOnlineTransfer,
+         buildClaimOverrides: [ToriiOfflineSettlementBuildClaimOverride] = [],
+         repairExistingBuildClaims: Bool = false) throws {
         self.init(authority: authority,
                   privateKey: privateKey,
-                  transfer: try transfer.toriiJSON())
+                  transfer: try transfer.toriiJSON(),
+                  buildClaimOverrides: buildClaimOverrides,
+                  repairExistingBuildClaims: repairExistingBuildClaims)
     }
 }
 
