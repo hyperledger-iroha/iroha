@@ -1,6 +1,17 @@
 # Status
 
 Last update: 2026-03-03
+- Compile-time optimization follow-up for unchanged runtime feature behavior (`Cargo.toml`, `crates/iroha_core/Cargo.toml`, `crates/iroha_core/src/block_sync.rs`, `crates/iroha_torii/Cargo.toml`, `crates/{iroha_config,iroha_js_host,iroha_torii_shared}/Cargo.toml`): removed test-only feature forcing from normal Torii/Core builds (`iroha_core` default no longer includes `iroha-core-tests`; Torii no longer enables `zk-tests` by default or via workspace dependency), retained runtime ZK defaults (`zk-halo2`, `zk-halo2-ipa`), removed additional unused direct edges (`iroha_config`: `json5`, `displaydoc`, `derive_more`, `iroha_schema`; `iroha_js_host`: `futures`, `httpmock`; `iroha_torii_shared`: `iroha_primitives`), and dropped unused Axum features `multipart`/`original-uri` in Torii. Updated `iroha_core/src/block_sync.rs` imports with feature-gated `StateReadOnly`/`StateView` to keep default builds warning-clean after feature tightening.
+- Validation:
+  - `scripts/cargo_fast.sh -- check -p iroha_torii -p irohad` (ok, multiple passes).
+  - `scripts/cargo_fast.sh -- check -p irohad` (ok after `iroha_core` default-feature change and warning cleanup).
+  - `scripts/cargo_fast.sh -- check -p iroha_config -p iroha_core -p iroha_js_host -p iroha_torii_shared -p iroha_torii -p irohad` (ok).
+  - Cold timing sweep (`/usr/bin/time -p scripts/cargo_fast.sh --no-sccache --linker off --target-dir ... -- check -p irohad`):
+    - earlier baseline in this tranche: `real 170.89s` (`/tmp/iroha_final_opt`)
+    - after Torii/Core test-feature unforcing: `real 158.14s` (`/tmp/iroha_no_testzk`)
+    - after removing `iroha-core-tests` from core defaults: `real 150.77s` (`/tmp/iroha_no_coretests`)
+    - repeat with final patchset: `real 149.08s` (`/tmp/iroha_axum_trim2`)
+    - net improvement vs tranche baseline: ~`12.8%` faster cold `irohad` check on this host/session.
 - Offline certificate issuance UX hardening (`crates/iroha_torii/src/routing.rs`, `crates/iroha_torii/tests/offline_certificates_app_api.rs`, `IrohaSwift`, `java/iroha_android`, `javascript/iroha_js`, `docs/source/sdk/swift/index*.md`): Torii now derives `OfflineWalletCertificate.operator` from the configured offline-issuer keypair and the draft controller domain, so client draft payloads no longer need an `operator` field. `OfflineWalletCertificateDraft.operator` is now optional/ignored server-side for backward compatibility. Swift/Android/JS SDK draft encoders were updated to omit `operator`, while signed-certificate models still require and validate `operator`.
 - Tests: `cargo fmt --all` (ok), `cargo test -p iroha_torii --test offline_certificates_app_api` (ok; `6 passed`), `cd IrohaSwift && swift test --filter ToriiOfflineEndpointsTests` (ok; `15 passed`), `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :android:test` (ok), `node --check javascript/iroha_js/src/toriiClient.js && node --check javascript/iroha_js/dist/toriiClient.js` (ok).
 - Kura block-index write atomicity hardening (`crates/iroha_core/src/kura.rs`): added fixed-size `BlockIndex` entry encoding and switched block-index entry writes to single 16-byte writes in live write paths (`append_block_batch`, `write_block_index`, and eviction rewrite temp index generation) to prevent transient `blocks.index` misalignment during concurrent reads.
