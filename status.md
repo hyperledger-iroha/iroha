@@ -1,6 +1,43 @@
 # Status
 
-Last update: 2026-03-03
+Last update: 2026-03-04
+- Latest sync (2026-03-04 Tranche 7C h=178/179 stall-loop closure, core + ingress / no new public knobs):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+    - `crates/izanami/src/chaos.rs`
+  - Changes:
+    - hardened frontier-catchup stall hysteresis so transient unresolved/gap blips (including transient `frontier_catchup_target_height(..) -> None`) retain active stall state for `FRONTIER_CATCHUP_STALL_WINDOWS_TO_ACTIVATE` stall windows unless commit height/frontier identity progresses,
+    - added deterministic adaptive frontier reanchor stride by no-progress windows (`1/2/4/8` cadence at `<9`, `9..26`, `27..80`, `>=81`) and applied it to frontier-equivalent reasons while preserving deterministic 2-peer cohort + every-3rd all-peer sweep on emitted windows,
+    - unified frontier-equivalent reanchor emission via shared canonical gate keyed by `(frontier_height, canonical_height, window_index)` with dependency-progress-at-emit tracking,
+    - suppressed same-window `missing_qc` rotation in `force_view_change_if_idle(..)` when contiguous frontier reanchor already emitted and unresolved dependency progress has not advanced, while preserving liveness via existing `try_reserve_missing_qc_height_stall_rotation_window(..)` path,
+    - wired committed-edge sidecar mismatch to one bounded per-window conflict bundle under unresolved contiguous frontier: one `highest_qc_committed_conflict` reanchor attempt + one targeted highest-QC missing-block fetch with sidecar observation skip (quarantine semantics unchanged),
+    - tightened deferred QC far-ahead replay boundary under frontier stall to `replay_height > local_height_at_entry + 1` (one far-ahead replay per window retained),
+    - added internal ingress lag snapshot plumbing (`IngressLagSnapshot`) and lag-aware endpoint exclusion (`quorum_min_height - endpoint_height > IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS`) so lagging endpoints are skipped while healthy non-lagging options exist,
+    - hardened queue-pressure stickiness with deterministic exponential cooldown by consecutive queue-pressure failures (bounded shift, no new knob) and blocked early reprobe while healthy alternatives exist; forced-probe fallback now avoids dead-end by probing excluded lagging endpoints when normal candidates are exhausted.
+  - Test updates:
+    - `frontier_catchup_stall_mode_persists_across_transient_unresolved_blips`
+    - `frontier_catchup_reanchor_stride_expands_with_long_no_progress`
+    - `frontier_shared_window_gate_all_reasons_single_emit`
+    - `missing_qc_view_change_suppressed_when_frontier_reanchor_already_emitted`
+    - `committed_edge_sidecar_conflict_emits_one_bundle_per_window`
+    - `deferred_qc_far_ahead_boundary_uses_local_plus_one_under_stall`
+    - `chaos::tests::ingress_pool_excludes_lagging_endpoint_when_healthy_alternatives_exist`
+    - `chaos::tests::ingress_pool_forced_probe_when_all_endpoints_excluded_or_unhealthy`
+    - `chaos::tests::queue_pressure_sticky_cooldown_blocks_early_reprobe`
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core --lib frontier_catchup_stall_mode_persists_across_transient_unresolved_blips -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib frontier_catchup_reanchor_stride_expands_with_long_no_progress -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib frontier_shared_window_gate_all_reasons_single_emit -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib missing_qc_view_change_suppressed_when_frontier_reanchor_already_emitted -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib committed_edge_sidecar_conflict_emits_one_bundle_per_window -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib deferred_qc_far_ahead_boundary_uses_local_plus_one_under_stall -- --nocapture` (ok)
+    - `cargo test -p izanami ingress_pool_excludes_lagging_endpoint_when_healthy_alternatives_exist -- --nocapture` (ok)
+    - `cargo test -p izanami ingress_pool_forced_probe_when_all_endpoints_excluded_or_unhealthy -- --nocapture` (ok)
+    - `cargo test -p izanami queue_pressure_sticky_cooldown_blocks_early_reprobe -- --nocapture` (ok)
+  - Open follow-up:
+    - execute the unchanged 3600s soak envelope and verify tranche-7C gates (no strict-peer hard stall, lagging peer advances beyond 178 with sustained progress, strict/quorum gap <=150, and hotspot deltas for `frontier_gap_realign@179`, `missing_block_height_hard_cap@179`, `view_change{cause=missing_qc,height=179}`, and ingress `queue_pressure` on `:44005`).
 - Latest sync (2026-03-03 Tranche 7 lagging-peer catch-up convergence, core-only/no new knobs):
   - Implemented in:
     - `crates/iroha_core/src/sumeragi/main_loop.rs`

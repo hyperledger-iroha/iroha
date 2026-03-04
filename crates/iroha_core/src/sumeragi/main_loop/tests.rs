@@ -31916,6 +31916,90 @@ async fn sidecar_mismatch_committed_edge_gate_clears_on_commit_progress() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn committed_edge_sidecar_conflict_emits_one_bundle_per_window() {
+    let _missing_block_guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let actor = &mut harness.actor;
+    let now = Instant::now();
+    let _ = seed_genesis_block_for_state(&actor.state);
+    let stale = now.checked_sub(Duration::from_secs(45)).unwrap_or(now);
+    let committed_height = actor.committed_height_snapshot();
+    let frontier_height = committed_height.saturating_add(1);
+    let _ =
+        insert_unresolved_missing_request_for_tests(actor, 0xE6, frontier_height, 1, stale, stale);
+
+    let highest_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE7; Hash::LENGTH]));
+    actor.highest_qc = Some(QcHeaderRef {
+        subject_block_hash: highest_hash,
+        height: frontier_height.saturating_add(5),
+        view: 0,
+        epoch: actor.epoch_for_height(frontier_height.saturating_add(5)),
+        phase: Phase::Commit,
+    });
+    actor.range_pull_escalation_cooldowns.clear();
+    actor.frontier_catchup_window_gates.clear();
+    actor.canonical_frontier_reanchor_window_gates.clear();
+    actor.missing_qc_height_stall = None;
+    actor.lock_lag_frontier_stall = None;
+    assert!(
+        !actor
+            .range_pull_targets_for_height(frontier_height)
+            .is_empty(),
+        "test setup requires at least one deterministic range-pull target"
+    );
+
+    let reason = "test_committed_edge_bundle";
+    let expected_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE8; Hash::LENGTH]));
+    let stored_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE9; Hash::LENGTH]));
+
+    let before = super::status::snapshot();
+    actor.note_sidecar_mismatch(committed_height, expected_hash, stored_hash, reason);
+    let after_first = super::status::snapshot();
+    let first_attempts = actor
+        .pending
+        .missing_block_requests
+        .get(&highest_hash)
+        .map_or(0, |request| request.attempts);
+
+    actor.note_sidecar_mismatch(committed_height, expected_hash, stored_hash, reason);
+    let after_second = super::status::snapshot();
+    let second_attempts = actor
+        .pending
+        .missing_block_requests
+        .get(&highest_hash)
+        .map_or(0, |request| request.attempts);
+
+    assert!(
+        after_first.blocksync_range_pull_escalation_total
+            >= before
+                .blocksync_range_pull_escalation_total
+                .saturating_add(1),
+        "first committed-edge conflict should emit one bounded frontier reanchor"
+    );
+    assert_eq!(
+        after_second.blocksync_range_pull_escalation_total,
+        after_first.blocksync_range_pull_escalation_total,
+        "same-window committed-edge conflicts should not emit a second reanchor bundle"
+    );
+    assert!(
+        first_attempts >= 1,
+        "first committed-edge conflict should force one targeted highest-QC fetch"
+    );
+    assert_eq!(
+        second_attempts, first_attempts,
+        "same-window committed-edge conflicts should not emit a second targeted highest-QC fetch"
+    );
+
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn sidecar_mismatch_on_uncommitted_height_does_not_quarantine() {
     let (kura, _kura_dir) = persistent_kura_for_tests();
     let mut harness = test_actor_harness_with_config_and_height_and_kura(
@@ -37950,6 +38034,320 @@ async fn frontier_catchup_stall_mode_enters_for_contiguous_frontier_under_sideca
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn frontier_catchup_stall_mode_persists_across_transient_unresolved_blips() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let frontier_height = seed_frontier_catchup_for_tests(actor, 0xF8, 10);
+    let now = Instant::now();
+    let stale = now.checked_sub(Duration::from_secs(45)).unwrap_or(now);
+    let missing_hash =
+        insert_unresolved_missing_request_for_tests(actor, 0xF9, frontier_height, 1, stale, stale);
+
+    let (stall_window, activate_at) = activate_frontier_catchup_stall_mode_for_tests(
+        actor,
+        frontier_height.saturating_add(6),
+        now,
+    );
+    assert!(
+        actor
+            .frontier_catchup_window_snapshot(frontier_height.saturating_add(6), activate_at)
+            .is_some_and(|stall| stall.mode_active),
+        "test setup should activate frontier catch-up stall mode"
+    );
+
+    actor.pending.missing_block_requests.remove(&missing_hash);
+    let transient_blip_at = activate_at + stall_window;
+    assert!(
+        actor
+            .frontier_catchup_window_snapshot(frontier_height.saturating_add(6), transient_blip_at)
+            .is_none(),
+        "transient unresolved/gap blip should not emit a catch-up snapshot"
+    );
+    assert!(
+        actor
+            .frontier_catchup_stall
+            .is_some_and(|stall| stall.mode_active),
+        "stall mode should persist across transient unresolved/gap blips without commit progress"
+    );
+
+    let clear_after = transient_blip_at
+        + super::saturating_mul_duration(
+            stall_window,
+            super::FRONTIER_CATCHUP_STALL_WINDOWS_TO_ACTIVATE,
+        )
+        + Duration::from_millis(1);
+    let _ = actor.frontier_catchup_window_snapshot(frontier_height.saturating_add(6), clear_after);
+    assert!(
+        actor.frontier_catchup_stall.is_none(),
+        "stall mode should clear after the transient-blip hysteresis window elapses"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_catchup_reanchor_stride_expands_with_long_no_progress() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let frontier_height = seed_frontier_catchup_for_tests(actor, 0xFA, 12);
+    let now = Instant::now();
+    let stale = now.checked_sub(Duration::from_secs(50)).unwrap_or(now);
+    let _ =
+        insert_unresolved_missing_request_for_tests(actor, 0xFB, frontier_height, 1, stale, stale);
+    let local_height = actor.committed_height_snapshot();
+
+    macro_rules! configure_stall {
+        ($windows_without_progress:expr, $window_index:expr) => {{
+            actor.frontier_catchup_stall = Some(super::FrontierCatchupStallState {
+                frontier_height,
+                local_height_at_entry: local_height,
+                entered_at: now,
+                last_window_at: now,
+                inactive_since: None,
+                windows_without_commit_progress: $windows_without_progress,
+                mode_active: true,
+                window_index: $window_index,
+                last_rotation_at: None,
+                last_reanchor_emit_at: None,
+                last_far_ahead_replay_window_index: None,
+            });
+            actor.frontier_catchup_window_gates.insert(
+                frontier_height,
+                super::FrontierCatchupWindowGateState {
+                    frontier_height,
+                    entered_at: now,
+                    last_window_at: now,
+                    window_index: $window_index,
+                    last_reanchor_window_index: None,
+                    last_rotation_at: None,
+                    last_reanchor_emit_at: None,
+                },
+            );
+            actor.canonical_frontier_reanchor_window_gates.clear();
+            actor.range_pull_escalation_cooldowns.clear();
+        }};
+    }
+
+    configure_stall!(8, 1);
+    assert!(
+        actor.request_range_pull_from_anchor_with_tier(
+            frontier_height,
+            "frontier_gap_realign",
+            now,
+            None,
+        ),
+        "stride=1 should emit every stalled window below 9 windows"
+    );
+
+    configure_stall!(9, 1);
+    assert!(
+        !actor.request_range_pull_from_anchor_with_tier(
+            frontier_height,
+            "frontier_gap_realign",
+            now,
+            None,
+        ),
+        "stride=2 should suppress odd stalled windows once no-progress windows reach 9"
+    );
+    configure_stall!(9, 2);
+    assert!(
+        actor.request_range_pull_from_anchor_with_tier(
+            frontier_height,
+            "frontier_gap_realign",
+            now,
+            None,
+        ),
+        "stride=2 should emit on every second stalled window"
+    );
+
+    configure_stall!(27, 2);
+    assert!(
+        !actor.request_range_pull_from_anchor_with_tier(
+            frontier_height,
+            "frontier_gap_realign",
+            now,
+            None,
+        ),
+        "stride=4 should suppress non-aligned stalled windows once no-progress windows reach 27"
+    );
+    configure_stall!(27, 4);
+    assert!(
+        actor.request_range_pull_from_anchor_with_tier(
+            frontier_height,
+            "frontier_gap_realign",
+            now,
+            None,
+        ),
+        "stride=4 should emit on aligned stalled windows"
+    );
+
+    configure_stall!(81, 4);
+    assert!(
+        !actor.request_range_pull_from_anchor_with_tier(
+            frontier_height,
+            "frontier_gap_realign",
+            now,
+            None,
+        ),
+        "stride=8 should suppress non-aligned stalled windows once no-progress windows reach 81"
+    );
+    configure_stall!(81, 8);
+    assert!(
+        actor.request_range_pull_from_anchor_with_tier(
+            frontier_height,
+            "frontier_gap_realign",
+            now,
+            None,
+        ),
+        "stride=8 should emit on aligned stalled windows"
+    );
+
+    assert!(
+        !actor.range_pull_escalation_cooldowns.is_empty(),
+        "aligned stalled windows should still emit deterministic reanchor peer cohorts"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn clear_missing_block_recovery_preserves_frontier_window_state_when_requested() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let now = Instant::now();
+    let local_height = actor.committed_height_snapshot();
+    let frontier_height = local_height.saturating_add(1);
+    let frontier_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xF6; Hash::LENGTH]));
+
+    actor.note_missing_block_height_attempt(
+        frontier_hash,
+        frontier_height,
+        0,
+        super::MissingBlockRecoveryStage::ParentFetch,
+        None,
+        now,
+    );
+    actor.frontier_catchup_stall = Some(super::FrontierCatchupStallState {
+        frontier_height,
+        local_height_at_entry: local_height,
+        entered_at: now,
+        last_window_at: now,
+        inactive_since: None,
+        windows_without_commit_progress: super::FRONTIER_CATCHUP_STALL_WINDOWS_TO_ACTIVATE,
+        mode_active: true,
+        window_index: 1,
+        last_rotation_at: None,
+        last_reanchor_emit_at: Some(now),
+        last_far_ahead_replay_window_index: None,
+    });
+    actor.frontier_catchup_window_gates.insert(
+        frontier_height,
+        super::FrontierCatchupWindowGateState {
+            frontier_height,
+            entered_at: now,
+            last_window_at: now,
+            window_index: 1,
+            last_reanchor_window_index: Some(1),
+            last_rotation_at: None,
+            last_reanchor_emit_at: Some(now),
+        },
+    );
+    actor.mark_canonical_frontier_reanchor_window_emitted(
+        frontier_height,
+        frontier_height,
+        1,
+        now,
+        Some(now),
+    );
+
+    actor.clear_missing_block_recovery_for_height_preserving_frontier_state(frontier_height, now);
+
+    assert!(
+        actor.missing_block_height_recovery.is_empty(),
+        "height recovery budget should still clear when stale round cleanup runs"
+    );
+    assert!(
+        actor
+            .frontier_catchup_stall
+            .is_some_and(|stall| stall.frontier_height == frontier_height && stall.mode_active),
+        "preserving cleanup should not drop frontier catch-up stall state"
+    );
+    assert!(
+        actor
+            .frontier_catchup_window_gates
+            .contains_key(&frontier_height),
+        "preserving cleanup should keep frontier stall window gate"
+    );
+    assert!(
+        actor
+            .canonical_frontier_reanchor_window_gates
+            .keys()
+            .any(|(height, canonical)| *height == frontier_height && *canonical == frontier_height),
+        "preserving cleanup should keep shared canonical frontier reanchor window gate"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_shared_window_gate_all_reasons_single_emit() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let frontier_height = seed_frontier_catchup_for_tests(actor, 0xFC, 10);
+    let now = Instant::now();
+    let stale = now.checked_sub(Duration::from_secs(45)).unwrap_or(now);
+    let _ =
+        insert_unresolved_missing_request_for_tests(actor, 0xFD, frontier_height, 1, stale, stale);
+
+    let (_stall_window, activate_at) = activate_frontier_catchup_stall_mode_for_tests(
+        actor,
+        frontier_height.saturating_add(6),
+        now,
+    );
+    assert!(
+        actor
+            .frontier_catchup_window_snapshot(frontier_height.saturating_add(6), activate_at)
+            .is_some_and(|stall| stall.mode_active),
+        "test setup should activate frontier catch-up stall mode"
+    );
+
+    actor.range_pull_escalation_cooldowns.clear();
+    assert!(
+        actor.request_range_pull_from_anchor_with_tier(
+            frontier_height,
+            "frontier_gap_realign",
+            activate_at,
+            None,
+        ),
+        "first frontier-equivalent reason should emit in the shared window"
+    );
+
+    actor.range_pull_escalation_cooldowns.clear();
+    let same_window = activate_at + Duration::from_millis(1);
+    for reason in [
+        "frontier_stall_reset",
+        "missing_block_height_hard_cap",
+        "idle_missing_qc_reacquire",
+        "lock_lag_future_prune",
+        "sidecar_mismatch",
+        "highest_qc_committed_conflict",
+    ] {
+        assert!(
+            !actor.request_range_pull_from_anchor_with_tier(
+                frontier_height.saturating_add(12),
+                reason,
+                same_window,
+                None,
+            ),
+            "frontier-equivalent reason `{reason}` should be suppressed after one shared-window emission"
+        );
+    }
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn frontier_catchup_stall_mode_throttles_reanchor_to_one_per_window_across_reasons() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -38286,6 +38684,47 @@ async fn deferred_qc_replay_under_catchup_stall_prioritizes_frontier_and_throttl
     assert_eq!(
         far_progressed, 1,
         "frontier catch-up stall should allow at most one far-ahead deferred replay per window"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn deferred_qc_far_ahead_boundary_uses_local_plus_one_under_stall() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let now = Instant::now();
+    let stale = now.checked_sub(Duration::from_secs(45)).unwrap_or(now);
+    let frontier_height = seed_frontier_catchup_for_tests(actor, 0xA9, 10);
+    let _ =
+        insert_unresolved_missing_request_for_tests(actor, 0xAA, frontier_height, 1, stale, stale);
+    let local_height = actor.committed_height_snapshot();
+
+    actor.frontier_catchup_stall = Some(super::FrontierCatchupStallState {
+        frontier_height,
+        local_height_at_entry: local_height,
+        entered_at: now,
+        last_window_at: now,
+        inactive_since: None,
+        windows_without_commit_progress: 3,
+        mode_active: true,
+        window_index: 0,
+        last_rotation_at: None,
+        last_reanchor_emit_at: None,
+        last_far_ahead_replay_window_index: None,
+    });
+
+    assert!(
+        actor.frontier_catchup_far_ahead_replay_allowed(local_height.saturating_add(1), now),
+        "near-frontier replay (local+1) should remain prioritized and unsuppressed"
+    );
+    assert!(
+        actor.frontier_catchup_far_ahead_replay_allowed(local_height.saturating_add(2), now),
+        "first far-ahead replay (local+2) should be allowed once per stalled window"
+    );
+    assert!(
+        !actor.frontier_catchup_far_ahead_replay_allowed(local_height.saturating_add(3), now),
+        "second far-ahead replay in the same stalled window should be suppressed"
     );
 
     harness.shutdown.send();
@@ -48401,6 +48840,348 @@ async fn force_view_change_if_idle_missing_qc_backoff_expires_and_rotation_proce
             .missing_qc_total,
         1,
         "missing_qc rotation should be counted after hard-cap expiry"
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_qc_view_change_suppressed_when_frontier_reanchor_already_emitted() {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    let _view_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+    actor.config.recovery.rotate_after_reacquire_exhausted = true;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let _ = seed_genesis_block_for_state(&actor.state);
+    let committed_height = actor.committed_height_snapshot();
+    let height = committed_height.saturating_add(1);
+    let current_view = 2u64;
+    actor.highest_qc = Some(sample_qc_ref(height.saturating_add(2), 0));
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
+    let availability_timeout =
+        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
+    let elapsed = timeout
+        .saturating_add(availability_timeout)
+        .saturating_add(missing_qc_window)
+        .saturating_add(Duration::from_millis(1));
+    let start = now.checked_sub(elapsed).unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, current_view));
+
+    let hard_cap = super::missing_qc_rotation_hard_cap(timeout, missing_qc_window);
+    actor.subsystems.propose.last_missing_qc_timeout_trigger =
+        Some(super::CachedSlotTimeoutTrigger {
+            height,
+            view: current_view.saturating_sub(1),
+            at: now
+                .checked_sub(hard_cap.saturating_add(Duration::from_millis(1)))
+                .unwrap_or(now),
+            streak: 1,
+        });
+
+    let missing_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x8B; Hash::LENGTH]));
+    actor.pending.missing_block_requests.insert(
+        missing_hash,
+        MissingBlockRequest {
+            height,
+            view: current_view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_secs(1),
+            view_change_window: Some(Duration::from_secs(1)),
+            first_seen: start,
+            last_requested: start,
+            last_dependency_progress: start,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+    assert!(
+        actor.frontier_catchup_has_unresolved_dependency(height),
+        "setup should expose unresolved contiguous frontier dependency"
+    );
+
+    actor.frontier_catchup_stall = Some(super::FrontierCatchupStallState {
+        frontier_height: height,
+        local_height_at_entry: committed_height,
+        entered_at: now,
+        last_window_at: now,
+        inactive_since: None,
+        windows_without_commit_progress: super::FRONTIER_CATCHUP_STALL_WINDOWS_TO_ACTIVATE,
+        mode_active: true,
+        window_index: 0,
+        last_rotation_at: None,
+        last_reanchor_emit_at: Some(now),
+        last_far_ahead_replay_window_index: None,
+    });
+    let canonical_frontier_height = actor
+        .highest_qc
+        .or(actor.latest_committed_qc())
+        .map_or(height, |qc| qc.height.max(height));
+    let dependency_progress =
+        actor.frontier_catchup_unresolved_dependency_progress_at_height(height);
+    actor.mark_canonical_frontier_reanchor_window_emitted(
+        height,
+        canonical_frontier_height,
+        0,
+        now,
+        dependency_progress,
+    );
+
+    actor.missing_qc_height_stall = Some(super::MissingQcHeightStallState {
+        height,
+        dependency_height: height,
+        committed_height,
+        entered_at: now,
+        last_window_at: now,
+        windows_without_commit_progress: super::MISSING_QC_HEIGHT_STALL_WINDOWS_TO_ACTIVATE,
+        mode_active: true,
+        window_index: 0,
+        last_rotation_at: Some(now),
+        last_rotation_window_index: Some(0),
+        last_reacquire_window_index: None,
+    });
+
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "same-height missing_qc rotation should be suppressed while in-window frontier reanchor remains unresolved"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "suppression should keep the current round view"
+    );
+    assert_eq!(
+        super::status::snapshot()
+            .view_change_causes
+            .missing_qc_total,
+        0,
+        "suppression should not count a missing_qc rotation"
+    );
+
+    let later = now
+        .checked_add(actor.missing_qc_height_stall_window())
+        .and_then(|at| at.checked_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    assert!(
+        actor.force_view_change_if_idle(later),
+        "rotation should proceed once the missing_qc stall window advances"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1)),
+        "view should advance after in-window suppression expires"
+    );
+    assert_eq!(
+        super::status::snapshot()
+            .view_change_causes
+            .missing_qc_total,
+        1,
+        "exactly one missing_qc rotation should be counted after window advance"
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_qc_view_change_suppressed_without_frontier_stall_mode_when_reanchor_window_already_emitted()
+ {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    let _view_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+    actor.config.recovery.rotate_after_reacquire_exhausted = true;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let _ = seed_genesis_block_for_state(&actor.state);
+    let committed_height = actor.committed_height_snapshot();
+    let height = committed_height.saturating_add(1);
+    let current_view = 2u64;
+    actor.highest_qc = Some(sample_qc_ref(height.saturating_add(2), 0));
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
+    let availability_timeout =
+        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
+    let elapsed = timeout
+        .saturating_add(availability_timeout)
+        .saturating_add(missing_qc_window)
+        .saturating_add(Duration::from_millis(1));
+    let start = now.checked_sub(elapsed).unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, current_view));
+
+    let hard_cap = super::missing_qc_rotation_hard_cap(timeout, missing_qc_window);
+    actor.subsystems.propose.last_missing_qc_timeout_trigger =
+        Some(super::CachedSlotTimeoutTrigger {
+            height,
+            view: current_view.saturating_sub(1),
+            at: now
+                .checked_sub(hard_cap.saturating_add(Duration::from_millis(1)))
+                .unwrap_or(now),
+            streak: 1,
+        });
+
+    let missing_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x8D; Hash::LENGTH]));
+    actor.pending.missing_block_requests.insert(
+        missing_hash,
+        MissingBlockRequest {
+            height,
+            view: current_view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_secs(1),
+            view_change_window: Some(Duration::from_secs(1)),
+            first_seen: start,
+            last_requested: start,
+            last_dependency_progress: start,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+    assert!(
+        actor.frontier_catchup_has_unresolved_dependency(height),
+        "setup should expose unresolved contiguous frontier dependency"
+    );
+
+    let canonical_frontier_height = actor
+        .highest_qc
+        .or(actor.latest_committed_qc())
+        .map_or(height, |qc| qc.height.max(height));
+    let dependency_progress =
+        actor.frontier_catchup_unresolved_dependency_progress_at_height(height);
+    actor.mark_canonical_frontier_reanchor_window_emitted(
+        height,
+        canonical_frontier_height,
+        0,
+        now,
+        dependency_progress,
+    );
+
+    actor.missing_qc_height_stall = Some(super::MissingQcHeightStallState {
+        height,
+        dependency_height: height,
+        committed_height,
+        entered_at: now,
+        last_window_at: now,
+        windows_without_commit_progress: super::MISSING_QC_HEIGHT_STALL_WINDOWS_TO_ACTIVATE,
+        mode_active: true,
+        window_index: 0,
+        last_rotation_at: Some(now),
+        last_rotation_window_index: Some(0),
+        last_reacquire_window_index: None,
+    });
+
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "same-height missing_qc rotation should be suppressed when the canonical frontier reanchor already emitted in-window, even without frontier stall mode"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "suppression should keep the current round view"
+    );
+    assert_eq!(
+        super::status::snapshot()
+            .view_change_causes
+            .missing_qc_total,
+        0,
+        "suppression should not count a missing_qc rotation"
+    );
+
+    let later = now
+        .checked_add(actor.missing_qc_height_stall_window())
+        .and_then(|at| at.checked_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    assert!(
+        actor.force_view_change_if_idle(later),
+        "rotation should proceed once the missing_qc stall window advances"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1)),
+        "view should advance after in-window suppression expires"
+    );
+    assert_eq!(
+        super::status::snapshot()
+            .view_change_causes
+            .missing_qc_total,
+        1,
+        "exactly one missing_qc rotation should be counted after window advance"
     );
 
     super::status::reset_worker_loop_snapshot_for_tests();
