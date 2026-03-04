@@ -320,9 +320,25 @@ console.log(typedStatus?.status?.kind); // e.g. "Committed"
 // The wait helpers also ship normalised variants if you prefer structured DTOs
 await torii.waitForTransactionStatusTyped(sampleHashHex, { intervalMs: 500 });
 await torii.submitTransactionAndWaitTyped(encoded, { hashHex: sampleHashHex });
-// Note: the polling helpers require `options` to be a plain object. intervalMs/timeoutMs
-// must be non-negative integers (use timeoutMs: null to disable the deadline), maxAttempts
-// must be a positive integer when provided, and onStatus must be a function.
+// Note: `getTransactionStatus` options support only { allowShortHash, signal }.
+// Polling helper options support only { signal, intervalMs, timeoutMs, maxAttempts,
+// successStatuses, failureStatuses, onStatus }.
+// intervalMs/timeoutMs must be non-negative integers (use timeoutMs: null to disable
+// the deadline), maxAttempts must be a positive integer when provided, and onStatus
+// must be a function.
+const statusAbort = new AbortController();
+try {
+  await torii.waitForTransactionStatus(sampleHashHex, {
+    signal: statusAbort.signal,
+    intervalMs: 500,
+    maxAttempts: 40,
+  });
+} catch (error) {
+  if (error && error.name === "TransactionStatusError") {
+    console.error(error.status, error.rejectionReason); // e.g. Rejected build_claim_missing
+  }
+  throw error;
+}
 
 // Submit while re-signing with a fresh private key (mutating buffer supported)
 await submitSignedTransaction(torii, encoded, { privateKey });
@@ -2946,7 +2962,6 @@ so you can persist the verdict metadata immediately.
 ```js
 const draft = {
   controller: "ih58:...",
-  operator: "ih58:...", // account whose private key signs the certificate payload
   allowance: {
     asset: "usd#wonderland",
     amount: "10",
@@ -2962,6 +2977,8 @@ const draft = {
     expires_at_ms: Date.now() + 86_400_000,
   },
 };
+
+// Torii derives the certificate operator from its configured offline issuer keypair.
 
 const topUp = await torii.topUpOfflineAllowance({
   authority: "ih58:...",
@@ -2983,6 +3000,67 @@ const renewed = await torii.topUpOfflineAllowanceRenewal(
   },
 );
 console.log("renewed", renewed.registration.certificate_id_hex);
+```
+
+To issue a signed build claim directly (for example to attach to receipts before
+settlement), call `issueOfflineBuildClaim`:
+
+```js
+const claim = await torii.issueOfflineBuildClaim({
+  certificateIdHex: topUp.registration.certificate_id_hex,
+  txIdHex: "ab".repeat(64),
+  platform: "apple", // or "android"
+  appId: "com.example.ios",
+  buildNumber: 77,
+});
+console.log("issued build claim", claim.claim_id_hex);
+console.log("claim platform", claim.build_claim.platform); // Apple / Android
+```
+
+Submit offline settlement bundles with `submitOfflineSettlement`. When Torii
+cannot infer a single app/build tuple (for example Android multi-package
+certificates), pass per-receipt `buildClaimOverrides` and set
+`repairExistingBuildClaims` when existing claims should be re-issued:
+
+```js
+const settlement = await torii.submitOfflineSettlement({
+  authority: "ih58:...",
+  privateKey: "ed25519:...",
+  transfer: transferPayload,
+  buildClaimOverrides: [
+    {
+      txIdHex: "ab".repeat(32),
+      appId: "com.example.android",
+      buildNumber: 77,
+      issuedAtMs: Date.now() - 1_000,
+      expiresAtMs: Date.now() + 30_000,
+    },
+  ],
+  repairExistingBuildClaims: true,
+});
+console.log("settled bundle", settlement.bundle_id_hex);
+```
+
+To enforce tx-status checks in one call, use `submitOfflineSettlementAndWait`
+and inspect `TransactionStatusError` when rejected:
+
+```js
+try {
+  const settleAbort = new AbortController();
+  const settlement = await torii.submitOfflineSettlementAndWait(
+    {
+      authority: "ih58:...",
+      privateKey: "ed25519:...",
+      transfer: transferPayload,
+    },
+    { signal: settleAbort.signal, intervalMs: 250, maxAttempts: 40 },
+  );
+  console.log("bundle", settlement.bundle_id_hex, "tx", settlement.transaction_hash_hex);
+} catch (error) {
+  if (error && error.name === "TransactionStatusError") {
+    console.error(error.status, error.rejectionReason); // e.g. Rejected build_claim_missing
+  }
+}
 ```
 
 If you already have a signed certificate, call `registerOfflineAllowance` or

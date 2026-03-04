@@ -640,19 +640,11 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   private static String extractRejectCode(final TransportResponse response) {
-    if (response == null || response.headers() == null) {
+    if (response == null) {
       return null;
     }
-    final List<String> values = response.headers().get("x-iroha-reject-code");
-    if (values == null || values.isEmpty()) {
-      return null;
-    }
-    for (final String value : values) {
-      if (value != null && !value.isBlank()) {
-        return value.trim();
-      }
-    }
-    return null;
+    return HttpErrorMessageExtractor.extractRejectCode(
+        response.headers(), "x-iroha-reject-code");
   }
 
   private static String resolveAuthority(final TransportRequest request) {
@@ -732,9 +724,7 @@ public final class HttpClientTransport implements IrohaClient {
                     && statusCode != 204
                     && statusCode != 404) {
                   future.completeExceptionally(
-                      new RuntimeException(
-                          "Unexpected pipeline status code " + statusCode + " for transaction "
-                              + hashHex));
+                      buildPipelineStatusHttpException(hashHex, clientResponse));
                   return;
                 }
 
@@ -767,8 +757,14 @@ public final class HttpClientTransport implements IrohaClient {
                   return;
                 }
                 if (isFailure) {
+                  final String rejectionReason =
+                      PipelineStatusExtractor.extractRejectionReason(payload).orElse(null);
                   future.completeExceptionally(
-                      new TransactionStatusException(hashHex, statusLiteral, payload));
+                      new TransactionStatusException(
+                          hashHex,
+                          statusLiteral,
+                          rejectionReason,
+                          payload));
                   return;
                 }
 
@@ -858,6 +854,16 @@ public final class HttpClientTransport implements IrohaClient {
       return (Map<String, Object>) parsed;
     }
     throw new IllegalStateException("Pipeline status response must be a JSON object");
+  }
+
+  private static TransactionStatusHttpException buildPipelineStatusHttpException(
+      final String hashHex, final ClientResponse response) {
+    final String bodyPreview = HttpErrorMessageExtractor.extractMessage(response.body());
+    return new TransactionStatusHttpException(
+        hashHex,
+        response.statusCode(),
+        response.rejectCode().orElse(null),
+        bodyPreview);
   }
 
   private void notifyRequest(final TransportRequest request) {

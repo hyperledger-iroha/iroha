@@ -2125,6 +2125,7 @@ fn minimal_config_snapshot() {
                     android_trust_anchors: [],
                     skip_platform_attestation: false,
                     skip_build_claim_verification: false,
+                    apple_app_attest_strict_signature: false,
                 },
                 router: Router {
                     twap_window: 60s,

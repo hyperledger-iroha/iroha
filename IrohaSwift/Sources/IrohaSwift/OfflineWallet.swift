@@ -166,15 +166,18 @@ public final class OfflineWallet {
 
     /// Issues and registers an offline allowance. When `recordVerdict` is `true`, the issued
     /// certificate is cached in the verdict journal using `recordedAt` (or now when omitted).
+    /// For iOS App Attest flows, pass the top-up `challengeHash` as `attestationNonce`.
     @discardableResult
     public func topUpAllowance(draft: OfflineWalletCertificateDraft,
                                authority: String,
                                privateKey: String,
+                               attestationNonce: Data? = nil,
                                recordVerdict: Bool = true,
                                recordedAt timestampMs: UInt64? = nil) async throws -> ToriiOfflineTopUpResponse {
         let response = try await toriiClient.topUpOfflineAllowance(draft: draft,
                                                                    authority: authority,
-                                                                   privateKey: privateKey)
+                                                                   privateKey: privateKey,
+                                                                   attestationNonce: attestationNonce)
         if recordVerdict {
             try recordVerdictMetadata(from: response.certificate, recordedAt: timestampMs)
         }
@@ -183,17 +186,20 @@ public final class OfflineWallet {
 
     /// Issues and registers a renewed offline allowance. When `recordVerdict` is `true`, the issued
     /// certificate is cached in the verdict journal using `recordedAt` (or now when omitted).
+    /// For iOS App Attest flows, pass the renewal `challengeHash` as `attestationNonce`.
     @discardableResult
     public func topUpAllowanceRenewal(certificateIdHex: String,
                                       draft: OfflineWalletCertificateDraft,
                                       authority: String,
                                       privateKey: String,
+                                      attestationNonce: Data? = nil,
                                       recordVerdict: Bool = true,
                                       recordedAt timestampMs: UInt64? = nil) async throws -> ToriiOfflineTopUpResponse {
         let response = try await toriiClient.topUpOfflineAllowanceRenewal(certificateIdHex: certificateIdHex,
                                                                           draft: draft,
                                                                           authority: authority,
-                                                                          privateKey: privateKey)
+                                                                          privateKey: privateKey,
+                                                                          attestationNonce: attestationNonce)
         if recordVerdict {
             try recordVerdictMetadata(from: response.certificate, recordedAt: timestampMs)
         }

@@ -2784,6 +2784,116 @@ public struct ToriiOfflineCertificateIssueResponse: Decodable, Sendable, Equatab
     }
 }
 
+public struct ToriiOfflineBuildClaimIssueRequest: Encodable, Sendable {
+    public let certificateIdHex: String
+    public let txIdHex: String
+    public let platform: String
+    public let appId: String?
+    public let buildNumber: UInt64?
+    public let issuedAtMs: UInt64?
+    public let expiresAtMs: UInt64?
+
+    private enum CodingKeys: String, CodingKey {
+        case certificateIdHex = "certificate_id_hex"
+        case txIdHex = "tx_id_hex"
+        case platform
+        case appId = "app_id"
+        case buildNumber = "build_number"
+        case issuedAtMs = "issued_at_ms"
+        case expiresAtMs = "expires_at_ms"
+    }
+
+    public init(certificateIdHex: String,
+                txIdHex: String,
+                platform: String,
+                appId: String? = nil,
+                buildNumber: UInt64? = nil,
+                issuedAtMs: UInt64? = nil,
+                expiresAtMs: UInt64? = nil) {
+        self.certificateIdHex = certificateIdHex
+        self.txIdHex = txIdHex
+        self.platform = platform.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        self.appId = appId
+        self.buildNumber = buildNumber
+        self.issuedAtMs = issuedAtMs
+        self.expiresAtMs = expiresAtMs
+    }
+}
+
+public enum ToriiOfflineBuildClaimPlatform: String, Codable, Sendable, Equatable {
+    case apple = "Apple"
+    case android = "Android"
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        switch raw.lowercased() {
+        case "apple", "ios":
+            self = .apple
+        case "android":
+            self = .android
+        default:
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "platform must be Apple or Android"
+            )
+        }
+    }
+}
+
+public struct ToriiOfflineBuildClaim: Codable, Sendable, Equatable {
+    public let claimId: String
+    public let nonce: String
+    public let platform: ToriiOfflineBuildClaimPlatform
+    public let appId: String
+    public let buildNumber: UInt64
+    public let issuedAtMs: UInt64
+    public let expiresAtMs: UInt64
+    public let lineageScope: String?
+    public let operatorSignature: String
+
+    private enum CodingKeys: String, CodingKey {
+        case claimId = "claim_id"
+        case nonce
+        case platform
+        case appId = "app_id"
+        case buildNumber = "build_number"
+        case issuedAtMs = "issued_at_ms"
+        case expiresAtMs = "expires_at_ms"
+        case lineageScope = "lineage_scope"
+        case operatorSignature = "operator_signature"
+    }
+}
+
+public struct ToriiOfflineBuildClaimIssueResponse: Decodable, Sendable, Equatable {
+    public let claimIdHex: String
+    private let buildClaim: ToriiJSONValue
+
+    private enum CodingKeys: String, CodingKey {
+        case claimIdHex = "claim_id_hex"
+        case buildClaim = "build_claim"
+    }
+
+    public var rawBuildClaim: ToriiJSONValue {
+        buildClaim
+    }
+
+    public func decodeBuildClaim<T: Decodable>(as type: T.Type = T.self,
+                                               decoder: JSONDecoder = JSONDecoder()) throws -> T {
+        try buildClaim.decode(as: type, decoder: decoder)
+    }
+
+    public func buildClaimObject(decoder: JSONDecoder = JSONDecoder()) throws -> ToriiOfflineBuildClaim {
+        try decodeBuildClaim(as: ToriiOfflineBuildClaim.self, decoder: decoder)
+    }
+
+    /// Encode the raw build-claim JSON to Data for local storage.
+    public func encodedBuildClaimData() throws -> Data {
+        try buildClaim.encodedData()
+    }
+}
+
 public struct ToriiOfflineAllowanceRegisterRequest: Encodable, Sendable {
     public let authority: String
     public let privateKey: String
@@ -2862,25 +2972,78 @@ public struct ToriiOfflineSettlementSubmitRequest: Encodable, Sendable {
     public let authority: String
     public let privateKey: String
     public let transfer: ToriiJSONValue
+    public let buildClaimOverrides: [ToriiOfflineSettlementBuildClaimOverride]
+    public let repairExistingBuildClaims: Bool
 
     private enum CodingKeys: String, CodingKey {
         case authority
         case privateKey = "private_key"
         case transfer
+        case buildClaimOverrides = "build_claim_overrides"
+        case repairExistingBuildClaims = "repair_existing_build_claims"
     }
 
-    public init(authority: String, privateKey: String, transfer: ToriiJSONValue) {
+    public init(authority: String,
+                privateKey: String,
+                transfer: ToriiJSONValue,
+                buildClaimOverrides: [ToriiOfflineSettlementBuildClaimOverride] = [],
+                repairExistingBuildClaims: Bool = false) {
         self.authority = authority
         self.privateKey = privateKey
         self.transfer = transfer
+        self.buildClaimOverrides = buildClaimOverrides
+        self.repairExistingBuildClaims = repairExistingBuildClaims
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(authority, forKey: .authority)
+        try container.encode(privateKey, forKey: .privateKey)
+        try container.encode(transfer, forKey: .transfer)
+        if !buildClaimOverrides.isEmpty {
+            try container.encode(buildClaimOverrides, forKey: .buildClaimOverrides)
+        }
+        if repairExistingBuildClaims {
+            try container.encode(true, forKey: .repairExistingBuildClaims)
+        }
     }
 }
 
 public struct ToriiOfflineSettlementSubmitResponse: Decodable, Sendable, Equatable {
     public let bundleIdHex: String
+    public let txHashHex: String?
 
     private enum CodingKeys: String, CodingKey {
         case bundleIdHex = "bundle_id_hex"
+        case txHashHex = "transaction_hash_hex"
+    }
+}
+
+public struct ToriiOfflineSettlementBuildClaimOverride: Encodable, Sendable, Equatable {
+    public let txIdHex: String
+    public let appId: String?
+    public let buildNumber: UInt64?
+    public let issuedAtMs: UInt64?
+    public let expiresAtMs: UInt64?
+
+    private enum CodingKeys: String, CodingKey {
+        case txIdHex = "tx_id_hex"
+        case appId = "app_id"
+        case buildNumber = "build_number"
+        case issuedAtMs = "issued_at_ms"
+        case expiresAtMs = "expires_at_ms"
+    }
+
+    public init(txIdHex: String,
+                appId: String? = nil,
+                buildNumber: UInt64? = nil,
+                issuedAtMs: UInt64? = nil,
+                expiresAtMs: UInt64? = nil) {
+        self.txIdHex = txIdHex
+        self.appId = appId
+        self.buildNumber = buildNumber
+        self.issuedAtMs = issuedAtMs
+        self.expiresAtMs = expiresAtMs
     }
 }
 
@@ -7464,6 +7627,13 @@ public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
     public struct Status: Decodable, Sendable {
         public let kind: String
         public let content: String?
+        public let rejectionReason: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case kind
+            case content
+            case rejectionReason = "rejection_reason"
+        }
 
         public var state: PipelineTransactionState {
             PipelineTransactionState(kind: kind)
@@ -8499,6 +8669,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
+    public func issueOfflineBuildClaim(_ requestBody: ToriiOfflineBuildClaimIssueRequest,
+                                       completion: @escaping (Result<ToriiOfflineBuildClaimIssueResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.issueOfflineBuildClaim(requestBody) }
+    }
+
+    @discardableResult
     public func registerOfflineAllowance(_ requestBody: ToriiOfflineAllowanceRegisterRequest,
                                          completion: @escaping (Result<ToriiOfflineAllowanceRegisterResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.registerOfflineAllowance(requestBody) }
@@ -8524,10 +8700,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func topUpOfflineAllowance(draft: OfflineWalletCertificateDraft,
                                       authority: String,
                                       privateKey: String,
+                                      attestationNonce: Data? = nil,
                                       completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.topUpOfflineAllowance(draft: draft,
                                                                    authority: authority,
-                                                                   privateKey: privateKey) }
+                                                                   privateKey: privateKey,
+                                                                   attestationNonce: attestationNonce) }
     }
 
     @discardableResult
@@ -8535,11 +8713,13 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                              draft: OfflineWalletCertificateDraft,
                                              authority: String,
                                              privateKey: String,
+                                             attestationNonce: Data? = nil,
                                              completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.topUpOfflineAllowanceRenewal(certificateIdHex: certificateIdHex,
                                                                           draft: draft,
                                                                           authority: authority,
-                                                                          privateKey: privateKey) }
+                                                                          privateKey: privateKey,
+                                                                          attestationNonce: attestationNonce) }
     }
 
     /// Reprovisions an existing offline allowance by renewing the certificate with a
@@ -8573,6 +8753,18 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func submitOfflineSettlement(_ requestBody: ToriiOfflineSettlementSubmitRequest,
                                         completion: @escaping (Result<ToriiOfflineSettlementSubmitResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.submitOfflineSettlement(requestBody) }
+    }
+
+    @discardableResult
+    public func submitOfflineSettlementAndWait(_ requestBody: ToriiOfflineSettlementSubmitRequest,
+                                               pollOptions: PipelineStatusPollOptions = .default,
+                                               mode: PipelineEndpointMode = .pipeline,
+                                               completion: @escaping (Result<ToriiOfflineSettlementSubmitResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.submitOfflineSettlementAndWait(requestBody,
+                                                          pollOptions: pollOptions,
+                                                          mode: mode)
+        }
     }
 
     @discardableResult
@@ -9011,7 +9203,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       body: body,
                                       headers: ["Content-Type": "application/json"])
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 202)
+        try ensureStatus(response, equals: 202, responseBody: data)
         return try decodeJSON(ToriiAccountOnboardingResponse.self, from: data)
     }
 
@@ -9409,7 +9601,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         if response.statusCode == 404 {
             return nil
         }
-        try ensureStatus(response, equals: 200)
+        try ensureStatus(response, equals: 200, responseBody: data)
         if data.isEmpty {
             throw ToriiClientError.emptyBody
         }
@@ -9646,6 +9838,41 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiOfflineCertificateIssueResponse.self, from: data)
     }
 
+    public func issueOfflineBuildClaim(_ requestBody: ToriiOfflineBuildClaimIssueRequest) async throws -> ToriiOfflineBuildClaimIssueResponse {
+        let normalizedCertificateId = try Self.normalizeHash32HexOrLiteral(
+            requestBody.certificateIdHex,
+            field: "certificate_id_hex"
+        )
+        let normalizedTxId = try Self.normalizeHash32HexOrLiteral(
+            requestBody.txIdHex,
+            field: "tx_id_hex"
+        )
+        let normalizedPlatform = try ToriiRequestValidation.normalizedNonEmpty(
+            requestBody.platform,
+            field: "platform"
+        ).lowercased()
+        guard normalizedPlatform == "apple" || normalizedPlatform == "android" else {
+            throw ToriiClientError.invalidPayload("platform must be either \"apple\" or \"android\".")
+        }
+        let normalizedRequest = ToriiOfflineBuildClaimIssueRequest(
+            certificateIdHex: normalizedCertificateId,
+            txIdHex: normalizedTxId,
+            platform: normalizedPlatform,
+            appId: requestBody.appId,
+            buildNumber: requestBody.buildNumber,
+            issuedAtMs: requestBody.issuedAtMs,
+            expiresAtMs: requestBody.expiresAtMs
+        )
+        let encoder = JSONEncoder()
+        let body = try encoder.encode(normalizedRequest)
+        let request = try makeRequest(path: "/v1/offline/build-claims/issue",
+                                      method: .post,
+                                      body: body,
+                                      headers: ["Content-Type": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiOfflineBuildClaimIssueResponse.self, from: data)
+    }
+
     public func registerOfflineAllowance(_ requestBody: ToriiOfflineAllowanceRegisterRequest) async throws -> ToriiOfflineAllowanceRegisterResponse {
         let encoder = JSONEncoder()
         let body = try encoder.encode(requestBody)
@@ -9685,8 +9912,10 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     public func topUpOfflineAllowance(draft: OfflineWalletCertificateDraft,
                                       authority: String,
-                                      privateKey: String) async throws -> ToriiOfflineTopUpResponse {
-        let issueRequest = try ToriiOfflineCertificateIssueRequest(certificate: draft)
+                                      privateKey: String,
+                                      attestationNonce: Data? = nil) async throws -> ToriiOfflineTopUpResponse {
+        let effectiveDraft = try Self.draftByApplyingAttestationNonce(draft, attestationNonce)
+        let issueRequest = try ToriiOfflineCertificateIssueRequest(certificate: effectiveDraft)
         let issued = try await issueOfflineCertificate(issueRequest)
         let registerRequest = ToriiOfflineAllowanceRegisterRequest(authority: authority,
                                                                    privateKey: privateKey,
@@ -9699,8 +9928,10 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func topUpOfflineAllowanceRenewal(certificateIdHex: String,
                                              draft: OfflineWalletCertificateDraft,
                                              authority: String,
-                                             privateKey: String) async throws -> ToriiOfflineTopUpResponse {
-        let issueRequest = try ToriiOfflineCertificateIssueRequest(certificate: draft)
+                                             privateKey: String,
+                                             attestationNonce: Data? = nil) async throws -> ToriiOfflineTopUpResponse {
+        let effectiveDraft = try Self.draftByApplyingAttestationNonce(draft, attestationNonce)
+        let issueRequest = try ToriiOfflineCertificateIssueRequest(certificate: effectiveDraft)
         let issued = try await issueOfflineCertificateRenewal(certificateIdHex: certificateIdHex,
                                                               requestBody: issueRequest)
         let renewRequest = ToriiOfflineAllowanceRegisterRequest(authority: authority,
@@ -9760,9 +9991,29 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func submitOfflineSettlement(_ requestBody: ToriiOfflineSettlementSubmitRequest) async throws -> ToriiOfflineSettlementSubmitResponse {
+        let normalizedOverrides = try requestBody.buildClaimOverrides.enumerated().map { index, buildClaimOverride in
+            let normalizedTxIdHex = try Self.normalizeHash32HexOrLiteral(
+                buildClaimOverride.txIdHex,
+                field: "build_claim_overrides[\(index)].tx_id_hex"
+            )
+            return ToriiOfflineSettlementBuildClaimOverride(
+                txIdHex: normalizedTxIdHex,
+                appId: buildClaimOverride.appId,
+                buildNumber: buildClaimOverride.buildNumber,
+                issuedAtMs: buildClaimOverride.issuedAtMs,
+                expiresAtMs: buildClaimOverride.expiresAtMs
+            )
+        }
         let normalizedBundleId = Self.extractBundleIdHex(from: requestBody.transfer)
+        let normalizedRequest = ToriiOfflineSettlementSubmitRequest(
+            authority: requestBody.authority,
+            privateKey: requestBody.privateKey,
+            transfer: requestBody.transfer,
+            buildClaimOverrides: normalizedOverrides,
+            repairExistingBuildClaims: requestBody.repairExistingBuildClaims
+        )
         let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
+        let body = try encoder.encode(normalizedRequest)
         let request = try makeRequest(path: "/v1/offline/settlements",
                                       method: .post,
                                       body: body,
@@ -9779,6 +10030,66 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             if let normalizedBundleId,
                let rejectCode = Self.extractRejectCode(from: error) {
                 cacheOfflineSettlementStatus(.rejected(reason: rejectCode), bundleIdHex: normalizedBundleId)
+            }
+            throw error
+        }
+    }
+
+    public func waitForTransactionStatus(hashHex: String,
+                                         pollOptions: PipelineStatusPollOptions = .default,
+                                         mode: PipelineEndpointMode = .pipeline) async throws -> ToriiPipelineTransactionStatus {
+        var attempts = 0
+        let deadline = pollOptions.timeout > 0 ? Date().addingTimeInterval(pollOptions.timeout) : nil
+        while true {
+            try Task.checkCancellation()
+            attempts += 1
+            if let status = try await getTransactionStatus(hashHex: hashHex, mode: mode) {
+                let kind = status.content.status.kind
+                if pollOptions.successStatuses.contains(kind) {
+                    return status
+                }
+                if pollOptions.failureStatuses.contains(kind) {
+                    throw PipelineStatusError.failure(hash: hashHex, status: kind, payload: status)
+                }
+            }
+            if let maxAttempts = pollOptions.maxAttempts, attempts >= maxAttempts {
+                throw PipelineStatusError.timeout(hash: hashHex, attempts: attempts)
+            }
+            if let deadline, Date() >= deadline {
+                throw PipelineStatusError.timeout(hash: hashHex, attempts: attempts)
+            }
+            let interval = max(pollOptions.pollInterval, 0)
+            if interval > 0 {
+                let nanosDouble = interval * 1_000_000_000
+                let clamped = min(max(nanosDouble, 0), Double(UInt64.max))
+                try await Task.sleep(nanoseconds: UInt64(clamped))
+            } else {
+                await Task.yield()
+            }
+        }
+    }
+
+    public func submitOfflineSettlementAndWait(_ requestBody: ToriiOfflineSettlementSubmitRequest,
+                                               pollOptions: PipelineStatusPollOptions = .default,
+                                               mode: PipelineEndpointMode = .pipeline) async throws -> ToriiOfflineSettlementSubmitResponse {
+        let settlement = try await submitOfflineSettlement(requestBody)
+        let cachedBundleId =
+            (try? Self.normalizeBundleIdHex(settlement.bundleIdHex, field: "bundle_id_hex"))
+            ?? Self.extractBundleIdHex(from: requestBody.transfer)
+        guard let txHashHex = settlement.txHashHex, !txHashHex.isEmpty else {
+            throw ToriiClientError.invalidPayload(
+                "offline settlement submit response missing transaction_hash_hex"
+            )
+        }
+        do {
+            _ = try await waitForTransactionStatus(hashHex: txHashHex,
+                                                   pollOptions: pollOptions,
+                                                   mode: mode)
+            return settlement
+        } catch let error as PipelineStatusError {
+            if case .failure = error, let cachedBundleId {
+                cacheOfflineSettlementStatus(.rejected(reason: error.rejectionReason),
+                                             bundleIdHex: cachedBundleId)
             }
             throw error
         }
@@ -9809,7 +10120,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         if response.statusCode == 404 {
             return nil
         }
-        try ensureStatus(response, equals: 200)
+        try ensureStatus(response, equals: 200, responseBody: data)
         if data.isEmpty {
             throw ToriiClientError.emptyBody
         }
@@ -9842,11 +10153,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let trimmed = try ToriiConnectJSON.trimmedNonEmpty(sid, field: "sid")
         let encoded = encodePathComponent(trimmed)
         let request = try makeRequest(path: "/v1/connect/session/\(encoded)", method: .delete)
-        let (_, response) = try await send(request)
+        let (data, response) = try await send(request)
         if response.statusCode == 404 {
             return false
         }
-        try ensureStatus(response, equals: 204)
+        try ensureStatus(response, equals: 204, responseBody: data)
         return true
     }
 
@@ -9876,7 +10187,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                         "Accept": "application/json"
                                       ])
         let (data, response) = try await send(request)
-        try ensureStatus(response, in: 200..<203)
+        try ensureStatus(response, in: 200..<203, responseBody: data)
         if data.isEmpty {
             return nil
         }
@@ -9958,7 +10269,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let encodedId = encodePathComponent(normalizedId)
         let request = try makeRequest(path: "/v1/zk/attachments/\(encodedId)")
         let (data, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         let contentType = response.value(forHTTPHeaderField: "Content-Type")
         return (data, contentType)
     }
@@ -9967,8 +10278,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let normalizedId = try ToriiRequestValidation.normalizedNonEmpty(id, field: "id")
         let encodedId = encodePathComponent(normalizedId)
         let request = try makeRequest(path: "/v1/zk/attachments/\(encodedId)", method: .delete)
-        let (_, response) = try await send(request)
-        try ensureStatus(response, equals: 204)
+        let (data, response) = try await send(request)
+        try ensureStatus(response, equals: 204, responseBody: data)
     }
 
     // MARK: Data Availability (Async)
@@ -10263,7 +10574,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             ]
         )
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 202)
+        try ensureStatus(response, equals: 202, responseBody: data)
         let payload = try decodeJSON(ToriiDaIngestSubmitPayload.self, from: data)
         let headerValue = response.value(forHTTPHeaderField: ToriiPdpCommitmentHeader)
         if let artifactDirectory {
@@ -10368,8 +10679,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let normalizedId = try ToriiRequestValidation.normalizedNonEmpty(id, field: "id")
         let encodedId = encodePathComponent(normalizedId)
         let request = try makeRequest(path: "/v1/zk/prover/reports/\(encodedId)", method: .delete)
-        let (_, response) = try await send(request)
-        try ensureStatus(response, equals: 204)
+        let (data, response) = try await send(request)
+        try ensureStatus(response, equals: 204, responseBody: data)
     }
 
     public func countProverReports(filter: ToriiProverReportsFilter? = nil) async throws -> UInt64 {
@@ -10442,8 +10753,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
                                       headers: ["Content-Type": "application/json"])
-        let (_, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300)
+        let (data, response) = try await send(request)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
     }
 
     public func fetchContractManifest(codeHashHex: String) async throws -> ToriiContractManifestRecord {
@@ -10496,7 +10807,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let request = try makeRequest(path: "/v1/health",
                                       headers: ["Accept": "text/plain"])
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 200)
+        try ensureStatus(response, equals: 200, responseBody: data)
         return try decodeUTF8String(from: data, context: "health")
     }
 
@@ -10507,7 +10818,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
         let request = try makeRequest(path: "/v1/metrics", headers: headers)
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 200)
+        try ensureStatus(response, equals: 200, responseBody: data)
         if asText {
             return .text(try decodeUTF8String(from: data, context: "metrics (text)"))
         }
@@ -10587,7 +10898,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       body: body,
                                       headers: ["Content-Type": "application/json"])
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 200)
+        try ensureStatus(response, equals: 200, responseBody: data)
         return try decodeJSON(ToriiRuntimeUpgradeActionResponse.self, from: data)
     }
 
@@ -10599,7 +10910,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       body: Data(),
                                       headers: ["Content-Type": "application/json"])
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 200)
+        try ensureStatus(response, equals: 200, responseBody: data)
         return try decodeJSON(ToriiRuntimeUpgradeActionResponse.self, from: data)
     }
 
@@ -10611,7 +10922,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       body: Data(),
                                       headers: ["Content-Type": "application/json"])
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 200)
+        try ensureStatus(response, equals: 200, responseBody: data)
         return try decodeJSON(ToriiRuntimeUpgradeActionResponse.self, from: data)
     }
 
@@ -10647,8 +10958,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       method: .post,
                                       body: body,
                                       headers: ["Content-Type": "application/json"])
-        let (_, response) = try await send(request)
-        try ensureStatus(response, equals: 202)
+        let (data, response) = try await send(request)
+        try ensureStatus(response, equals: 202, responseBody: data)
     }
 
     public func updateVerifyingKey(_ requestBody: ToriiVerifyingKeyUpdateRequest) async throws {
@@ -10658,8 +10969,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       method: .post,
                                       body: body,
                                       headers: ["Content-Type": "application/json"])
-        let (_, response) = try await send(request)
-        try ensureStatus(response, equals: 202)
+        let (data, response) = try await send(request)
+        try ensureStatus(response, equals: 202, responseBody: data)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -11260,6 +11571,31 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         )
     }
 
+    private static func draftByApplyingAttestationNonce(
+        _ draft: OfflineWalletCertificateDraft,
+        _ attestationNonce: Data?
+    ) throws -> OfflineWalletCertificateDraft {
+        guard let attestationNonce else {
+            return draft
+        }
+        guard attestationNonce.count == 32 else {
+            throw ToriiClientError.invalidPayload("attestationNonce must be exactly 32 bytes.")
+        }
+        return OfflineWalletCertificateDraft(
+            controller: draft.controller,
+            allowance: draft.allowance,
+            spendPublicKey: draft.spendPublicKey,
+            attestationReport: draft.attestationReport,
+            issuedAtMs: draft.issuedAtMs,
+            expiresAtMs: draft.expiresAtMs,
+            policy: draft.policy,
+            metadata: draft.metadata,
+            verdictId: draft.verdictId,
+            attestationNonce: attestationNonce,
+            refreshAtMs: draft.refreshAtMs
+        )
+    }
+
     public func submitTransaction(data: Data,
                                   mode: PipelineEndpointMode,
                                   idempotencyKey: String? = nil) async throws -> ToriiSubmitTransactionResponse? {
@@ -11277,7 +11613,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       body: data,
                                       headers: headers)
         let (responseData, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: responseData)
         guard !responseData.isEmpty else { return nil }
         let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
         if contentType.contains("application/x-norito") {
@@ -11300,7 +11636,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         )
         let (data, response) = try await send(request)
         if response.statusCode == 404 { return nil }
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         guard !data.isEmpty else { return nil }
         return try decodeJSON(ToriiPipelineTransactionStatus.self, from: data)
     }
@@ -11309,7 +11645,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let request = try makeRequest(path: "/v1/pipeline/recovery/\(height)")
         let (data, response) = try await send(request)
         if response.statusCode == 404 { return nil }
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         guard !data.isEmpty else { return nil }
         return try decodeJSON(ToriiPipelineRecovery.self, from: data)
     }
@@ -11317,14 +11653,14 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getTimeNow() async throws -> ToriiTimeSnapshot {
         let request = try makeRequest(path: "/v1/time/now")
         let (data, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         return try decodeJSON(ToriiTimeSnapshot.self, from: data)
     }
 
     public func getTimeStatus() async throws -> ToriiTimeStatusSnapshot {
         let request = try makeRequest(path: "/v1/time/status")
         let (data, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         return try decodeJSON(ToriiTimeStatusSnapshot.self, from: data)
     }
 
@@ -11620,11 +11956,20 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                 throw ToriiClientError.invalidResponse
             }
             return (data, http)
-        } catch is CancellationError {
-            throw CancellationError()
         } catch {
+            if error is CancellationError || Self.isCancelledTransportError(error) {
+                throw CancellationError()
+            }
             throw ToriiClientError.transport(error)
         }
+    }
+
+    private static func isCancelledTransportError(_ error: Error) -> Bool {
+        if let urlError = error as? URLError {
+            return urlError.code == .cancelled
+        }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 
     private func rejectCode(from response: HTTPURLResponse) -> String? {
@@ -11636,18 +11981,94 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return raw
     }
 
-    private func ensureStatus(_ response: HTTPURLResponse, in range: Range<Int>) throws {
+    private static func trimErrorBodyText(_ text: String, maxLength: Int = 512) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maxLength else { return trimmed }
+        let index = trimmed.index(trimmed.startIndex, offsetBy: maxLength)
+        return "\(trimmed[..<index])..."
+    }
+
+    private static func extractErrorMessage(from jsonObject: Any) -> String? {
+        if let text = jsonObject as? String {
+            let trimmed = trimErrorBodyText(text)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let list = jsonObject as? [Any] {
+            for value in list {
+                if let nested = extractErrorMessage(from: value) {
+                    return nested
+                }
+            }
+            return nil
+        }
+        guard let object = jsonObject as? [String: Any] else { return nil }
+        let candidateKeys = [
+            "message",
+            "error",
+            "errors",
+            "detail",
+            "details",
+            "reason",
+            "rejection_reason",
+            "description"
+        ]
+        var caseInsensitiveValues: [String: Any] = [:]
+        for (key, value) in object {
+            let normalized = key.lowercased()
+            if caseInsensitiveValues[normalized] == nil {
+                caseInsensitiveValues[normalized] = value
+            }
+        }
+        for key in candidateKeys {
+            guard let value = caseInsensitiveValues[key] else { continue }
+            if let nested = extractErrorMessage(from: value) {
+                return nested
+            }
+        }
+        return nil
+    }
+
+    private static func httpStatusMessage(response: HTTPURLResponse, responseBody: Data?) -> String {
+        let fallback = HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
+        guard let responseBody, !responseBody.isEmpty else { return fallback }
+        if let jsonObject = try? JSONSerialization.jsonObject(with: responseBody, options: []) {
+            if let detail = extractErrorMessage(from: jsonObject), !detail.isEmpty {
+                return detail
+            }
+            if JSONSerialization.isValidJSONObject(jsonObject),
+               let compact = try? JSONSerialization.data(withJSONObject: jsonObject, options: [.sortedKeys]),
+               let jsonText = String(data: compact, encoding: .utf8) {
+                let detail = trimErrorBodyText(jsonText)
+                if !detail.isEmpty {
+                    return detail
+                }
+            }
+        }
+        if let text = String(data: responseBody, encoding: .utf8) {
+            let detail = trimErrorBodyText(text)
+            if !detail.isEmpty {
+                return detail
+            }
+        }
+        return fallback
+    }
+
+    private func ensureStatus(_ response: HTTPURLResponse,
+                              in range: Range<Int>,
+                              responseBody: Data? = nil) throws {
         guard range.contains(response.statusCode) else {
             throw ToriiClientError.httpStatus(code: response.statusCode,
-                                              message: HTTPURLResponse.localizedString(forStatusCode: response.statusCode),
+                                              message: Self.httpStatusMessage(response: response, responseBody: responseBody),
                                               rejectCode: rejectCode(from: response))
         }
     }
 
-    private func ensureStatus(_ response: HTTPURLResponse, equals code: Int) throws {
+    private func ensureStatus(_ response: HTTPURLResponse,
+                              equals code: Int,
+                              responseBody: Data? = nil) throws {
         guard response.statusCode == code else {
             throw ToriiClientError.httpStatus(code: response.statusCode,
-                                              message: HTTPURLResponse.localizedString(forStatusCode: response.statusCode),
+                                              message: Self.httpStatusMessage(response: response, responseBody: responseBody),
                                               rejectCode: rejectCode(from: response))
         }
     }
@@ -11656,7 +12077,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                       acceptedStatus: Range<Int> = 200..<300,
                       allowEmptyBody: Bool = false) async throws -> Data {
         let (data, response) = try await send(request)
-        try ensureStatus(response, in: acceptedStatus)
+        try ensureStatus(response, in: acceptedStatus, responseBody: data)
         if data.isEmpty && !allowEmptyBody {
             throw ToriiClientError.emptyBody
         }
@@ -11763,7 +12184,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       body: payload,
                                       headers: ["Content-Type": "application/json"])
         let (data, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         return try decodeJSON(Response.self, from: data)
     }
 
@@ -11772,7 +12193,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                                         responseType: Response.Type) async throws -> Response {
         let request = try makeRequest(path: path, queryItems: queryItems)
         let (data, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         return try decodeJSON(Response.self, from: data)
     }
 
@@ -12142,8 +12563,22 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return normalized.lowercased()
     }
 
+    private static func normalizeHash32HexOrLiteral(_ value: String,
+                                                    field: String) throws -> String {
+        let trimmed = try ToriiRequestValidation.normalizedNonEmpty(value, field: field)
+        if trimmed.lowercased().hasPrefix("hash:") {
+            return try normalizeHashLiteralBundleId(trimmed, field: field)
+        }
+        return try ToriiRequestValidation.normalized32ByteHex(trimmed, field: field)
+    }
+
     private static func normalizeHashLiteralBundleId(_ literal: String,
                                                      field: String) throws -> String {
+        let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix("hash:") else {
+            throw ToriiClientError.invalidPayload("\(field) must be a valid hash literal.")
+        }
+        let literal = trimmed
         guard let separator = literal.lastIndex(of: "#") else {
             throw ToriiClientError.invalidPayload("\(field) must be a valid hash literal.")
         }
@@ -12153,13 +12588,41 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
         let body = String(literal[start..<separator])
         let checksum = String(literal[literal.index(after: separator)...])
-        guard !body.isEmpty,
-              checksum.count == 4,
-              UInt16(checksum, radix: 16) != nil,
-              Data(hexString: body) != nil else {
+        guard body.range(of: "^[0-9a-fA-F]{64}$", options: .regularExpression) != nil,
+              checksum.range(of: "^[0-9a-fA-F]{4}$", options: .regularExpression) != nil else {
+            throw ToriiClientError.invalidPayload("\(field) must be a valid hash literal.")
+        }
+        let expectedChecksum = hashLiteralChecksum(tag: "hash", body: body.uppercased())
+        guard expectedChecksum.caseInsensitiveCompare(checksum) == .orderedSame else {
             throw ToriiClientError.invalidPayload("\(field) must be a valid hash literal.")
         }
         return body.lowercased()
+    }
+
+    private static func hashLiteralChecksum(tag: String,
+                                            body: String) -> String {
+        var crc: UInt16 = 0xFFFF
+        for byte in tag.utf8 {
+            crc = updateHashLiteralChecksum(crc, value: byte)
+        }
+        crc = updateHashLiteralChecksum(crc, value: 0x3A) // ':'
+        for byte in body.utf8 {
+            crc = updateHashLiteralChecksum(crc, value: byte)
+        }
+        return String(format: "%04X", crc & 0xFFFF)
+    }
+
+    private static func updateHashLiteralChecksum(_ crc: UInt16,
+                                                  value: UInt8) -> UInt16 {
+        var current = UInt16(crc ^ (UInt16(value) << 8))
+        for _ in 0..<8 {
+            if (current & 0x8000) != 0 {
+                current = (current << 1) ^ 0x1021
+            } else {
+                current <<= 1
+            }
+        }
+        return current & 0xFFFF
     }
 
     private static func extractBundleIdHex(from transfer: ToriiJSONValue) -> String? {

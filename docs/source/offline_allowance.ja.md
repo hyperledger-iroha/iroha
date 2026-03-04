@@ -802,6 +802,18 @@ via `/v1/offline/allowances` (or `/v1/offline/allowances/{certificate_id_hex}/re
 There is no single “top-up” endpoint; SDK helpers simply chain the two calls
 and verify the certificate ids match.
 
+When build-claim verification is enabled and `torii.offline_issuer` is
+configured, `/v1/offline/settlements` auto-issues missing receipt build claims
+before submitting the transaction. Use `build_claim_overrides[]` on the
+settlement request for per-receipt overrides (`app_id`, `build_number`, or
+claim window), and set `repair_existing_build_claims=true` to re-issue already
+present claims.
+
+Android certificates may whitelist multiple package names (for example Play
+Integrity or marker-key metadata with more than one entry). In that case Torii
+cannot infer a single `app_id`; callers must provide `build_claim_overrides[]`
+for the affected receipt `tx_id_hex`.
+
 Issuer endpoints (`/v1/offline/certificates/*/issue`) are only enabled when
 `torii.offline_issuer` is configured. Use `torii.offline_issuer.allowed_controllers` to restrict
 which controller accounts may request new certificates.
