@@ -39,9 +39,9 @@ fn envelope_hash_is_injected_into_enqueued_unshield() {
     let authority: AccountId = ALICE_ID.clone();
     let mut vm = IVM::new(0);
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
-    // Seed latch with a fake envelope hash for unshield
+    // Seed the pending envelope hash that the vendor bridge injects into Unshield proofs.
     let expected_hash: [u8; 32] = [0x11; 32];
-    host.__test_seed_unshield_latch(expected_hash);
+    host.__test_set_last_env_hash_unshield(expected_hash);
     let metadata = ProgramMetadata {
         abi_version: 1,
         ..ProgramMetadata::default()

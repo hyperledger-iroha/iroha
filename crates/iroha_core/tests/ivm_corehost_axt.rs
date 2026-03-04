@@ -2,6 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::similar_names)]
 #![allow(clippy::too_many_lines)]
+#![cfg(feature = "iroha-core-tests")]
 
 #[cfg(feature = "app_api")]
 use std::collections::BTreeMap;

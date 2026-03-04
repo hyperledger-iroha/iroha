@@ -4441,7 +4441,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Execute a closure with a mutable reference to the [`CoreHost`] attached to `vm`.
     ///
     /// Used in tests to access the host state without juggling raw pointers.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn with_host<R>(vm: &mut IVM, f: impl FnOnce(&mut CoreHost) -> R) -> R {
         let host_any = vm.host_mut_any().expect("CoreHost not attached to VM");
         let host = host_any
