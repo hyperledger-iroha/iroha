@@ -61,6 +61,11 @@ enum NoritoBridgeLoader {
         "ios-arm64_x86_64-simulator": "7ec00db281461365e2a3acaf7bc7094f9751f23a25f0a2ab992a9b27cd004356"
     ]
 
+    private struct ArtifactManifest {
+        let version: String
+        let hashes: [String: String]
+    }
+
     static func openHandle() -> (UnsafeMutableRawPointer?, ValidationStatus) {
         if BridgeBuildMode.current == .disabled {
             return (nil, .disabled(reason: "\(BridgePolicyHint.envVar)=0"))
@@ -136,13 +141,16 @@ enum NoritoBridgeLoader {
         guard allowUntrustedLocation || isTrustedLocation(url) else {
             return .pathDenied(path: path)
         }
-        guard let identifier = identifier(for: url),
-              let expectedHash = expectedHashes[identifier] else {
+        guard let identifier = identifier(for: url) else {
             return .pathDenied(path: path)
         }
 
-        if let version = versionMetadata(near: url), version != expectedVersion {
+        let manifest = artifactManifest(near: url)
+        if let version = manifest?.version, version != expectedVersion {
             return .versionMismatch(path: path, expected: expectedVersion, actual: version)
+        }
+        guard let expectedHash = manifest?.hashes[identifier] ?? expectedHashes[identifier] else {
+            return .pathDenied(path: path)
         }
 
         let actualHash = sha256(url: url)
@@ -153,18 +161,30 @@ enum NoritoBridgeLoader {
         return .valid(path: path, identifier: identifier)
     }
 
-    private static func versionMetadata(near binaryURL: URL) -> String? {
-        let candidate = binaryURL
-            .deletingLastPathComponent() // NoritoBridge.framework
-            .deletingLastPathComponent() // platform folder
-            .deletingLastPathComponent() // NoritoBridge.xcframework
-            .appendingPathComponent("NoritoBridge.artifacts.json")
-        guard let data = try? Data(contentsOf: candidate),
+    private static func artifactManifest(near binaryURL: URL) -> ArtifactManifest? {
+        let frameworkDir = binaryURL.deletingLastPathComponent()
+        let platformDir = frameworkDir.deletingLastPathComponent()
+        let xcframeworkDir = platformDir.deletingLastPathComponent()
+        let candidates = [
+            xcframeworkDir.appendingPathComponent("NoritoBridge.artifacts.json"),
+            xcframeworkDir.deletingLastPathComponent().appendingPathComponent("NoritoBridge.artifacts.json")
+        ]
+        for candidate in candidates {
+            if let manifest = parseArtifactManifest(at: candidate) {
+                return manifest
+            }
+        }
+        return nil
+    }
+
+    private static func parseArtifactManifest(at url: URL) -> ArtifactManifest? {
+        guard let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let version = json["version"] as? String else {
             return nil
         }
-        return version
+        let hashes = json["hashes"] as? [String: String] ?? [:]
+        return ArtifactManifest(version: version, hashes: hashes)
     }
 
     private static func sha256(url: URL) -> String? {
