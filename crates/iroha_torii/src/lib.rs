@@ -4421,7 +4421,8 @@ async fn handler_explorer_blocks_list(
     if !allowed {
         check_access(&app, &headers, None, "v1/explorer/blocks").await?;
     }
-    routing::handle_v1_explorer_blocks(app.state.clone(), query.pagination).await
+    routing::handle_v1_explorer_blocks(app.state.clone(), app.telemetry.clone(), query.pagination)
+        .await
 }
 
 #[cfg(feature = "app_api")]
@@ -4753,7 +4754,8 @@ async fn handler_explorer_block_detail(
     if !allowed {
         check_access(&app, &headers, None, "v1/explorer/blocks/{id}").await?;
     }
-    routing::handle_v1_explorer_block_detail(app.state.clone(), identifier).await
+    routing::handle_v1_explorer_block_detail(app.state.clone(), app.telemetry.clone(), identifier)
+        .await
 }
 
 #[cfg(feature = "app_api")]
