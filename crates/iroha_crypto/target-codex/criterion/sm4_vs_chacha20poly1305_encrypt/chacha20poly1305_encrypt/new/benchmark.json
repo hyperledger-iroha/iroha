@@ -1,1 +1,0 @@
-{"group_id":"sm4_vs_chacha20poly1305_encrypt","function_id":"chacha20poly1305_encrypt","value_str":null,"throughput":{"Bytes":1024},"full_id":"sm4_vs_chacha20poly1305_encrypt/chacha20poly1305_encrypt","directory_name":"sm4_vs_chacha20poly1305_encrypt/chacha20poly1305_encrypt","title":"sm4_vs_chacha20poly1305_encrypt/chacha20poly1305_encrypt"}
