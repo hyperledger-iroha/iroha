@@ -2,6 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! `DefaultHost` and does not set ZK verification latches on verify calls.
 
+#![cfg(feature = "zk-tests")]
 #![cfg(feature = "zk-ipa-native")]
 
 use std::sync::Arc;

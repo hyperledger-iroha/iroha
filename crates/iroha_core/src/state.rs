@@ -8900,7 +8900,6 @@ impl World {
         Self::default()
     }
 
-    #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
     /// Register an active validator consensus key with a PoP for deterministic tests.
     pub fn register_validator_pop_for_testing(&mut self, public_key: PublicKey, pop: Vec<u8>) {
         let id = derive_validator_key_id(&public_key);
