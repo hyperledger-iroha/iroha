@@ -1328,6 +1328,11 @@ pub mod torii {
         /// Master enable switch for offline certificate issuer endpoints.
         pub const ENABLED: bool = true;
 
+        /// Additional legacy operator private keys retained for build-claim compatibility.
+        pub fn legacy_operator_private_keys() -> Vec<iroha_crypto::ExposedPrivateKey> {
+            Vec::new()
+        }
+
         /// Allowed controller allow-list (empty => allow all).
         pub fn allowed_controllers() -> Vec<String> {
             Vec::new()
@@ -3281,6 +3286,8 @@ pub mod settlement {
         pub const SKIP_PLATFORM_ATTESTATION: bool = false;
         /// Whether to skip build claim verification (for local testing only).
         pub const SKIP_BUILD_CLAIM_VERIFICATION: bool = false;
+        /// Whether iOS App Attest signatures must verify only against raw `clientDataHash`.
+        pub const APPLE_APP_ATTEST_STRICT_SIGNATURE: bool = false;
     }
     /// Router defaults (shadow price, guard rails).
     pub mod router {

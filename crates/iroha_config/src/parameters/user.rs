@@ -9321,6 +9321,9 @@ pub struct Offline {
     /// Skip build claim verification (for local testing only).
     #[config(default = "defaults::settlement::offline::SKIP_BUILD_CLAIM_VERIFICATION")]
     pub skip_build_claim_verification: bool,
+    /// Enforce strict iOS App Attest signature verification (disable compatibility fallback).
+    #[config(default = "defaults::settlement::offline::APPLE_APP_ATTEST_STRICT_SIGNATURE")]
+    pub apple_app_attest_strict_signature: bool,
 }
 
 impl Default for Offline {
@@ -9340,6 +9343,8 @@ impl Default for Offline {
             skip_platform_attestation: defaults::settlement::offline::SKIP_PLATFORM_ATTESTATION,
             skip_build_claim_verification:
                 defaults::settlement::offline::SKIP_BUILD_CLAIM_VERIFICATION,
+            apple_app_attest_strict_signature:
+                defaults::settlement::offline::APPLE_APP_ATTEST_STRICT_SIGNATURE,
         }
     }
 }
@@ -9570,6 +9575,7 @@ impl Offline {
             android_trust_anchor_files,
             skip_platform_attestation,
             skip_build_claim_verification,
+            apple_app_attest_strict_signature,
         } = self;
         if hot_retention_blocks == 0 {
             emitter.emit(ParseError::InvalidSettlementConfig.into());
@@ -9651,6 +9657,7 @@ impl Offline {
             android_trust_anchors: anchors,
             skip_platform_attestation,
             skip_build_claim_verification,
+            apple_app_attest_strict_signature,
         }
     }
 }
@@ -14518,6 +14525,9 @@ pub struct ToriiOfflineIssuer {
     pub enabled: bool,
     /// Private key used to sign offline wallet certificates.
     pub operator_private_key: ExposedPrivateKey,
+    /// Additional legacy private keys accepted for build-claim signatures.
+    #[config(default = "defaults::torii::offline_issuer::legacy_operator_private_keys()")]
+    pub legacy_operator_private_keys: Vec<ExposedPrivateKey>,
     /// Optional allow-list of controllers eligible for issuance.
     #[config(default = "defaults::torii::offline_issuer::allowed_controllers()")]
     pub allowed_controllers: Vec<String>,
@@ -14539,6 +14549,7 @@ impl ToriiOfflineIssuer {
             .collect();
         Some(actual::ToriiOfflineIssuer {
             operator_private_key: self.operator_private_key,
+            legacy_operator_private_keys: self.legacy_operator_private_keys,
             allowed_controllers,
         })
     }

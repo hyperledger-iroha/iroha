@@ -78,7 +78,7 @@ public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
     public let issuedAtMs: UInt64
     public let expiresAtMs: UInt64
     public let policy: OfflineWalletPolicy
-    public let metadata: [String: ToriiJSONValue]
+    let metadata: [String: ToriiJSONValue]
     public let verdictId: Data?
     public let attestationNonce: Data?
     public let refreshAtMs: UInt64?
@@ -220,6 +220,11 @@ public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
         verdictId = try Self.decodeOptionalHash(from: container, key: .verdictIdHex)
         attestationNonce = try Self.decodeOptionalHash(from: container, key: .attestationNonceHex)
         refreshAtMs = try container.decodeIfPresent(UInt64.self, forKey: .refreshAtMs)
+    }
+
+    /// Parse draft metadata into typed platform-agnostic models.
+    public func parsedMetadata() -> OfflineCertificateParsedMetadata {
+        OfflineCertificateParsedMetadata(from: metadata)
     }
 
     public func encode(to encoder: Encoder) throws {

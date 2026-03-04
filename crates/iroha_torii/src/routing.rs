@@ -14020,6 +14020,10 @@ const ENDPOINT_KAIGI_RELAYS: &str = "/v1/kaigi/relays";
 #[cfg(feature = "app_api")]
 const ENDPOINT_KAIGI_RELAY_DETAIL: &str = "/v1/kaigi/relays/{relay_id}";
 #[cfg(feature = "app_api")]
+const ENDPOINT_EXPLORER_BLOCKS: &str = "/v1/explorer/blocks";
+#[cfg(feature = "app_api")]
+const ENDPOINT_EXPLORER_BLOCK_DETAIL: &str = "/v1/explorer/blocks/{identifier}";
+#[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_TRANSACTIONS: &str = "/v1/explorer/transactions";
 #[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_INSTRUCTIONS: &str = "/v1/explorer/instructions";
@@ -16322,6 +16326,285 @@ mod tx_query_filter_tests {
         assert!(!filter_tx(&expr, &tx_a));
         assert!(filter_tx(&expr, &tx_b));
         assert!(filter_tx(&expr, &tx_c));
+    }
+
+    #[test]
+    fn explorer_pagination_window_matches_paginate_semantics() {
+        assert_eq!(explorer_pagination_window(0, 0), (1, 0, 1));
+        assert_eq!(explorer_pagination_window(1, 5), (5, 0, 5));
+        assert_eq!(explorer_pagination_window(3, 2), (2, 4, 6));
+
+        let (_, start_index, end_index) = explorer_pagination_window(3, 2);
+        let kept: Vec<u64> = (0..8)
+            .filter(|index| *index >= start_index && *index < end_index)
+            .collect();
+        assert_eq!(kept, vec![4, 5]);
+    }
+
+    #[test]
+    fn explorer_pagination_meta_keeps_page_and_counts() {
+        let meta = explorer_pagination_meta(0, 1, 3);
+        assert_eq!(meta.page, 0);
+        assert_eq!(meta.per_page, 1);
+        assert_eq!(meta.total_items, 3);
+        assert_eq!(meta.total_pages, 3);
+
+        let meta = explorer_pagination_meta(2, 5, 12);
+        assert_eq!(meta.page, 2);
+        assert_eq!(meta.per_page, 5);
+        assert_eq!(meta.total_items, 12);
+        assert_eq!(meta.total_pages, 3);
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod explorer_lookup_tests {
+    use std::{borrow::Cow, sync::Arc, time::Duration};
+
+    use iroha_core::{
+        block::{BlockBuilder, ValidBlock},
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+        sumeragi::network_topology::Topology,
+        tx::AcceptedTransaction,
+    };
+    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_data_model::{prelude as dm, transaction::signed::TransactionEntrypoint};
+
+    use super::*;
+
+    fn build_state_with_single_transaction(
+        instructions: Vec<dm::InstructionBox>,
+    ) -> (Arc<State>, HashOf<TransactionEntrypoint>) {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+
+        let chain: dm::ChainId = "test-chain".parse().expect("valid chain id");
+        let domain: dm::DomainId = "wonderland".parse().expect("valid domain id");
+        let authority_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = dm::AccountId::new(domain, authority_key.public_key().clone());
+
+        let mut builder = dm::TransactionBuilder::new(chain, authority);
+        builder.set_creation_time(Duration::from_millis(1_710_000_000_000));
+        let signed = builder
+            .with_instructions(instructions)
+            .sign(authority_key.private_key());
+        let target_hash = signed.hash_as_entrypoint();
+        let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
+
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let unverified = BlockBuilder::new(vec![tx])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified.header());
+        let valid: ValidBlock = unverified
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, state_block, committed);
+
+        (state, target_hash)
+    }
+
+    #[test]
+    fn explorer_instruction_history_collects_requested_page_only() {
+        let instructions = vec![
+            dm::Log::new(dm::Level::INFO, "first".to_owned()).into(),
+            dm::Log::new(dm::Level::INFO, "second".to_owned()).into(),
+            dm::Log::new(dm::Level::INFO, "third".to_owned()).into(),
+        ];
+        let (state, target_hash) = build_state_with_single_transaction(instructions);
+        let filters = ExplorerInstructionFilters {
+            account: None,
+            authority: None,
+            transaction_hash: None,
+            status: None,
+            block: None,
+            kind: None,
+            asset_id: None,
+        };
+
+        let (items, pagination) = collect_instruction_history(
+            state.as_ref(),
+            state.committed_height() as u64,
+            &filters,
+            2,
+            2,
+            AddressFormatPreference::Ih58,
+        )
+        .expect("instruction collection should succeed");
+
+        assert_eq!(pagination.total_items, 3);
+        assert_eq!(pagination.total_pages, 2);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].index, 2);
+        assert_eq!(items[0].transaction_hash, target_hash.to_string());
+    }
+
+    #[test]
+    fn explorer_detail_lookup_returns_transaction_and_instruction() {
+        let instructions = vec![
+            dm::Log::new(dm::Level::INFO, "first".to_owned()).into(),
+            dm::Log::new(dm::Level::INFO, "second".to_owned()).into(),
+        ];
+        let (state, target_hash) = build_state_with_single_transaction(instructions);
+        let max_height = state.committed_height() as u64;
+
+        let tx = find_transaction_detail(
+            state.as_ref(),
+            max_height,
+            target_hash.to_string(),
+            AddressFormatPreference::Ih58,
+        )
+        .expect("transaction detail should resolve");
+        assert_eq!(tx.hash, target_hash.to_string());
+
+        let instruction = find_instruction_detail(
+            state.as_ref(),
+            max_height,
+            target_hash.to_string(),
+            1,
+            AddressFormatPreference::Ih58,
+        )
+        .expect("instruction detail should resolve");
+        assert_eq!(instruction.index, 1);
+
+        let missing = find_instruction_detail(
+            state.as_ref(),
+            max_height,
+            target_hash.to_string(),
+            42,
+            AddressFormatPreference::Ih58,
+        );
+        assert!(
+            missing.is_err(),
+            "invalid instruction index should return not found"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "app_api", feature = "telemetry"))]
+mod explorer_endpoint_telemetry_tests {
+    use std::sync::Arc;
+
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
+
+    use super::*;
+
+    fn blank_state() -> Arc<State> {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        Arc::new(State::new_for_testing(World::default(), kura, query))
+    }
+
+    #[tokio::test]
+    async fn explorer_transactions_record_ok_metrics() {
+        let telemetry = MaybeTelemetry::for_tests();
+        let state = blank_state();
+
+        let before_count = telemetry
+            .metrics()
+            .await
+            .torii_explorer_requests_total
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTIONS, "ok"])
+            .get();
+        let before_samples = telemetry
+            .metrics()
+            .await
+            .torii_explorer_request_duration_seconds
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTIONS, "ok"])
+            .get_sample_count();
+
+        let response = handle_v1_explorer_transactions(
+            state,
+            telemetry.clone(),
+            crate::explorer::ExplorerPaginationQuery {
+                page: 1,
+                per_page: 1,
+                address_format: None,
+            },
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(
+            response.is_ok(),
+            "transactions list should succeed on blank state"
+        );
+
+        let after_count = telemetry
+            .metrics()
+            .await
+            .torii_explorer_requests_total
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTIONS, "ok"])
+            .get();
+        let after_samples = telemetry
+            .metrics()
+            .await
+            .torii_explorer_request_duration_seconds
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTIONS, "ok"])
+            .get_sample_count();
+
+        assert_eq!(after_count, before_count + 1);
+        assert_eq!(after_samples, before_samples + 1);
+    }
+
+    #[tokio::test]
+    async fn explorer_transaction_detail_records_error_metrics() {
+        let telemetry = MaybeTelemetry::for_tests();
+        let state = blank_state();
+
+        let before_count = telemetry
+            .metrics()
+            .await
+            .torii_explorer_requests_total
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTION_DETAIL, "error"])
+            .get();
+        let before_samples = telemetry
+            .metrics()
+            .await
+            .torii_explorer_request_duration_seconds
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTION_DETAIL, "error"])
+            .get_sample_count();
+
+        let response = handle_v1_explorer_transaction_detail(
+            state,
+            telemetry.clone(),
+            "not-a-valid-hash".to_owned(),
+            AddressFormatPreference::Ih58,
+        )
+        .await;
+        assert!(response.is_err(), "invalid hash should return an error");
+
+        let after_count = telemetry
+            .metrics()
+            .await
+            .torii_explorer_requests_total
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTION_DETAIL, "error"])
+            .get();
+        let after_samples = telemetry
+            .metrics()
+            .await
+            .torii_explorer_request_duration_seconds
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTION_DETAIL, "error"])
+            .get_sample_count();
+
+        assert_eq!(after_count, before_count + 1);
+        assert_eq!(after_samples, before_samples + 1);
     }
 }
 
@@ -27900,6 +28183,33 @@ pub struct OfflineCertificateRenewResponse {
 
 /// Request payload for POST `/v1/offline/settlements`.
 #[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    Debug,
+    Clone,
+)]
+pub struct OfflineSettlementBuildClaimOverride {
+    /// Receipt transaction identifier (hex, case-insensitive) targeted by this override.
+    pub tx_id_hex: String,
+    /// Optional application identifier override (`bundle_id` on iOS, package name on Android).
+    #[norito(default)]
+    pub app_id: Option<String>,
+    /// Optional certified build number override.
+    #[norito(default)]
+    pub build_number: Option<u64>,
+    /// Optional issuance timestamp override (unix ms).
+    #[norito(default)]
+    pub issued_at_ms: Option<u64>,
+    /// Optional expiry timestamp override (unix ms).
+    #[norito(default)]
+    pub expires_at_ms: Option<u64>,
+}
+
+/// Request payload for POST `/v1/offline/settlements`.
+#[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineSettlementSubmitRequest {
     /// Account authorizing the settlement transaction.
@@ -27908,6 +28218,12 @@ pub struct OfflineSettlementSubmitRequest {
     pub private_key: ExposedPrivateKey,
     /// Prepared offline-to-online transfer bundle.
     pub transfer: OfflineToOnlineTransfer,
+    /// Optional per-receipt overrides used when issuing/repairing build claims.
+    #[norito(default)]
+    pub build_claim_overrides: Vec<OfflineSettlementBuildClaimOverride>,
+    /// Re-issue and replace existing receipt build claims server-side.
+    #[norito(default)]
+    pub repair_existing_build_claims: bool,
 }
 
 /// Response payload for POST `/v1/offline/settlements`.
@@ -28486,6 +28802,19 @@ fn record_address_format_selection(
 ) {
     telemetry.with_metrics(|metrics| {
         metrics.inc_torii_address_format(endpoint, preference.metric_label());
+    });
+}
+
+#[cfg(feature = "app_api")]
+fn record_explorer_endpoint_result<T>(
+    telemetry: &MaybeTelemetry,
+    endpoint: &'static str,
+    started: std::time::Instant,
+    result: &Result<T, Error>,
+) {
+    let outcome = if result.is_ok() { "ok" } else { "error" };
+    telemetry.with_metrics(|metrics| {
+        metrics.record_torii_explorer_request(endpoint, outcome, started.elapsed());
     });
 }
 
@@ -32135,42 +32464,48 @@ pub async fn handle_v1_explorer_nfts(
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_blocks(
     state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
     pagination: crate::explorer::ExplorerPaginationQuery,
 ) -> Result<AxResponse, Error> {
-    let total_items = state.committed_height() as u64;
-    let page = pagination.page.max(1);
-    let per_page = pagination.per_page.max(1);
-    let total_pages = total_items.div_ceil(per_page);
-    let start_index = (page.saturating_sub(1)).saturating_mul(per_page);
-    let end_index = (start_index + per_page).min(total_items);
-    let mut items = Vec::new();
-    if total_items > 0 && start_index < total_items {
-        for offset in start_index..end_index {
-            let height = total_items - offset;
-            let height_usize: usize = height
-                .try_into()
-                .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
-            let nonzero_height = NonZeroUsize::new(height_usize)
-                .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-            let block = state.block_by_height(nonzero_height).ok_or_else(|| {
-                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::NotFound,
-                ))
-            })?;
-            items.push(crate::explorer::ExplorerBlockDto::from_block(&block));
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let total_items = state.committed_height() as u64;
+        let page = pagination.page.max(1);
+        let per_page = pagination.per_page.max(1);
+        let total_pages = total_items.div_ceil(per_page);
+        let start_index = (page.saturating_sub(1)).saturating_mul(per_page);
+        let end_index = (start_index + per_page).min(total_items);
+        let mut items = Vec::new();
+        if total_items > 0 && start_index < total_items {
+            for offset in start_index..end_index {
+                let height = total_items - offset;
+                let height_usize: usize = height.try_into().map_err(|_| {
+                    conversion_error("block height exceeds host pointer width".into())
+                })?;
+                let nonzero_height = NonZeroUsize::new(height_usize)
+                    .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
+                let block = state.block_by_height(nonzero_height).ok_or_else(|| {
+                    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                        iroha_data_model::query::error::QueryExecutionFail::NotFound,
+                    ))
+                })?;
+                items.push(crate::explorer::ExplorerBlockDto::from_block(&block));
+            }
         }
-    }
-    let pagination_meta = crate::explorer::ExplorerPaginationMeta {
-        page,
-        per_page,
-        total_pages,
-        total_items,
-    };
-    let body = crate::explorer::ExplorerBlocksPage {
-        pagination: pagination_meta,
-        items,
-    };
-    Ok(JsonBody(body).into_response())
+        let pagination_meta = crate::explorer::ExplorerPaginationMeta {
+            page,
+            per_page,
+            total_pages,
+            total_items,
+        };
+        let body = crate::explorer::ExplorerBlocksPage {
+            pagination: pagination_meta,
+            items,
+        };
+        Ok(JsonBody(body).into_response())
+    })();
+    record_explorer_endpoint_result(&telemetry, ENDPOINT_EXPLORER_BLOCKS, started, &response);
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -32401,38 +32736,52 @@ pub async fn handle_v1_explorer_transactions(
     status: Option<ExplorerTransactionStatusFilter>,
     asset_id: Option<iroha_data_model::asset::AssetId>,
 ) -> Result<AxResponse, Error> {
-    let max_height = state.committed_height() as u64;
-    let address_format = pagination.address_format_pref()?;
-    record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTIONS, address_format);
-    if let Some(block_height) = block {
-        if block_height > max_height {
-            let (items, pagination_meta) = crate::explorer::paginate(
-                Vec::<crate::explorer::ExplorerTransactionDto>::new(),
-                pagination.page,
-                pagination.per_page,
-            );
-            let empty_page = crate::explorer::ExplorerTransactionsPage {
-                pagination: pagination_meta,
-                items,
-            };
-            return Ok(JsonBody(empty_page).into_response());
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let max_height = state.committed_height() as u64;
+        let address_format = pagination.address_format_pref()?;
+        record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTIONS, address_format);
+        if let Some(block_height) = block {
+            if block_height > max_height {
+                let (items, pagination_meta) = crate::explorer::paginate(
+                    Vec::<crate::explorer::ExplorerTransactionDto>::new(),
+                    pagination.page,
+                    pagination.per_page,
+                );
+                let empty_page = crate::explorer::ExplorerTransactionsPage {
+                    pagination: pagination_meta,
+                    items,
+                };
+                return Ok(JsonBody(empty_page).into_response());
+            }
         }
-    }
-    let filters = ExplorerTransactionFilters {
-        authority,
-        status,
-        block,
-        asset_id,
-    };
-    let transactions =
-        collect_transaction_summaries(state.as_ref(), max_height, &filters, address_format)?;
-    let (items, pagination_meta) =
-        crate::explorer::paginate(transactions, pagination.page, pagination.per_page);
-    let page = crate::explorer::ExplorerTransactionsPage {
-        pagination: pagination_meta,
-        items,
-    };
-    Ok(JsonBody(page).into_response())
+        let filters = ExplorerTransactionFilters {
+            authority,
+            status,
+            block,
+            asset_id,
+        };
+        let (items, pagination_meta) = collect_transaction_summaries(
+            state.as_ref(),
+            max_height,
+            &filters,
+            pagination.page,
+            pagination.per_page,
+            address_format,
+        )?;
+        let page = crate::explorer::ExplorerTransactionsPage {
+            pagination: pagination_meta,
+            items,
+        };
+        Ok(JsonBody(page).into_response())
+    })();
+    record_explorer_endpoint_result(
+        &telemetry,
+        ENDPOINT_EXPLORER_TRANSACTIONS,
+        started,
+        &response,
+    );
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -32454,50 +32803,64 @@ pub async fn handle_v1_explorer_instructions(
     pagination: crate::explorer::ExplorerPaginationQuery,
     query: ExplorerInstructionQuery,
 ) -> Result<AxResponse, Error> {
-    let max_height = state.committed_height() as u64;
-    let address_format = pagination.address_format_pref()?;
-    record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTIONS, address_format);
-    let ExplorerInstructionQuery {
-        account,
-        authority,
-        transaction_hash,
-        status,
-        block,
-        kind,
-        asset_id,
-    } = query;
-    if let Some(block_height) = block {
-        if block_height > max_height {
-            let (items, pagination_meta) = crate::explorer::paginate(
-                Vec::<ExplorerInstructionDto>::new(),
-                pagination.page,
-                pagination.per_page,
-            );
-            let empty_page = ExplorerInstructionsPage {
-                pagination: pagination_meta,
-                items,
-            };
-            return Ok(JsonBody(empty_page).into_response());
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let max_height = state.committed_height() as u64;
+        let address_format = pagination.address_format_pref()?;
+        record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTIONS, address_format);
+        let ExplorerInstructionQuery {
+            account,
+            authority,
+            transaction_hash,
+            status,
+            block,
+            kind,
+            asset_id,
+        } = query;
+        if let Some(block_height) = block {
+            if block_height > max_height {
+                let (items, pagination_meta) = crate::explorer::paginate(
+                    Vec::<ExplorerInstructionDto>::new(),
+                    pagination.page,
+                    pagination.per_page,
+                );
+                let empty_page = ExplorerInstructionsPage {
+                    pagination: pagination_meta,
+                    items,
+                };
+                return Ok(JsonBody(empty_page).into_response());
+            }
         }
-    }
-    let filters = ExplorerInstructionFilters {
-        account,
-        authority,
-        transaction_hash,
-        status,
-        block,
-        kind,
-        asset_id,
-    };
-    let instructions =
-        collect_instruction_history(state.as_ref(), max_height, &filters, address_format)?;
-    let (items, pagination_meta) =
-        crate::explorer::paginate(instructions, pagination.page, pagination.per_page);
-    let page = ExplorerInstructionsPage {
-        pagination: pagination_meta,
-        items,
-    };
-    Ok(JsonBody(page).into_response())
+        let filters = ExplorerInstructionFilters {
+            account,
+            authority,
+            transaction_hash,
+            status,
+            block,
+            kind,
+            asset_id,
+        };
+        let (items, pagination_meta) = collect_instruction_history(
+            state.as_ref(),
+            max_height,
+            &filters,
+            pagination.page,
+            pagination.per_page,
+            address_format,
+        )?;
+        let page = ExplorerInstructionsPage {
+            pagination: pagination_meta,
+            items,
+        };
+        Ok(JsonBody(page).into_response())
+    })();
+    record_explorer_endpoint_result(
+        &telemetry,
+        ENDPOINT_EXPLORER_INSTRUCTIONS,
+        started,
+        &response,
+    );
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -32507,14 +32870,24 @@ pub async fn handle_v1_explorer_transaction_detail(
     identifier: String,
     address_format: AddressFormatPreference,
 ) -> Result<AxResponse, Error> {
-    let max_height = state.committed_height() as u64;
-    record_address_format_selection(
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let max_height = state.committed_height() as u64;
+        record_address_format_selection(
+            &telemetry,
+            ENDPOINT_EXPLORER_TRANSACTION_DETAIL,
+            address_format,
+        );
+        let dto = find_transaction_detail(state.as_ref(), max_height, identifier, address_format)?;
+        Ok(JsonBody(dto).into_response())
+    })();
+    record_explorer_endpoint_result(
         &telemetry,
         ENDPOINT_EXPLORER_TRANSACTION_DETAIL,
-        address_format,
+        started,
+        &response,
     );
-    let dto = find_transaction_detail(state.as_ref(), max_height, identifier, address_format)?;
-    Ok(JsonBody(dto).into_response())
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -32525,14 +32898,24 @@ pub async fn handle_v1_explorer_instruction_detail(
     index: u64,
     address_format: AddressFormatPreference,
 ) -> Result<AxResponse, Error> {
-    let max_height = state.committed_height() as u64;
-    record_address_format_selection(
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let max_height = state.committed_height() as u64;
+        record_address_format_selection(
+            &telemetry,
+            ENDPOINT_EXPLORER_INSTRUCTION_DETAIL,
+            address_format,
+        );
+        let dto = find_instruction_detail(state.as_ref(), max_height, hash, index, address_format)?;
+        Ok(JsonBody(dto).into_response())
+    })();
+    record_explorer_endpoint_result(
         &telemetry,
         ENDPOINT_EXPLORER_INSTRUCTION_DETAIL,
-        address_format,
+        started,
+        &response,
     );
-    let dto = find_instruction_detail(state.as_ref(), max_height, hash, index, address_format)?;
-    Ok(JsonBody(dto).into_response())
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -32581,15 +32964,47 @@ fn collect_transaction_summaries_from_kura(
 }
 
 #[cfg(feature = "app_api")]
+fn explorer_pagination_window(page: u64, per_page: u64) -> (u64, u64, u64) {
+    let per_page = per_page.max(1);
+    let start_index = page.saturating_sub(1).saturating_mul(per_page);
+    let end_index = start_index.saturating_add(per_page);
+    (per_page, start_index, end_index)
+}
+
+#[cfg(feature = "app_api")]
+fn explorer_pagination_meta(
+    page: u64,
+    per_page: u64,
+    total_items: u64,
+) -> crate::explorer::ExplorerPaginationMeta {
+    crate::explorer::ExplorerPaginationMeta {
+        page,
+        per_page,
+        total_pages: total_items.div_ceil(per_page),
+        total_items,
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn collect_transaction_summaries(
     state: &CoreState,
     start_height: u64,
     filters: &ExplorerTransactionFilters,
+    page: u64,
+    per_page: u64,
     address_format: AddressFormatPreference,
-) -> Result<Vec<crate::explorer::ExplorerTransactionDto>, Error> {
+) -> Result<
+    (
+        Vec<crate::explorer::ExplorerTransactionDto>,
+        crate::explorer::ExplorerPaginationMeta,
+    ),
+    Error,
+> {
+    let (per_page, start_index, end_index) = explorer_pagination_window(page, per_page);
     let mut out = Vec::new();
+    let mut total_items = 0_u64;
     if start_height == 0 {
-        return Ok(out);
+        return Ok((out, explorer_pagination_meta(page, per_page, total_items)));
     }
     let mut height = filters.block.unwrap_or(start_height);
     let lower_bound = filters.block.unwrap_or(1);
@@ -32609,12 +33024,15 @@ fn collect_transaction_summaries(
             .zip(block_ref.results().take(external_total))
         {
             if filters.matches(tx, height, result) {
-                out.push(crate::explorer::transaction_summary_dto(
-                    tx,
-                    height,
-                    result,
-                    address_format,
-                ));
+                if total_items >= start_index && total_items < end_index {
+                    out.push(crate::explorer::transaction_summary_dto(
+                        tx,
+                        height,
+                        result,
+                        address_format,
+                    ));
+                }
+                total_items = total_items.saturating_add(1);
             }
         }
         if height == lower_bound || height == 1 {
@@ -32622,7 +33040,7 @@ fn collect_transaction_summaries(
         }
         height -= 1;
     }
-    Ok(out)
+    Ok((out, explorer_pagination_meta(page, per_page, total_items)))
 }
 
 #[cfg(feature = "app_api")]
@@ -32699,11 +33117,21 @@ fn collect_instruction_history(
     state: &CoreState,
     start_height: u64,
     filters: &ExplorerInstructionFilters,
+    page: u64,
+    per_page: u64,
     address_format: AddressFormatPreference,
-) -> Result<Vec<ExplorerInstructionDto>, Error> {
+) -> Result<
+    (
+        Vec<ExplorerInstructionDto>,
+        crate::explorer::ExplorerPaginationMeta,
+    ),
+    Error,
+> {
+    let (per_page, start_index, end_index) = explorer_pagination_window(page, per_page);
     let mut out = Vec::new();
+    let mut total_items = 0_u64;
     if start_height == 0 {
-        return Ok(out);
+        return Ok((out, explorer_pagination_meta(page, per_page, total_items)));
     }
     let mut height = filters.block.unwrap_or(start_height);
     let lower_bound = filters.block.unwrap_or(1);
@@ -32743,16 +33171,19 @@ fn collect_instruction_history(
                         continue;
                     }
                 }
-                let index = u32::try_from(idx).unwrap_or(u32::MAX);
-                out.push(crate::explorer::instruction_dto_with_kind(
-                    tx,
-                    height,
-                    result,
-                    instruction,
-                    kind,
-                    index,
-                    address_format,
-                ));
+                if total_items >= start_index && total_items < end_index {
+                    let index = u32::try_from(idx).unwrap_or(u32::MAX);
+                    out.push(crate::explorer::instruction_dto_with_kind(
+                        tx,
+                        height,
+                        result,
+                        instruction,
+                        kind,
+                        index,
+                        address_format,
+                    ));
+                }
+                total_items = total_items.saturating_add(1);
             }
         }
         if height == lower_bound || height == 1 {
@@ -32760,7 +33191,7 @@ fn collect_instruction_history(
         }
         height -= 1;
     }
-    Ok(out)
+    Ok((out, explorer_pagination_meta(page, per_page, total_items)))
 }
 
 #[cfg(feature = "app_api")]
@@ -32777,35 +33208,20 @@ fn find_transaction_detail(
         .trim()
         .parse()
         .map_err(|_| conversion_error("invalid transaction hash".to_owned()))?;
-    let mut height = start_height;
-    loop {
-        let height_usize: usize = height
-            .try_into()
-            .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
-        let nonzero_height = NonZeroUsize::new(height_usize)
-            .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-        let block = state
-            .block_by_height(nonzero_height)
-            .ok_or_else(explorer_not_found)?;
-        let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
-            if tx.hash_as_entrypoint() == target {
-                return Ok(crate::explorer::transaction_detail_dto(
-                    tx,
-                    height,
-                    result,
-                    address_format,
-                ));
-            }
+    let indexed_height = indexed_transaction_height(state, start_height, target);
+    if let Some(height) = indexed_height {
+        if let Some(dto) = transaction_detail_at_height(state, height, target, address_format)? {
+            return Ok(dto);
         }
-        if height == 1 {
-            break;
-        }
-        height -= 1;
+    }
+    if let Some(dto) = find_transaction_detail_by_scan(
+        state,
+        start_height,
+        target,
+        address_format,
+        indexed_height,
+    )? {
+        return Ok(dto);
     }
     Err(explorer_not_found())
 }
@@ -32828,49 +33244,162 @@ fn find_instruction_detail(
     let lookup_index: usize = index
         .try_into()
         .map_err(|_| conversion_error("instruction index exceeds host pointer width".into()))?;
-    let mut height = start_height;
-    loop {
-        let height_usize: usize = height
-            .try_into()
-            .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
-        let nonzero_height = NonZeroUsize::new(height_usize)
-            .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-        let block = state
-            .block_by_height(nonzero_height)
-            .ok_or_else(explorer_not_found)?;
-        let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
+    let indexed_height = indexed_transaction_height(state, start_height, target);
+    if let Some(height) = indexed_height {
+        if let Some(dto) =
+            instruction_detail_at_height(state, height, target, lookup_index, address_format)?
         {
-            if tx.hash_as_entrypoint() != target {
-                continue;
-            }
-            let Executable::Instructions(instructions) = tx.instructions() else {
-                continue;
-            };
-            let instruction = instructions
-                .get(lookup_index)
-                .ok_or_else(explorer_not_found)?;
-            let kind = crate::explorer::instruction_kind(instruction);
-            let index_u32 = u32::try_from(lookup_index).unwrap_or(u32::MAX);
-            return Ok(crate::explorer::instruction_dto_with_kind(
+            return Ok(dto);
+        }
+    }
+    if let Some(dto) = find_instruction_detail_by_scan(
+        state,
+        start_height,
+        target,
+        lookup_index,
+        address_format,
+        indexed_height,
+    )? {
+        return Ok(dto);
+    }
+    Err(explorer_not_found())
+}
+
+#[cfg(feature = "app_api")]
+fn indexed_transaction_height(
+    state: &CoreState,
+    start_height: u64,
+    target: HashOf<TransactionEntrypoint>,
+) -> Option<u64> {
+    let target_as_signed = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(target));
+    let height = state.committed_transaction_height(&target_as_signed)?;
+    let height_u64 = u64::try_from(height.get()).ok()?;
+    (height_u64 <= start_height).then_some(height_u64)
+}
+
+#[cfg(feature = "app_api")]
+fn transaction_detail_at_height(
+    state: &CoreState,
+    height: u64,
+    target: HashOf<TransactionEntrypoint>,
+    address_format: AddressFormatPreference,
+) -> Result<Option<crate::explorer::ExplorerTransactionDetailDto>, Error> {
+    let Some(nonzero_height) = nonzero_height(height) else {
+        return Ok(None);
+    };
+    let Some(block) = state.block_by_height(nonzero_height) else {
+        return Ok(None);
+    };
+    let block_ref = block.as_ref();
+    let external_total = block_ref.external_transactions().len();
+    for (tx, result) in block_ref
+        .external_transactions()
+        .zip(block_ref.results().take(external_total))
+    {
+        if tx.hash_as_entrypoint() == target {
+            return Ok(Some(crate::explorer::transaction_detail_dto(
                 tx,
                 height,
                 result,
-                instruction,
-                kind,
-                index_u32,
                 address_format,
-            ));
+            )));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "app_api")]
+fn find_transaction_detail_by_scan(
+    state: &CoreState,
+    start_height: u64,
+    target: HashOf<TransactionEntrypoint>,
+    address_format: AddressFormatPreference,
+    skip_height: Option<u64>,
+) -> Result<Option<crate::explorer::ExplorerTransactionDetailDto>, Error> {
+    let mut height = start_height;
+    loop {
+        if Some(height) != skip_height {
+            if let Some(dto) = transaction_detail_at_height(state, height, target, address_format)?
+            {
+                return Ok(Some(dto));
+            }
         }
         if height == 1 {
             break;
         }
         height -= 1;
     }
-    Err(explorer_not_found())
+    Ok(None)
+}
+
+#[cfg(feature = "app_api")]
+fn instruction_detail_at_height(
+    state: &CoreState,
+    height: u64,
+    target: HashOf<TransactionEntrypoint>,
+    lookup_index: usize,
+    address_format: AddressFormatPreference,
+) -> Result<Option<ExplorerInstructionDto>, Error> {
+    let Some(nonzero_height) = nonzero_height(height) else {
+        return Ok(None);
+    };
+    let Some(block) = state.block_by_height(nonzero_height) else {
+        return Ok(None);
+    };
+    let block_ref = block.as_ref();
+    let external_total = block_ref.external_transactions().len();
+    for (tx, result) in block_ref
+        .external_transactions()
+        .zip(block_ref.results().take(external_total))
+    {
+        if tx.hash_as_entrypoint() != target {
+            continue;
+        }
+        let Executable::Instructions(instructions) = tx.instructions() else {
+            return Err(explorer_not_found());
+        };
+        let instruction = instructions
+            .get(lookup_index)
+            .ok_or_else(explorer_not_found)?;
+        let kind = crate::explorer::instruction_kind(instruction);
+        let index_u32 = u32::try_from(lookup_index).unwrap_or(u32::MAX);
+        return Ok(Some(crate::explorer::instruction_dto_with_kind(
+            tx,
+            height,
+            result,
+            instruction,
+            kind,
+            index_u32,
+            address_format,
+        )));
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "app_api")]
+fn find_instruction_detail_by_scan(
+    state: &CoreState,
+    start_height: u64,
+    target: HashOf<TransactionEntrypoint>,
+    lookup_index: usize,
+    address_format: AddressFormatPreference,
+    skip_height: Option<u64>,
+) -> Result<Option<ExplorerInstructionDto>, Error> {
+    let mut height = start_height;
+    loop {
+        if Some(height) != skip_height {
+            if let Some(dto) =
+                instruction_detail_at_height(state, height, target, lookup_index, address_format)?
+            {
+                return Ok(Some(dto));
+            }
+        }
+        if height == 1 {
+            break;
+        }
+        height -= 1;
+    }
+    Ok(None)
 }
 
 #[cfg(feature = "app_api")]
@@ -34252,16 +34781,27 @@ fn parse_block_identifier(raw: &str) -> Result<ExplorerBlockIdentifier, Error> {
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_block_detail(
     state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
     identifier: String,
 ) -> Result<AxResponse, Error> {
-    let lookup = parse_block_identifier(&identifier)?;
-    let block = match lookup {
-        ExplorerBlockIdentifier::Height(height) => state.block_by_height(height),
-        ExplorerBlockIdentifier::Hash(hash) => state.block_by_hash(hash),
-    }
-    .ok_or_else(explorer_not_found)?;
-    let dto = crate::explorer::ExplorerBlockDto::from_block(block.as_ref());
-    Ok(JsonBody(dto).into_response())
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let lookup = parse_block_identifier(&identifier)?;
+        let block = match lookup {
+            ExplorerBlockIdentifier::Height(height) => state.block_by_height(height),
+            ExplorerBlockIdentifier::Hash(hash) => state.block_by_hash(hash),
+        }
+        .ok_or_else(explorer_not_found)?;
+        let dto = crate::explorer::ExplorerBlockDto::from_block(block.as_ref());
+        Ok(JsonBody(dto).into_response())
+    })();
+    record_explorer_endpoint_result(
+        &telemetry,
+        ENDPOINT_EXPLORER_BLOCK_DETAIL,
+        started,
+        &response,
+    );
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -39352,6 +39892,18 @@ fn build_claim_issue_error(
 }
 
 #[cfg(feature = "app_api")]
+fn build_claim_platform_from_receipt_proof(
+    proof: &OfflinePlatformProof,
+) -> OfflineBuildClaimPlatform {
+    match proof {
+        OfflinePlatformProof::AppleAppAttest(_) => OfflineBuildClaimPlatform::Apple,
+        OfflinePlatformProof::AndroidMarkerKey(_) | OfflinePlatformProof::Provisioned(_) => {
+            OfflineBuildClaimPlatform::Android
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn parse_build_claim_platform(value: &str) -> Result<OfflineBuildClaimPlatform> {
     match value.trim().to_ascii_lowercase().as_str() {
         "apple" | "ios" => Ok(OfflineBuildClaimPlatform::Apple),
@@ -39512,6 +40064,253 @@ fn resolve_build_claim_app_id(
 }
 
 #[cfg(feature = "app_api")]
+#[allow(clippy::too_many_arguments)]
+fn issue_offline_build_claim(
+    state: &CoreState,
+    issuer: &crate::OfflineIssuerSigner,
+    certificate_id: Hash,
+    nonce: Hash,
+    platform: OfflineBuildClaimPlatform,
+    requested_app_id: Option<&str>,
+    build_number: Option<u64>,
+    issued_at_ms: Option<u64>,
+    expires_at_ms: Option<u64>,
+) -> Result<OfflineBuildClaim> {
+    let world = state.world_view();
+    let record = world
+        .offline_allowances()
+        .get(&certificate_id)
+        .cloned()
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}allowance_not_found:offline allowance not found"
+            ))
+        })?;
+
+    if !issuer.allowed_controllers.is_empty()
+        && !issuer
+            .allowed_controllers
+            .iter()
+            .any(|controller| controller == &record.certificate.controller)
+    {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}unauthorized_controller:controller is not permitted"
+        )));
+    }
+
+    let operator_key = record.certificate.operator.try_signatory().ok_or_else(|| {
+        build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            "certificate operator account must be single-signature for build claims",
+        )
+    })?;
+    let signer_keypair = issuer.keypair_for_operator(operator_key).ok_or_else(|| {
+        build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            "no configured offline issuer key matches certificate operator",
+        )
+    })?;
+
+    let lineage = parse_offline_draft_lineage(&record.certificate.metadata)?;
+    if lineage.min_build_number == 0 {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:offline.build_claim.min_build_number must be greater than zero"
+        )));
+    }
+
+    let app_id = resolve_build_claim_app_id(&record.certificate, platform, requested_app_id)?;
+
+    let build_number = build_number.unwrap_or(lineage.min_build_number);
+    if build_number < lineage.min_build_number {
+        return Err(build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimBuildTooLow,
+            "build-claim build number is lower than certificate minimum",
+        ));
+    }
+
+    let issued_at_ms = issued_at_ms.unwrap_or(record.certificate.issued_at_ms);
+    let expires_at_ms = expires_at_ms.unwrap_or(record.certificate.expires_at_ms);
+    if issued_at_ms > expires_at_ms
+        || issued_at_ms < record.certificate.issued_at_ms
+        || expires_at_ms > record.certificate.expires_at_ms
+    {
+        return Err(build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimExpired,
+            "build-claim timestamp window must fit within certificate lifetime",
+        ));
+    }
+
+    let platform_slug = match platform {
+        OfflineBuildClaimPlatform::Apple => "apple",
+        OfflineBuildClaimPlatform::Android => "android",
+    };
+    let claim_seed = format!(
+        "{}:{}:{}:{}:{}:{}:{}:{}",
+        hex::encode(certificate_id.as_ref()),
+        hex::encode(nonce.as_ref()),
+        platform_slug,
+        app_id,
+        build_number,
+        issued_at_ms,
+        expires_at_ms,
+        lineage.scope
+    );
+    let claim_id = Hash::new(claim_seed.as_bytes());
+    if world
+        .offline_consumed_build_claim_ids()
+        .get(&claim_id)
+        .is_some()
+    {
+        return Err(build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimReplayed,
+            "build-claim id was already consumed",
+        ));
+    }
+
+    let mut build_claim = OfflineBuildClaim {
+        claim_id,
+        platform,
+        app_id,
+        build_number,
+        issued_at_ms,
+        expires_at_ms,
+        lineage_scope: lineage.scope,
+        nonce,
+        operator_signature: Signature::from_bytes(&[]),
+    };
+    let payload = build_claim.signing_bytes().map_err(|err| {
+        build_claim_issue_error(
+            OfflineTransferRejectionReason::BuildClaimInvalid,
+            format!("failed to encode build-claim payload: {err}"),
+        )
+    })?;
+    build_claim.operator_signature = Signature::new(signer_keypair.private_key(), &payload);
+    Ok(build_claim)
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+struct SettlementBuildClaimOverrideValues {
+    app_id: Option<String>,
+    build_number: Option<u64>,
+    issued_at_ms: Option<u64>,
+    expires_at_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+fn settlement_build_claim_override_map(
+    overrides: &[OfflineSettlementBuildClaimOverride],
+) -> Result<BTreeMap<Hash, SettlementBuildClaimOverrideValues>> {
+    let mut by_tx_id: BTreeMap<Hash, SettlementBuildClaimOverrideValues> = BTreeMap::new();
+    for override_entry in overrides {
+        let tx_id = parse_hash_hex(&override_entry.tx_id_hex, "tx_id_hex")?;
+        if by_tx_id.contains_key(&tx_id) {
+            return Err(build_claim_issue_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                format!(
+                    "duplicate build-claim override for receipt tx_id {}",
+                    override_entry.tx_id_hex
+                ),
+            ));
+        }
+        by_tx_id.insert(
+            tx_id,
+            SettlementBuildClaimOverrideValues {
+                app_id: override_entry.app_id.clone(),
+                build_number: override_entry.build_number,
+                issued_at_ms: override_entry.issued_at_ms,
+                expires_at_ms: override_entry.expires_at_ms,
+            },
+        );
+    }
+    Ok(by_tx_id)
+}
+
+#[cfg(feature = "app_api")]
+fn attach_missing_receipt_build_claims(
+    state: &CoreState,
+    offline_issuer: Option<&crate::OfflineIssuerSigner>,
+    transfer: &mut OfflineToOnlineTransfer,
+    build_claim_overrides: &[OfflineSettlementBuildClaimOverride],
+    repair_existing_build_claims: bool,
+) -> Result<()> {
+    if state.settlement.offline.skip_build_claim_verification {
+        return Ok(());
+    }
+
+    let overrides_by_tx = settlement_build_claim_override_map(build_claim_overrides)?;
+    let mut receipts_by_tx: BTreeMap<Hash, bool> = BTreeMap::new();
+    for receipt in &transfer.receipts {
+        receipts_by_tx.insert(receipt.tx_id, receipt.build_claim.is_some());
+    }
+    for (tx_id, _) in &overrides_by_tx {
+        let Some(has_claim) = receipts_by_tx.get(tx_id) else {
+            return Err(build_claim_issue_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                format!(
+                    "build-claim override references unknown receipt tx_id {}",
+                    hex::encode(tx_id.as_ref())
+                ),
+            ));
+        };
+        if *has_claim && !repair_existing_build_claims {
+            return Err(build_claim_issue_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                format!(
+                    "build-claim override for tx_id {} requires `repair_existing_build_claims=true`",
+                    hex::encode(tx_id.as_ref())
+                ),
+            ));
+        }
+    }
+
+    let should_issue_any = repair_existing_build_claims
+        || transfer
+            .receipts
+            .iter()
+            .any(|receipt| receipt.build_claim.is_none());
+    if !should_issue_any {
+        return Ok(());
+    }
+
+    let issuer = offline_issuer.ok_or_else(|| {
+        if repair_existing_build_claims {
+            build_claim_issue_error(
+                OfflineTransferRejectionReason::BuildClaimInvalid,
+                "`repair_existing_build_claims` requires torii.offline_issuer",
+            )
+        } else {
+            build_claim_issue_error(
+                OfflineTransferRejectionReason::BuildClaimMissing,
+                "receipt is missing build claim and torii.offline_issuer is disabled",
+            )
+        }
+    })?;
+
+    for receipt in &mut transfer.receipts {
+        if receipt.build_claim.is_some() && !repair_existing_build_claims {
+            continue;
+        }
+        let platform = build_claim_platform_from_receipt_proof(&receipt.platform_proof);
+        let override_values = overrides_by_tx.get(&receipt.tx_id);
+        let build_claim = issue_offline_build_claim(
+            state,
+            issuer,
+            receipt.sender_certificate_id,
+            receipt.tx_id,
+            platform,
+            override_values.and_then(|override_values| override_values.app_id.as_deref()),
+            override_values.and_then(|override_values| override_values.build_number),
+            override_values.and_then(|override_values| override_values.issued_at_ms),
+            override_values.and_then(|override_values| override_values.expires_at_ms),
+        )?;
+        receipt.build_claim = Some(build_claim);
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
 fn sign_offline_certificate(
     issuer: &crate::OfflineIssuerSigner,
     draft: OfflineWalletCertificateDraft,
@@ -39665,119 +40464,18 @@ pub async fn handle_post_v1_offline_build_claims_issue(
 
     let certificate_id = parse_hash_hex(&req.certificate_id_hex, "certificate_id_hex")?;
     let nonce = parse_hash_hex(&req.tx_id_hex, "tx_id_hex")?;
-    let world = app.state.world_view();
-    let record = world
-        .offline_allowances()
-        .get(&certificate_id)
-        .cloned()
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "{OFFLINE_REJECTION_REASON_PREFIX}allowance_not_found:offline allowance not found"
-            ))
-        })?;
-
-    if !issuer.allowed_controllers.is_empty()
-        && !issuer
-            .allowed_controllers
-            .iter()
-            .any(|controller| controller == &record.certificate.controller)
-    {
-        return Err(conversion_error(format!(
-            "{OFFLINE_REJECTION_REASON_PREFIX}unauthorized_controller:controller is not permitted"
-        )));
-    }
-
-    let operator_key = record.certificate.operator.try_signatory().ok_or_else(|| {
-        build_claim_issue_error(
-            OfflineTransferRejectionReason::BuildClaimInvalid,
-            "certificate operator account must be single-signature for build claims",
-        )
-    })?;
-    if operator_key != issuer.operator_keypair.public_key() {
-        return Err(build_claim_issue_error(
-            OfflineTransferRejectionReason::BuildClaimInvalid,
-            "build-claim issuer key does not match certificate operator",
-        ));
-    }
-
-    let lineage = parse_offline_draft_lineage(&record.certificate.metadata)?;
-    if lineage.min_build_number == 0 {
-        return Err(conversion_error(format!(
-            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:offline.build_claim.min_build_number must be greater than zero"
-        )));
-    }
-
     let platform = parse_build_claim_platform(&req.platform)?;
-    let app_id = resolve_build_claim_app_id(&record.certificate, platform, req.app_id.as_deref())?;
-
-    let build_number = req.build_number.unwrap_or(lineage.min_build_number);
-    if build_number < lineage.min_build_number {
-        return Err(build_claim_issue_error(
-            OfflineTransferRejectionReason::BuildClaimBuildTooLow,
-            "build-claim build number is lower than certificate minimum",
-        ));
-    }
-
-    let issued_at_ms = req.issued_at_ms.unwrap_or(record.certificate.issued_at_ms);
-    let expires_at_ms = req
-        .expires_at_ms
-        .unwrap_or(record.certificate.expires_at_ms);
-    if issued_at_ms > expires_at_ms
-        || issued_at_ms < record.certificate.issued_at_ms
-        || expires_at_ms > record.certificate.expires_at_ms
-    {
-        return Err(build_claim_issue_error(
-            OfflineTransferRejectionReason::BuildClaimExpired,
-            "build-claim timestamp window must fit within certificate lifetime",
-        ));
-    }
-
-    let platform_slug = match platform {
-        OfflineBuildClaimPlatform::Apple => "apple",
-        OfflineBuildClaimPlatform::Android => "android",
-    };
-    let claim_seed = format!(
-        "{}:{}:{}:{}:{}:{}:{}:{}",
-        hex::encode(certificate_id.as_ref()),
-        hex::encode(nonce.as_ref()),
-        platform_slug,
-        app_id,
-        build_number,
-        issued_at_ms,
-        expires_at_ms,
-        lineage.scope
-    );
-    let claim_id = Hash::new(claim_seed.as_bytes());
-    if world
-        .offline_consumed_build_claim_ids()
-        .get(&claim_id)
-        .is_some()
-    {
-        return Err(build_claim_issue_error(
-            OfflineTransferRejectionReason::BuildClaimReplayed,
-            "build-claim id was already consumed",
-        ));
-    }
-
-    let mut build_claim = OfflineBuildClaim {
-        claim_id,
-        platform,
-        app_id,
-        build_number,
-        issued_at_ms,
-        expires_at_ms,
-        lineage_scope: lineage.scope,
+    let build_claim = issue_offline_build_claim(
+        app.state.as_ref(),
+        issuer,
+        certificate_id,
         nonce,
-        operator_signature: Signature::from_bytes(&[]),
-    };
-    let payload = build_claim.signing_bytes().map_err(|err| {
-        build_claim_issue_error(
-            OfflineTransferRejectionReason::BuildClaimInvalid,
-            format!("failed to encode build-claim payload: {err}"),
-        )
-    })?;
-    build_claim.operator_signature =
-        Signature::new(issuer.operator_keypair.private_key(), &payload);
+        platform,
+        req.app_id.as_deref(),
+        req.build_number,
+        req.issued_at_ms,
+        req.expires_at_ms,
+    )?;
 
     json_response(&OfflineBuildClaimIssueResponse {
         claim_id_hex: hex::encode(build_claim.claim_id.as_ref()),
@@ -39994,25 +40692,35 @@ pub async fn handle_post_v1_offline_settlements_submit(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
+    offline_issuer: Option<crate::OfflineIssuerSigner>,
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<OfflineSettlementSubmitRequest>,
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::{isi::offline, prelude as dm};
 
-    let bundle_id_hex = hex::encode(req.transfer.bundle_id.as_ref());
+    let repair_existing_build_claims = req.repair_existing_build_claims;
+    let build_claim_overrides = req.build_claim_overrides;
+    let mut transfer = req.transfer;
+    attach_missing_receipt_build_claims(
+        state.as_ref(),
+        offline_issuer.as_ref(),
+        &mut transfer,
+        &build_claim_overrides,
+        repair_existing_build_claims,
+    )?;
+
+    let bundle_id_hex = hex::encode(transfer.bundle_id.as_ref());
     if state
         .world_view()
         .offline_to_online_transfers()
-        .get(&req.transfer.bundle_id)
+        .get(&transfer.bundle_id)
         .is_some()
     {
         return Err(conversion_error(format!(
             "{OFFLINE_REJECTION_REASON_PREFIX}duplicate_bundle:offline transfer bundle already submitted"
         )));
     }
-    let isi = offline::SubmitOfflineToOnlineTransfer {
-        transfer: req.transfer,
-    };
+    let isi = offline::SubmitOfflineToOnlineTransfer { transfer };
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority)
         .with_instructions([dm::InstructionBox::from(isi)])
         .sign(&req.private_key.0);

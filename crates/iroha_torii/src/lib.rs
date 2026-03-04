@@ -3670,6 +3670,7 @@ async fn handler_offline_settlements_submit(
             app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
+            app.offline_issuer.clone(),
             app.telemetry.clone(),
             crate::utils::extractors::NoritoJson(req),
         )
@@ -3684,6 +3685,7 @@ async fn handler_offline_settlements_submit(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
+        app.offline_issuer.clone(),
         app.telemetry.clone(),
         crate::utils::extractors::NoritoJson(req),
     )
@@ -4419,7 +4421,8 @@ async fn handler_explorer_blocks_list(
     if !allowed {
         check_access(&app, &headers, None, "v1/explorer/blocks").await?;
     }
-    routing::handle_v1_explorer_blocks(app.state.clone(), query.pagination).await
+    routing::handle_v1_explorer_blocks(app.state.clone(), app.telemetry.clone(), query.pagination)
+        .await
 }
 
 #[cfg(feature = "app_api")]
@@ -4751,7 +4754,8 @@ async fn handler_explorer_block_detail(
     if !allowed {
         check_access(&app, &headers, None, "v1/explorer/blocks/{id}").await?;
     }
-    routing::handle_v1_explorer_block_detail(app.state.clone(), identifier).await
+    routing::handle_v1_explorer_block_detail(app.state.clone(), app.telemetry.clone(), identifier)
+        .await
 }
 
 #[cfg(feature = "app_api")]
@@ -13505,7 +13509,20 @@ struct AccountOnboardingSigner {
 #[derive(Clone)]
 struct OfflineIssuerSigner {
     operator_keypair: KeyPair,
+    legacy_operator_keypairs: Vec<KeyPair>,
     allowed_controllers: Vec<AccountId>,
+}
+
+#[cfg(feature = "app_api")]
+impl OfflineIssuerSigner {
+    fn keypair_for_operator(&self, operator_key: &iroha_crypto::PublicKey) -> Option<&KeyPair> {
+        if self.operator_keypair.public_key() == operator_key {
+            return Some(&self.operator_keypair);
+        }
+        self.legacy_operator_keypairs
+            .iter()
+            .find(|keypair| keypair.public_key() == operator_key)
+    }
 }
 
 /// Main network handler and the only entrypoint of the Iroha.
@@ -15669,8 +15686,21 @@ impl Torii {
                 .unwrap_or_else(|err| {
                     panic!("invalid torii.offline_issuer.operator_private_key: {err}")
                 });
+            let legacy_operator_keypairs = cfg
+                .legacy_operator_private_keys
+                .iter()
+                .enumerate()
+                .map(|(index, key)| {
+                    KeyPair::from_private_key(key.0.clone()).unwrap_or_else(|err| {
+                        panic!(
+                            "invalid torii.offline_issuer.legacy_operator_private_keys[{index}]: {err}"
+                        )
+                    })
+                })
+                .collect();
             OfflineIssuerSigner {
                 operator_keypair,
+                legacy_operator_keypairs,
                 allowed_controllers: cfg.allowed_controllers.clone(),
             }
         });

@@ -1101,7 +1101,10 @@ fn offline_settlements_operation() -> Map {
         "description".into(),
         Value::String(
             "Enqueues a `SubmitOfflineToOnlineTransfer` transaction carrying the provided \
-             OfflineToOnlineTransfer bundle."
+             OfflineToOnlineTransfer bundle. When `torii.offline_issuer` is configured, Torii \
+             auto-issues missing receipt `build_claim` entries before submission. Use \
+             `build_claim_overrides[]` for per-receipt app/build/window overrides; set \
+             `repair_existing_build_claims=true` to re-issue existing claims."
                 .to_owned(),
         ),
     );
@@ -8043,6 +8046,42 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "OfflineSettlementBuildClaimOverride".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["tx_id_hex"],
+            "properties": {
+                "tx_id_hex": {
+                    "type": "string",
+                    "description": "Receipt tx id rendered as hex (override target)."
+                },
+                "app_id": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Optional application identifier override."
+                },
+                "build_number": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "nullable": true,
+                    "description": "Optional build number override."
+                },
+                "issued_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "nullable": true,
+                    "description": "Optional issuance timestamp override."
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "nullable": true,
+                    "description": "Optional expiry timestamp override."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "OfflineSettlementSubmitRequest".to_owned(),
         norito::json!({
             "type": "object",
@@ -8058,7 +8097,18 @@ fn openapi_schemas() -> Map {
                 },
                 "transfer": {
                     "type": "object",
-                    "description": "OfflineToOnlineTransfer bundle to settle."
+                    "description": "OfflineToOnlineTransfer bundle to settle. Torii auto-fills missing receipt build claims when `torii.offline_issuer` is configured."
+                },
+                "build_claim_overrides": {
+                    "type": "array",
+                    "description": "Optional per-receipt build-claim overrides keyed by tx_id_hex.",
+                    "items": {
+                        "$ref": "#/components/schemas/OfflineSettlementBuildClaimOverride"
+                    }
+                },
+                "repair_existing_build_claims": {
+                    "type": "boolean",
+                    "description": "When true, Torii re-issues and replaces existing receipt build claims."
                 }
             }
         }),

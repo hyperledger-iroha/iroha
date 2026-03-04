@@ -29,9 +29,10 @@ use reqwest::Client as HttpClient;
 use sha2::{Digest as _, Sha256};
 use tokio::time::sleep;
 
-const EPOCH_LENGTH_BLOCKS: u64 = 6;
-const VRF_COMMIT_WINDOW_BLOCKS: u64 = 2;
-const VRF_REVEAL_WINDOW_BLOCKS: u64 = 2;
+const EPOCH_LENGTH_BLOCKS: u64 = 10;
+const VRF_COMMIT_WINDOW_BLOCKS: u64 = 1;
+const VRF_REVEAL_WINDOW_BLOCKS: u64 = 0;
+const VRF_LATE_REVEAL_SAFETY_BLOCKS: u64 = 3;
 const BLOCK_TIME_MS: u64 = 600;
 const TELEMETRY_RETRY_INTERVAL: Duration = Duration::from_millis(200);
 const TELEMETRY_RETRY_ATTEMPTS: usize = 30;
@@ -73,11 +74,20 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
     submit_vrf_commit(&client, &http, epoch, target_signer, commitment).await?;
     client.submit_blocking(Log::new(Level::INFO, "vrf commit flush".to_owned()))?;
 
-    // Wait until the epoch record is available with participant entries.
+    let commitment_hex = hex::encode(commitment);
+    // Wait until the submitted commitment is visible for the target signer.
     let snapshot_before = wait_for_epoch_record(&client, epoch, |json| {
         json.get("participants")
             .and_then(Value::as_array)
-            .is_some_and(|participants| !participants.is_empty())
+            .is_some_and(|participants| {
+                participants.iter().any(|participant| {
+                    participant.get("signer").and_then(Value::as_u64)
+                        == Some(u64::from(target_signer))
+                        && participant.get("commitment").and_then(Value::as_str)
+                            == Some(commitment_hex.as_str())
+                        && participant.get("reveal").is_none()
+                })
+            })
     })
     .await?;
     let status_before = wait_for_sumeragi_status(&client, |json| {
@@ -99,14 +109,16 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
         .unwrap_or_default()
         .to_owned();
 
-    // Advance height until we are outside the reveal window.
+    // Advance height well outside the reveal window.
     // `vrf_reveal_window_blocks` is relative to the commit window, so the
     // inclusive reveal deadline is `commit + reveal`.
+    // Keep a safety margin because consensus message handling can lag behind
+    // externally reported block height by a couple of blocks under load.
     let reveal_cutoff_height = epoch
         .saturating_mul(EPOCH_LENGTH_BLOCKS)
         .saturating_add(VRF_COMMIT_WINDOW_BLOCKS)
         .saturating_add(VRF_REVEAL_WINDOW_BLOCKS)
-        .saturating_add(1);
+        .saturating_add(VRF_LATE_REVEAL_SAFETY_BLOCKS);
     wait_for_height_total_at_least(&client, reveal_cutoff_height).await?;
 
     let snapshot_after =
@@ -509,35 +521,46 @@ async fn submit_late_reveal_until_recorded(
     reveal: [u8; 32],
 ) -> Result<Value> {
     const RETRY_INTERVAL: Duration = Duration::from_millis(200);
+    const PROCESSING_POLL_INTERVAL: Duration = Duration::from_millis(50);
+    const PROCESSING_POLLS: usize = 6;
     const RETRIES: usize = 60;
 
     let mut last_snapshot = None;
+    let mut epoch_finalized = false;
     for attempt in 0..RETRIES {
         submit_vrf_reveal(client, http, epoch, signer, reveal).await?;
-        client.submit_blocking(Log::new(
-            Level::INFO,
-            format!("vrf reveal flush attempt {attempt}"),
-        ))?;
 
-        let snapshot = client.get_sumeragi_vrf_epoch_json(epoch)?;
-        if snapshot
-            .get("late_reveals_total")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            >= 1
-        {
-            return Ok(snapshot);
+        // First poll the snapshot without forcing progress. Committing a block
+        // immediately after every submit can race straight into finalization.
+        for _ in 0..PROCESSING_POLLS {
+            let snapshot = client.get_sumeragi_vrf_epoch_json(epoch)?;
+            if snapshot
+                .get("late_reveals_total")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                >= 1
+            {
+                return Ok(snapshot);
+            }
+
+            epoch_finalized = snapshot
+                .get("finalized")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            last_snapshot = Some(snapshot);
+            if epoch_finalized {
+                break;
+            }
+            sleep(PROCESSING_POLL_INTERVAL).await;
         }
 
-        let finalized = snapshot
-            .get("finalized")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        last_snapshot = Some(snapshot);
-        if finalized {
+        if epoch_finalized {
             break;
         }
-
+        client.submit_blocking(Log::new(
+            Level::INFO,
+            format!("vrf late-reveal progress tick {attempt}"),
+        ))?;
         sleep(RETRY_INTERVAL).await;
     }
 

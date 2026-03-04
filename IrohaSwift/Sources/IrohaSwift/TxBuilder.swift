@@ -749,13 +749,36 @@ public enum PipelineStatusError: Error, LocalizedError {
     case timeout(hash: String, attempts: Int)
     case failure(hash: String, status: String, payload: ToriiPipelineTransactionStatus)
 
+    public var rejectionReason: String? {
+        guard case let .failure(_, _, payload) = self else {
+            return nil
+        }
+        return Self.resolveRejectionReason(from: payload)
+    }
+
     public var errorDescription: String? {
         switch self {
         case let .timeout(hash, attempts):
             return "Pipeline transaction \(hash) did not reach a terminal status after \(attempts) attempts."
-        case let .failure(hash, status, _):
+        case let .failure(hash, status, payload):
+            if let reason = Self.resolveRejectionReason(from: payload) {
+                return "Pipeline transaction \(hash) failed with status \(status) (reason: \(reason))."
+            }
             return "Pipeline transaction \(hash) failed with status \(status)."
         }
+    }
+
+    private static func resolveRejectionReason(from payload: ToriiPipelineTransactionStatus) -> String? {
+        if let explicit = payload.content.status.rejectionReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !explicit.isEmpty {
+            return explicit
+        }
+        if payload.content.status.kind == "Rejected",
+           let fallback = payload.content.status.content?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !fallback.isEmpty {
+            return fallback
+        }
+        return nil
     }
 }
 
