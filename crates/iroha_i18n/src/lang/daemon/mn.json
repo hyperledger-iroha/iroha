@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Hyperledger Iroha-д тавтай морилно уу!",
+  "error.trace_config_setup": "Тохиргооны мөрдөлтийг тохируулах боломжгүй",
+  "error.config": "Тохиргооны алдаа!",
+  "error.logger": "Бүртгэлийн системийг эхлүүлэх боломжгүй",
+  "error.start": "Iroha-г эхлүүлэх боломжгүй",
+  "error.run": "Iroha ажиллах үед алдаа гарлаа",
+  "error.start_p2p": "P2P сүлжээг эхлүүлэх боломжгүй",
+  "error.init_kura": "Kura (блок хадгалах сан)-г эхлүүлэх боломжгүй",
+  "error.start_dev_telemetry": "Хөгжүүлэгчдийн телеметрийн үйлчилгээг эхлүүлэх боломжгүй",
+  "error.start_telemetry": "Телеметрийн үйлчилгээг эхлүүлэх боломжгүй",
+  "error.listen_os_signal": "Үйлдлийн системийн дохиог сонсох тохиргоо хийгдсэнгүй",
+  "error.start_torii": "Torii (Iroha HTTP API гарц)-г эхлүүлэх боломжгүй"
+}

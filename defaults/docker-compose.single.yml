@@ -4,42 +4,54 @@
 
 services:
   irohad0:
-    image: hyperledger/iroha:local
     build: ..
-    pull_policy: never
-    environment:
-      CHAIN: 00000000-0000-0000-0000-000000000000
-      PUBLIC_KEY: ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D
-      PRIVATE_KEY: 802620A4DFC16789FBF9A588525E4AC7F791AC51B12AEE8919EACC03EB2FC31D32C692
-      P2P_PUBLIC_ADDRESS: irohad0:1337
-      P2P_ADDRESS: 0.0.0.0:1337
-      API_ADDRESS: 0.0.0.0:8080
-      GENESIS: /tmp/genesis.json
-      TOPOLOGY: '["ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"]'
-    ports:
-    - 1337:1337
-    - 8080:8080
-    volumes:
-    - ./genesis.json:/config/genesis.json:ro
-    - ./client.toml:/config/client.toml:ro
-    init: true
-    healthcheck:
-      test: test $(curl -s http://127.0.0.1:8080/status/blocks) -gt 0
-      interval: 2s
-      timeout: 1s
-      retries: 30
-      start_period: 4s
     command: |-
       /bin/sh -c "
-          EXECUTOR_RELATIVE_PATH=$(jq -r '.executor' /config/genesis.json) && \\
-          EXECUTOR_ABSOLUTE_PATH=$(realpath \"/config/$$EXECUTOR_RELATIVE_PATH\") && \\
-          WASM_DIR_RELATIVE_PATH=$(jq -r '.wasm_dir' /config/genesis.json) && \\
-          WASM_DIR_ABSOLUTE_PATH=$(realpath \"/config/$$WASM_DIR_RELATIVE_PATH\") && \\
+          EXECUTOR_RELATIVE_PATH=$(jq -r '.executor // empty' /config/genesis.json) && \\
+          if [ -n \"$$EXECUTOR_RELATIVE_PATH\" ]; then EXECUTOR_ABSOLUTE_PATH=$(realpath \"/config/$$EXECUTOR_RELATIVE_PATH\"); else EXECUTOR_ABSOLUTE_PATH=; fi && \\
+          IVM_DIR_RELATIVE_PATH=$(jq -r '.ivm_dir // empty' /config/genesis.json) && \\
+          if [ -n \"$$IVM_DIR_RELATIVE_PATH\" ]; then IVM_DIR_ABSOLUTE_PATH=$(realpath \"/config/$$IVM_DIR_RELATIVE_PATH\"); else IVM_DIR_ABSOLUTE_PATH=; fi && \\
           jq \\
               --arg executor \"$$EXECUTOR_ABSOLUTE_PATH\" \\
-              --arg wasm_dir \"$$WASM_DIR_ABSOLUTE_PATH\" \\
-              --argjson topology \"$$TOPOLOGY\" \\
-              '.executor = $$executor | .wasm_dir = $$wasm_dir | .topology = $$topology' /config/genesis.json \\
-              >$$GENESIS && \\
+              --arg ivm_dir \"$$IVM_DIR_ABSOLUTE_PATH\" \\
+              'if ($executor|length)>0 then .executor = $$executor else del(.executor) end | if ($ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end' /config/genesis.json \\
+              >/tmp/genesis.json && \\
+          kagami genesis sign /tmp/genesis.json \\
+              --public-key $$GENESIS_PUBLIC_KEY \\
+              --private-key $$GENESIS_PRIVATE_KEY \\
+              ${GENESIS_CONSENSUS_MODE:+--consensus-mode $$GENESIS_CONSENSUS_MODE} \\
+              ${GENESIS_NEXT_CONSENSUS_MODE:+--next-consensus-mode $$GENESIS_NEXT_CONSENSUS_MODE} \\
+              ${GENESIS_MODE_ACTIVATION_HEIGHT:+--mode-activation-height $$GENESIS_MODE_ACTIVATION_HEIGHT} \\
+              --topology \"$$TOPOLOGY\" \\
+              ${GENESIS_PEER_POPS:+$$GENESIS_PEER_POPS} \\
+              --out-file $$GENESIS \\
+          && \\
           exec irohad
       "
+    environment:
+      API_ADDRESS: 0.0.0.0:8080
+      CHAIN: 00000000-0000-0000-0000-000000000000
+      GENESIS: /tmp/genesis.signed.nrt
+      GENESIS_PEER_POPS: '--peer-pop ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39=0xb9cd3633f028c577f15527ce9ea028e5b80223d380465f50cbc1cb0fbae7b608e63e28a0b10078e7a7f6e8954b35bb5712ad7d22e23469a11943052c035959444cde9cf2fc7524f4a17200c4e9f08620985f456f75c010c9d9682f8caa6c3cd5'
+      GENESIS_PRIVATE_KEY: 802620FB8B867188E4952F1E83534B9B2E0A12D5122BD6F417CBC79D50D8A8C9C917B0
+      GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
+      P2P_ADDRESS: 0.0.0.0:1337
+      P2P_PUBLIC_ADDRESS: irohad0:1337
+      PRIVATE_KEY: 8926207AAB38417AB8226BEA595EB47FE1138165550E3BB5667F8AE4FFECBF6B2AC13D
+      PUBLIC_KEY: ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39
+      TOPOLOGY: '["ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39"]'
+    healthcheck:
+      interval: 2s
+      retries: 30
+      start_period: 4s
+      test: 'test $(curl -s http://127.0.0.1:8080/status/blocks) -gt 0'
+      timeout: 1s
+    image: hyperledger/iroha:local
+    init: true
+    ports:
+      - 1337:1337
+      - 8080:8080
+    pull_policy: never
+    volumes:
+      - ./genesis.json:/config/genesis.json:ro
+      - ./client.toml:/config/client.toml:ro

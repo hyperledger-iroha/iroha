@@ -1,0 +1,35 @@
+{
+  "chunk_count": 5,
+  "chunk_digest_sha3_256": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482",
+  "chunk_digests_blake3": [
+    "7789b490337d16c51b59a92e354a657ba450da4bab872c31e85e4d4fedcb3a27",
+    "56397fe0ff8cc24c790e0719505fff05c49dca09289b595d17455bedcc1f7438",
+    "2a2a47eedcc11effdb5d13190fe09143d6b31f959c72980bb0f2b8a5058971fd",
+    "8dbb40d7a3439aa57bd69a3adfe98ff43b9043764072bc42d7dc211942e46ef8",
+    "194c8180f4b90e021a86199d17092af3b2bd29792dc028e401258d903616b664"
+  ],
+  "chunk_lengths": [
+    177082,
+    210377,
+    403145,
+    187169,
+    70803
+  ],
+  "chunk_offsets": [
+    0,
+    177082,
+    387459,
+    790604,
+    977773
+  ],
+  "input_length": 1048576,
+  "input_seed": "0x0000000000DEC0DED",
+  "prng": {
+    "increment": 3037000493,
+    "multiplier": 2862933555777941757
+  },
+  "profile": "sorafs.sf1@1.0.0",
+  "profile_aliases": [
+    "sorafs.sf1@1.0.0"
+  ]
+}

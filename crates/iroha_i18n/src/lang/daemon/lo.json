@@ -1,0 +1,14 @@
+{
+  "info.welcome": "ຍິນດີຕ້ອນຮັບສູ່ Hyperledger Iroha!",
+  "error.trace_config_setup": "ບໍ່ສາມາດຕັ້ງຄ່າການຕິດຕາມການຕັ້ງຄ່າໄດ້",
+  "error.config": "ເກີດຂໍ້ຜິດພາດໃນການຕັ້ງຄ່າ!",
+  "error.logger": "ບໍ່ສາມາດເລີ່ມລະບົບບັນທຶກຂໍ້ມູນໄດ້",
+  "error.start": "ບໍ່ສາມາດເລີ່ມ Iroha ໄດ້",
+  "error.run": "ເກີດຄວາມຜິດພາດໃນຂະນະເຮັດວຽກ Iroha",
+  "error.start_p2p": "ບໍ່ສາມາດເລີ່ມເຄືອຂ່າຍ P2P ໄດ້",
+  "error.init_kura": "ບໍ່ສາມາດເລີ່ມ Kura (ຄັງບລັອກ) ໄດ້",
+  "error.start_dev_telemetry": "ບໍ່ສາມາດເລີ່ມບໍລິການ telemetry ສໍາລັບການພັດທະນາໄດ້",
+  "error.start_telemetry": "ບໍ່ສາມາດເລີ່ມບໍລິການ telemetry ໄດ້",
+  "error.listen_os_signal": "ບໍ່ສາມາດກໍານົດການຟັງສັນຍານຈາກ OS ໄດ້",
+  "error.start_torii": "ບໍ່ສາມາດເລີ່ມ Torii (ປະຕູ Iroha HTTP API) ໄດ້"
+}

@@ -1,0 +1,58 @@
+groups:
+  - name: sorafs-fetch
+    interval: 1m
+    rules:
+      - alert: SoraFSFetchFailureBurst
+        expr: sum by (region, manifest_id) (increase(sorafs_orchestrator_fetch_failures_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS fetch failures detected"
+          description: |
+            Region {{ $labels.region }} observed {{ printf "%.0f" $value }} orchestrator failures for manifest {{ $labels.manifest_id }} during the last 5 minutes.
+      - alert: SoraFSProviderRetrySpike
+        expr: max by (provider_id, region) (rate(sorafs_orchestrator_retries_total[5m])) > 2
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS retry spike"
+          description: |
+            Provider {{ $labels.provider_id }} in region {{ $labels.region }} exceeds retry budget (rate={{ printf "%.2f" $value }} req/s).
+      - alert: SoraFSProviderFailureSpike
+        expr: sum by (provider_id, region) (increase(sorafs_orchestrator_provider_failures_total[10m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS provider failure spike"
+          description: |
+            Provider {{ $labels.provider_id }} in region {{ $labels.region }} reported {{ printf "%.0f" $value }} failures during the last 10 minutes (reason={{ $labels.reason }}).
+      - alert: SoraFSChunkLatencyDegraded
+        expr: histogram_quantile(0.95, sum by (region, provider_id, le) (rate(sorafs_orchestrator_chunk_latency_ms_bucket[5m]))) > 2500
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Chunk latency P95 above SLO"
+          description: |
+            Provider {{ $labels.provider_id }} in region {{ $labels.region }} exceeded the 2.5s P95 latency budget (value={{ printf "%.0f" $value }} ms).
+      - alert: SoraFSChunkLatencyCritical
+        expr: histogram_quantile(0.99, sum by (region, provider_id, le) (rate(sorafs_orchestrator_chunk_latency_ms_bucket[5m]))) > 5000
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Chunk latency P99 severe"
+          description: |
+            Provider {{ $labels.provider_id }} in region {{ $labels.region }} breached the 5s latency ceiling (value={{ printf "%.0f" $value }} ms).
+      - alert: SoraFSStallBurst
+        expr: sum by (region, provider_id) (increase(sorafs_orchestrator_stalls_total[10m])) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Latency stall burst"
+          description: |
+            Provider {{ $labels.provider_id }} in region {{ $labels.region }} recorded {{ printf "%.0f" $value }} stall events in 10 minutes (exceeded latency cap).

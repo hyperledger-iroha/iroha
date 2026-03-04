@@ -1,0 +1,13 @@
+// Deterministically sum up to two (k,v) pairs from a state map.
+// The compiler lowers `for (k,v) in Entries.take(2)` to a fixed two-iteration walk.
+seiyaku MapTakeTwo {
+  state Entries: Map<int, int>;
+
+  kotoage fn sum_two() -> int {
+    let acc = 0;
+    for (k, v) in Entries.take(2) {
+      acc = acc + v;
+    }
+    return acc;
+  }
+}

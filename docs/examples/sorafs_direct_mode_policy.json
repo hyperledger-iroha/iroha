@@ -1,0 +1,19 @@
+{
+  "scoreboard": {
+    "latency_cap_ms": 5000,
+    "weight_scale": 100,
+    "telemetry_grace_secs": 30,
+    "now_unix_secs": 0,
+    "persist_path": "fetch_state/direct_mode_scoreboard.json"
+  },
+  "fetch": {
+    "verify_lengths": true,
+    "verify_digests": true,
+    "retry_budget": 2,
+    "provider_failure_threshold": 3,
+    "global_parallel_limit": 2
+  },
+  "telemetry_region": "regulated-eu",
+  "max_providers": 2,
+  "transport_policy": "direct_only"
+}

@@ -5,5 +5,4 @@ fn execute() -> Result<(), ()> {
     Ok(())
 }
 
-fn main() {
-}
+fn main() {}

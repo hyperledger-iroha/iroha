@@ -1,0 +1,8 @@
+{
+  "authority": "alice@wonderland",
+  "private_key": "ed0120...",
+  "backend": "halo2/ipa",
+  "name": "vk_transfer",
+  "version": 1,
+  "vk_bytes": "AQID"
+}

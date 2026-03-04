@@ -1,0 +1,11 @@
+{
+  "base_fixture": "../1.0.0",
+  "mutations": {
+    "gateway.required_headers": [
+      "Sora-Dag-Scope"
+    ]
+  },
+  "notes": [
+    "Trustless range requests must include the canonical `Sora-Dag-Scope` header; omitting it reproduces scenario C5."
+  ]
+}

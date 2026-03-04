@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Hyperledger Iroha ལ་བཀྲ་ཤིས་བདེ་ལེགས་ཕེབས་ཀྱིས་ལེགས་སོ་!",
+  "error.trace_config_setup": "རིམ་སྒྲིག་རྗེས་འཚོལ་སྒྲིག་འཇུག་བྱེད་མི་ཚུབ།",
+  "error.config": "རིམ་སྒྲིག་ནོར་འཁྲུལ!",
+  "error.logger": "དྲན་དེབ་མ་འགོ་བཙུགས།",
+  "error.start": "Iroha འགོ་མ་བཙུགས།",
+  "error.run": "Iroha ལས་འགན་སྤྲོད་སྐབས་ན་ནོར་འཁྲུལ་འདུག",
+  "error.start_p2p": "P2P དབྱེ་འཛིན་གནས་ཚུལ་འགོ་མ་བཙུགས།",
+  "error.init_kura": "Kura (བུད་སྡེར་མཛོད་) འགོ་མ་བཙུགས།",
+  "error.start_dev_telemetry": "གསར་འཛུགས་སྐུལ་མ་ཐོན་ཆས་འགོ་མ་བཙུགས།",
+  "error.start_telemetry": "ཐོག་མར་བརྡ་རྟགས་དོ་དམ་བྱས་མ་ཚུབ།",
+  "error.listen_os_signal": "OS སྐུལ་མ་ཐོན་རྣམས་ལ་ཉན་འདོད་མ་ཚུབ།",
+  "error.start_torii": "Torii (Iroha HTTP API སྒོ་ལྕགས་) འགོ་མ་བཙུགས།"
+}

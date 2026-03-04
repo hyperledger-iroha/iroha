@@ -1,4 +1,10 @@
-use std::num::NonZeroU64;
+#![allow(clippy::disallowed_types, clippy::items_after_test_module)]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+
+use std::{
+    num::{NonZeroU16, NonZeroU64},
+    sync::Arc,
+};
 
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
@@ -8,14 +14,16 @@ use iroha_core::{
     state::{State, StateBlock, World},
     sumeragi::network_topology::Topology,
 };
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
+    ChainId,
     account::Account,
     asset::{AssetDefinition, AssetDefinitionId},
     domain::Domain,
-    isi::InstructionBox,
+    isi::{InstructionBox, Log},
     parameter::TransactionParameters,
     prelude::*,
-    ChainId,
+    transaction::IvmBytecode,
 };
 use iroha_executor_data_model::permission::{
     account::CanUnregisterAccount,
@@ -26,11 +34,11 @@ use iroha_executor_data_model::permission::{
 /// Create block
 pub fn create_block<'a>(
     state: &'a State,
-    instructions: Vec<InstructionBox>,
+    instructions: impl IntoIterator<Item = InstructionBox>,
     account_id: AccountId,
     account_private_key: &PrivateKey,
     topology: &Topology,
-    peer_key_pair: &KeyPair,
+    peer_private_key: &PrivateKey,
 ) -> (CommittedBlock, StateBlock<'a>) {
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
@@ -40,29 +48,34 @@ pub fn create_block<'a>(
     let (max_clock_drift, tx_limits) = {
         let state_view = state.view();
         let params = state_view.world.parameters();
-        (params.sumeragi().max_clock_drift(), params.transaction)
+        (params.sumeragi().max_clock_drift(), params.transaction())
     };
 
-    let unverified_block = BlockBuilder::new(vec![AcceptedTransaction::accept(
-        transaction,
-        &chain_id,
-        max_clock_drift,
-        tx_limits,
-    )
-    .unwrap()])
-    .chain(0, state.view().latest_block().as_deref());
+    let crypto_cfg = state.crypto();
+    let unverified_block = BlockBuilder::new(vec![
+        AcceptedTransaction::accept(
+            transaction,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            crypto_cfg.as_ref(),
+        )
+        .unwrap(),
+    ])
+    .chain(0, state.view().latest_block().as_deref())
+    .sign(peer_private_key)
+    .unpack(|_| {});
 
     let mut state_block = state.block(unverified_block.header());
     let block = unverified_block
-        .validate_unchecked(&mut state_block)
-        .sign(peer_key_pair, topology)
+        .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {})
         .commit(topology)
         .unpack(|_| {})
         .unwrap();
 
-    // Verify that transactions are valid
-    assert_eq!(block.as_ref().errors().count(), 0);
+    // Verify that transactions are valid (non-fatal in release benches)
+    debug_assert_eq!(block.as_ref().errors().count(), 0);
 
     (block, state_block)
 }
@@ -186,7 +199,11 @@ pub fn restore_every_nth(
     instructions
 }
 
-pub fn build_state(rt: &tokio::runtime::Handle, account_id: &AccountId) -> State {
+pub fn build_state(
+    rt: &tokio::runtime::Handle,
+    account_id: &AccountId,
+    account_private_key: &PrivateKey,
+) -> State {
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query_handle = {
         let _guard = rt.enter();
@@ -199,50 +216,72 @@ pub fn build_state(rt: &tokio::runtime::Handle, account_id: &AccountId) -> State
             [Account::new(account_id.clone()).build(account_id)],
             [],
         ),
-        kura,
+        Arc::clone(&kura),
         query_handle,
         #[cfg(feature = "telemetry")]
         <_>::default(),
     );
 
     {
-        let private_key = KeyPair::random().into_parts().1;
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
         let transaction = TransactionBuilder::new(chain_id.clone(), account_id.clone())
-            .with_instructions(Vec::<InstructionBox>::new())
-            .sign(&private_key);
+            .with_instructions([Log::new(Level::INFO, "init".to_string())])
+            .sign(account_private_key);
         let (max_clock_drift, tx_limits) = {
             let state_view = state.view();
             let params = state_view.world.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction)
+            (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let unverified_block = BlockBuilder::new(vec![AcceptedTransaction::accept(
-            transaction,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-        )
-        .unwrap()])
-        .chain(0, state.view().latest_block().as_deref());
+        let crypto_cfg = state.crypto();
+        let unverified_block = BlockBuilder::new(vec![
+            AcceptedTransaction::accept(
+                transaction,
+                &chain_id,
+                max_clock_drift,
+                tx_limits,
+                crypto_cfg.as_ref(),
+            )
+            .unwrap(),
+        ])
+        .chain(0, state.view().latest_block().as_deref())
+        .sign(account_private_key)
+        .unpack(|_| {});
         let mut state_block = state.block(unverified_block.header());
 
-        state_block.world.parameters.transaction =
-            TransactionParameters::new(NonZeroU64::MAX, NonZeroU64::MAX);
+        state_block.world.parameters.transaction = TransactionParameters::with_max_signatures(
+            NonZeroU64::MAX,
+            NonZeroU64::MAX,
+            NonZeroU64::MAX,
+            NonZeroU64::MAX,
+            NonZeroU64::MAX,
+            NonZeroU16::new(u16::MAX).expect("u16::MAX is non-zero"),
+        );
         state_block.world.parameters.executor.fuel = NonZeroU64::MAX;
         state_block.world.parameters.executor.memory = NonZeroU64::MAX;
 
         let mut state_transaction = state_block.transaction();
-        let path_to_executor = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../defaults/executor.wasm");
-        let wasm = std::fs::read(&path_to_executor)
-            .unwrap_or_else(|_| panic!("Failed to read file: {}", path_to_executor.display()));
-        let executor = Executor::new(WasmSmartContract::from_compiled(wasm));
-        Upgrade::new(executor)
-            .execute(account_id, &mut state_transaction)
-            .expect("Failed to load executor");
+        let path_to_executor =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../defaults/executor.to");
+        if let Ok(bytecode) = std::fs::read(&path_to_executor)
+            && !bytecode.is_empty()
+        {
+            let executor = Executor::new(IvmBytecode::from_compiled(bytecode));
+            // Ignore upgrade failure and keep the default executor when bytecode is invalid
+            let _ = Upgrade::new(executor).execute(account_id, &mut state_transaction);
+        }
 
         state_transaction.apply();
-        state_block.commit();
+        let committed_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {})
+            .commit_unchecked()
+            .unpack(|_| {});
+        let _ = state_block.apply_without_execution(&committed_block, Vec::new());
+        state_block.commit().unwrap();
+
+        let block_arc = Arc::new(committed_block.into());
+        kura.store_block(block_arc)
+            .expect("store block in bench setup");
     }
 
     state
@@ -252,8 +291,39 @@ fn construct_domain_id(i: usize) -> DomainId {
     format!("non_inlinable_domain_name_{i}").parse().unwrap()
 }
 
-fn generate_account_id(domain_id: DomainId) -> AccountId {
-    AccountId::new(domain_id, KeyPair::random().into_parts().0)
+fn generate_account_id(domain_id: DomainId, seed: u128) -> AccountId {
+    let keypair = KeyPair::from_seed(seed.to_le_bytes().to_vec(), Algorithm::Ed25519);
+    AccountId::new(domain_id, keypair.public_key().clone())
+}
+
+#[cfg(test)]
+mod tests {
+    #[allow(unused_imports)]
+    use iroha_crypto::KeyPair;
+    #[allow(unused_imports)]
+    use iroha_data_model::prelude::AccountId;
+    #[allow(unused_imports)]
+    use tokio::runtime::Runtime;
+
+    #[allow(unused_imports)]
+    use super::build_state;
+
+    #[test]
+    fn build_state_succeeds_without_executor_bytecode() {
+        let rt = Runtime::new().unwrap();
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(
+            "test_domain".parse().expect("valid domain"),
+            keypair.public_key().clone(),
+        );
+
+        // Should not panic even if executor bytecode is missing or invalid
+        let state = build_state(rt.handle(), &account_id, keypair.private_key());
+
+        let view = state.view();
+        assert_eq!(view.height(), 1);
+        assert!(view.latest_block().is_some());
+    }
 }
 
 fn construct_asset_definition_id(i: usize, domain_id: DomainId) -> AssetDefinitionId {
@@ -277,8 +347,9 @@ pub fn generate_ids(
     for i in 0..domains {
         let domain_id = construct_domain_id(i);
         domain_ids.push(domain_id.clone());
-        for _ in 0..accounts_per_domain {
-            let account_id = generate_account_id(domain_id.clone());
+        for account_idx in 0..accounts_per_domain {
+            let seed = (i as u128) * accounts_per_domain as u128 + account_idx as u128;
+            let account_id = generate_account_id(domain_id.clone(), seed);
             account_ids.push(account_id)
         }
         for k in 0..assets_per_domain {

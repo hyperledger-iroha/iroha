@@ -1,0 +1,38 @@
+{
+  "fixture": "multi_peer_parity_v1",
+  "generated_at": "2025-11-22T10:16:08Z",
+  "plan_file": "plan.json",
+  "providers_file": "providers.json",
+  "telemetry_file": "telemetry.json",
+  "manifest_report_path": "target-codex/android_codegen/sorafs_manifest/multi_peer_parity_v1.json",
+  "chunk_digests_blake3": [
+    "7789b490337d16c51b59a92e354a657ba450da4bab872c31e85e4d4fedcb3a27",
+    "56397fe0ff8cc24c790e0719505fff05c49dca09289b595d17455bedcc1f7438",
+    "2a2a47eedcc11effdb5d13190fe09143d6b31f959c72980bb0f2b8a5058971fd",
+    "8dbb40d7a3439aa57bd69a3adfe98ff43b9043764072bc42d7dc211942e46ef8",
+    "194c8180f4b90e021a86199d17092af3b2bd29792dc028e401258d903616b664"
+  ],
+  "instruction": {
+    "digest_hex": "9cd419c9fb260ac54ecbf771890270fbf13189bc1892453313a4bda010b20214",
+    "chunker": {
+      "profile_id": 1,
+      "namespace": "sorafs",
+      "name": "sf1",
+      "semver": "1.0.0",
+      "handle": "sorafs.sf1@1.0.0",
+      "aliases": [
+        "sorafs.sf1@1.0.0"
+      ],
+      "multihash_code": 31
+    },
+    "chunk_digest_sha3_256_hex": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482",
+    "policy": {
+      "min_replicas": 3,
+      "retention_epoch": 1725000000,
+      "storage_class": "Hot"
+    },
+    "submitted_epoch": 1725000000,
+    "alias": null,
+    "successor_of": null
+  }
+}

@@ -1,0 +1,12 @@
+groups:
+  - name: soranet-policy
+    interval: 1m
+    rules:
+      - alert: SoranetAnonymityBrownout
+        expr: increase(sorafs_orchestrator_brownouts_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraNet anonymity brownout triggered"
+          description: "The anonymity policy entered brownout mode; block SNNet-5 default-on rollouts until guard coverage recovers."

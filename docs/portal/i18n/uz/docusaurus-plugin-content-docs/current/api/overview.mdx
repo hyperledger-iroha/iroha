@@ -1,0 +1,83 @@
+---
+lang: uz
+direction: ltr
+source: docs/portal/docs/api/overview.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+TryItConsole ni '@site/src/components/TryItConsole.jsx' dan import qiling;
+
+# Torii API umumiy ko'rinishi
+
+Torii shlyuzi Iroha bilan ishlash uchun REST + WebSocket sirtini ochib beradi.
+tugunlar. Kanonik OpenAPI hujjati quyidagilar orqali yaratiladi:
+
+```bash
+cargo xtask openapi
+```
+
+Yuqoridagi buyruqni ishga tushirish `docs/portal/static/openapi/torii.json` va yozadi
+`docusaurus-plugin-openapi-docs` integratsiyasini ta'minlaydi, shuning uchun bu bo'lim yangilanadi
+avtomatik ravishda. Generator xotiradagi Torii routerini aylantiradi va
+uning OpenAPI so'nggi nuqtasini so'rang; agar bu bajarilmasa (masalan, marshrutizatorni ishga tushirish
+xatolar) o'rniga deterministik to'ldiruvchi spetsifikatsiya chiqariladi.
+
+## Joriy holat
+
+- **Maxsus manba:** `cargo xtask openapi` to'g'ridan-to'g'ri Torii routeriga so'rov yuboradi; the
+  zaxira stub faqat marshrutizator OpenAPI ni ochib bera olmasa chiqariladi.
+  hujjat.
+- **Determinizm:** JSON chiqishi CIda barqaror farqni taʼminlash uchun kanoniklashtirilgan.
+- **Autentifikatsiya:** “Sinab ko‘ring” sinov maydoni endi so‘rovlarni a orqali yuboradi
+  cheklangan staging proksi. Operatorlar Torii so'nggi nuqta va tashuvchini taqdim etishlari kerak
+  qo'ng'iroq qilishdan oldin token.
+- **Versiya selektori:** Swagger UI, RapiDoc va toʻliq Torii OpenAPI sahifasi
+  `openapi/versions.json` o'qiydigan ochiladigan ro'yxatni oching, shunda solishtirishingiz mumkin
+  tarixiy suratlar. `Latest (tracked)` variantiga ishora qiladi
+  `/openapi/torii.json`, boshqa barcha yozuvlar mos keladiganlarni yuklaydi
+  `openapi/versions/<version>/torii.json` artefakt.
+- **Snapshot ish jarayoni:** `npm run docs:version -- <label>` ishga tushirilgandan so'ng, yangilang
+  `npm run sync-openapi -- --version=<label> --latest` bilan mos keladigan OpenAPI fayli
+  Shunday qilib, ochiladigan menyu muzlatilgan suratni ham, "So'nggi" tuzilmasini ham yuklashi mumkin.
+
+Router tomonidan qo'llab-quvvatlanadigan ekstraktor endi to'liq Torii sirtini chiqaradi. Agar ko'rsangiz
+to'ldiruvchi stub, uni qurilish vaqtidagi nosozlik sifatida ko'rib chiqing va Torii ni tekshiring
+marshrutizatorni ishga tushirish jurnallari.
+
+## Sinab ko'ring (DOCS-3)
+
+Ishlab chiquvchi portali REST so'rovlarini a orqali yuboradigan kichik konsolni o'rnatadi
+Tugunga asoslangan proksi-server. Proksi-server CORS, tarif cheklovlari va ixtiyoriy tashuvchini qo'llaydi
+tokenlar, shuning uchun vidjet hisobga olish ma'lumotlarini oshkor qilmasdan staging shlyuzlari bilan gaplashishi mumkin.
+To'liq operator nazorat ro'yxati uchun `docs/devportal/try-it.md` ga qarang.
+
+Docusaurus dev serveri bilan birga proksi-serverni ishga tushiring:
+
+```bash
+cd docs/portal
+# Proxy configuration
+export TRYIT_PROXY_TARGET="https://torii.staging.sora"
+export TRYIT_PROXY_ALLOWED_ORIGINS="http://localhost:3000"
+export TRYIT_PROXY_BEARER="sora-dev-token"
+# Front-end configuration so the widget knows where the proxy lives
+export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
+
+# Run the proxy and the docs site (parallel terminals recommended)
+npm run tryit-proxy
+npm run start
+```
+
+- Proksi-server `TRYIT_PROXY_LISTEN` (standart `127.0.0.1:8787`) da tinglaydi va
+  har qanday `/proxy/...` so'rovlarini `TRYIT_PROXY_TARGET` ga yo'naltiradi.
+- Statik tokenlar uchun `TRYIT_PROXY_BEARER` yetkazib bering yoki qo'ng'iroq qiluvchilarga taqdim etishiga ruxsat bering.
+  “Tashuvchi token” maydoni orqali har bir so‘rov uchun bittadan.
+- Tarifni sukut bo'yicha daqiqada 60 so'rov bilan cheklaydi va ularni sozlash mumkin
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
+
+> ⚠️ Proksi-server sahnalashtirish/demo kirish uchun mo'ljallangan. Ishlab chiqarishni joylashtirish
+> qattiqlashtirilgan kirish ortidan yugurishi va bir xil tezlikni cheklash siyosatini qayta ishlatishi kerak
+> Torii old tomoni.
+

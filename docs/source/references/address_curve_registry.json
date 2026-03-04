@@ -1,0 +1,247 @@
+{
+  "version": 5,
+  "generated_at": "2026-01-22T06:39:48Z",
+  "entries": [
+    {
+      "id": 1,
+      "hex": "0x01",
+      "algorithm": "ed25519",
+      "status": "production",
+      "feature": null,
+      "public_key_encoding": "32-byte compressed Ed25519 point",
+      "signature_encoding": "64-byte canonical r||s",
+      "notes": [
+        "Default controller curve for address payloads.",
+        "Always available; no feature gates required."
+      ],
+      "validation": {
+        "public_key_bytes": 32,
+        "signature_bytes": 64,
+        "checks": [
+          "Reject payloads that are not exactly 32 bytes before decompressing the point.",
+          "Decompress using the Ed25519 canonical check and reject small-order/non-canonical points.",
+          "Require s < L when validating signatures and ensure clusters advertise curve id 0x01 in crypto.allowed_curve_ids."
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "hex": "0x02",
+      "algorithm": "ml-dsa",
+      "status": "production",
+      "feature": null,
+      "public_key_encoding": "Dilithium3 public key (1952 bytes)",
+      "signature_encoding": "3309-byte ML-DSA signature",
+      "notes": [
+        "Available in all builds; enable via crypto.allowed_signing and crypto.curves.allowed_curve_ids."
+      ],
+      "validation": {
+        "public_key_bytes": 1952,
+        "signature_bytes": 3309,
+        "checks": [
+          "Reject payloads that are not exactly 1952 bytes before decoding.",
+          "Parse Dilithium3 public key bytes via pqcrypto_dilithium::dilithium3.",
+          "Enforce 3309-byte signatures and verify with pqcrypto_dilithium::dilithium3."
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "hex": "0x03",
+      "algorithm": "bls_normal",
+      "status": "production",
+      "feature": "bls",
+      "public_key_encoding": "48-byte compressed G1 public key",
+      "signature_encoding": "96-byte compressed G2 signature",
+      "notes": [
+        "Required for consensus validators.",
+        "Admission allows BLS controllers even when allowed_signing/allowed_curve_ids omit them."
+      ],
+      "validation": {
+        "public_key_bytes": 48,
+        "signature_bytes": 96,
+        "checks": [
+          "Parse compressed G1 public keys and reject non-canonical or identity points.",
+          "Parse compressed G2 signatures and reject non-canonical or identity points.",
+          "Verify signatures with the w3f_bls/blstrs backend."
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "hex": "0x04",
+      "algorithm": "secp256k1",
+      "status": "production",
+      "feature": null,
+      "public_key_encoding": "SEC1 compressed (33-byte) secp256k1 point",
+      "signature_encoding": "64-byte canonical r||s (low-s) over SHA-256",
+      "notes": [
+        "Available for Nexus account controllers and multisig members.",
+        "Leverages deterministic ECDSA signing with low-s normalization; payloads must use SEC1-compressed public keys."
+      ],
+      "validation": {
+        "public_key_bytes": 33,
+        "signature_bytes": 64,
+        "checks": [
+          "Reject payloads that are not exactly 33 bytes before decompressing the SEC1 point.",
+          "Parse with SEC1 compressed rules and fail closed on invalid or non-canonical points.",
+          "Verify signatures using the canonical 64-byte r||s encoding produced by the RustCrypto k256 backend."
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "hex": "0x05",
+      "algorithm": "bls_small",
+      "status": "production",
+      "feature": "bls",
+      "public_key_encoding": "96-byte compressed G2 public key",
+      "signature_encoding": "48-byte compressed G1 signature",
+      "notes": [
+        "Compact-signature BLS profile (smaller signatures, larger public keys)."
+      ],
+      "validation": {
+        "public_key_bytes": 96,
+        "signature_bytes": 48,
+        "checks": [
+          "Parse compressed G2 public keys and reject non-canonical or identity points.",
+          "Parse compressed G1 signatures and reject non-canonical or identity points.",
+          "Verify signatures with the w3f_bls/blstrs backend."
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "hex": "0x0A",
+      "algorithm": "gost3410-2012-256-paramset-a",
+      "status": "reserved",
+      "feature": "gost",
+      "public_key_encoding": "TC26 param set A point (little-endian bytes)",
+      "signature_encoding": "64-byte canonical r||s",
+      "notes": [
+        "Reserved for GOST 256-bit param set A.",
+        "Requires the `gost` feature before use."
+      ],
+      "validation": {
+        "public_key_bytes": 64,
+        "signature_bytes": 64,
+        "checks": [
+          "Interpret the payload as little-endian (x || y) coordinates and reject values >= p or the identity point.",
+          "Ensure coordinates decompress against the TC26 param set A domain parameters.",
+          "Require canonical 32-byte r and s limbs during signature verification."
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "hex": "0x0B",
+      "algorithm": "gost3410-2012-256-paramset-b",
+      "status": "reserved",
+      "feature": "gost",
+      "public_key_encoding": "TC26 param set B point (little-endian bytes)",
+      "signature_encoding": "64-byte canonical r||s",
+      "notes": [
+        "Reserved for GOST 256-bit param set B.",
+        "Requires the `gost` feature before use."
+      ],
+      "validation": {
+        "public_key_bytes": 64,
+        "signature_bytes": 64,
+        "checks": [
+          "Interpret the payload as little-endian (x || y) coordinates expressed over the TC26 param set B domain.",
+          "Reject points whose coordinates >= p or point-at-infinity encodings.",
+          "Require canonical 32-byte r and s limbs during signature verification."
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "hex": "0x0C",
+      "algorithm": "gost3410-2012-256-paramset-c",
+      "status": "reserved",
+      "feature": "gost",
+      "public_key_encoding": "TC26 param set C point (little-endian bytes)",
+      "signature_encoding": "64-byte canonical r||s",
+      "notes": [
+        "Reserved for GOST 256-bit param set C.",
+        "Requires the `gost` feature before use."
+      ],
+      "validation": {
+        "public_key_bytes": 64,
+        "signature_bytes": 64,
+        "checks": [
+          "Interpret the payload as little-endian (x || y) coordinates expressed over the TC26 param set C domain.",
+          "Reject coordinates that are >= p or the identity point.",
+          "Require canonical 32-byte r and s limbs during signature verification."
+        ]
+      }
+    },
+    {
+      "id": 13,
+      "hex": "0x0D",
+      "algorithm": "gost3410-2012-512-paramset-a",
+      "status": "reserved",
+      "feature": "gost",
+      "public_key_encoding": "TC26 param set A 512-bit point (little-endian bytes)",
+      "signature_encoding": "128-byte canonical r||s",
+      "notes": [
+        "Reserved for GOST 512-bit param set A.",
+        "Requires the `gost` feature before use."
+      ],
+      "validation": {
+        "public_key_bytes": 128,
+        "signature_bytes": 128,
+        "checks": [
+          "Interpret the payload as little-endian (x || y) coordinates with 64-byte limbs over the TC26 512-bit param set A domain.",
+          "Reject coordinates >= p or identity encodings before attempting to decompress.",
+          "Require canonical 64-byte r and s limbs during signature verification."
+        ]
+      }
+    },
+    {
+      "id": 14,
+      "hex": "0x0E",
+      "algorithm": "gost3410-2012-512-paramset-b",
+      "status": "reserved",
+      "feature": "gost",
+      "public_key_encoding": "TC26 param set B 512-bit point (little-endian bytes)",
+      "signature_encoding": "128-byte canonical r||s",
+      "notes": [
+        "Reserved for GOST 512-bit param set B.",
+        "Requires the `gost` feature before use."
+      ],
+      "validation": {
+        "public_key_bytes": 128,
+        "signature_bytes": 128,
+        "checks": [
+          "Interpret the payload as little-endian (x || y) coordinates with 64-byte limbs over the TC26 512-bit param set B domain.",
+          "Reject coordinates >= p or identity encodings before attempting to decompress.",
+          "Require canonical 64-byte r and s limbs during signature verification."
+        ]
+      }
+    },
+    {
+      "id": 15,
+      "hex": "0x0F",
+      "algorithm": "sm2",
+      "status": "reserved",
+      "feature": "sm",
+      "public_key_encoding": "DistID length (u16 BE) + DistID bytes + SEC1 uncompressed SM2 point",
+      "signature_encoding": "64-byte canonical r||s",
+      "notes": [
+        "Reserved for the SM2 rollout.",
+        "Requires the `sm` feature before use."
+      ],
+      "validation": {
+        "public_key_bytes": null,
+        "signature_bytes": 64,
+        "checks": [
+          "Decode the DistID length prefix (u16 BE), validate the DistID bytes, and ensure the remaining payload is 65 bytes before parsing the point.",
+          "Parse the SEC1 uncompressed point and reject invalid encodings before invoking the SM2 verifier.",
+          "Apply the configured DistID to the verification context and reject signatures that do not bind to it.",
+          "Require canonical 32-byte r and s limbs and ensure curve id 0x0F is present in crypto.allowed_curve_ids before admission."
+        ]
+      }
+    }
+  ]
+}

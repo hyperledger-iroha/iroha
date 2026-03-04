@@ -1,0 +1,71 @@
+[package]
+name = "sorafs_orchestrator"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "High-level SoraFS orchestrator facade built on top of sorafs_car"
+
+[features]
+default = ["cli-orchestrator"]
+cli-orchestrator = [
+    "dep:iroha_config",
+    "dep:iroha_crypto",
+    "dep:sorafs_chunker",
+    "dep:sorafs_manifest",
+]
+schema-structural = []
+packed-struct = []
+packed-seq = []
+compact-len = []
+compression = []
+
+[dependencies]
+sorafs_car = { path = "../sorafs_car", features = ["manifest", "cli"] }
+norito = { path = "../norito", features = ["json", "derive"] }
+thiserror = "2.0.17"
+rust_decimal = { workspace = true }
+iroha_telemetry = { path = "../iroha_telemetry" }
+iroha_logger = { path = "../iroha_logger" }
+iroha_data_model = { path = "../iroha_data_model" }
+iroha_primitives = { path = "../iroha_primitives" }
+iroha_core = { path = "../iroha_core" }
+blake3 = "1.8.2"
+hex = { workspace = true }
+base64 = { workspace = true }
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
+ivm = { path = "../ivm" }
+rand = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "net", "io-util", "fs"] }
+reqwest = { workspace = true, features = ["rustls-tls", "blocking"] }
+quinn = { version = "0.11.9", default-features = false, features = ["rustls", "runtime-tokio"] }
+rcgen = "=0.14.5"
+futures = { workspace = true }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
+url = { workspace = true }
+sorafs_chunker = { path = "../sorafs_chunker", optional = true }
+sorafs_manifest = { path = "../sorafs_manifest", optional = true }
+iroha_crypto = { path = "../iroha_crypto", optional = true }
+iroha_config = { path = "../iroha_config", optional = true }
+
+[dev-dependencies]
+futures = "0.3.31"
+tempfile = "3.23.0"
+hex = "0.4.3"
+blake3 = "1.8.2"
+rustls = { version = "0.23.35", default-features = false, features = ["std"] }
+assert_cmd = "2.1.1"
+httpmock = "0.8.2"
+sorafs_manifest = { path = "../sorafs_manifest" }
+iroha_crypto = { path = "../iroha_crypto" }
+soranet_pq = { path = "../soranet_pq" }
+
+[[bin]]
+name = "sorafs_cli"
+path = "src/bin/sorafs_cli.rs"
+required-features = ["cli-orchestrator"]
+
+[[bin]]
+name = "taikai_viewer"
+path = "src/bin/taikai_viewer.rs"
+required-features = ["cli-orchestrator"]

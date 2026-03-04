@@ -5,6 +5,8 @@ edition.workspace = true
 version.workspace = true
 authors.workspace = true
 
+build = "../build-support/script.rs"
+
 description.workspace = true
 repository.workspace = true
 homepage.workspace = true
@@ -22,30 +24,79 @@ is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledg
 is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-iroha/iroha" }
 maintenance = { status = "actively-developed" }
 
+[features]
+default = ["build-i3"]
+build-i2 = []
+build-i3 = []
+# Experimental selector support. Forwarded to data model when enabled.
+ids_projection = []
+# Hooks used only by integration tests.
+cli_integration_harness = []
+bridge = []
+
+[[bin]]
+name = "iroha3"
+path = "src/bin/iroha3.rs"
+required-features = ["build-i3"]
+
+[[bin]]
+name = "iroha2"
+path = "src/bin/iroha2.rs"
+required-features = ["build-i2"]
+
 [[bin]]
 name = "iroha"
-path = "src/main.rs"
+path = "src/bin/iroha.rs"
+required-features = ["build-i3"]
 
 [dependencies]
 iroha = { workspace = true }
 iroha_primitives = { workspace = true }
+ivm = { workspace = true }
+iroha_crypto = { workspace = true, features = ["sm"] }
+iroha_core = { workspace = true }
+fastpq_prover = { path = "../fastpq_prover" }
+iroha_config = { workspace = true }
+iroha_zkp_halo2 = { workspace = true }
+iroha_data_model = { workspace = true }
+iroha_torii_shared = { workspace = true }
+iroha_version = { workspace = true }
+url = { workspace = true }
 
 thiserror = { workspace = true }
 error-stack = { workspace = true, features = ["eyre"] }
 eyre = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-clap-markdown = "0.1.4"
+clap-markdown = "0.1.5"
 humantime = { workspace = true }
-json5 = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-serde_with = { workspace = true }
-erased-serde = "0.4.5"
+norito = {workspace = true}
 supports-color = { workspace = true }
 derive_more = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 futures = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+iroha_i18n = { workspace = true }
+rand = { version = "0.9.2", features = ["std"] }
+sorafs_manifest = { workspace = true }
+sorafs_car = { workspace = true, features = ["cli"] }
+sorafs_chunker = { workspace = true }
+sorafs_orchestrator = { workspace = true }
+soranet_pq = { workspace = true }
+time = { workspace = true }
+zeroize = { version = "1.8.2", default-features = false, features = ["std"] }
+blake3 = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
+toml = { workspace = true }
+tiny-keccak = { workspace = true }
+qrcode = { version = "0.14.1", default-features = false, features = ["svg", "image"] }
+image = { version = "0.25.9", default-features = false, features = ["png", "gif"] }
+png = "0.18.0"
 
 [build-dependencies]
-vergen = { workspace = true }
-color-eyre = "0.6.3"
+build-support = { path = "../build-support", default-features = false }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
+iroha_test_samples = { workspace = true }

@@ -1,0 +1,33 @@
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/reference/torii-swagger.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+'@site/src/components/SwaggerUiPanel.jsx' から SwaggerUiPanel をインポートします。
+
+# Torii API (Swagger UI)
+
+このページには、`swagger-ui-react` を使用して Torii OpenAPI ドキュメントが埋め込まれています。こんなときに使います
+使い慣れた Swagger レイアウト、サンプルのリクエスト、試してみる機能が必要な場合
+ブラウザ内で直接リクエストを送信します。
+
+## 使用上のヒント
+
+- すべてのリクエストを事前承認するために、パネルにベアラー トークンを提供します。トークンは
+  `X-TryIt-Auth` ヘッダーを使用してプロキシに転送され、永続化されることはありません。
+- ポータルを提供するときに、ウィジェットが表示されるように `TRYIT_PROXY_PUBLIC_URL` を構成します。
+  バンドルされたステージング プロキシを通じてリクエストを転送します。警告バナーが表示される
+  プロキシが無効になっている場合。
+- ドロップダウンから OpenAPI スナップショットを選択して、最新の仕様を切り替えます
+  `npm run sync-openapi` によって生成されたアーカイブ バージョン。
+- プロキシを利用した「[Try it](/api/overview#try-it-sandbox-docs-3)」コンソールを試す
+  CORS によって Torii への直接アクセスが妨げられるステージング環境の場合。
+- `cargo xtask openapi` を使用して OpenAPI スナップショットを最新の状態に保ちます (「
+  `docs/portal/static/openapi/torii.json`)。
+
+<SwaggerUiPanel />

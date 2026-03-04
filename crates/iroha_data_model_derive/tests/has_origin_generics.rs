@@ -1,24 +1,37 @@
-#![allow(missing_docs)]
+//! Tests covering `HasOrigin` derive on generic enums.
 
-use iroha_data_model::prelude::{HasOrigin, Identifiable};
 use iroha_data_model_derive::{HasOrigin, IdEqOrdHash};
 
+/// Minimal `Identifiable` trait for testing
+pub trait Identifiable: Ord + Eq {
+    /// Identifier type
+    type Id: Ord + Eq + core::hash::Hash;
+
+    /// Access identifier
+    fn id(&self) -> &Self::Id;
+}
+
+/// Minimal `HasOrigin` trait for testing
+pub trait HasOrigin {
+    /// Origin type
+    type Origin: Identifiable;
+
+    /// Identifier of the origin
+    fn origin(&self) -> &<Self::Origin as Identifiable>::Id;
+}
+
+/// Simple identifier wrapper used in the tests.
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
 struct ObjectId(pub i32);
 
-// fake impl for `#[derive(IdEqOrdHash)]`
-impl From<ObjectId> for iroha_data_model::IdBox {
-    fn from(_: ObjectId) -> Self {
-        unimplemented!("fake impl")
-    }
-}
-
+/// Minimal object type used as an origin.
 #[derive(Debug, IdEqOrdHash)]
 struct Object {
     id: ObjectId,
 }
 
 #[allow(clippy::enum_variant_names)] // it's a test, duh
+/// Generic event type used to verify `HasOrigin` derive support.
 #[derive(Debug, HasOrigin)]
 #[has_origin(origin = Object)]
 enum ObjectEvent<T: Identifiable<Id = ObjectId>> {

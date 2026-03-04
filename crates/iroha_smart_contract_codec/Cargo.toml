@@ -1,0 +1,13 @@
+[package]
+name = "iroha_smart_contract_codec"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+norito.workspace = true

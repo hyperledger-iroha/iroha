@@ -1,0 +1,85 @@
+{
+  "title": "SoraGlobal Gateway M0 (soranet-pop-m0)",
+  "tags": [
+    "soranet",
+    "m0",
+    "soranet-pop-m0"
+  ],
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Gateway latency p95",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(sorafs_gateway_latency_ms_bucket{pop=\"soranet-pop-m0\"}[5m]))",
+          "legendFormat": "gateway latency p95"
+        }
+      ],
+      "description": "Target 350ms p95 with 500ms error budget ceiling."
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Cache hit rate",
+      "targets": [
+        {
+          "expr": "sum(rate(sorafs_gateway_cache_hits_total{pop=\"soranet-pop-m0\"}[5m])) / sum(rate(sorafs_gateway_cache_requests_total{pop=\"soranet-pop-m0\"}[5m]))"
+        }
+      ],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "green",
+            "value": 0.0
+          },
+          {
+            "color": "orange",
+            "value": 0.92
+          },
+          {
+            "color": "red",
+            "value": 0.89
+          }
+        ]
+      },
+      "description": "Hold >92% hit rate during drills; annotate dips with resolver/gateway incidents."
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Error budget burn (hourly)",
+      "targets": [
+        {
+          "expr": "(1 - avg_over_time(sorafs_gateway_success_ratio{pop=\"soranet-pop-m0\"}[1h])) * 100"
+        }
+      ],
+      "description": "Keeps SN15-M0 burn rate visible for change approvals."
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Resolver proof age",
+      "targets": [
+        {
+          "expr": "max_over_time(soradns_rad_proof_age_seconds{pop=\"soranet-pop-m0\"}[15m])"
+        }
+      ],
+      "description": "Alarm before RAD proofs age past 15m; ties to GAR policy enforcement."
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "name": "deploy",
+        "enable": true,
+        "expr": "changes(sorafs_gateway_deploy_revision{pop=\"soranet-pop-m0\"}[5m]) > 0"
+      }
+    ]
+  }
+}

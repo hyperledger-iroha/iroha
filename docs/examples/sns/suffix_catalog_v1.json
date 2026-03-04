@@ -1,0 +1,154 @@
+{
+  "version": 1,
+  "generated_at": "2026-05-01T00:00:00Z",
+  "generated_by": "docs/examples/sns/suffix_catalog_v1.json",
+  "suffixes": [
+    {
+      "suffix": ".sora",
+      "suffix_id": 1,
+      "status": "active",
+      "steward_account": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+      "fund_splitter_account": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+      "payment_asset_id": "xor#sora",
+      "referral_cap_bps": 500,
+      "min_term_years": 1,
+      "max_term_years": 5,
+      "grace_period_days": 30,
+      "redemption_period_days": 60,
+      "policy_version": 1,
+      "reserved_labels": [
+        {
+          "label": "treasury",
+          "assigned_to": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+          "release_at_ms": null,
+          "note": "Protocol reserved"
+        }
+      ],
+      "pricing": [
+        {
+          "tier_id": 0,
+          "label_regex": "^[a-z0-9]{3,}$",
+          "base_price": {
+            "asset_id": "xor#sora",
+            "amount": 120
+          },
+          "auction_kind": "vickrey_commit_reveal",
+          "dutch_floor": null,
+          "min_duration_years": 1,
+          "max_duration_years": 5
+        }
+      ],
+      "fee_split": {
+        "treasury_bps": 7000,
+        "steward_bps": 3000,
+        "referral_max_bps": 1000,
+        "escrow_bps": 0
+      }
+    },
+    {
+      "suffix": ".nexus",
+      "suffix_id": 2,
+      "status": "paused",
+      "steward_account": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+      "fund_splitter_account": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+      "payment_asset_id": "xor#sora",
+      "referral_cap_bps": 300,
+      "min_term_years": 1,
+      "max_term_years": 3,
+      "grace_period_days": 15,
+      "redemption_period_days": 30,
+      "policy_version": 2,
+      "reserved_labels": [
+        {
+          "label": "treasury",
+          "assigned_to": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+          "release_at_ms": null,
+          "note": "Protocol reserved"
+        },
+        {
+          "label": "guardian",
+          "assigned_to": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+          "release_at_ms": null,
+          "note": "Guardian controls nexus.* GAR manifests"
+        }
+      ],
+      "pricing": [
+        {
+          "tier_id": 0,
+          "label_regex": "^[a-z0-9]{4,}$",
+          "base_price": {
+            "asset_id": "xor#sora",
+            "amount": 480
+          },
+          "auction_kind": "vickrey_commit_reveal",
+          "dutch_floor": null,
+          "min_duration_years": 1,
+          "max_duration_years": 3
+        },
+        {
+          "tier_id": 1,
+          "label_regex": "^[a-z]{2}$",
+          "base_price": {
+            "asset_id": "xor#sora",
+            "amount": 4000
+          },
+          "auction_kind": "dutch_reopen",
+          "dutch_floor": {
+            "asset_id": "xor#sora",
+            "amount": 500
+          },
+          "min_duration_years": 1,
+          "max_duration_years": 2
+        }
+      ],
+      "fee_split": {
+        "treasury_bps": 6500,
+        "steward_bps": 2500,
+        "referral_max_bps": 800,
+        "escrow_bps": 200
+      }
+    },
+    {
+      "suffix": ".dao",
+      "suffix_id": 3,
+      "status": "revoked",
+      "steward_account": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+      "fund_splitter_account": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+      "payment_asset_id": "xor#sora",
+      "referral_cap_bps": 0,
+      "min_term_years": 1,
+      "max_term_years": 2,
+      "grace_period_days": 30,
+      "redemption_period_days": 30,
+      "policy_version": 0,
+      "reserved_labels": [
+        {
+          "label": "dao",
+          "assigned_to": null,
+          "release_at_ms": null,
+          "note": "Held until DAO governance policies finalize"
+        }
+      ],
+      "pricing": [
+        {
+          "tier_id": 0,
+          "label_regex": "^[a-z0-9]{3,}$",
+          "base_price": {
+            "asset_id": "xor#sora",
+            "amount": 60
+          },
+          "auction_kind": "vickrey_commit_reveal",
+          "dutch_floor": null,
+          "min_duration_years": 1,
+          "max_duration_years": 2
+        }
+      ],
+      "fee_split": {
+        "treasury_bps": 9000,
+        "steward_bps": 1000,
+        "referral_max_bps": 0,
+        "escrow_bps": 0
+      }
+    }
+  ]
+}

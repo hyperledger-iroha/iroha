@@ -1,0 +1,626 @@
+{
+  "title": "SoraFS Capacity Health",
+  "uid": "sorafs-capacity-health",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "tags": [
+    "sorafs",
+    "capacity"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Datasource",
+        "type": "datasource",
+        "pluginId": "prometheus",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "Prometheus"
+        }
+      },
+      {
+        "name": "provider",
+        "label": "Provider",
+        "type": "query",
+        "datasource": "$datasource",
+        "query": "label_values(torii_sorafs_capacity_declared_gib, provider)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      },
+      {
+        "name": "cluster",
+        "label": "Torii Cluster",
+        "type": "query",
+        "datasource": "$datasource",
+        "query": "label_values(torii_da_rent_gib_months_total, cluster)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      },
+      {
+        "name": "storage_class",
+        "label": "Storage Class",
+        "type": "query",
+        "datasource": "$datasource",
+        "query": "label_values(torii_da_rent_gib_months_total, storage_class)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      },
+      {
+        "name": "ledger_label",
+        "label": "Reserve Ledger Label",
+        "type": "query",
+        "datasource": "$datasource",
+        "query": "label_values(sorafs_reserve_ledger_rent_due_xor, label)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Declared vs Utilised Capacity (GiB)",
+      "id": 1,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (provider) (torii_sorafs_capacity_declared_gib{provider=~\"$provider\"})",
+          "legendFormat": "{{provider}} declared",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (provider) (torii_sorafs_capacity_utilised_gib{provider=~\"$provider\"})",
+          "legendFormat": "{{provider}} utilised",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "gibibytes",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Capacity Utilisation (%)",
+      "id": 2,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "100 * torii_sorafs_capacity_utilised_gib{provider=~\"$provider\"} / clamp_min(torii_sorafs_capacity_effective_gib{provider=~\"$provider\"}, 1)",
+          "legendFormat": "{{provider}} utilisation",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 150
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Outstanding Reservations (GiB)",
+      "id": 3,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (provider) (torii_sorafs_capacity_outstanding_gib{provider=~\"$provider\"})",
+          "legendFormat": "{{provider}} outstanding",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "gibibytes",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Replication Backlog",
+      "id": 4,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "torii_sorafs_replication_backlog_total",
+          "legendFormat": "pending orders",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Expired Orders / 5m",
+      "id": 5,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum(increase(torii_sorafs_registry_orders_total{status=\"expired\"}[5m]))",
+          "legendFormat": "expired",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Declared vs Effective Gap (GiB)",
+      "id": 6,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "clamp_min(torii_sorafs_capacity_declared_gib{provider=~\"$provider\"} - torii_sorafs_capacity_effective_gib{provider=~\"$provider\"}, 0)",
+          "legendFormat": "{{provider}} gap",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "gibibytes",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "DA Rent Distribution (XOR/hour)",
+      "id": 7,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (cluster, storage_class) (rate(torii_da_rent_base_micro_total{cluster=~\"$cluster\",storage_class=~\"$storage_class\"}[5m])) * 3600 / 1e6",
+          "legendFormat": "{{cluster}} {{storage_class}} base",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (cluster, storage_class) (rate(torii_da_protocol_reserve_micro_total{cluster=~\"$cluster\",storage_class=~\"$storage_class\"}[5m])) * 3600 / 1e6",
+          "legendFormat": "{{cluster}} {{storage_class}} protocol reserve",
+          "refId": "B"
+        },
+        {
+          "expr": "sum by (cluster, storage_class) (rate(torii_da_provider_reward_micro_total{cluster=~\"$cluster\",storage_class=~\"$storage_class\"}[5m])) * 3600 / 1e6",
+          "legendFormat": "{{cluster}} {{storage_class}} provider reward",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "DA Bonus Accrual (XOR/hour)",
+      "id": 8,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (cluster, storage_class) (rate(torii_da_pdp_bonus_micro_total{cluster=~\"$cluster\",storage_class=~\"$storage_class\"}[5m])) * 3600 / 1e6",
+          "legendFormat": "{{cluster}} {{storage_class}} PDP bonus",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (cluster, storage_class) (rate(torii_da_potr_bonus_micro_total{cluster=~\"$cluster\",storage_class=~\"$storage_class\"}[5m])) * 3600 / 1e6",
+          "legendFormat": "{{cluster}} {{storage_class}} PoTR bonus",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "DA GiB-Month Capture (GiB-month/hour)",
+      "id": 9,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (cluster, storage_class) (rate(torii_da_rent_gib_months_total{cluster=~\"$cluster\",storage_class=~\"$storage_class\"}[5m])) * 3600",
+          "legendFormat": "{{cluster}} {{storage_class}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Reserve Ledger Snapshot (XOR)",
+      "id": 10,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sorafs_reserve_ledger_rent_due_xor{label=~\"$ledger_label\"}",
+          "legendFormat": "{{label}} rent",
+          "refId": "A"
+        },
+        {
+          "expr": "sorafs_reserve_ledger_reserve_shortfall_xor{label=~\"$ledger_label\"}",
+          "legendFormat": "{{label}} reserve shortfall",
+          "refId": "B"
+        },
+        {
+          "expr": "sorafs_reserve_ledger_top_up_shortfall_xor{label=~\"$ledger_label\"}",
+          "legendFormat": "{{label}} top-up shortfall",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Reserve Ledger Compliance Flags",
+      "id": 11,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sorafs_reserve_ledger_requires_top_up{label=~\"$ledger_label\"}",
+          "legendFormat": "{{label}} requires top-up",
+          "refId": "A"
+        },
+        {
+          "expr": "sorafs_reserve_ledger_meets_underwriting{label=~\"$ledger_label\"}",
+          "legendFormat": "{{label}} meets underwriting",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bool",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Reserve Ledger Transfers (XOR)",
+      "id": 12,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sorafs_reserve_ledger_transfer_xor{label=~\"$ledger_label\"}",
+          "legendFormat": "{{label}} {{transfer}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Reserve Ledger Instruction Count",
+      "id": 13,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sorafs_reserve_ledger_instruction_total{label=~\"$ledger_label\"}",
+          "legendFormat": "{{label}} count",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Rent Transfer Coverage",
+      "id": 14,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "(sum by (label) (sorafs_reserve_ledger_rent_due_xor{label=~\"$ledger_label\"}) == 0)\n+ (sum by (label) (sorafs_reserve_ledger_rent_due_xor{label=~\"$ledger_label\"}) > 0)\n* (sum by (label) (sorafs_reserve_ledger_transfer_xor{label=~\"$ledger_label\",transfer=\"rent\"}) / clamp_min(sum by (label) (sorafs_reserve_ledger_rent_due_xor{label=~\"$ledger_label\"}), 0.000001))",
+          "legendFormat": "{{label}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1.2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": 0},
+              {"color": "orange", "value": 0.9},
+              {"color": "green", "value": 1}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Ratio of rent transfer amounts to the projected rent due. Equals 1 when the digest is fully covered or no rent is required."
+    },
+    {
+      "type": "stat",
+      "title": "Reserve Top-up Coverage",
+      "id": 15,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "(sum by (label) (sorafs_reserve_ledger_top_up_shortfall_xor{label=~\"$ledger_label\"}) == 0)\n+ (sum by (label) (sorafs_reserve_ledger_top_up_shortfall_xor{label=~\"$ledger_label\"}) > 0)\n* (sum by (label) (sorafs_reserve_ledger_transfer_xor{label=~\"$ledger_label\",transfer=\"reserve_top_up\"}) / clamp_min(sum by (label) (sorafs_reserve_ledger_top_up_shortfall_xor{label=~\"$ledger_label\"}), 0.000001))",
+          "legendFormat": "{{label}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1.2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": 0},
+              {"color": "orange", "value": 0.9},
+              {"color": "green", "value": 1}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Ratio of reserve top-up transfers to the projected top-up shortfall. Equals 1 when the reserve digest is fully funded or no top-up is required."
+    },
+    {
+      "type": "timeseries",
+      "title": "GC Runs / 5m",
+      "id": 16,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (result) (increase(torii_sorafs_gc_runs_total[5m]))",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Count of GC sweeps completed in the last 5 minutes."
+    },
+    {
+      "type": "timeseries",
+      "title": "GC Evictions / 5m",
+      "id": 17,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(torii_sorafs_gc_evictions_total[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Evictions performed by GC in the last 5 minutes, grouped by reason."
+    },
+    {
+      "type": "timeseries",
+      "title": "GC Bytes Freed / 5m",
+      "id": 18,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(torii_sorafs_gc_bytes_freed_total[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Total bytes freed by GC in the last 5 minutes, grouped by reason."
+    },
+    {
+      "type": "timeseries",
+      "title": "GC Blocked / 5m",
+      "id": 19,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(torii_sorafs_gc_blocked_total[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Retention evictions blocked by GC in the last 5 minutes."
+    },
+    {
+      "type": "timeseries",
+      "title": "Expired Manifests",
+      "id": 20,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "torii_sorafs_gc_expired_manifests",
+          "legendFormat": "expired",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Number of manifests currently past retention expiry."
+    },
+    {
+      "type": "timeseries",
+      "title": "Oldest Expired Age (hours)",
+      "id": 21,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "torii_sorafs_gc_oldest_expired_age_seconds / 3600",
+          "legendFormat": "age_hours",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Age in hours of the oldest expired manifest observed by GC."
+    },
+    {
+      "type": "timeseries",
+      "title": "Repair SLA Escalations / 1h",
+      "id": 22,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "increase(torii_sorafs_repair_tasks_total{status=\"escalated\"}[1h])",
+          "legendFormat": "escalated",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Repair tickets escalated within the last hour (SLA breach signal)."
+    },
+    {
+      "type": "timeseries",
+      "title": "Repair Queue Depth by Provider",
+      "id": 23,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "torii_sorafs_repair_queue_depth{provider=~\"$provider\"}",
+          "legendFormat": "{{provider}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Queued repair tickets per provider. Provider labels are hex-encoded; keep dashboard filters aligned to avoid high-cardinality exports."
+    },
+    {
+      "type": "timeseries",
+      "title": "Retention Blocked Evictions / 15m",
+      "id": 24,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "increase(torii_sorafs_gc_blocked_total{reason=\"repair_active\"}[15m])",
+          "legendFormat": "repair_active",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "GC evictions blocked by active repair tickets in the last 15 minutes."
+    }
+  ]
+}

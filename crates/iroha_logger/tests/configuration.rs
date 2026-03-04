@@ -1,7 +1,11 @@
-#![allow(missing_docs)]
+//! Integration tests for `iroha_logger` configuration.
+//!
+//! Ensures telemetry events are routed to the expected channel and
+//! that structured fields are preserved as emitted.
 
 use std::time::Duration;
 
+use iroha_data_model::nexus::{DataSpaceId, LaneId};
 use iroha_logger::{
     info,
     telemetry::{Channel, Event, Fields},
@@ -20,9 +24,12 @@ async fn telemetry_separation_custom() {
     let telemetry = Event {
         target: "test",
         fields: Fields(vec![
-            ("a", serde_json::json!(2)),
-            ("c", serde_json::json!(true)),
-            ("d", serde_json::json!("this won't be logged")),
+            ("level", norito::json!("INFO")),
+            ("lane_id", norito::json!(u64::from(LaneId::SINGLE.as_u32()))),
+            ("dataspace_id", norito::json!(DataSpaceId::GLOBAL.as_u64())),
+            ("a", norito::json!(2)),
+            ("c", norito::json!(true)),
+            ("d", norito::json!("this won't be logged")),
         ]),
     };
     let output = time::timeout(Duration::from_millis(10), receiver.recv())

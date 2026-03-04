@@ -9,6 +9,11 @@ license.workspace = true
 
 [dependencies]
 iroha_data_model.workspace = true
+norito = {workspace = true}
 
-serde.workspace = true
-serde_json.workspace = true
+[features]
+default = []
+compact-len = []
+json = []
+packed-struct = []
+schema-structural = []

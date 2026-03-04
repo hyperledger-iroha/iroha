@@ -1,12 +1,16 @@
 //! Executor data model
-#![no_std]
+#![allow(unexpected_cfgs)]
 
-extern crate alloc;
 extern crate self as iroha_executor_data_model;
 
 pub mod isi;
 pub mod parameter;
 pub mod permission;
+
+/// Norito `FastJson` derive macros reused by executor data-model types.
+pub mod json_macros {
+    pub use norito::derive::{FastJson, FastJsonWrite, JsonDeserialize, JsonSerialize};
+}
 
 /// An error that might occur while converting a data model object into a native executor type.
 ///
@@ -16,5 +20,5 @@ pub enum TryFromDataModelObjectError {
     /// Unexpected object name
     UnknownIdent(iroha_schema::Ident),
     /// Failed to deserialize object payload
-    Deserialize(serde_json::Error),
+    Deserialize(norito::json::Error),
 }

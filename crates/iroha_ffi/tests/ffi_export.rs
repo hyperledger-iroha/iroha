@@ -1,24 +1,40 @@
-#![allow(missing_docs)]
+//! Extensive export tests for `iroha_ffi`: enums, structs, options, slices, and more.
 #![allow(unsafe_code, clippy::pedantic)]
 
-use std::{alloc, collections::BTreeMap, mem::MaybeUninit};
+use std::{
+    collections::BTreeMap,
+    mem::{ManuallyDrop, MaybeUninit},
+    string::String,
+};
 
 use iroha_ffi::{
-    ffi_export, slice::OutBoxedSlice, FfiConvert, FfiOutPtrRead, FfiReturn, FfiTuple1, FfiTuple2,
-    FfiType, LocalRef,
+    FfiConvert, FfiOutPtrRead, FfiReturn, FfiTuple1, FfiTuple2, FfiType, FromFfiReturn,
+    IntoFfiReturn, LocalRef, ReprC, Result, ffi_export,
+    ir::Ir,
+    option::{self, OptionIr},
+    repr_c::{
+        COutPtr, COutPtrRead, COutPtrWrite, CType, CTypeConvert, CWrapperType, Cloned, NonLocal,
+        read_non_local, write_non_local,
+    },
+    slice::OutBoxedSlice,
 };
 
 iroha_ffi::handles! {OpaqueStruct}
 iroha_ffi::def_ffi_fns! { dealloc }
 
+/// Simple trait used in tests to exercise associated types and methods across FFI.
 pub trait Target {
+    /// Associated type carried by the implementer.
     type Target;
 
+    /// Convert `self` into the associated type.
     fn target(self) -> Self::Target;
 }
 
+/// Test wrapper for a name string.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FfiType)]
 pub struct Name(String);
+/// Test wrapper for a value string.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FfiType)]
 pub struct Value(String);
 
@@ -34,26 +50,181 @@ pub struct OpaqueStruct {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FfiType)]
 pub enum FieldlessEnum {
+    /// Variant A
     A,
+    /// Variant B
     B,
+    /// Variant C
     C,
 }
 
+/// Single-variant transparent enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FfiType)]
 #[repr(transparent)]
 pub enum TransparentFieldlessEnum {
+    /// Single variant
     A,
 }
 
 /// Data-carrying enum
-#[derive(Debug, Clone, PartialEq, Eq, FfiType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(variant_size_differences)]
 pub enum DataCarryingEnum {
+    /// Struct variant
     A(OpaqueStruct),
+    /// Numeric variant
     B(u32),
-    // TODO: Support this
-    //C(T),
+    /// Value payload variant
+    C(Value),
+    /// Empty variant
     D,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+/// ReprC container used to bridge `DataCarryingEnum` across FFI tests.
+pub struct __iroha_ffi__ReprCDataCarryingEnum {
+    /// Variant discriminant encoded as a compact integer.
+    pub tag: u8,
+    /// Union carrying the variant payload.
+    pub payload: __iroha_ffi__DataCarryingEnumPayload,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+/// Payload union accompanying `__iroha_ffi__ReprCDataCarryingEnum`.
+pub union __iroha_ffi__DataCarryingEnumPayload {
+    /// Payload for `DataCarryingEnum::A`.
+    pub variant_a: ManuallyDrop<<OpaqueStruct as FfiType>::ReprC>,
+    /// Payload for `DataCarryingEnum::B`.
+    pub variant_b: u32,
+    /// Payload for `DataCarryingEnum::C`.
+    pub variant_c: ManuallyDrop<<Value as FfiType>::ReprC>,
+    /// Sentinel for the `DataCarryingEnum::D` variant.
+    pub variant_d: (),
+}
+
+unsafe impl ReprC for __iroha_ffi__ReprCDataCarryingEnum {}
+unsafe impl ReprC for __iroha_ffi__DataCarryingEnumPayload {}
+
+#[derive(Default)]
+/// Conversion state for `DataCarryingEnum` when marshalling into `ReprC`.
+pub struct DataCarryingEnumRustStore<'itm> {
+    a: <OpaqueStruct as FfiConvert<'itm, <OpaqueStruct as FfiType>::ReprC>>::RustStore,
+    c: <Value as FfiConvert<'itm, <Value as FfiType>::ReprC>>::RustStore,
+}
+
+#[derive(Default)]
+/// Conversion state for `DataCarryingEnum` when decoding from `ReprC`.
+pub struct DataCarryingEnumFfiStore<'itm> {
+    a: <OpaqueStruct as FfiConvert<'itm, <OpaqueStruct as FfiType>::ReprC>>::FfiStore,
+    c: <Value as FfiConvert<'itm, <Value as FfiType>::ReprC>>::FfiStore,
+}
+
+impl Ir for DataCarryingEnum {
+    type Type = Self;
+}
+
+impl OptionIr for DataCarryingEnum {
+    type Type = option::WithoutNiche;
+}
+
+impl Cloned for DataCarryingEnum {}
+
+unsafe impl NonLocal<Self> for DataCarryingEnum {}
+
+impl CType<DataCarryingEnum> for DataCarryingEnum {
+    type ReprC = __iroha_ffi__ReprCDataCarryingEnum;
+}
+
+impl<'itm> CTypeConvert<'itm, DataCarryingEnum, __iroha_ffi__ReprCDataCarryingEnum>
+    for DataCarryingEnum
+{
+    type RustStore = DataCarryingEnumRustStore<'itm>;
+    type FfiStore = DataCarryingEnumFfiStore<'itm>;
+
+    fn into_repr_c(self, store: &'itm mut Self::RustStore) -> __iroha_ffi__ReprCDataCarryingEnum {
+        match self {
+            DataCarryingEnum::A(value) => {
+                let repr = value.into_ffi(&mut store.a);
+                __iroha_ffi__ReprCDataCarryingEnum {
+                    tag: 0,
+                    payload: __iroha_ffi__DataCarryingEnumPayload {
+                        variant_a: ManuallyDrop::new(repr),
+                    },
+                }
+            }
+            DataCarryingEnum::B(value) => __iroha_ffi__ReprCDataCarryingEnum {
+                tag: 1,
+                payload: __iroha_ffi__DataCarryingEnumPayload { variant_b: value },
+            },
+            DataCarryingEnum::C(value) => {
+                let repr = value.into_ffi(&mut store.c);
+                __iroha_ffi__ReprCDataCarryingEnum {
+                    tag: 2,
+                    payload: __iroha_ffi__DataCarryingEnumPayload {
+                        variant_c: ManuallyDrop::new(repr),
+                    },
+                }
+            }
+            DataCarryingEnum::D => __iroha_ffi__ReprCDataCarryingEnum {
+                tag: 3,
+                payload: __iroha_ffi__DataCarryingEnumPayload { variant_d: () },
+            },
+        }
+    }
+
+    unsafe fn try_from_repr_c(
+        value: __iroha_ffi__ReprCDataCarryingEnum,
+        store: &'itm mut Self::FfiStore,
+    ) -> Result<Self> {
+        match value.tag {
+            0 => {
+                let payload = ManuallyDrop::into_inner(unsafe { value.payload.variant_a });
+                let extracted = unsafe {
+                    <OpaqueStruct as FfiConvert<
+                        'itm,
+                        <OpaqueStruct as FfiType>::ReprC,
+                    >>::try_from_ffi(payload, &mut store.a)?
+                };
+                Ok(DataCarryingEnum::A(extracted))
+            }
+            1 => Ok(DataCarryingEnum::B(unsafe { value.payload.variant_b })),
+            2 => {
+                let payload = ManuallyDrop::into_inner(unsafe { value.payload.variant_c });
+                let extracted = unsafe {
+                    <Value as FfiConvert<'itm, <Value as FfiType>::ReprC>>::try_from_ffi(
+                        payload,
+                        &mut store.c,
+                    )?
+                };
+                Ok(DataCarryingEnum::C(extracted))
+            }
+            3 => Ok(DataCarryingEnum::D),
+            _ => Err(FfiReturn::TrapRepresentation),
+        }
+    }
+}
+
+impl CWrapperType<DataCarryingEnum> for DataCarryingEnum {
+    type InputType = DataCarryingEnum;
+    type ReturnType = DataCarryingEnum;
+}
+
+impl COutPtr<DataCarryingEnum> for DataCarryingEnum {
+    type OutPtr = __iroha_ffi__ReprCDataCarryingEnum;
+}
+
+impl COutPtrWrite<DataCarryingEnum> for DataCarryingEnum {
+    unsafe fn write_out(self, out_ptr: *mut Self::OutPtr) {
+        unsafe { write_non_local::<_, DataCarryingEnum>(self, out_ptr) };
+    }
+}
+
+impl COutPtrRead<DataCarryingEnum> for DataCarryingEnum {
+    unsafe fn try_read_out(out_ptr: Self::OutPtr) -> Result<Self> {
+        unsafe { read_non_local::<DataCarryingEnum, DataCarryingEnum>(out_ptr) }
+    }
 }
 
 /// `ReprC` struct
@@ -111,21 +282,13 @@ impl OpaqueStruct {
     }
 
     /// Fallible int output
-    pub fn fallible_int_output(flag: bool) -> Result<u32, &'static str> {
-        if flag {
-            Ok(42)
-        } else {
-            Err("fail")
-        }
+    pub fn fallible_int_output(flag: bool) -> std::result::Result<u32, &'static str> {
+        if flag { Ok(42) } else { Err("fail") }
     }
 
     /// Fallible empty tuple output
-    pub fn fallible_empty_tuple_output(flag: bool) -> Result<(), &'static str> {
-        if flag {
-            Ok(())
-        } else {
-            Err("fail")
-        }
+    pub fn fallible_empty_tuple_output(flag: bool) -> std::result::Result<(), &'static str> {
+        if flag { Ok(()) } else { Err("fail") }
     }
 }
 
@@ -221,11 +384,15 @@ pub fn take_non_robust_ref_mut(val: &mut str) -> &mut str {
     val
 }
 
+/// Accepts a vector reference; used to ensure FFI signatures compile.
 #[ffi_export]
+/// Accepts a vector reference; used to ensure FFI signatures compile.
 pub fn take_vec_ref(a: &Vec<u8>) {
     assert_eq!(a, &vec![1, 2])
 }
 
+/// Returns the same tuple reference; used to test tuple passing across FFI.
+/// Returns the same tuple reference; used to test tuple passing across FFI.
 #[ffi_export]
 pub fn take_tuple_ref(a: &(u8, u8)) -> &(u8, u8) {
     a
@@ -240,6 +407,8 @@ impl Target for OpaqueStruct {
     }
 }
 
+/// Returns the first element reference from a slice.
+/// Returns the first element reference from a slice.
 #[ffi_export]
 pub fn reference_from_slice(a: &[u8]) -> &u8 {
     &a[0]
@@ -288,7 +457,6 @@ fn get_new_struct_with_params() -> OpaqueStruct {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 #[cfg(feature = "non_robust_ref_mut")]
 fn non_robust_ref_mut() {
     use iroha_ffi::slice::RefMutSlice;
@@ -310,7 +478,6 @@ fn non_robust_ref_mut() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn constructor() {
     let ffi_struct = get_new_struct();
     assert_eq!(Some(Name(String::from('X'))), ffi_struct.name);
@@ -318,7 +485,6 @@ fn constructor() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn builder_method() {
     let ffi_struct = get_new_struct_with_params();
 
@@ -330,7 +496,6 @@ fn builder_method() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn consume_self() {
     let ffi_struct = get_new_struct();
 
@@ -343,7 +508,6 @@ fn consume_self() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn into_iter_item_impl_into() {
     let tokens = vec![
         Value(String::from("My omen")),
@@ -374,7 +538,6 @@ fn into_iter_item_impl_into() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn mutate_opaque() {
     let param_name = Name(String::from("Nomen"));
     let mut ffi_struct = get_new_struct_with_params();
@@ -398,7 +561,6 @@ fn mutate_opaque() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn return_option() {
     let ffi_struct = get_new_struct_with_params();
 
@@ -436,7 +598,6 @@ fn return_option() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn take_and_return_boxed_slice() {
     let input: Box<[u8]> = [12u8, 42u8].into();
     let mut output = MaybeUninit::new(OutBoxedSlice::from_raw_parts(core::ptr::null_mut(), 0));
@@ -453,16 +614,15 @@ fn take_and_return_boxed_slice() {
 
         let output = output.assume_init();
         assert_eq!(output.len(), 2);
-        let boxed_slice = Box::<[u8]>::try_read_out(output).expect("Valid");
+        let boxed_slice: Box<[u8]> = iroha_ffi::FfiOutPtrRead::try_read_out(output).expect("Valid");
         assert_eq!(boxed_slice, [12u8, 42u8].into());
     }
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn take_and_return_option_without_niche() {
-    let input = Some(42);
-    let mut output = MaybeUninit::new(FfiTuple2(0, unsafe { core::mem::zeroed() }));
+    let input: Option<u8> = Some(42);
+    let mut output = MaybeUninit::uninit();
 
     unsafe {
         assert_eq!(
@@ -476,7 +636,6 @@ fn take_and_return_option_without_niche() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn take_and_return_option_with_niche_ref() {
     let input = Some(true);
     let mut output = MaybeUninit::new(0);
@@ -492,15 +651,16 @@ fn take_and_return_option_with_niche_ref() {
         );
 
         let output = output.assume_init();
-        assert_eq!(input, *LocalRef::try_read_out(output).expect("Valid"));
+        let restored: LocalRef<'_, Option<bool>> =
+            iroha_ffi::FfiOutPtrRead::try_read_out(output).expect("Valid");
+        assert_eq!(input, *restored);
     }
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn take_and_return_option_without_niche_ref() {
     let input = Some(42u8);
-    let mut output = MaybeUninit::new(FfiTuple2(0, 0));
+    let mut output = MaybeUninit::uninit();
     let mut in_store = Default::default();
 
     unsafe {
@@ -513,12 +673,13 @@ fn take_and_return_option_without_niche_ref() {
         );
 
         let output = output.assume_init();
-        assert_eq!(input, *LocalRef::try_read_out(output).expect("Valid"));
+        let restored: LocalRef<'_, Option<u8>> =
+            iroha_ffi::FfiOutPtrRead::try_read_out(output).expect("Valid");
+        assert_eq!(input, *restored);
     }
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn return_iterator() {
     let ffi_struct = get_new_struct_with_params();
     let mut out_params = MaybeUninit::new(OutBoxedSlice::from_raw_parts(core::ptr::null_mut(), 0));
@@ -534,7 +695,8 @@ fn return_iterator() {
 
         let out_params = out_params.assume_init();
         assert_eq!(out_params.len(), 2);
-        let vec = Vec::<(&Name, &Value)>::try_read_out(out_params).expect("Valid");
+        let vec: Vec<(&Name, &Value)> =
+            iroha_ffi::FfiOutPtrRead::try_read_out(out_params).expect("Valid");
 
         let default_params = get_default_params();
         assert_eq!((&default_params[0].0, &default_params[0].1), vec[0]);
@@ -543,7 +705,6 @@ fn return_iterator() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn return_result() {
     let mut output = MaybeUninit::new(0);
 
@@ -562,7 +723,6 @@ fn return_result() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn return_empty_tuple_result() {
     unsafe {
         assert_eq!(
@@ -577,7 +737,22 @@ fn return_empty_tuple_result() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
+fn ffi_return_conversion_helpers() {
+    assert_eq!(
+        IntoFfiReturn::into_ffi_return("oops"),
+        FfiReturn::ExecutionFail
+    );
+    assert_eq!(
+        <&'static str as FromFfiReturn>::from_ffi_return(FfiReturn::ExecutionFail),
+        ""
+    );
+    assert_eq!(
+        <String as FromFfiReturn>::from_ffi_return(FfiReturn::UnknownHandle),
+        "UnknownHandle"
+    );
+}
+
+#[test]
 fn array_to_pointer() {
     let array = [1_u8];
     let mut store = Option::default();
@@ -598,7 +773,6 @@ fn array_to_pointer() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn take_and_return_array_ref() {
     let array = [1_u8];
     let ptr: *const [u8; 1] = (&array).into_ffi(&mut ());
@@ -618,7 +792,6 @@ fn take_and_return_array_ref() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn array_in_struct() {
     let array = ([1_u8],);
     let ffi_arr: FfiTuple1<[u8; 1]> = array.into_ffi(&mut ((),));
@@ -638,7 +811,6 @@ fn array_in_struct() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn repr_c_struct() {
     let struct_ = RobustReprCStruct {
         a: 42,
@@ -664,7 +836,6 @@ fn repr_c_struct() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn primitive_conversion() {
     let byte: u8 = 1;
     let mut output = MaybeUninit::new(0);
@@ -680,7 +851,6 @@ fn primitive_conversion() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn fieldless_enum_conversion() {
     let fieldless_enum = FieldlessEnum::A;
     let mut output = MaybeUninit::new(2);
@@ -699,9 +869,8 @@ fn fieldless_enum_conversion() {
     }
 }
 
+#[cfg(feature = "ivm")]
 #[test]
-#[cfg(target_family = "wasm")]
-#[webassembly_test::webassembly_test]
 fn primitive_conversion_failed() {
     let byte: u32 = u32::MAX;
     let mut output = MaybeUninit::new(0);
@@ -717,15 +886,9 @@ fn primitive_conversion_failed() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn data_carrying_enum_conversion() {
     let data_carrying_enum = DataCarryingEnum::A(get_new_struct());
-    let mut output = MaybeUninit::new(__iroha_ffi__ReprCDataCarryingEnum {
-        tag: 1,
-        payload: __iroha_ffi__DataCarryingEnumPayload {
-            B: core::mem::ManuallyDrop::new(42),
-        },
-    });
+    let mut output = MaybeUninit::<__iroha_ffi__ReprCDataCarryingEnum>::uninit();
 
     unsafe {
         let mut store = Default::default();
@@ -743,7 +906,26 @@ fn data_carrying_enum_conversion() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
+fn data_carrying_enum_value_payload_conversion() {
+    let data_carrying_enum = DataCarryingEnum::C(Value(String::from("payload")));
+    let mut output = MaybeUninit::<__iroha_ffi__ReprCDataCarryingEnum>::uninit();
+
+    unsafe {
+        let mut store = Default::default();
+        assert_eq!(
+            FfiReturn::Ok,
+            __freestanding_with_data_carrying_enum(
+                data_carrying_enum.clone().into_ffi(&mut store),
+                output.as_mut_ptr()
+            )
+        );
+
+        let ret_val = FfiOutPtrRead::try_read_out(output.assume_init());
+        assert_eq!(data_carrying_enum, ret_val.expect("Conversion failed"));
+    }
+}
+
+#[test]
 fn invoke_trait_method() {
     let ffi_struct = get_new_struct_with_params();
     let mut output = MaybeUninit::<*mut Name>::new(core::ptr::null_mut());
@@ -762,7 +944,6 @@ fn invoke_trait_method() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn nested_vec() {
     let vec: Vec<Vec<Vec<u8>>> = vec![];
 
@@ -776,7 +957,6 @@ fn nested_vec() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn return_vec_of_boxed_opaques() {
     let mut output = MaybeUninit::new(OutBoxedSlice::from_raw_parts(core::ptr::null_mut(), 0));
 
@@ -787,13 +967,13 @@ fn return_vec_of_boxed_opaques() {
         );
         let output = output.assume_init();
         assert_eq!(output.len(), 1);
-        let vec = Vec::<Box<OpaqueStruct>>::try_read_out(output).expect("Valid");
+        let vec: Vec<Box<OpaqueStruct>> =
+            iroha_ffi::FfiOutPtrRead::try_read_out(output).expect("Valid");
         assert_eq!(Box::new(get_new_struct()), vec[0]);
     }
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn array_of_opaques() {
     let input = [OpaqueStruct::default(), OpaqueStruct::default()];
     let mut output = MaybeUninit::new([core::ptr::null_mut(), core::ptr::null_mut()]);
@@ -814,7 +994,6 @@ fn array_of_opaques() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn borrow_vec() {
     let a = vec![1, 2];
 
@@ -829,7 +1008,6 @@ fn borrow_vec() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn return_reference_from_slice() {
     let a = vec![1, 2];
 
@@ -841,13 +1019,12 @@ fn return_reference_from_slice() {
             __reference_from_slice(<&[u8]>::into_ffi(&a, &mut ()), output.as_mut_ptr())
         );
 
-        let output = <&u8>::try_read_out(output.assume_init()).unwrap();
+        let output: &u8 = iroha_ffi::FfiOutPtrRead::try_read_out(output.assume_init()).unwrap();
         assert_eq!(output, &a[0]);
     }
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn borrow_local() {
     let a = (1_u8, 2_u8);
 

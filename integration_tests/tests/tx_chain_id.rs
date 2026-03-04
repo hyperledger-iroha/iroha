@@ -1,5 +1,7 @@
-#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+//! Validates that mismatched chain identifiers cause transaction rejection.
 
+use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_primitives::numeric::numeric;
 use iroha_test_network::*;
@@ -7,7 +9,13 @@ use iroha_test_samples::gen_account_in;
 
 #[test]
 fn send_tx_with_different_chain_id() {
-    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
+        NetworkBuilder::new(),
+        stringify!(send_tx_with_different_chain_id),
+    )
+    .unwrap() else {
+        return;
+    };
     let test_client = network.client();
     // Given
     let (sender_id, sender_keypair) = gen_account_in("wonderland");

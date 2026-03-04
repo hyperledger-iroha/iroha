@@ -1,0 +1,9 @@
+{
+  "base_fixture": "../1.0.0",
+  "mutations": {
+    "proof.chunks[0].digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "notes": [
+    "Corrupt the first chunk digest in the PoR proof before returning it from the mock provider."
+  ]
+}

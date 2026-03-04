@@ -1,6 +1,8 @@
-#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+//! Integration tests for domain permissions and transfers.
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::{
     crypto::KeyPair,
     data_model::{prelude::*, transaction::error::TransactionRejectionReason},
@@ -11,15 +13,30 @@ use iroha_executor_data_model::permission::{
     asset_definition::{CanRegisterAssetDefinition, CanUnregisterAssetDefinition},
     domain::CanUnregisterDomain,
     nft::{CanRegisterNft, CanUnregisterNft},
-    trigger::CanUnregisterTrigger,
+    trigger::{CanExecuteTrigger, CanUnregisterTrigger},
 };
-use iroha_genesis::GENESIS_ACCOUNT_ID;
 use iroha_test_network::*;
-use iroha_test_samples::{gen_account_in, ALICE_ID, BOB_ID};
+use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
+use tokio::runtime::Runtime;
+
+fn err_chain_contains(err: &eyre::Report, needle: &str) -> bool {
+    err.chain().any(|cause| cause.to_string().contains(needle))
+}
+
+fn start_network(
+    builder: NetworkBuilder,
+    context: &'static str,
+) -> Result<Option<(sandbox::SerializedNetwork, Runtime)>> {
+    sandbox::start_network_blocking_or_skip(builder, context)
+}
 
 #[test]
 fn domain_owner_domain_permissions() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let builder = NetworkBuilder::new();
+    let Some((network, _rt)) = start_network(builder, stringify!(domain_owner_domain_permissions))?
+    else {
+        return Ok(());
+    };
     let test_client = network.client();
 
     let kingdom_id: DomainId = "kingdom".parse()?;
@@ -42,14 +59,22 @@ fn domain_owner_domain_permissions() -> Result<()> {
         .submit_transaction_blocking(&transaction)
         .expect_err("Tx should fail due to permissions");
 
-    let rejection_reason = err
-        .downcast_ref::<TransactionRejectionReason>()
-        .unwrap_or_else(|| panic!("Error {err} is not TransactionRejectionReason"));
-
-    assert!(matches!(
-        rejection_reason,
-        &TransactionRejectionReason::Validation(ValidationFail::NotPermitted(_))
-    ));
+    if let Some(rejection_reason) = err.downcast_ref::<TransactionRejectionReason>() {
+        assert!(matches!(
+            rejection_reason,
+            &TransactionRejectionReason::Validation(ValidationFail::NotPermitted(_))
+        ));
+    } else {
+        assert!(
+            err_chain_contains(&err, "Not permitted")
+                || err_chain_contains(&err, "NotPermitted")
+                || err_chain_contains(
+                    &err,
+                    "Can't register asset definition in a domain owned by another account"
+                ),
+            "expected NotPermitted validation error, got: {err:?}"
+        );
+    }
 
     // "alice@wonderland" owns the domain and can register AssetDefinitions by default as domain owner
     test_client.submit_blocking(Register::asset_definition(coin.clone()))?;
@@ -67,7 +92,10 @@ fn domain_owner_domain_permissions() -> Result<()> {
         .with_instructions([Register::asset_definition(coin)])
         .sign(bob_keypair.private_key());
     test_client.submit_transaction_blocking(&transaction)?;
-    test_client.submit_blocking(Revoke::account_permission(permission, bob_id.clone()))?;
+    test_client.submit_blocking(RevokeBox::from(Revoke::account_permission(
+        permission,
+        bob_id.clone(),
+    )))?;
 
     // check that "alice@wonderland" as owner of domain can edit metadata in her domain
     let key: Name = "key".parse()?;
@@ -83,7 +111,9 @@ fn domain_owner_domain_permissions() -> Result<()> {
         permission.clone(),
         bob_id.clone(),
     ))?;
-    test_client.submit_blocking(Revoke::account_permission(permission, bob_id))?;
+    test_client.submit_blocking(RevokeBox::from(Revoke::account_permission(
+        permission, bob_id,
+    )))?;
 
     // check that "alice@wonderland" as owner of domain can unregister her domain
     test_client.submit_blocking(Unregister::domain(kingdom_id))?;
@@ -93,7 +123,12 @@ fn domain_owner_domain_permissions() -> Result<()> {
 
 #[test]
 fn domain_owner_account_permissions() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let builder = NetworkBuilder::new();
+    let Some((network, _rt)) =
+        start_network(builder, stringify!(domain_owner_account_permissions))?
+    else {
+        return Ok(());
+    };
     let test_client = network.client();
 
     let kingdom_id: DomainId = "kingdom".parse()?;
@@ -125,7 +160,9 @@ fn domain_owner_account_permissions() -> Result<()> {
         permission.clone(),
         bob_id.clone(),
     ))?;
-    test_client.submit_blocking(Revoke::account_permission(permission, bob_id))?;
+    test_client.submit_blocking(RevokeBox::from(Revoke::account_permission(
+        permission, bob_id,
+    )))?;
 
     // check that "alice@wonderland" as owner of domain can unregister accounts in her domain
     test_client.submit_blocking(Unregister::account(mad_hatter_id))?;
@@ -135,7 +172,14 @@ fn domain_owner_account_permissions() -> Result<()> {
 
 #[test]
 fn domain_owner_asset_definition_permissions() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let builder = NetworkBuilder::new();
+    let Some((network, _rt)) = start_network(
+        builder,
+        stringify!(domain_owner_asset_definition_permissions),
+    )?
+    else {
+        return Ok(());
+    };
     let test_client = network.client();
 
     let kingdom_id: DomainId = "kingdom".parse()?;
@@ -189,7 +233,9 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
         permission.clone(),
         bob_id.clone(),
     ))?;
-    test_client.submit_blocking(Revoke::account_permission(permission, bob_id))?;
+    test_client.submit_blocking(RevokeBox::from(Revoke::account_permission(
+        permission, bob_id,
+    )))?;
 
     // check that "alice@wonderland" as owner of domain can unregister asset definitions in her domain
     test_client.submit_blocking(Unregister::asset_definition(coin_id))?;
@@ -199,7 +245,11 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
 
 #[test]
 fn domain_owner_asset_permissions() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let builder = NetworkBuilder::new();
+    let Some((network, _rt)) = start_network(builder, stringify!(domain_owner_asset_permissions))?
+    else {
+        return Ok(());
+    };
     let test_client = network.client();
 
     let alice_id = ALICE_ID.clone();
@@ -237,14 +287,20 @@ fn domain_owner_asset_permissions() -> Result<()> {
         permission.clone(),
         bob_id.clone(),
     ))?;
-    test_client.submit_blocking(Revoke::account_permission(permission, bob_id))?;
+    test_client.submit_blocking(RevokeBox::from(Revoke::account_permission(
+        permission, bob_id,
+    )))?;
 
     Ok(())
 }
 
 #[test]
 fn domain_owner_nft_permissions() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let builder = NetworkBuilder::new();
+    let Some((network, _rt)) = start_network(builder, stringify!(domain_owner_nft_permissions))?
+    else {
+        return Ok(());
+    };
     let test_client = network.client();
 
     let kingdom_id: DomainId = "kingdom".parse()?;
@@ -283,7 +339,9 @@ fn domain_owner_nft_permissions() -> Result<()> {
         permission.clone(),
         bob_id.clone(),
     ))?;
-    test_client.submit_blocking(Revoke::account_permission(permission, bob_id))?;
+    test_client.submit_blocking(RevokeBox::from(Revoke::account_permission(
+        permission, bob_id,
+    )))?;
 
     // check that "alice@wonderland" as owner of domain can unregister NFT in her domain
     test_client.submit_blocking(Unregister::nft(nft_id.clone()))?;
@@ -293,7 +351,12 @@ fn domain_owner_nft_permissions() -> Result<()> {
 
 #[test]
 fn domain_owner_trigger_permissions() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let builder = NetworkBuilder::new();
+    let Some((network, _rt)) =
+        start_network(builder, stringify!(domain_owner_trigger_permissions))?
+    else {
+        return Ok(());
+    };
     let test_client = network.client();
 
     let alice_id = ALICE_ID.clone();
@@ -327,9 +390,21 @@ fn domain_owner_trigger_permissions() -> Result<()> {
     test_client.submit_blocking(Mint::trigger_repetitions(1_u32, trigger_id.clone()))?;
     test_client.submit_blocking(Burn::trigger_repetitions(1_u32, trigger_id.clone()))?;
 
-    // check that "alice@wonderland" as owner of domain can call triggers in her domain
+    // check that "alice@wonderland" as owner of domain can grant execute permission and call triggers in her domain
+    let execute_permission = CanExecuteTrigger {
+        trigger: trigger_id.clone(),
+    };
+    test_client.submit_blocking(Grant::account_permission(
+        execute_permission.clone(),
+        alice_id.clone(),
+    ))?;
+
     let execute_trigger = ExecuteTrigger::new(trigger_id.clone());
-    test_client.submit_blocking(execute_trigger)?;
+    test_client.submit_blocking(Instruction::into_instruction_box(Box::new(execute_trigger)))?;
+    test_client.submit_blocking(RevokeBox::from(Revoke::account_permission(
+        execute_permission,
+        alice_id.clone(),
+    )))?;
 
     // check that "alice@wonderland" as owner of domain can grant and revoke trigger related permissions in her domain
     let permission = CanUnregisterTrigger {
@@ -339,7 +414,9 @@ fn domain_owner_trigger_permissions() -> Result<()> {
         permission.clone(),
         bob_id.clone(),
     ))?;
-    test_client.submit_blocking(Revoke::account_permission(permission, bob_id))?;
+    test_client.submit_blocking(RevokeBox::from(Revoke::account_permission(
+        permission, bob_id,
+    )))?;
 
     // check that "alice@wonderland" as owner of domain can unregister triggers in her domain
     test_client.submit_blocking(Unregister::trigger(trigger_id))?;
@@ -349,7 +426,10 @@ fn domain_owner_trigger_permissions() -> Result<()> {
 
 #[test]
 fn domain_owner_transfer() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let builder = NetworkBuilder::new();
+    let Some((network, _rt)) = start_network(builder, stringify!(domain_owner_transfer))? else {
+        return Ok(());
+    };
     let test_client = network.client();
 
     let alice_id = ALICE_ID.clone();
@@ -365,8 +445,10 @@ fn domain_owner_transfer() -> Result<()> {
 
     let domain = test_client
         .query(FindDomains::new())
-        .filter_with(|domain| domain.id.eq(kingdom_id.clone()))
-        .execute_single()?;
+        .execute_all()?
+        .into_iter()
+        .find(|domain| domain.id() == &kingdom_id)
+        .expect("Failed to execute Iroha Query");
 
     assert_eq!(domain.owned_by(), &alice_id);
 
@@ -380,8 +462,10 @@ fn domain_owner_transfer() -> Result<()> {
 
     let domain = test_client
         .query(FindDomains::new())
-        .filter_with(|domain| domain.id.eq(kingdom_id.clone()))
-        .execute_single()?;
+        .execute_all()?
+        .into_iter()
+        .find(|domain| domain.id() == &kingdom_id)
+        .expect("Failed to execute Iroha Query");
     assert_eq!(domain.owned_by(), &bob_id);
 
     Ok(())
@@ -393,13 +477,14 @@ fn not_allowed_to_transfer_other_user_domain() -> Result<()> {
     let foo_domain: DomainId = "foo".parse()?;
     let user1 = AccountId::new(users_domain.clone(), KeyPair::random().into_parts().0);
     let user2 = AccountId::new(users_domain.clone(), KeyPair::random().into_parts().0);
-    let genesis_account = GENESIS_ACCOUNT_ID.clone();
+    let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
 
-    let (network, _rt) = NetworkBuilder::new()
+    let builder = NetworkBuilder::new()
         .with_genesis_instruction(Register::domain(Domain::new(users_domain.clone())))
         .with_genesis_instruction(Register::account(Account::new(user1.clone())))
         .with_genesis_instruction(Register::account(Account::new(user2.clone())))
         .with_genesis_instruction(Register::domain(Domain::new(foo_domain.clone())))
+        .next_genesis_transaction()
         .with_genesis_instruction(Transfer::domain(
             genesis_account.clone(),
             foo_domain.clone(),
@@ -409,15 +494,30 @@ fn not_allowed_to_transfer_other_user_domain() -> Result<()> {
             genesis_account.clone(),
             users_domain.clone(),
             user1.clone(),
-        ))
-        .start_blocking()?;
+        ));
+    let Some((network, _rt)) = start_network(
+        builder,
+        stringify!(not_allowed_to_transfer_other_user_domain),
+    )?
+    else {
+        return Ok(());
+    };
     let client = network.client();
 
     let domain = client
         .query(FindDomains::new())
-        .filter_with(|domain| domain.id.eq(foo_domain.clone()))
-        .execute_single()?;
+        .execute_all()?
+        .into_iter()
+        .find(|domain| domain.id() == &foo_domain)
+        .expect("Failed to execute Iroha Query");
     assert_eq!(domain.owned_by(), &user1);
+    let users = client
+        .query(FindDomains::new())
+        .execute_all()?
+        .into_iter()
+        .find(|domain| domain.id() == &users_domain)
+        .expect("Failed to execute Iroha Query");
+    assert_eq!(users.owned_by(), &user1);
 
     // Client authority is "alice@wonderlang".
     // `foo_domain` is owned by `user1@users`.

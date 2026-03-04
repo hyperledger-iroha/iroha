@@ -1,0 +1,32 @@
+{
+  "clip_sets": {
+    "objective-1-fast": [
+      {
+        "id": "synthetic_checker_16x16",
+        "path": "synthetic_checker_16x16.y4m",
+        "description": "Synthetic 16x16 Y4M clip used for CI parity in lieu of the full objective-1-fast subset.",
+        "fps": "30:1",
+        "frames": 4,
+        "sha256": "5c084429d18ca163f5881b9de241d5752e0ffb7df3780ecd497c60bde2ea4da3"
+      },
+      {
+        "id": "synthetic_checker_32x32",
+        "path": "synthetic_checker_32x32.y4m",
+        "description": "Synthetic 32x32 Y4M for tiny-clip SVT runs",
+        "fps": "30:1",
+        "frames": 4,
+        "sha256": "26453c081b03a9350d870bb81305baa33dbdd89177b7c9f45c661173259a77d2"
+      }
+    ],
+    "netflix": [
+      {
+        "id": "synthetic_checker_16x16",
+        "path": "synthetic_checker_16x16.y4m",
+        "description": "Placeholder entry until the Netflix subset is mirrored locally.",
+        "fps": "30:1",
+        "frames": 4,
+        "sha256": "5c084429d18ca163f5881b9de241d5752e0ffb7df3780ecd497c60bde2ea4da3"
+      }
+    ]
+  }
+}

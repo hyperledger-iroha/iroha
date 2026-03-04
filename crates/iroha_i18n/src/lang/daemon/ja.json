@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Hyperledger Iroha へようこそ！",
+  "error.trace_config_setup": "設定トレースを構成できませんでした",
+  "error.config": "設定エラーです！",
+  "error.logger": "ロガーを初期化できませんでした",
+  "error.start": "Iroha を起動できませんでした",
+  "error.run": "Iroha の実行中にエラーが発生しました",
+  "error.start_p2p": "ピアツーピアネットワークを起動できませんでした",
+  "error.init_kura": "蔵（ブロックストレージ）を初期化できませんでした",
+  "error.start_dev_telemetry": "開発用テレメトリーサービスを起動できませんでした",
+  "error.start_telemetry": "テレメトリーサービスを起動できませんでした",
+  "error.listen_os_signal": "OS シグナルの待ち受けを設定できませんでした",
+  "error.start_torii": "鳥居（Iroha HTTP API ゲートウェイ）を起動できませんでした"
+}

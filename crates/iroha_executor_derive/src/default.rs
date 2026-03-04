@@ -1,11 +1,25 @@
-use darling::{ast::NestedMeta, FromDeriveInput, FromMeta};
-use iroha_macro_utils::Emitter;
-use manyhow::emit;
+use darling::{FromDeriveInput, FromMeta, ast::NestedMeta};
+use manyhow::{Emitter, ToTokensError, emit};
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{quote, ToTokens};
-use syn::{parse_quote, Ident};
+use quote::{ToTokens, quote};
+use syn::{Ident, parse_quote};
+
+use crate::emitter_ext::EmitterExt;
 
 type ExecutorData = darling::ast::Data<darling::util::Ignored, syn::Field>;
+
+#[derive(Debug)]
+struct DarlingErrorWrapper(darling::Error);
+
+impl ToTokensError for DarlingErrorWrapper {
+    fn to_tokens(&self, tokens: &mut TokenStream2) {
+        self.0.clone().write_errors().to_tokens(tokens);
+    }
+}
+
+fn darling_result<T>(result: darling::Result<T>) -> manyhow::Result<T, DarlingErrorWrapper> {
+    result.map_err(DarlingErrorWrapper)
+}
 
 #[derive(Debug)]
 struct Custom(Vec<Ident>);
@@ -36,7 +50,9 @@ struct ExecutorDeriveInput {
 }
 
 pub fn impl_derive_entrypoints(emitter: &mut Emitter, input: &syn::DeriveInput) -> TokenStream2 {
-    let Some(input) = emitter.handle(ExecutorDeriveInput::from_derive_input(input)) else {
+    let Some(input) = emitter.handle(darling_result(ExecutorDeriveInput::from_derive_input(
+        input,
+    ))) else {
         return quote!();
     };
     let ExecutorDeriveInput {
@@ -106,14 +122,16 @@ pub fn impl_derive_entrypoints(emitter: &mut Emitter, input: &syn::DeriveInput) 
 
 #[allow(clippy::too_many_lines)]
 pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> TokenStream2 {
-    let Some(input) = emitter.handle(ExecutorDeriveInput::from_derive_input(input)) else {
+    let Some(input) = emitter.handle(darling_result(ExecutorDeriveInput::from_derive_input(
+        input,
+    ))) else {
         return quote!();
     };
     let ExecutorDeriveInput { ident, custom, .. } = &input;
     let default_visit_sigs: Vec<syn::Signature> = [
         "fn visit_transaction(operation: &SignedTransaction)",
         "fn visit_instruction(operation: &InstructionBox)",
-        "fn visit_register_peer(operation: &Register<Peer>)",
+        "fn visit_register_peer(operation: &RegisterPeerWithPop)",
         "fn visit_unregister_peer(operation: &Unregister<Peer>)",
         "fn visit_register_domain(operation: &Register<Domain>)",
         "fn visit_unregister_domain(operation: &Unregister<Domain>)",
@@ -156,6 +174,8 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
         "fn visit_upgrade(operation: &Upgrade)",
         "fn visit_log(operation: &Log)",
         "fn visit_custom_instruction(operation: &CustomInstruction)",
+        "fn visit_register_public_lane_validator(operation: &RegisterPublicLaneValidator)",
+        "fn visit_set_lane_relay_emergency_validators(operation: &SetLaneRelayEmergencyValidators)",
     ]
     .into_iter()
     .map(|item| {
@@ -220,7 +240,9 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
 }
 
 pub fn impl_derive_execute(emitter: &mut Emitter, input: &syn::DeriveInput) -> TokenStream2 {
-    let Some(input) = emitter.handle(ExecutorDeriveInput::from_derive_input(input)) else {
+    let Some(input) = emitter.handle(darling_result(ExecutorDeriveInput::from_derive_input(
+        input,
+    ))) else {
         return quote!();
     };
     let ExecutorDeriveInput { ident, data, .. } = &input;
@@ -321,7 +343,7 @@ fn custom_field_idents(ast: &ExecutorData) -> Vec<&Ident> {
             .expect("BUG: Struct should have named fields");
         !required_idents.iter().any(|ident| ident == curr_ident)
     });
-    let custom_idents = custom_fields
+    custom_fields
         .iter()
         .map(|field| {
             field
@@ -329,6 +351,22 @@ fn custom_field_idents(ast: &ExecutorData) -> Vec<&Ident> {
                 .as_ref()
                 .expect("BUG: Struct should have named fields")
         })
-        .collect::<Vec<_>>();
-    custom_idents
+        .collect::<Vec<_>>()
+}
+
+#[cfg(test)]
+mod tests {
+    use manyhow::Emitter;
+
+    use super::*;
+    use crate::emitter_ext::EmitterExt;
+
+    #[test]
+    fn darling_result_integrates_with_emitter() {
+        let mut emitter = Emitter::new();
+        let result: Option<()> =
+            emitter.handle(darling_result(Err(darling::Error::custom("oops"))));
+        assert!(result.is_none());
+        assert!(!emitter.finish_token_stream().is_empty());
+    }
 }

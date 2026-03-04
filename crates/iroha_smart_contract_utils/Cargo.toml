@@ -15,10 +15,11 @@ debug = []
 
 [dependencies]
 iroha_data_model.workspace = true
+iroha_smart_contract_codec.workspace = true
 
-getrandom = { version = "0.2", features = ["custom"] }
-parity-scale-codec.workspace = true
-cfg-if.workspace = true
+getrandom = { version = "0.3.4" }
+norito.workspace = true
 
 [dev-dependencies]
-webassembly-test = "0.1.0"
+# Removed `webassembly-test` due to outdated dependency chain causing
+# compilation failures in transitive crates.

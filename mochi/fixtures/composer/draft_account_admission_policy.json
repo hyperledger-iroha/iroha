@@ -1,0 +1,25 @@
+{
+  "kind": "account_admission_policy",
+  "domain": "wonderland",
+  "policy": {
+    "mode": {
+      "mode": "ImplicitReceive",
+      "value": null
+    },
+    "max_implicit_creations_per_tx": 3,
+    "max_implicit_creations_per_block": 10,
+    "implicit_creation_fee": {
+      "asset_definition_id": "rose#wonderland",
+      "amount": "1",
+      "destination": {
+        "destination": "Burn",
+        "value": null
+      }
+    },
+    "min_initial_amounts": {
+      "rose#wonderland": "5",
+      "cabbage#wonderland": "1"
+    },
+    "default_role_on_create": "basic_user"
+  }
+}

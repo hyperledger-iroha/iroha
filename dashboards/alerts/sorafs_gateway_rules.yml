@@ -1,0 +1,31 @@
+groups:
+  - name: sorafs-gateway
+    interval: 1m
+    rules:
+      - alert: SoraFSGatewayAvailabilityBreached
+        expr: sum by (endpoint) (increase(sorafs_gateway_requests_total{result="success"}[10m])) / sum by (endpoint) (increase(sorafs_gateway_requests_total[10m])) < 0.999
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS gateway availability below target"
+          description: |
+            Endpoint {{ $labels.endpoint }} observed availability {{ printf "%.4f" $value }} over the last 10 minutes.
+      - alert: SoraFSGatewayTtfbP95High
+        expr: histogram_quantile(0.95, sum by (endpoint, le) (rate(sorafs_gateway_ttfb_ms_bucket[5m]))) > 120
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS gateway TTFB P95 above 120ms"
+          description: |
+            Endpoint {{ $labels.endpoint }} exceeded the TTFB SLO (P95 {{ printf "%.1f" $value }} ms over 5 minutes).
+      - alert: SoraFSProofFailureSpike
+        expr: sum by (kind, provider_id) (increase(sorafs_gateway_proof_events_total{result!="success"}[10m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS proof failure spike"
+          description: |
+            Provider {{ $labels.provider_id }} reported {{ printf "%.0f" $value }} {{ $labels.kind }} proof failures in the last 10 minutes.

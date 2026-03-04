@@ -1,0 +1,104 @@
+{
+  "scenario": "npos_baseline_1s_k3",
+  "network": {
+    "seed": "npos-baseline-1s-k3",
+    "peers": 6,
+    "collectors_k": 3,
+    "redundant_send_r": 2
+  },
+  "timing": {
+    "block_time_target_ms": 1000,
+    "blocks_sampled": 12,
+    "elapsed_ms": 12580.0,
+    "throughput_blocks_per_sec": 0.95,
+    "observed_block_time_ms": 1048.3
+  },
+  "phase_latency_ema_ms": {
+    "propose": {
+      "samples": 18,
+      "min": 110.0,
+      "max": 215.0,
+      "mean": 156.4,
+      "median": 152.0
+    },
+    "collect_da": {
+      "samples": 18,
+      "min": 0.0,
+      "max": 0.0,
+      "mean": 0.0,
+      "median": 0.0
+    },
+    "collect_prevote": {
+      "samples": 18,
+      "min": 280.0,
+      "max": 360.0,
+      "mean": 312.7,
+      "median": 308.0
+    },
+    "collect_precommit": {
+      "samples": 18,
+      "min": 420.0,
+      "max": 510.0,
+      "mean": 452.9,
+      "median": 449.0
+    },
+    "collect_aggregator": {
+      "samples": 18,
+      "min": 95.0,
+      "max": 165.0,
+      "mean": 128.6,
+      "median": 126.0
+    },
+    "commit": {
+      "samples": 18,
+      "min": 790.0,
+      "max": 1155.0,
+      "mean": 934.5,
+      "median": 922.0
+    }
+  },
+  "queue": {
+    "bg_post_depth": {
+      "samples": 18,
+      "min": 0.0,
+      "max": 6.0,
+      "mean": 1.8,
+      "median": 1.0
+    },
+    "bg_post_peer_max": {
+      "samples": 18,
+      "min": 0.0,
+      "max": 7.0,
+      "mean": 2.1,
+      "median": 1.0
+    }
+  },
+  "view_changes": {
+    "install_total": {
+      "samples": 18,
+      "min": 0.0,
+      "max": 1.0,
+      "mean": 0.1,
+      "median": 0.0
+    },
+    "status_view_changes": {
+      "value": 0
+    }
+  },
+  "telemetry_samples": 18,
+  "final_height": {
+    "total": 48,
+    "non_empty": 36
+  },
+  "environment": {
+    "os": "macos",
+    "arch": "arm64",
+    "family": "unix",
+    "hardware_model": "Apple M2 Ultra",
+    "cpu_cores_total": 24,
+    "memory_gb": 192,
+    "system_version": "Darwin 25.0.0",
+    "kernel": "Darwin Kernel Version 25.0.0",
+    "hostname": "baseline-harness"
+  }
+}

@@ -12,12 +12,17 @@ categories = ["network-programming"]
 workspace = true
 
 [dependencies]
+norito = {workspace = true}
 iroha_logger = { workspace = true }
 iroha_crypto = { workspace = true, default-features = true }
 iroha_data_model = { workspace = true, default-features = true }
 iroha_primitives = { workspace = true }
 iroha_config = { workspace = true }
 iroha_futures = { workspace = true }
+iroha_config_base = { workspace = true }
+iroha_telemetry = { workspace = true }
+aead = { version = "0.6.0-rc.3", default-features = false }
+soranet_pq = { workspace = true }
 
 rand = { workspace = true }
 tokio = { workspace = true, features = [
@@ -29,11 +34,44 @@ tokio = { workspace = true, features = [
 ] }
 futures = { workspace = true, features = ["alloc"] }
 async-trait = { workspace = true }
-parity-scale-codec = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 displaydoc = { workspace = true }
 derive_more = { workspace = true }
 bytes = { workspace = true }
+tracing = { workspace = true }
+base64 = { workspace = true }
+socket2 = "0.5.10"
+# Optional transports/handshakes (feature-gated)
+quinn = { version = "0.11.9", optional = true }
+snow = { version = "0.10", optional = true }
+rcgen = { version = "0.14.5", optional = true }
+rustls = { version = "0.23.35", default-features = false, optional = true }
+tokio-rustls = { version = "0.26.4", default-features = false, optional = true }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"], optional = true }
+
+[features]
+default = []
+# If enabled, include ChainId in the signed handshake payload.
+handshake_chain_id = []
+# If enabled, use bounded queues for peer post channel to reduce unbounded growth.
+p2p_bounded_queues = []
+# Optional future transport/handshake features (scaffolding)
+quic = ["dep:quinn", "dep:rcgen", "dep:rustls", "rustls/ring", "rustls/std"]
+noise_handshake = ["dep:snow"]
+## Scaffold for TLS-over-TCP transport (camouflage); currently a placeholder.
+p2p_tls = [
+    "dep:tokio-rustls",
+    "tokio-rustls/ring",
+    "dep:rustls",
+    "rustls/ring",
+    "rustls/std",
+    "dep:rcgen",
+]
+## WebSocket fallback over Torii (/p2p) using WSS
+p2p_ws = ["dep:tokio-tungstenite"]
+## Optional TURN relay scaffold (no external deps; env-based stub)
+p2p_turn = []
 
 [dev-dependencies]
-iroha_config_base = { workspace = true }
+tokio = { workspace = true, features = ["test-util", "time", "macros"] }
+tempfile = { workspace = true }

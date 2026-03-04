@@ -1,0 +1,6 @@
+{"timestamp_ms":1778000000000,"state":"healthy","app_to_wallet_depth":2,"wallet_to_app_depth":1,"reason":null}
+{"timestamp_ms":1778000002500,"state":"throttled","app_to_wallet_depth":2,"wallet_to_app_depth":1,"reason":"heartbeat_miss"}
+{"timestamp_ms":1778000003200,"state":"healthy","app_to_wallet_depth":2,"wallet_to_app_depth":1,"reason":"resume_ok"}
+{"timestamp_ms":1778000004700,"state":"healthy","app_to_wallet_depth":2,"wallet_to_app_depth":1,"reason":"salt_rotated"}
+{"timestamp_ms":1778000005600,"state":"throttled","app_to_wallet_depth":3,"wallet_to_app_depth":2,"reason":"backpressure_warning"}
+{"timestamp_ms":1778000005900,"state":"healthy","app_to_wallet_depth":1,"wallet_to_app_depth":0,"reason":"drained"}

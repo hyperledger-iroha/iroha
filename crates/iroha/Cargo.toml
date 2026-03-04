@@ -23,31 +23,37 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [features]
-# Use rustls by default to avoid OpenSSL dependency, simplifying compilation with musl
-default = ["tls-rustls-native-roots"]
+# Use rustls by default to avoid OpenSSL dependency, simplifying compilation with musl.
+# Enable SM algorithm support unless downstream consumers opt out via `--no-default-features`.
+default = ["tls-rustls-native-roots", "sm"]
+sm = [
+    "iroha_crypto/sm",
+    "iroha_data_model/sm",
+]
 
 tls-native = [
-    "attohttpc/tls-native",
+    "reqwest/native-tls",
     "tokio-tungstenite/native-tls",
     "tungstenite/native-tls",
 ]
 tls-native-vendored = [
-    "attohttpc/tls-native-vendored",
+    "reqwest/native-tls-vendored",
     "tokio-tungstenite/native-tls-vendored",
     "tungstenite/native-tls-vendored",
 ]
 tls-rustls-native-roots = [
-    "attohttpc/tls-rustls-native-roots",
+    "reqwest/rustls-tls-native-roots",
     "tokio-tungstenite/rustls-tls-native-roots",
     "tungstenite/rustls-tls-native-roots",
 ]
 tls-rustls-webpki-roots = [
-    "attohttpc/tls-rustls-webpki-roots",
+    "reqwest/rustls-tls-webpki-roots",
     "tokio-tungstenite/rustls-tls-webpki-roots",
     "tungstenite/rustls-tls-webpki-roots",
 ]
 
 [dependencies]
+norito = {workspace = true}
 iroha_config = { workspace = true }
 iroha_config_base = { workspace = true }
 iroha_crypto = { workspace = true }
@@ -56,33 +62,38 @@ iroha_logger = { workspace = true }
 iroha_telemetry = { workspace = true }
 iroha_torii_shared = { workspace = true }
 iroha_version = { workspace = true }
+sorafs_manifest = { workspace = true }
+sorafs_car = { workspace = true, features = ["manifest"] }
+sorafs_orchestrator = { workspace = true }
 
 iroha_data_model = { workspace = true, features = ["http"] }
 iroha_executor_data_model = { workspace = true }
 
-attohttpc = { version = "0.28.0", default-features = false }
+reqwest = { workspace = true, features = ["blocking"] }
 eyre = { workspace = true }
 error-stack = { workspace = true }
-http = "1.1.0"
+http = "1.3.1"
 url = { workspace = true }
 rand = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-serde_with = { workspace = true }
-serde_json = { workspace = true }
+rand_core_06 = { workspace = true }
 base64 = { workspace = true }
+hex = { workspace = true }
 thiserror = { workspace = true }
 displaydoc = { workspace = true }
 derive_more = { workspace = true }
-parity-scale-codec = { workspace = true, default-features = false, features = ["derive"] }
-tokio = { workspace = true, features = ["rt"] }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+tokio = { workspace = true, features = ["rt", "sync"] }
 tokio-tungstenite = { workspace = true }
 tungstenite = { workspace = true }
-futures-util = "0.3.30"
-async-fn-stream = "0.2.2"
+futures-util = "0.3.31"
 toml = { workspace = true }
+hmac = "0.12.1"
+blake2 = { version = "0.10.6", default-features = false, features = ["std"] }
+blake3.workspace = true
 
 [dev-dependencies]
 iroha_test_samples = { workspace = true }
 tempfile = { workspace = true }
 assertables = { workspace = true }
-
+tokio-stream = { workspace = true }
+sorafs_chunker = { workspace = true }

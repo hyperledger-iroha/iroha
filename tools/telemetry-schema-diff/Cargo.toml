@@ -1,0 +1,22 @@
+[package]
+name = "telemetry-schema-diff"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+anyhow = "1.0.100"
+chrono = { version = "0.4.38", default-features = false, features = ["clock", "std"] }
+clap = { version = "4.5.20", features = ["derive"] }
+norito = { workspace = true }
+
+[lints]
+workspace = true

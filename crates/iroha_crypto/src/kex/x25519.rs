@@ -1,20 +1,18 @@
-#[cfg(not(feature = "std"))]
-use alloc::{format, vec::Vec};
-
-use arrayref::array_ref;
-use iroha_primitives::const_vec::ConstVec;
-#[cfg(feature = "rand")]
-use rand::rngs::OsRng;
-use rand::SeedableRng;
-use rand_chacha::ChaChaRng;
-use sha2::Digest;
+use hkdf::Hkdf;
+use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
 use super::KeyExchangeScheme;
-use crate::{error::ParseError, KeyGenOption, SessionKey};
+#[cfg(feature = "rand")]
+use crate::rng::os_rng;
+use crate::{Error, KeyGenOption, SessionKey, error::ParseError, rng::rng_from_seed};
 
-/// Implements the [`KeyExchangeScheme`] using X25519 key exchange and SHA256 hash function.
+const HKDF_SALT: &[u8] = b"iroha:x25519:hkdf:v1";
+const HKDF_INFO: &[u8] = b"iroha:x25519:session-key";
+
+/// Implements the [`KeyExchangeScheme`] using X25519 key exchange and HKDF-SHA256 with
+/// domain separation to derive the session key.
 #[derive(Copy, Clone)]
 pub struct X25519Sha256;
 
@@ -33,16 +31,16 @@ impl KeyExchangeScheme for X25519Sha256 {
         match option {
             #[cfg(feature = "rand")]
             KeyGenOption::Random => {
-                let rng = OsRng;
-                let sk = StaticSecret::random_from_rng(rng);
+                let sk = StaticSecret::random_from_rng(os_rng());
                 let pk = PublicKey::from(&sk);
                 (pk, sk)
             }
             KeyGenOption::UseSeed(ref mut s) => {
-                let hash = sha2::Sha256::digest(s.as_slice());
+                let mut rng = rng_from_seed(s.clone());
                 s.zeroize();
-                let rng = ChaChaRng::from_seed(*array_ref!(hash.as_slice(), 0, 32));
-                let sk = StaticSecret::random_from_rng(rng);
+                let mut bytes = [0u8; 32];
+                rand_core::RngCore::fill_bytes(&mut rng, &mut bytes);
+                let sk = StaticSecret::from(bytes);
                 let pk = PublicKey::from(&sk);
                 (pk, sk)
             }
@@ -57,26 +55,39 @@ impl KeyExchangeScheme for X25519Sha256 {
         &self,
         local_private_key: &Self::PrivateKey,
         remote_public_key: &Self::PublicKey,
-    ) -> SessionKey {
+    ) -> Result<SessionKey, Error> {
         let sk = StaticSecret::from(*local_private_key.as_bytes());
 
         let shared_secret = sk.diffie_hellman(remote_public_key);
-        let hash = sha2::Sha256::digest(shared_secret.as_bytes());
-        SessionKey(ConstVec::new(hash.as_slice().to_vec()))
+        if shared_secret.as_bytes().iter().all(|&byte| byte == 0) {
+            return Err(Error::Other(
+                "x25519 shared secret is all-zero (invalid public key)".into(),
+            ));
+        }
+        // Derive a 32-byte session key via HKDF-SHA256 with fixed salt/info to
+        // avoid direct use of the raw ECDH output.
+        let hkdf = Hkdf::<Sha256>::new(Some(HKDF_SALT), shared_secret.as_bytes());
+        let mut okm = [0u8; 32];
+        hkdf.expand(HKDF_INFO, &mut okm)
+            .expect("hkdf expansion to 32 bytes must succeed");
+        Ok(SessionKey::new(okm.to_vec()))
     }
 
-    fn encode_public_key(pk: &Self::PublicKey) -> &[u8] {
-        pk.as_bytes()
+    fn encode_public_key(pk: &Self::PublicKey) -> Vec<u8> {
+        pk.to_bytes().to_vec()
     }
 
-    fn decode_public_key(bytes: Vec<u8>) -> Result<Self::PublicKey, ParseError> {
-        let bytes = <[u8; Self::PUBLIC_KEY_SIZE]>::try_from(bytes).map_err(|_| {
-            ParseError(format!(
-                "X25519 public key should be {} size long",
-                Self::PUBLIC_KEY_SIZE
-            ))
-        })?;
-        Ok(PublicKey::from(bytes))
+    fn decode_public_key(bytes: &[u8]) -> Result<Self::PublicKey, ParseError> {
+        if bytes.len() != Self::PUBLIC_KEY_SIZE {
+            return Err(ParseError(format!(
+                "expected {} bytes, got {}",
+                Self::PUBLIC_KEY_SIZE,
+                bytes.len()
+            )));
+        }
+        let mut array = [0u8; Self::PUBLIC_KEY_SIZE];
+        array.copy_from_slice(bytes);
+        Ok(PublicKey::from(array))
     }
 
     const SHARED_SECRET_SIZE: usize = 32;
@@ -94,11 +105,45 @@ mod tests {
         let (public_key1, secret_key1) = scheme.keypair(KeyGenOption::Random);
 
         let (public_key2, secret_key2) = scheme.keypair(KeyGenOption::Random);
-        let shared_secret1 = scheme.compute_shared_secret(&secret_key2, &public_key1);
-        let shared_secret2 = scheme.compute_shared_secret(&secret_key1, &public_key2);
+        let shared_secret1 = scheme
+            .compute_shared_secret(&secret_key2, &public_key1)
+            .expect("shared secret");
+        let shared_secret2 = scheme
+            .compute_shared_secret(&secret_key1, &public_key2)
+            .expect("shared secret");
         assert_eq!(shared_secret1.payload(), shared_secret2.payload());
 
         let (public_key2, _secret_key1) = scheme.keypair(KeyGenOption::FromPrivateKey(secret_key1));
         assert_eq!(public_key2, public_key1);
+    }
+
+    #[test]
+    fn hkdf_derivation_is_domain_separated() {
+        let scheme = X25519Sha256::new();
+        // Deterministic secrets for reproducibility.
+        let sk1 = StaticSecret::from([0x11; 32]);
+        let sk2 = StaticSecret::from([0x22; 32]);
+        let pk1 = PublicKey::from(&sk1);
+        let pk2 = PublicKey::from(&sk2);
+
+        let session1 = scheme
+            .compute_shared_secret(&sk1, &pk2)
+            .expect("shared secret");
+        let session2 = scheme
+            .compute_shared_secret(&sk2, &pk1)
+            .expect("shared secret");
+        assert_eq!(session1.payload(), session2.payload());
+        // Raw DH bytes must not match derived key (HKDF applied).
+        let raw = sk1.diffie_hellman(&pk2);
+        assert_ne!(session1.payload(), raw.as_bytes());
+    }
+
+    #[test]
+    fn shared_secret_rejects_low_order_public_key() {
+        let scheme = X25519Sha256::new();
+        let (_pk, sk) = scheme.keypair(KeyGenOption::UseSeed(vec![0x11; 32]));
+        let low_order = PublicKey::from([0u8; 32]);
+        let err = scheme.compute_shared_secret(&sk, &low_order);
+        assert!(err.is_err());
     }
 }

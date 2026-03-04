@@ -1,0 +1,32 @@
+{
+  "window_days": 14.0,
+  "circuit_events": {
+    "completed": 98500.0,
+    "brownout": 2400.0,
+    "downgrade": 600.0
+  },
+  "fetch_sessions": {
+    "total": 24000.0,
+    "brownout": 120.0
+  },
+  "gar_mix": {
+    "expected": {
+      "anon_guard_pq": 0.55,
+      "anon_majority_pq": 0.30,
+      "anon_strict_pq": 0.15
+    },
+    "observed": {
+      "anon_guard_pq": 13100.0,
+      "anon_majority_pq": 7200.0,
+      "anon_strict_pq": 3600.0
+    }
+  },
+  "pow": {
+    "attempts": 15000.0,
+    "successes": 14970.0,
+    "p95_seconds": 2.6
+  },
+  "latency_ms": {
+    "p95": 182.0
+  }
+}

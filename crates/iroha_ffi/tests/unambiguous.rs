@@ -1,16 +1,21 @@
-#![allow(missing_docs)]
+//! Tests for unambiguous FFI method name generation with trait impls and inherent methods.
 #![allow(unsafe_code)]
 
 use std::mem::MaybeUninit;
 
-use iroha_ffi::{ffi_export, FfiOutPtrRead, FfiReturn, FfiType};
+use iroha_ffi::{FfiOutPtrRead, FfiReturn, FfiType, ffi_export};
 
+/// Enum of ambiguous method sources used to validate name mangling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FfiType)]
 #[repr(u8)]
 pub enum Ambiguous {
+    /// Inherent impl method
     Inherent,
+    /// Trait `AmbiguousX` impl method
     AmbiguousX,
+    /// Trait `AmbiguousY` impl method
     AmbiguousY,
+    /// Placeholder value used in tests
     None,
 }
 
@@ -26,11 +31,15 @@ impl FfiStruct {
     }
 }
 
+/// Trait used to test name disambiguation (X).
 pub trait AmbiguousX {
+    /// Return an `Ambiguous` marker for this trait.
     fn ambiguous() -> Ambiguous;
 }
 
+/// Trait used to test name disambiguation (Y).
 pub trait AmbiguousY {
+    /// Return an `Ambiguous` marker for this trait.
     fn ambiguous() -> Ambiguous;
 }
 

@@ -1,0 +1,31 @@
+// NFT example: mints and transfers an NFT
+
+seiyaku NftDemo {
+  fn owner_id() -> AccountId {
+    let owner = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    return owner;
+  }
+
+  fn recipient_id() -> AccountId {
+    let recipient = account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland");
+    return recipient;
+  }
+
+  fn dragon_nft() -> NftId {
+    let nft = nft_id!("dragon$wonderland");
+    return nft;
+  }
+
+  kotoage fn create() permission(NftAuthority) {
+    let owner = owner_id();
+    let nft = dragon_nft();
+    nft_mint_asset(nft, owner);
+  }
+
+  kotoage fn transfer() permission(NftAuthority) {
+    let owner = owner_id();
+    let recipient = recipient_id();
+    let nft = dragon_nft();
+    nft_transfer_asset(owner, nft, recipient);
+  }
+}

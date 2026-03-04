@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iroha-norito"
+version = "0.1.0"
+description = "Pure-Python implementation of the Norito serialization codec"
+readme = "README.md"
+authors = [{name = "Hyperledger Iroha Contributors"}]
+license = {file = "LICENSE"}
+requires-python = ">=3.9"
+dynamic = []
+keywords = ["iroha", "norito", "serialization", "blockchain"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.optional-dependencies]
+compression = ["zstandard>=0.22.0"]
+
+[project.urls]
+Homepage = "https://github.com/hyperledger/iroha"
+Repository = "https://github.com/hyperledger/iroha"
+
+[project.scripts]
+norito-dump = "norito.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+extend-exclude = ["build"]

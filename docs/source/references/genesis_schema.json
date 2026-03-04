@@ -1,0 +1,47 @@
+{
+  "RawGenesisTransaction": {
+    "Struct": [
+      { "name": "chain", "type": "ChainId" },
+      { "name": "executor", "type": "Option<String>" },
+      { "name": "ivm_dir", "type": "String" },
+      { "name": "transactions", "type": "Vec<RawGenesisTx>" },
+      { "name": "consensus_mode", "type": "SumeragiConsensusMode" },
+      { "name": "bls_domain", "type": "Option<String>" },
+      { "name": "wire_proto_versions", "type": "Vec<u32>" },
+      { "name": "consensus_fingerprint", "type": "Option<String>" },
+      { "name": "crypto", "type": "ManifestCrypto" }
+    ]
+  },
+  "RawGenesisTx": {
+    "Struct": [
+      { "name": "parameters", "type": "Option<Parameters>" },
+      { "name": "instructions", "type": "Vec<InstructionBox>" },
+      { "name": "ivm_triggers", "type": "Vec<GenesisIvmTrigger>" },
+      { "name": "topology", "type": "Vec<TopologyEntry>" }
+    ]
+  },
+  "TopologyEntry": {
+    "Struct": [
+      {
+        "name": "peer",
+        "type": "PeerId",
+        "docs": "Peer entry."
+      },
+      {
+        "name": "pop_hex",
+        "type": "HexString",
+        "docs": "Proof-of-possession hex (lowercase, without 0x)."
+      }
+    ],
+    "docs": "Entries are objects with `peer` and `pop_hex` to keep PoPs adjacent to peers."
+  },
+  "ManifestCrypto": {
+    "Struct": [
+      { "name": "sm_openssl_preview", "type": "bool" },
+      { "name": "default_hash", "type": "String" },
+      { "name": "allowed_signing", "type": "Vec<Algorithm>" },
+      { "name": "sm2_distid_default", "type": "String" },
+      { "name": "allowed_curve_ids", "type": "Vec<u8>" }
+    ]
+  }
+}

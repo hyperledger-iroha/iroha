@@ -1,9 +1,8 @@
 // Lint triggers somewhere in Encode/Decode
 
-#![allow(missing_docs)]
-
+//! Fieldless enum schema tests.
 use iroha_schema::prelude::*;
-use parity_scale_codec::{Decode, Encode};
+use norito::{Decode, Encode};
 
 #[derive(IntoSchema, Encode, Decode)]
 enum Foo {

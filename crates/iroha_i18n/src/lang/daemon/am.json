@@ -1,0 +1,14 @@
+{
+  "info.welcome": "እንኳን ወደ Hyperledger Iroha በደህና መጡ!",
+  "error.trace_config_setup": "የኮንፊግሬሽን እርዳታ ማዋቀር አልተቻለም",
+  "error.config": "የኮንፊግሬሽን ስህተት!",
+  "error.logger": "የመዝገብ ስርዓት ማስጀመር አልተቻለም",
+  "error.start": "Iroha ማስጀመር አልተቻለም",
+  "error.run": "Iroha በሚሰራበት ጊዜ ስህተት ተፈጥሯል",
+  "error.start_p2p": "የP2P መረብ ማስጀመር አልተቻለም",
+  "error.init_kura": "Kura (የብሎክ ማከማቻ) ማስጀመር አልተቻለም",
+  "error.start_dev_telemetry": "የልማት ቴሌሜትሪ አገልግሎት ማስጀመር አልተቻለም",
+  "error.start_telemetry": "ቴሌሜትሪ አገልግሎት ማስጀመር አልተቻለም",
+  "error.listen_os_signal": "የOS ምልክቶችን ለመስማት ማስተካከል አልተቻለም",
+  "error.start_torii": "Torii (የIroha HTTP API መግቢያ) ማስጀመር አልተቻለም"
+}

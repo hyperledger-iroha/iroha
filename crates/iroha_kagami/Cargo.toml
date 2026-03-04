@@ -13,6 +13,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+norito = {workspace = true}
 iroha_executor_data_model.workspace = true
 iroha_data_model.workspace = true
 iroha_crypto.workspace = true
@@ -23,32 +24,43 @@ iroha_test_samples.workspace = true
 iroha_schema.workspace = true
 iroha_core.workspace = true
 iroha_version.workspace = true
-iroha_wasm_builder.workspace = true
 
 iroha_swarm = { path = "../iroha_swarm" }
 
 clap = { workspace = true, features = ["derive"] }
-clap-markdown = "0.1.4"
-serde = { workspace = true, features = ["derive"] }
-spinoff = { workspace = true, features = ["binary"] }
+clap-markdown = "0.1.5"
 owo-colors = { workspace = true, features = ["supports-colors"] }
 color-eyre.workspace = true
-serde_json.workspace = true
 derive_more.workspace = true
-parity-scale-codec.workspace = true
-humantime.workspace = true
+toml = { version = "0.9.8" }
 
-inquire = "0.6.2"
-shell-words = "1.1.0"
+tiny-keccak.workspace = true
+hex = { workspace = true }
 
-[build-dependencies]
-iroha_data_model = { workspace = true }
+inquire = "0.9.1"
 
-parity-scale-codec = { workspace = true }
-serde_json = { workspace = true, features = ["std"]}
-serde = { workspace = true }
-color-eyre = { workspace = true }
+[dev-dependencies]
+tempfile = { workspace = true }
+iroha_config = { workspace = true }
+base64.workspace = true
+
+[features]
+default = ["bls"]
+bls = ["iroha_crypto/bls"]
+gost = ["iroha_crypto/gost"]
+sm = ["iroha_crypto/sm"]
+# Enable codec subcommands that depend on exhaustive Norito conversions.
+codec = []
+
+## No build script is required anymore.
+## Previously, a heavy build.rs generated sample binaries by depending on
+## iroha_data_model and norito at build time, which slowed down or appeared to
+## hang during "building the model". The samples are pre-generated and checked in.
 
 [[bin]]
 name = "kagami"
 path = "src/main.rs"
+
+[[example]]
+name = "codec_samples"
+path = "samples/codec/generate.rs"

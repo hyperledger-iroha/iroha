@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Välkommen till Hyperledger Iroha!",
+  "error.trace_config_setup": "Kunde inte ställa in konfigurationsspårning",
+  "error.config": "Inställningsfel",
+  "error.logger": "Det gick inte att initiera loggningssystemet",
+  "error.start": "Det gick inte att starta Iroha",
+  "error.run": "Ett fel uppstod vid körning av Iroha",
+  "error.start_p2p": "Kan inte starta peer-to-peer-nätverk",
+  "error.init_kura": "Det går inte att initiera Kura (blocklagring)",
+  "error.start_dev_telemetry": "Kan inte starta telemetritjänsten för utveckling",
+  "error.start_telemetry": "Det går inte att starta telemetritjänsten",
+  "error.listen_os_signal": "Det går inte att ställa in lyssning för OS-signaler",
+  "error.start_torii": "Det går inte att starta Torii (gateway för Iroha HTTP API)"
+}

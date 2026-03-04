@@ -1,14 +1,12 @@
 //! This test checks how the json-serialized schema looks like.
-
-#![allow(missing_docs)]
+#![allow(unexpected_cfgs)]
 #![allow(dead_code)]
 
 use iroha_schema::IntoSchema;
-use serde_json::json;
 
 /// It expects to have three parameters: a type definition item, an expected schema type name and a JSON schema.
 ///
-/// The json is passed to the `serde_json::json!` macro, so it can be a string, an array or an object.
+/// The json is passed to the `norito::json!` macro, so it can be a string, an array or an object.
 ///
 /// Only the schema of the type itself is checked, not the schema of its fields.
 ///
@@ -45,11 +43,11 @@ macro_rules! check_schema {
             "Type name of {} is not equal to the expected one",
             stringify!($ty)
         );
-        let __schema = serde_json::value::to_value(&$ty::schema())
+        let __schema = norito::json::to_value(&$ty::schema())
             .expect("Failed to serialize schema to JSON");
         assert_eq!(
-            __schema.get(&$ty::type_name()).unwrap().clone(),
-            json!($json),
+            __schema.get($ty::type_name()).unwrap().clone(),
+            norito::json!($json),
             "Schema of {} is not equal to the expected one",
             stringify!($ty)
         );
@@ -193,6 +191,26 @@ fn test_enum() {
         {"Enum": [
             {"discriminant": 0, "tag": "Variant1", "type": "u32"},
             {"discriminant": 1, "tag": "Variant3", "type": "String"}
+        ]}
+    );
+}
+
+#[test]
+fn test_enum_with_norito_rename_all() {
+    check_schema!(
+        #[norito(rename_all = "kebab-case")]
+        enum BackendTag {
+            Halo2IpaPasta,
+            #[norito(rename = "halo2-bn254")]
+            Halo2Bn254,
+            #[norito(other)]
+            Unsupported,
+        },
+        BackendTag,
+        {"Enum": [
+            {"discriminant": 0, "tag": "halo2-ipa-pasta"},
+            {"discriminant": 1, "tag": "halo2-bn254"},
+            {"discriminant": 2, "tag": "unsupported"}
         ]}
     );
 }

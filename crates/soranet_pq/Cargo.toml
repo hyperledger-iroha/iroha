@@ -1,0 +1,33 @@
+[package]
+name = "soranet_pq"
+build = "build.rs"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[features]
+default = []
+ffi-artifacts = []
+
+[lints]
+workspace = true
+
+[dependencies]
+blake3 = { workspace = true }
+hkdf = { version = "0.12.4", default-features = false, features = ["std"] }
+pqcrypto-dilithium = { version = "0.5" }
+pqcrypto-kyber = { version = "0.8.1" }
+pqcrypto-traits = { version = "0.3.5" }
+rand = { workspace = true, default-features = false, features = ["std_rng", "std"] }
+rand_chacha = { version = "0.9.0", default-features = false, features = ["std"] }
+rand_core = { version = "0.9.3", default-features = false, features = ["std"] }
+sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
+thiserror = { workspace = true }
+zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "derive"] }
+
+[dev-dependencies]
+hex = { workspace = true }
+once_cell = { workspace = true }
+norito = { workspace = true }

@@ -1,0 +1,4 @@
+# Exit bond manifest (sample)
+relay: relay-nrt-07
+bond_amount: 42000 XOR
+notarised_at: 2026-11-02T13:20:00Z

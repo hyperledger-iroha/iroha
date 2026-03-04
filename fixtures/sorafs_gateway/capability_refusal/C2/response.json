@@ -1,0 +1,10 @@
+{
+  "status": 412,
+  "body": {
+    "error": "manifest_variant_missing",
+    "reason": "requested manifest alias is not bound in the governance envelope",
+    "details": {
+      "alias": "sorafs.sf1@1.0.0"
+    }
+  }
+}

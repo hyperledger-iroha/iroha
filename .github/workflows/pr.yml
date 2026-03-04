@@ -91,6 +91,32 @@ jobs:
         working-directory: wasm
         run: cargo fmt --all -- --check
 
+  norito_rpc_verify:
+    runs-on: ubuntu-latest
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: Norito-RPC fixture parity
+        run: cargo xtask norito-rpc-verify
+
+  android_fixture_compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+      - name: Android fixture compatibility
+        working-directory: java/iroha_android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :core:test --tests org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests
+
   clippy:
     runs-on: [self-hosted, Linux, iroha2]
     container:
@@ -101,8 +127,14 @@ jobs:
         with:
           cache-on-failure: "true"
       - name: Clippy (all targets, all features)
-        run: cargo clippy --all-targets --all-features --quiet
-      # TODO: upload clippy artifact?
+        run: |
+          set -o pipefail
+          cargo clippy --all-targets --all-features --message-format=json | tee clippy.json
+      - name: Upload clippy report
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-clippy
+          path: clippy.json
 
   doc:
     runs-on: [self-hosted, Linux, iroha2]
@@ -322,8 +354,7 @@ jobs:
         with:
           args: >
             -Dcommunity.rust.lcov.reportPaths=lints/lcov.info
-          # TODO: include?
-          # -Dcommunity.rust.clippy.reportPaths=lints/clippy.json
+            -Dcommunity.rust.clippy.reportPaths=lints/clippy.json
 
   test_wasm:
     runs-on: ubuntu-latest
@@ -345,3 +376,41 @@ jobs:
       - name: Run smart contract tests on WebAssembly VM
         working-directory: crates/iroha_smart_contract
         run: mold --run cargo test -p iroha_smart_contract -p iroha_smart_contract_utils --release --tests --target wasm32-unknown-unknown --no-fail-fast --quiet
+
+  sumeragi_formal:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/apalache-mc/apalache:latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apalache version
+        run: apalache-mc --version
+      - name: Sumeragi formal model checks (fast + deep)
+        run: bash ci/check_sumeragi_formal.sh
+
+  nexus_cross_dataspace_localnet:
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: Nexus cross-dataspace localnet proof
+        run: bash ci/check_nexus_cross_dataspace_localnet.sh
+
+  nexus_cross_lane_proofs:
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: Nexus cross-lane proof filters
+        run: bash ci/check_nexus_cross_lane_proofs.sh

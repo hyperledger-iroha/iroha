@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Hyperledger Iroha သို့ ကြိုဆိုပါတယ်!",
+  "error.trace_config_setup": "ဖိုင်ဖွဲ့စည်းမှုကို စောင့်ကြည့်သတ်မှတ်ရန် မအောင်မြင်ပါ။",
+  "error.config": "ဖိုင်ဖွဲ့စည်းမှု အမှားရှိပါသည်!",
+  "error.logger": "မှတ်တမ်းတင်စနစ်ကို မစတင်နိုင်ပါ။",
+  "error.start": "Iroha ကို မစတင်နိုင်ပါ။",
+  "error.run": "Iroha လုပ်ဆောင်နေစဉ် အမှားတစ်ခု ဖြစ်ပွားခဲ့ပါသည်။",
+  "error.start_p2p": "P2P ကွန်ယက်ကို မစတင်နိုင်ပါ။",
+  "error.init_kura": "Kura (ဘလော့ခ်သိုလှောင်မှု) ကို မစတင်နိုင်ပါ။",
+  "error.start_dev_telemetry": "ဖွံ့ဖြိုးရေး telemetry ဝန်ဆောင်မှုကို မစတင်နိုင်ပါ။",
+  "error.start_telemetry": "telemetry ဝန်ဆောင်မှုကို မစတင်နိုင်ပါ။",
+  "error.listen_os_signal": "OS အချက်ပေးများကို လက်ခံရန် မပြင်ဆင်နိုင်ပါ။",
+  "error.start_torii": "Torii (Iroha HTTP API ဂိတ်ဝေး) ကို မစတင်နိုင်ပါ။"
+}

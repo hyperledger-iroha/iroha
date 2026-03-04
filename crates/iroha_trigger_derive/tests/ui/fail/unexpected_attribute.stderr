@@ -1,0 +1,13 @@
+error: #[main] attribute does not accept arguments
+ --> tests/ui/fail/unexpected_attribute.rs:4:1
+  |
+4 | #[main(unexpected)]
+  | ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `main` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/fail/unexpected_attribute.rs:7:2
+  |
+7 | }
+  |  ^ consider adding a `main` function to `$DIR/tests/ui/fail/unexpected_attribute.rs`

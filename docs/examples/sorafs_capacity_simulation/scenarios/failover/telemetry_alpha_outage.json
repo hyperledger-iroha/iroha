@@ -1,0 +1,13 @@
+{
+  "provider_id_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+  "epoch_start": 1700600360,
+  "epoch_end": 1700600720,
+  "declared_capacity_gib": 480,
+  "effective_capacity_gib": 300,
+  "utilised_capacity_gib": 220,
+  "successful_replications": 5,
+  "failed_replications": 7,
+  "uptime_percent_milli": 72000,
+  "por_success_percent_milli": 65000,
+  "notes": "Simulated outage window for alpha provider"
+}

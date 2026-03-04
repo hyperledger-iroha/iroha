@@ -1,0 +1,81 @@
+# Minimal relay + orchestrator configuration for SoraNet testnet (Phase T0)
+
+[relay]
+descriptor_seed_hex = "0771AE2885FBF14AD10AD571CA3FDB6A40305726F59615002F1710E1D50D4D02"
+admin_metrics_bind = "0.0.0.0:9642"
+entry_listen = "0.0.0.0:443"
+middle_listen = "0.0.0.0:9443"
+exit_listen = "0.0.0.0:10443"
+pow_difficulty = 20
+compliance_log_dir = "/var/lib/soranet/compliance"
+
+[relay.guard_policy]
+rotation_interval_secs = 86400
+max_clients_per_guard = 1024
+pinning_initial_weight = 0.65
+
+[relay.telemetry]
+prometheus_bind = "0.0.0.0:9898"
+privacy_bucket_secs = 60
+privacy_min_contributors = 5
+
+[orchestrator]
+telemetry_region = "testnet-t0"
+transport_policy = "soranet_first"
+anonymity_policy = "anon-guard-pq"
+max_providers = 8
+
+[orchestrator.scoreboard]
+latency_cap_ms = 5000
+weight_scale = 10000
+telemetry_grace_secs = 900
+
+[orchestrator.fetch]
+verify_lengths = true
+verify_digests = true
+retry_budget = 4
+provider_failure_threshold = 3
+global_parallel_limit = 6
+
+[orchestrator.compliance]
+operator_jurisdictions = ["US", "JP"]
+jurisdiction_opt_outs = ["US", "CA"]
+blinded_cid_opt_outs = [
+  "C6B434E5F23ABD318F01FEDB834B34BD16B46E0CC44CD70536233A632DFA3828",
+  "7F8B1E9D04878F1AEAB553C1DB0A3E3A2AB689F75FE6BE17469F85A4D201B4AC"
+]
+audit_contacts = [
+  "mailto:governance@soranet.org",
+  "https://status.soranet.org/gar-opt-outs"
+]
+
+[[orchestrator.compliance.attestations]]
+jurisdiction = "US"
+document_uri = "https://gov.example.org/gar/us-attestation.pdf"
+digest_hex = "37E8AA2E0C9BE3D64B2812747307D534642856A3F234D6F087E42A54B3A8380F"
+issued_at_ms = 1704000000000
+expires_at_ms = 1706000000000
+
+[[orchestrator.compliance.attestations]]
+document_uri = "https://gov.example.org/gar/global-attestation.json"
+digest_hex = "9D0E16C6F42449F57AD1BB221B35A484AF881B40B3F99588635B9A5FB1F88DA2"
+issued_at_ms = 1704500000000
+
+[orchestrator.guard_cache]
+directory = "/var/lib/soranet/guards/directory.json"
+persist_path = "/var/lib/soranet/guards/cache.json"
+target = 5
+
+# SNNet-T0 directory bootstrap mirrors managed by the governance publisher.
+# For later phases, obtain the current endpoints from the directory status
+# bulletin (`docs/source/soranet/directory_publisher_plan.md`).
+[orchestrator.directory]
+bootstrap_urls = [
+  "https://directory.testnet.soranet.org/v1/relays",
+  "https://directory.testnet.backup.soranet.org/v1/relays"
+]
+
+[orchestrator.stream_tokens]
+key_seed_hex = "AF908F45C84DE4552A610B774169CCCB58DB4F4D3795E5722B3AC86D2DEB016F"
+ttl_secs = 3600
+max_parallel = 16

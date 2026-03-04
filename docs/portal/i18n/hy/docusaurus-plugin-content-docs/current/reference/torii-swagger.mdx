@@ -1,0 +1,33 @@
+---
+lang: hy
+direction: ltr
+source: docs/portal/docs/reference/torii-swagger.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+ներմուծել SwaggerUiPanel-ը '@site/src/components/SwaggerUiPanel.jsx'-ից;
+
+# Torii API (Swagger UI)
+
+Այս էջը զետեղում է Torii OpenAPI փաստաթուղթը՝ օգտագործելով `swagger-ui-react`: Օգտագործեք այն, երբ
+ցանկանում եք ծանոթ Swagger դասավորությունը, նմուշներ պահանջել և փորձելու հնարավորություն
+հարցումները ուղղակիորեն բրաուզերի ներսում:
+
+## Օգտագործման խորհուրդներ
+
+- Վահանակում տրամադրեք կրող նշան՝ յուրաքանչյուր հարցումը նախապես թույլատրելու համար: Նշաններ են
+  փոխանցվում է վստահված անձին՝ օգտագործելով `X-TryIt-Auth` վերնագիրը և երբեք չեն պահպանվում:
+- Կարգավորեք `TRYIT_PROXY_PUBLIC_URL` պորտալը սպասարկելիս, որպեսզի վիջեթը
+  ուղարկում է հարցումները փաթեթավորված բեմադրիչի միջոցով: Զգուշացնող պաստառ է հայտնվում
+  եթե վստահված անձը անջատված է:
+- Ընտրեք OpenAPI նկարը բացվող ցանկից՝ վերջին սպեկտրի միջև անցնելու համար
+  և `npm run sync-openapi`-ի կողմից ստեղծված արխիվացված տարբերակները:
+- Փորձեք վստահված անձի «[Փորձեք այն](/api/overview#try-it-sandbox-docs-3)» վահանակը
+  բեմական միջավայրերի համար, որտեղ CORS-ը կանխում է Torii ուղղակի մուտքը:
+- Թարմ պահեք OpenAPI լուսանկարը `cargo xtask openapi`-ով (տես
+  `docs/portal/static/openapi/torii.json`):
+
+<SwaggerUiPanel />

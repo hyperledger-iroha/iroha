@@ -1,10 +1,14 @@
-#![allow(missing_docs)]
+//! Integration test for `iroha_futures` telemetry.
+//!
+//! Verifies that `#[telemetry_future]` records per-poll durations and that
+//! collected `FuturePollTelemetry` entries match the expected sleep timings.
+
 use std::{thread, time::Duration};
 
 use iroha_futures::FuturePollTelemetry;
 use iroha_logger::telemetry::Channel;
 use tokio::task;
-use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
 #[iroha_futures::telemetry_future]
 async fn sleep(times: Vec<Duration>) -> i32 {
@@ -17,7 +21,7 @@ async fn sleep(times: Vec<Duration>) -> i32 {
 }
 
 fn almost_equal(a: Duration, b: Duration) -> bool {
-    (a - b) < (b / 9)
+    a.abs_diff(b) < (b / 9)
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -49,13 +53,17 @@ async fn test_sleep() {
     let id = telemetry[0].id;
     let times = telemetry
         .iter()
-        .map(|telemetry_item| telemetry_item.duration);
+        .map(|telemetry_item| Duration::from_nanos(telemetry_item.duration));
 
-    assert!(telemetry
-        .iter()
-        .all(|telemetry_item| telemetry_item.name == "basic::sleep"));
-    assert!(telemetry
-        .iter()
-        .all(|telemetry_item| telemetry_item.id == id));
+    assert!(
+        telemetry
+            .iter()
+            .all(|telemetry_item| telemetry_item.name == "basic::sleep")
+    );
+    assert!(
+        telemetry
+            .iter()
+            .all(|telemetry_item| telemetry_item.id == id)
+    );
     assert!(times.zip(sleep_times).all(|(a, b)| almost_equal(a, b)));
 }

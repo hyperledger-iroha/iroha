@@ -1,0 +1,32 @@
+---
+lang: zh-hans
+direction: ltr
+source: docs/portal/docs/reference/torii-swagger.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+从 '@site/src/components/SwaggerUiPanel.jsx' 导入 SwaggerUiPanel；
+
+# Torii API（Swagger UI）
+
+此页面使用 `swagger-ui-react` 嵌入 Torii OpenAPI 文档。当
+您想要熟悉的 Swagger 布局、请求示例以及尝试的能力
+直接在浏览器中输出请求。
+
+## 使用技巧
+
+- 在面板中提供不记名令牌以预授权每个请求。代币是
+  使用 `X-TryIt-Auth` 标头转发到代理，并且永远不会保留。
+- 在为门户提供服务时配置 `TRYIT_PROXY_PUBLIC_URL`，以便小部件
+  通过捆绑的暂存代理转发请求。出现警告横幅
+  如果代理被禁用。
+- 从下拉列表中选择 OpenAPI 快照以在最新规格之间切换
+  以及 `npm run sync-openapi` 生成的存档版本。
+- 尝试代理支持的“[Try it](/api/overview#try-it-sandbox-docs-3)”控制台
+  适用于 CORS 阻止直接 Torii 访问的分阶段环境。
+- 使用 `cargo xtask openapi` 保持 OpenAPI 快照最新（请参阅
+  `docs/portal/static/openapi/torii.json`）。
+

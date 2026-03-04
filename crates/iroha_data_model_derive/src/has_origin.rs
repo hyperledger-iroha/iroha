@@ -1,8 +1,13 @@
 use darling::{FromDeriveInput, FromVariant};
-use iroha_macro_utils::{attr_struct, parse_single_list_attr, parse_single_list_attr_opt, Emitter};
+use manyhow::Emitter;
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{parse_quote, Ident, Token, Type};
+use syn::{Ident, Token, Type, parse_quote};
+
+use crate::{
+    emitter_ext::EmitterExt,
+    utils::{attr_struct, darling_result, parse_single_list_attr, parse_single_list_attr_opt},
+};
 
 mod kw {
     syn::custom_keyword!(origin);
@@ -71,7 +76,8 @@ attr_struct! {
 }
 
 pub fn impl_has_origin(emitter: &mut Emitter, input: &syn::DeriveInput) -> TokenStream {
-    let Some(enum_) = emitter.handle(HasOriginEnum::from_derive_input(input)) else {
+    let Some(enum_) = emitter.handle(darling_result(HasOriginEnum::from_derive_input(input)))
+    else {
         return quote!();
     };
 

@@ -1,19 +1,17 @@
 //! Notification events and their filter
 
-#[cfg(not(feature = "std"))]
-use alloc::{format, string::String, vec::Vec};
+use std::{format, string::String, vec::Vec};
 
 use derive_more::Constructor;
 use getset::Getters;
+use iroha_crypto::HashOf;
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
-use parity_scale_codec::{Decode, Encode};
-use serde::{Deserialize, Serialize};
-use strum::EnumDiscriminants;
+use norito::codec::{Decode, Encode};
 
 pub use self::model::*;
-use crate::trigger::TriggerId;
+use crate::{transaction::TransactionEntrypoint, trigger::TriggerId};
 
 #[model]
 mod model {
@@ -31,47 +29,57 @@ mod model {
         Constructor,
         Decode,
         Encode,
-        Deserialize,
-        Serialize,
         IntoSchema,
     )]
-    #[ffi_type]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[getset(get = "pub")]
     pub struct TriggerCompletedEvent {
         trigger_id: TriggerId,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        step_index: u32,
         outcome: TriggerCompletedOutcome,
     }
 
     /// Enum to represent outcome of trigger execution
     #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        FromVariant,
-        EnumDiscriminants,
-        Decode,
-        Encode,
-        Deserialize,
-        Serialize,
-        IntoSchema,
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromVariant, Decode, Encode, IntoSchema,
     )]
-    #[strum_discriminants(
-        name(TriggerCompletedOutcomeType),
-        derive(PartialOrd, Ord, Decode, Encode, Deserialize, Serialize, IntoSchema,),
-        cfg_attr(
-            any(feature = "ffi_import", feature = "ffi_export"),
-            derive(iroha_ffi::FfiType)
-        ),
-        allow(missing_docs),
-        repr(u8)
-    )]
-    #[ffi_type(opaque)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub enum TriggerCompletedOutcome {
         Success,
         Failure(String),
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        any(feature = "ffi_import", feature = "ffi_export"),
+        derive(iroha_ffi::FfiType)
+    )]
+    #[repr(u8)]
+    pub enum TriggerCompletedOutcomeType {
+        Success,
+        Failure,
+    }
+
+    impl ::core::fmt::Display for TriggerCompletedOutcomeType {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+            f.write_str(match self {
+                Self::Success => "Success",
+                Self::Failure => "Failure",
+            })
+        }
+    }
+
+    impl ::core::convert::TryFrom<u8> for TriggerCompletedOutcomeType {
+        type Error = ();
+
+        fn try_from(value: u8) -> Result<Self, Self::Error> {
+            match value {
+                0 => Ok(Self::Success),
+                1 => Ok(Self::Failure),
+                _ => Err(()),
+            }
+        }
     }
 
     /// Filter [`TriggerCompletedEvent`] by
@@ -79,27 +87,23 @@ mod model {
     /// 2. if `outcome_type` is some filter based on execution outcome (success/failure)
     /// 3. if both fields are none accept every event of this type
     #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Default,
-        Getters,
-        Decode,
-        Encode,
-        Deserialize,
-        Serialize,
-        IntoSchema,
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Getters, Decode, Encode, IntoSchema,
     )]
-    #[ffi_type]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[getset(get = "pub")]
     pub struct TriggerCompletedEventFilter {
         pub(super) trigger_id: Option<TriggerId>,
         pub(super) outcome_type: Option<TriggerCompletedOutcomeType>,
     }
 }
+
+#[cfg(feature = "json")]
+impl_json_via_norito_bytes!(
+    TriggerCompletedEvent,
+    TriggerCompletedOutcome,
+    TriggerCompletedOutcomeType,
+    TriggerCompletedEventFilter,
+);
 
 impl TriggerCompletedEventFilter {
     /// Creates a new [`TriggerCompletedEventFilter`] accepting all [`TriggerCompletedEvent`]s
@@ -136,11 +140,12 @@ impl super::EventFilter for TriggerCompletedEventFilter {
     /// Check if `self` accepts the `event`.
     #[inline]
     fn matches(&self, event: &Self::Event) -> bool {
-        if matches!(self.trigger_id(), Some(trigger_id) if trigger_id != event.trigger_id()) {
-            return false;
-        }
+        let trigger_ok = self
+            .trigger_id()
+            .as_ref()
+            .is_none_or(|id| id == event.trigger_id());
 
-        if matches!(
+        let outcome_ok = !matches!(
             (self.outcome_type(), event.outcome()),
             (
                 Some(TriggerCompletedOutcomeType::Success),
@@ -149,11 +154,9 @@ impl super::EventFilter for TriggerCompletedEventFilter {
                 Some(TriggerCompletedOutcomeType::Failure),
                 TriggerCompletedOutcome::Success
             )
-        ) {
-            return false;
-        }
+        );
 
-        true
+        trigger_ok && outcome_ok
     }
 }
 
@@ -175,19 +178,34 @@ mod tests {
     fn trigger_completed_events_filter() {
         let trigger_id_1: TriggerId = "trigger_1".parse().expect("Valid");
         let trigger_id_2: TriggerId = "trigger_2".parse().expect("Valid");
+        let dummy_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0; iroha_crypto::Hash::LENGTH]),
+        );
 
         let event_1_failure = TriggerCompletedEvent::new(
             trigger_id_1.clone(),
+            dummy_hash,
+            0,
             TriggerCompletedOutcome::Failure("Error".to_string()),
         );
-        let event_1_success =
-            TriggerCompletedEvent::new(trigger_id_1.clone(), TriggerCompletedOutcome::Success);
+        let event_1_success = TriggerCompletedEvent::new(
+            trigger_id_1.clone(),
+            dummy_hash,
+            0,
+            TriggerCompletedOutcome::Success,
+        );
         let event_2_failure = TriggerCompletedEvent::new(
             trigger_id_2.clone(),
+            dummy_hash,
+            0,
             TriggerCompletedOutcome::Failure("Error".to_string()),
         );
-        let event_2_success =
-            TriggerCompletedEvent::new(trigger_id_2.clone(), TriggerCompletedOutcome::Success);
+        let event_2_success = TriggerCompletedEvent::new(
+            trigger_id_2.clone(),
+            dummy_hash,
+            0,
+            TriggerCompletedOutcome::Success,
+        );
 
         let filter_accept_all = TriggerCompletedEventFilter::new();
         assert!(filter_accept_all.matches(&event_1_failure));

@@ -1,27 +1,30 @@
 //! API for *Runtime Executors*.
-#![no_std]
 #![allow(unsafe_code)]
+#![allow(unexpected_cfgs)]
 
-extern crate alloc;
+use std::collections::{BTreeMap, BTreeSet};
 
-use alloc::collections::BTreeSet;
-
-use data_model::{executor::Result, ValidationFail};
+use data_model::{ValidationFail, executor::Result, parameter::CustomParameterId};
 #[cfg(not(test))]
 use data_model::{prelude::*, query::AnyQueryBox, smart_contract::payloads};
-use iroha_executor_data_model::{parameter::Parameter, permission::Permission};
+use iroha_executor_data_model::{
+    parameter::Parameter, permission::Permission as ExecutorPermission,
+};
 pub use iroha_executor_derive::{entrypoint, migrate};
 use iroha_schema::{Ident, MetaMap};
 pub use iroha_smart_contract as smart_contract;
-pub use iroha_smart_contract_utils::{dbg, dbg_panic, DebugExpectExt, DebugUnwrapExt};
-pub use smart_contract::{data_model, Iroha};
+pub use iroha_smart_contract_utils::{DebugExpectExt, DebugUnwrapExt, dbg, dbg_panic};
+pub use smart_contract::{Iroha, data_model};
 
 pub mod default;
 pub mod permission;
 pub mod runtime;
 
+#[cfg(feature = "bridge")]
+pub mod bridge;
+
 pub mod log {
-    //! WASM logging utilities
+    //! IVM runtime logging utilities
     pub use iroha_smart_contract_utils::{debug, error, event, info, trace, warn};
 }
 
@@ -30,10 +33,9 @@ pub mod utils {
     //! Crate with utilities
 
     #[cfg(not(test))]
-    use iroha_smart_contract_utils::decode_with_length_prefix_from_raw;
-    pub use iroha_smart_contract_utils::{
-        encode_with_length_prefix, register_getrandom_err_callback,
-    };
+    use iroha_smart_contract_codec::decode_with_length_prefix_from_raw;
+    pub use iroha_smart_contract_codec::encode_with_length_prefix;
+    pub use iroha_smart_contract_utils::register_getrandom_err_callback;
 
     #[cfg(not(test))]
     use super::*;
@@ -49,7 +51,7 @@ pub mod utils {
     pub unsafe fn __decode_execute_transaction_context(
         context: *const u8,
     ) -> payloads::Validate<SignedTransaction> {
-        decode_with_length_prefix_from_raw(context)
+        unsafe { decode_with_length_prefix_from_raw(context) }
     }
 
     /// Get context for `validate_instruction()` entrypoint.
@@ -63,7 +65,7 @@ pub mod utils {
     pub unsafe fn __decode_execute_instruction_context(
         context: *const u8,
     ) -> payloads::Validate<InstructionBox> {
-        decode_with_length_prefix_from_raw(context)
+        unsafe { decode_with_length_prefix_from_raw(context) }
     }
 
     /// Get context for `validate_query()` entrypoint.
@@ -77,7 +79,7 @@ pub mod utils {
     pub unsafe fn __decode_validate_query_context(
         context: *const u8,
     ) -> payloads::Validate<AnyQueryBox> {
-        decode_with_length_prefix_from_raw(context)
+        unsafe { decode_with_length_prefix_from_raw(context) }
     }
 
     /// Get context for `migrate()` entrypoint.
@@ -89,7 +91,7 @@ pub mod utils {
     #[doc(hidden)]
     #[cfg(not(test))]
     pub unsafe fn __decode_migrate_context(context: *const u8) -> payloads::ExecutorContext {
-        decode_with_length_prefix_from_raw(context)
+        unsafe { decode_with_length_prefix_from_raw(context) }
     }
 }
 
@@ -106,13 +108,12 @@ pub mod utils {
 #[cfg(not(test))]
 pub fn set_data_model(data_model: &ExecutorDataModel) {
     // Safety: - ownership of the returned result is transferred into `_decode_from_raw`
-    unsafe { iroha_smart_contract_utils::encode_and_execute(&data_model, host::set_data_model) }
+    unsafe { iroha_smart_contract_utils::encode_and_execute(data_model, host::set_data_model) }
 }
 
 #[cfg(not(test))]
 mod host {
-    #[link(wasm_import_module = "iroha")]
-    extern "C" {
+    unsafe extern "C" {
         /// Set new [`ExecutorDataModel`].
         pub(super) fn set_data_model(ptr: *const u8, len: usize);
     }
@@ -139,7 +140,7 @@ macro_rules! execute {
 
 /// Shortcut for setting verdict to [`Err`] and return.
 ///
-/// Supports [`format!`](alloc::fmt::format) syntax as well as any expression returning [`String`](alloc::string::String).
+/// Supports [`format!`](std::fmt::format) syntax as well as any expression returning [`String`](std::string::String).
 #[macro_export]
 macro_rules! deny {
     ($executor:ident, $l:literal $(,)?) => {{
@@ -148,7 +149,7 @@ macro_rules! deny {
             unreachable!("Executor already denied");
         }
         $executor.deny($crate::data_model::ValidationFail::NotPermitted(
-            ::alloc::fmt::format(::core::format_args!($l)),
+            ::std::fmt::format(::core::format_args!($l)),
         ));
         return;
     }};
@@ -165,7 +166,7 @@ macro_rules! deny {
 /// A convenience to build [`ExecutorDataModel`] from within the executor
 #[derive(Debug, Clone)]
 pub struct DataModelBuilder {
-    parameters: BTreeSet<data_model::parameter::CustomParameter>,
+    parameters: BTreeMap<CustomParameterId, data_model::parameter::CustomParameter>,
     instructions: BTreeSet<Ident>,
     permissions: BTreeSet<Ident>,
     schema: MetaMap,
@@ -207,7 +208,10 @@ impl DataModelBuilder {
         param: T,
     ) -> Self {
         T::update_schema_map(&mut self.schema);
-        self.parameters.insert(param.into());
+        self.parameters.insert(
+            <T as iroha_executor_data_model::parameter::Parameter>::id(),
+            param.into(),
+        );
         self
     }
 
@@ -222,7 +226,7 @@ impl DataModelBuilder {
 
     /// Define a permission in the data model
     #[must_use]
-    pub fn add_permission<T: Permission>(mut self) -> Self {
+    pub fn add_permission<T: ExecutorPermission>(mut self) -> Self {
         T::update_schema_map(&mut self.schema);
         self.permissions.insert(T::name());
         self
@@ -230,7 +234,7 @@ impl DataModelBuilder {
 
     /// Remove a permission from the data model
     #[must_use]
-    pub fn remove_permission<T: Permission>(mut self) -> Self {
+    pub fn remove_permission<T: ExecutorPermission>(mut self) -> Self {
         T::remove_from_schema(&mut self.schema);
         self.permissions.remove(&T::name());
         self
@@ -272,13 +276,10 @@ impl DataModelBuilder {
         }
 
         set_data_model(&ExecutorDataModel::new(
-            self.parameters
-                .into_iter()
-                .map(|param| (param.id().clone(), param))
-                .collect(),
+            self.parameters,
             self.instructions,
             self.permissions,
-            serde_json::to_value(&self.schema)
+            norito::json::to_value(&self.schema)
                 .expect("INTERNAL BUG: Failed to serialize Executor data model entity")
                 .into(),
         ));
@@ -309,16 +310,216 @@ pub trait Execute {
 pub mod prelude {
     //! Contains useful re-exports
 
-    pub use alloc::vec::Vec;
+    pub use std::vec::Vec;
 
     pub use iroha_executor_derive::{Entrypoints, Execute, Visit};
 
     pub use crate::{
+        DataModelBuilder, DebugExpectExt, DebugUnwrapExt, Execute, Iroha,
         data_model::{
             executor::Result, prelude::*, smart_contract::payloads::ExecutorContext as Context,
             visit::Visit,
         },
-        dbg, dbg_panic, deny, execute, runtime, DataModelBuilder, DebugExpectExt, DebugUnwrapExt,
-        Execute, Iroha,
+        dbg, dbg_panic, deny, execute, runtime,
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use core::{
+        mem::ManuallyDrop,
+        sync::atomic::{AtomicBool, Ordering},
+    };
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        slice,
+    };
+
+    #[cfg(feature = "fast_dsl")]
+    use data_model::query::QueryItemKind;
+    use data_model::{
+        permission::Permission,
+        prelude::Json,
+        query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
+            QueryResponse, SingularQueryOutputBox,
+        },
+    };
+
+    use super::*;
+
+    static CALLED: AtomicBool = AtomicBool::new(false);
+
+    #[cfg(not(feature = "fast_dsl"))]
+    macro_rules! iter_query_empty_batch {
+        ($query_box:expr; $($ty:ty => $variant:ident),+ $(,)?) => {{
+            'found: {
+                $(
+                    if data_model::query::iter_query_inner::<$ty>($query_box).is_some() {
+                        break 'found QueryOutputBatchBox::$variant(Vec::new());
+                    }
+                )+
+                QueryOutputBatchBox::Permission(Vec::new())
+            }
+        }};
+    }
+
+    #[cfg(not(feature = "fast_dsl"))]
+    fn empty_iterable_batch_non_fast(
+        query: &data_model::query::QueryWithParams,
+    ) -> QueryOutputBatchBox {
+        let query_box = query
+            .query_box()
+            .expect("non-fast_dsl query must provide query box");
+        iter_query_empty_batch!(
+            query_box;
+            data_model::domain::Domain => Domain,
+            data_model::account::Account => Account,
+            data_model::asset::value::Asset => Asset,
+            data_model::asset::definition::AssetDefinition => AssetDefinition,
+            data_model::repo::RepoAgreement => RepoAgreement,
+            data_model::nft::Nft => Nft,
+            data_model::role::Role => Role,
+            data_model::role::RoleId => RoleId,
+            data_model::peer::PeerId => Peer,
+            data_model::trigger::TriggerId => TriggerId,
+            data_model::trigger::Trigger => Trigger,
+            data_model::query::CommittedTransaction => CommittedTransaction,
+            data_model::block::SignedBlock => Block,
+            data_model::block::BlockHeader => BlockHeader,
+            data_model::proof::ProofRecord => ProofRecord,
+            data_model::permission::Permission => Permission,
+            data_model::offline::OfflineAllowanceRecord => OfflineAllowanceRecord,
+            data_model::offline::OfflineTransferRecord => OfflineToOnlineTransfer,
+            data_model::offline::OfflineCounterSummary => OfflineCounterSummary,
+            data_model::offline::OfflineVerdictRevocation => OfflineVerdictRevocation,
+        )
+    }
+
+    #[cfg(feature = "fast_dsl")]
+    fn empty_iterable_batch_fast(
+        query: &data_model::query::QueryWithParams,
+    ) -> QueryOutputBatchBox {
+        match query.item {
+            QueryItemKind::Domain => QueryOutputBatchBox::Domain(Vec::new()),
+            QueryItemKind::Account => QueryOutputBatchBox::Account(Vec::new()),
+            QueryItemKind::Asset => QueryOutputBatchBox::Asset(Vec::new()),
+            QueryItemKind::AssetDefinition => QueryOutputBatchBox::AssetDefinition(Vec::new()),
+            QueryItemKind::RepoAgreement => QueryOutputBatchBox::RepoAgreement(Vec::new()),
+            QueryItemKind::Nft => QueryOutputBatchBox::Nft(Vec::new()),
+            QueryItemKind::Role => QueryOutputBatchBox::Role(Vec::new()),
+            QueryItemKind::RoleId => QueryOutputBatchBox::RoleId(Vec::new()),
+            QueryItemKind::PeerId => QueryOutputBatchBox::Peer(Vec::new()),
+            QueryItemKind::TriggerId => QueryOutputBatchBox::TriggerId(Vec::new()),
+            QueryItemKind::Trigger => QueryOutputBatchBox::Trigger(Vec::new()),
+            QueryItemKind::CommittedTransaction => {
+                QueryOutputBatchBox::CommittedTransaction(Vec::new())
+            }
+            QueryItemKind::SignedBlock => QueryOutputBatchBox::Block(Vec::new()),
+            QueryItemKind::BlockHeader => QueryOutputBatchBox::BlockHeader(Vec::new()),
+            QueryItemKind::ProofRecord => QueryOutputBatchBox::ProofRecord(Vec::new()),
+            QueryItemKind::Permission => QueryOutputBatchBox::Permission(Vec::new()),
+            QueryItemKind::OfflineAllowanceRecord => {
+                QueryOutputBatchBox::OfflineAllowanceRecord(Vec::new())
+            }
+            QueryItemKind::OfflineToOnlineTransfer => {
+                QueryOutputBatchBox::OfflineToOnlineTransfer(Vec::new())
+            }
+            QueryItemKind::OfflineCounterSummary => {
+                QueryOutputBatchBox::OfflineCounterSummary(Vec::new())
+            }
+            QueryItemKind::OfflineVerdictRevocation => {
+                QueryOutputBatchBox::OfflineVerdictRevocation(Vec::new())
+            }
+        }
+    }
+
+    fn empty_iterable_batch(
+        query: &data_model::query::QueryWithParams,
+    ) -> QueryOutputBatchBoxTuple {
+        #[cfg(not(feature = "fast_dsl"))]
+        let batch = empty_iterable_batch_non_fast(query);
+
+        #[cfg(feature = "fast_dsl")]
+        let batch = empty_iterable_batch_fast(query);
+
+        QueryOutputBatchBoxTuple::new(vec![batch])
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn execute_instruction(ptr: *const u8, len: usize) -> *const u8 {
+        let _ = unsafe { slice::from_raw_parts(ptr, len) };
+        let body =
+            norito::to_bytes(&Result::<(), ValidationFail>::Ok(())).expect("encode instruction ok");
+        unsafe { encode_with_len_prefix(&body) }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn execute_query(ptr: *const u8, len: usize) -> *const u8 {
+        let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+        let query_request = norito::decode_from_bytes::<QueryRequest>(bytes).ok();
+
+        let response: Result<QueryResponse, ValidationFail> = Ok(match query_request {
+            Some(QueryRequest::Singular(_)) => QueryResponse::Singular(
+                SingularQueryOutputBox::Parameters(data_model::parameter::Parameters::default()),
+            ),
+            Some(QueryRequest::Start(query)) => {
+                QueryResponse::Iterable(QueryOutput::new(empty_iterable_batch(&query), 0, None))
+            }
+            Some(QueryRequest::Continue(_)) | None => QueryResponse::Iterable(QueryOutput::new(
+                QueryOutputBatchBoxTuple::new(vec![QueryOutputBatchBox::Permission(Vec::new())]),
+                0,
+                None,
+            )),
+        });
+        let body = norito::to_bytes(&response).expect("encode query ok");
+        unsafe { encode_with_len_prefix(&body) }
+    }
+
+    unsafe fn encode_with_len_prefix(body: &[u8]) -> *const u8 {
+        let len_size = core::mem::size_of::<usize>();
+        let mut out = Vec::with_capacity(len_size + body.len());
+        out.extend_from_slice(&(len_size + body.len()).to_le_bytes());
+        out.extend_from_slice(body);
+        ManuallyDrop::new(out.into_boxed_slice()).as_ptr()
+    }
+
+    #[cfg(test)]
+    pub fn with_mock_permissions<R>(permissions: Vec<Permission>, f: impl FnOnce() -> R) -> R {
+        struct RestoreGuard {
+            previous: Option<Vec<Permission>>,
+        }
+
+        impl Drop for RestoreGuard {
+            fn drop(&mut self) {
+                if let Some(previous) = self.previous.take() {
+                    let _ = crate::permission::test_override::replace_permissions(previous);
+                }
+            }
+        }
+
+        let previous = crate::permission::test_override::replace_permissions(permissions);
+        let _restore = RestoreGuard {
+            previous: Some(previous),
+        };
+
+        f()
+    }
+
+    unsafe extern "C" fn dummy(_: *const u8, _: usize) {
+        CALLED.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn encode_executor_data_model() {
+        let data_model = data_model::ExecutorDataModel::new(
+            BTreeMap::new(),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            Json::new(()),
+        );
+
+        unsafe { iroha_smart_contract_utils::encode_and_execute(&data_model, dummy) };
+        assert!(CALLED.load(Ordering::Relaxed));
+    }
 }

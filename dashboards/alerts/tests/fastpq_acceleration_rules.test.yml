@@ -1,0 +1,126 @@
+rule_files:
+  - ../fastpq_acceleration_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'fastpq_execution_mode_total{requested="gpu", resolved="gpu", backend="metal", device_class="apple-m4"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'fastpq_execution_mode_total{requested="gpu", resolved="cpu", backend="none", device_class="apple-m4"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16'
+      - series: 'fastpq_execution_mode_total{requested="gpu", resolved="cpu", backend="cpu", device_class="apple-m4"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16'
+      - series: 'fastpq_metal_queue_ratio{metric="busy", device_class="apple-m4", queue="global"}'
+        values: '0.6 0.58 0.55 0.52 0.5 0.48 0.46 0.45 0.44 0.43 0.42 0.4 0.38 0.37 0.36 0.35 0.34'
+    alert_rule_test:
+      - alertname: FastpqMetalDowngrade
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              device_class: apple-m4
+              severity: page
+            exp_annotations:
+              summary: "FASTPQ Metal adoption below 50%"
+              description: |
+                Operators requested the GPU backend but fewer than half of the prover
+                resolutions landed on Metal over the last 15 minutes. Inspect
+                `fastpq_execution_mode_total` to confirm the fallback backend, re-run
+                `fastpq_metal_bench` to capture evidence, and review the latest
+                `zero_fill_hotspots` block in the benchmark bundle to ensure host
+                padding bandwidth stayed within expectations.
+      - alertname: FastpqBackendNoneBurst
+        eval_time: 11m
+        exp_alerts:
+          - exp_labels:
+              device_class: apple-m4
+              severity: warning
+            exp_annotations:
+              summary: "FASTPQ resolved to backend=none"
+              description: |
+                Nodes are resolving the FASTPQ backend to `none`, which means the
+                metallib/device was unavailable. Verify the Metal artefacts on the
+                affected hosts, ensure the benchmark bundle is refreshed, and check
+                its `zero_fill_hotspots` entry so padding regressions are captured
+                alongside the fallback evidence.
+      - alertname: FastpqCpuFallbackBurst
+        eval_time: 11m
+        exp_alerts:
+          - exp_labels:
+              device_class: apple-m4
+              severity: page
+            exp_annotations:
+              summary: "FASTPQ CPU fallback burst detected"
+              description: |
+                More than 5% of GPU-requested proofs resolved on the CPU backend for
+                at least 10 minutes. Inspect `fastpq_execution_mode_total` for the
+                affected device class, confirm whether the queue headroom or zero-fill
+                alerts also fired, rerun `fastpq_metal_bench`, and attach the updated
+                evidence bundle before re-enabling GPU defaults.
+      - alertname: FastpqQueueDutyCycleDrop
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              device_class: apple-m4
+              queue: global
+              severity: warning
+            exp_annotations:
+              summary: "FASTPQ Metal queue duty cycle below 50%"
+              description: |
+                The Metal dispatch queue busy ratio averaged below the 50% Stage7-1
+                target over the last 15 minutes while GPU work was still being
+                scheduled. Inspect `fastpq_metal_queue_ratio{metric="busy"}` for the
+                affected queue, confirm providers are not throttled, and collect new
+                benchmark artefacts before resuming the rollout.
+  - interval: 1m
+    input_series:
+      - series: 'fastpq_execution_mode_total{requested="gpu", resolved="gpu", backend="metal", device_class="apple-m4"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16'
+    alert_rule_test:
+      - alertname: FastpqMetalDowngrade
+        eval_time: 20m
+        exp_alerts: []
+      - alertname: FastpqBackendNoneBurst
+        eval_time: 20m
+        exp_alerts: []
+      - alertname: FastpqCpuFallbackBurst
+        eval_time: 20m
+        exp_alerts: []
+      - alertname: FastpqQueueDutyCycleDrop
+        eval_time: 20m
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'fastpq_metal_queue_depth{metric="limit", device_class="apple-m4"}'
+        values: '4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4'
+      - series: 'fastpq_metal_queue_depth{metric="max_in_flight", device_class="apple-m4"}'
+        values: '2 2 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4'
+      - series: 'fastpq_zero_fill_duration_ms{device_class="apple-m4"}'
+        values: '0 0.1 0.1 0.5 0.45 0.5 0.5 0.48 0.46 0.47 0.5 0.5 0.5 0.5 0.5 0.5 0.5'
+    alert_rule_test:
+      - alertname: FastpqQueueHeadroomLow
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              device_class: apple-m4
+              severity: warning
+            exp_annotations:
+              summary: "FASTPQ Metal queue headroom exhausted"
+              description: |
+                Metal dispatch queues are running without the required headroom
+                (limit − max_in_flight < 1) for the last 10 minutes. Check the
+                `metal_dispatch_queue` block in the latest benchmark artefact and
+                reduce `FASTPQ_METAL_MAX_IN_FLIGHT` or rerun the queue tuner before
+                continuing the rollout.
+      - alertname: FastpqZeroFillRegression
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              device_class: apple-m4
+              severity: page
+            exp_annotations:
+              summary: "FASTPQ zero-fill latency exceeded Stage7-1 limit"
+              description: |
+                Host-side zero-fill work exceeded the 0.40 ms Stage7-1 ceiling in
+                the last 15 minutes. Capture a fresh `zero_fill_hotspots` sample via
+                `fastpq_metal_bench`, review PCIe/memory telemetry on the affected
+                host, and attach the evidence bundle to the Stage7 rollout ticket.

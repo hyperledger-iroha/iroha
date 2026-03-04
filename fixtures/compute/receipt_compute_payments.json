@@ -1,0 +1,59 @@
+{
+  "call": {
+    "auth": {
+      "mode": "Authenticated",
+      "value": {
+        "session_hash": "hash:214A4C8F95074B216BE2F72EB93166506DAE0B1026ED01EF5A760632CD93ABAB#50FA",
+        "uaid": [
+          "hash:E2EC25C138748C00C98229823A991373BA2798BAF31C8E5B8BBB93513E524D4D#B714"
+        ]
+      }
+    },
+    "codec": {
+      "codec": "NoritoJson",
+      "value": null
+    },
+    "declared_input_bytes": 1024,
+    "declared_input_chunks": 1,
+    "determinism": {
+      "determinism": "Strict",
+      "value": null
+    },
+    "execution_class": {
+      "class": "Cpu",
+      "value": null
+    },
+    "gas_limit": 1000000,
+    "max_response_bytes": 65536,
+    "namespace": "compute",
+    "price_family": "default",
+    "request_hash": "hash:422C8FA780FCB77B2BD81F90C4A4B3B55508372A32A204AA7FA3CB491D19B51D#3845",
+    "resource_profile": "cpu-small",
+    "route": {
+      "method": "quote",
+      "service": "payments"
+    },
+    "sponsor_budget_cu": 8000,
+    "ttl_slots": 32
+  },
+  "metering": {
+    "charged_units": 10,
+    "cycles": 8000000,
+    "duration_ms": 25,
+    "egress_bytes": 2048,
+    "ingress_bytes": 768,
+    "price_family": "default"
+  },
+  "outcome": {
+    "kind": {
+      "outcome": "Success",
+      "value": null
+    },
+    "response_bytes": 128,
+    "response_codec": {
+      "codec": "NoritoJson",
+      "value": null
+    },
+    "response_hash": "hash:84384C1BA2A624DC6EFBBA5BD00654C84B66146B92532A1FC0E8835EB13498A1#41E3"
+  }
+}

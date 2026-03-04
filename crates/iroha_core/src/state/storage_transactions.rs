@@ -2,14 +2,24 @@
 
 #![allow(clippy::disallowed_types)]
 
-use std::{borrow::Borrow, collections::HashSet, hash::Hash, num::NonZeroUsize, sync::Arc};
+use std::{
+    borrow::Borrow,
+    collections::{BTreeMap, HashSet},
+    hash::Hash,
+    num::NonZeroUsize,
+    sync::Arc,
+};
 
 use arc_swap::ArcSwapOption;
 use dashmap::DashMap;
 use iroha_crypto::HashOf;
 use iroha_data_model::prelude::SignedTransaction;
-use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
-use serde::{Deserialize, Serialize};
+use mv::json::JsonKeyCodec;
+use norito::json::{
+    self, FastJsonWrite, JsonDeserialize as JsonDeserializeTrait,
+    JsonSerialize as JsonSerializeTrait,
+};
+use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
 
 type Key = HashOf<SignedTransaction>;
 type Value = NonZeroUsize;
@@ -29,11 +39,14 @@ pub struct TransactionsStorage {
     /// `None` when there are no blocks yet, otherwise must be not `None`.
     latest_block: ArcSwapOption<BlockInfo>,
     /// Map with aggregated transactions of multiple blocks, EXCEPT for the latest block.
+    /// Entries are retained only for finalised blocks (with heights strictly
+    /// lower than the current latest block) so that stale transactions are
+    /// discarded after rollbacks.
     blocks: DashMap<Key, Value>,
     write_lock: Mutex<()>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
 struct BlockInfo {
     /// Transactions added in the block
     transactions: HashSet<Key>,
@@ -53,7 +66,7 @@ impl TransactionsStorage {
     }
 
     /// Create persistent view of storage at certain point in time
-    pub fn view(&self) -> TransactionsView {
+    pub fn view(&self) -> TransactionsView<'_> {
         TransactionsView {
             latest_block: self.latest_block.load_full(),
             blocks: &self.blocks,
@@ -61,16 +74,16 @@ impl TransactionsStorage {
     }
 
     /// Create block to aggregate updates
-    pub fn block(&self) -> TransactionsBlock {
+    pub fn block(&self) -> TransactionsBlock<'_> {
         self.block_impl(false)
     }
 
     /// Create block to aggregate updates and revert changes created in the latest block
-    pub fn block_and_revert(&self) -> TransactionsBlock {
+    pub fn block_and_revert(&self) -> TransactionsBlock<'_> {
         self.block_impl(true)
     }
 
-    fn block_impl(&self, revert: bool) -> TransactionsBlock {
+    fn block_impl(&self, revert: bool) -> TransactionsBlock<'_> {
         let guard = self.write_lock.lock();
         TransactionsBlock {
             latest_block_ref: &self.latest_block,
@@ -96,7 +109,7 @@ mod view {
     use super::*;
 
     /// Consistent view of the storage at the certain version
-    #[derive(Serialize)]
+    #[derive(Clone)]
     pub struct TransactionsView<'storage> {
         pub(super) latest_block: Option<Arc<BlockInfo>>,
         /// Some transactions may be added to the map after `Self` is created,
@@ -124,14 +137,52 @@ mod view {
                 .filter(|&h| h < block_height)
         }
     }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    impl TransactionsView<'_> {
+        /// Test helper: return the latest committed block height (0 when empty).
+        pub fn latest_height_for_tests(&self) -> usize {
+            self.latest_block
+                .as_ref()
+                .map_or(0, |block| block.height.get())
+        }
+    }
 }
 pub use view::TransactionsView;
 
 /// Module for [`TransactionsBlock`] and it's related impls
 mod block {
-    use std::ops::Deref;
-
     use super::*;
+
+    /// Batched update to the storage that can be reverted later.
+    ///
+    /// The block aggregates transaction hashes for a particular block height.
+    /// Call [`insert_block`] exactly once to register the transactions and
+    /// height. After all updates are collected, [`commit`](Self::commit) can be
+    /// used to persist them in [`TransactionsStorage`].
+    ///
+    /// Committing a block without first calling [`insert_block`] is considered
+    /// an error and will cause [`commit`](Self::commit) to fail. See the
+    /// release-mode tests for examples.
+    /// Errors that can occur when committing [`TransactionsBlock`]
+    #[derive(thiserror::Error, Debug, displaydoc::Display, Clone, Copy, PartialEq, Eq)]
+    #[ignore_extra_doc_attributes]
+    pub enum TransactionsBlockError {
+        /// `TransactionsBlock::insert_block()` was not called
+        MissingInsertBlock,
+        /// Consensus mode staging invariant violated: `next_mode` and `mode_activation_height` must be set together
+        ModeStagingInvariant,
+        /// Block height `{actual_current_height}` does not match expected `{expected_current_height}`;
+        /// callers should abort the block and retry against the latest state view.
+        HeightMismatch {
+            /// Height expected by the storage while committing the block.
+            expected_current_height: usize,
+            /// Height encoded in the block being committed.
+            actual_current_height: usize,
+        },
+        /// Block contained no executed effects; empty blocks cannot be committed
+        EmptyBlock,
+    }
 
     /// Batched update to the storage that can be reverted later
     pub struct TransactionsBlock<'storage> {
@@ -146,16 +197,30 @@ mod block {
     }
 
     impl TransactionsBlock<'_> {
-        /// Add transactions of the block
+        /// Register transactions belonging to the block.
+        ///
+        /// This method **must** be called before [`commit`].
+        /// Calling it more than once with the same block payload is a no-op,
+        /// while changing the height or the transaction set triggers a panic.
+        /// Attempting to commit without inserting a block results in an error
+        /// (see `commit_without_insert_block_fails`).
         pub fn insert_block(&mut self, transactions: HashSet<Key>, height: Value) {
+            if let Some(current_block) = &self.current_block {
+                assert_eq!(
+                    current_block.height, height,
+                    "`TransactionsBlock::insert_block()` called multiple times with different height"
+                );
+                assert_eq!(
+                    current_block.transactions, transactions,
+                    "`TransactionsBlock::insert_block()` called multiple times with different transactions"
+                );
+                return;
+            }
+
             let block_info = BlockInfo {
                 transactions,
                 height,
             };
-            assert!(
-                self.current_block.is_none(),
-                "`TransactionsBlock::insert_block()` must be called only once"
-            );
             self.current_block = Some(Arc::new(block_info));
         }
 
@@ -165,8 +230,14 @@ mod block {
             self.insert_block(transactions, height);
         }
 
-        /// Apply aggregated changes to the storage
-        pub fn commit(self) {
+        /// Apply aggregated changes to the storage.
+        ///
+        /// # Errors
+        /// Returns an error if [`insert_block`] was not called prior to
+        /// committing or if the block height being committed does not match
+        /// the expected height derived from the current storage state. These
+        /// behaviours are illustrated in the release-mode tests.
+        pub fn commit(self) -> Result<(), TransactionsBlockError> {
             let previous_block = &self.latest_block_ref.load();
             let previous_block = previous_block.as_ref();
 
@@ -174,38 +245,31 @@ mod block {
             let addition = usize::from(!self.revert);
             let expected_current_height = previous_height + addition;
 
-            #[allow(clippy::option_if_let_else)]
-            let current_block = match self.current_block {
-                Some(current_block) => {
-                    let current_height = current_block.height.get();
-                    debug_assert_eq!(expected_current_height, current_height);
-                    current_block
-                }
-                None => {
-                    #[cfg(not(debug_assertions))]
-                    panic!("`TransactionsBlock::insert_block()` was not called");
-
-                    // Note that in production `current_block` must be not `None`.
-                    // We support `None` case here for tests,
-                    // in which `.block()` + `.commit()` is used to populate store,
-                    // without actually adding block with transactions.
-                    #[cfg(debug_assertions)]
-                    Arc::new(BlockInfo {
-                        transactions: HashSet::new(),
-                        height: NonZeroUsize::new(expected_current_height).unwrap(),
-                    })
-                }
+            let Some(current_block) = self.current_block else {
+                return Err(TransactionsBlockError::MissingInsertBlock);
             };
+            let current_height = current_block.height.get();
+            if expected_current_height != current_height {
+                return Err(TransactionsBlockError::HeightMismatch {
+                    expected_current_height,
+                    actual_current_height: current_height,
+                });
+            }
 
-            if !self.revert {
-                if let Some(previous_block) = previous_block {
-                    for &transaction in &previous_block.transactions {
-                        self.blocks_ref.insert(transaction, previous_block.height);
-                    }
+            if self.revert {
+                // Rolling back the latest block must not drop historical entries from
+                // earlier heights; we only prune versions that no longer fall strictly
+                // below the height being re-executed.
+                self.blocks_ref
+                    .retain(|_, height| *height < current_block.height);
+            } else if let Some(previous_block) = previous_block {
+                for &transaction in &previous_block.transactions {
+                    self.blocks_ref.insert(transaction, previous_block.height);
                 }
             }
 
             self.latest_block_ref.store(Some(current_block));
+            Ok(())
         }
     }
 
@@ -215,72 +279,113 @@ mod block {
             Key: Borrow<Q>,
             Q: Hash + Eq + ?Sized,
         {
-            if let Some(current_block) = &self.current_block {
-                if current_block.transactions.contains(key) {
-                    return Some(current_block.height);
-                }
+            if let Some(height) = self
+                .current_block
+                .as_ref()
+                .and_then(|block| block.transactions.contains(key).then_some(block.height))
+            {
+                return Some(height);
             }
 
-            #[allow(clippy::explicit_deref_methods)]
-            if let Some(latest_block) = self.latest_block_ref.load().deref() {
-                if latest_block.transactions.contains(key) {
-                    return Some(latest_block.height);
-                }
+            let latest_block = self.latest_block_ref.load();
+            if let Some(block) = latest_block.as_ref().as_ref()
+                && block.transactions.contains(key)
+            {
+                return Some(block.height);
             }
 
-            self.blocks_ref.get(key).map(|h| *h)
+            self.blocks_ref.get(key).map(|height| *height)
         }
     }
 }
-pub use block::TransactionsBlock;
+#[allow(unused_imports)]
+pub use block::{TransactionsBlock, TransactionsBlockError};
 
 /// Module with serialization and deserialization of [`TransactionsStorage`]
 mod serialization {
     use super::*;
 
-    impl Serialize for TransactionsStorage {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
-            let view = self.view();
+    fn write_transactions_view_json(view: &TransactionsView<'_>, out: &mut String) {
+        out.push('{');
+        json::write_json_string("latest_block", out);
+        out.push(':');
+        match view.latest_block.as_ref() {
+            Some(block) => JsonSerializeTrait::json_serialize(block.as_ref(), out),
+            None => out.push_str("null"),
+        }
+        out.push(',');
+        json::write_json_string("blocks", out);
+        out.push(':');
+        let mut map = BTreeMap::new();
+        #[allow(clippy::explicit_iter_loop)]
+        for entry in view.blocks.iter() {
+            map.insert(*entry.key(), *entry.value());
+        }
+        JsonSerializeTrait::json_serialize(&map, out);
+        out.push('}');
+    }
 
-            // Note that some new entries may be added to `blocks` during serialization.
-            // We will filter such entries later during deserialization.
-            // Potential alternative implementations:
-            // * Clone `blocks`, filter, then serialize
-            //   Bad approach, will have 2x peak memory usage
-            // * Write custom serialization with filtration
-            //   (using `serializer.serialize_map()`)
-            view.serialize(serializer)
+    impl JsonSerializeTrait for TransactionsStorage {
+        fn json_serialize(&self, out: &mut String) {
+            write_transactions_view_json(&self.view(), out)
         }
     }
 
-    impl<'de> Deserialize<'de> for TransactionsStorage {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            #[derive(Deserialize)]
-            struct Storage {
-                latest_block: Option<Arc<BlockInfo>>,
-                blocks: DashMap<Key, Value>,
+    impl FastJsonWrite for TransactionsView<'_> {
+        fn write_json(&self, out: &mut String) {
+            write_transactions_view_json(self, out)
+        }
+    }
+
+    impl JsonDeserializeTrait for TransactionsStorage {
+        fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+            let json::Value::Object(mut map) = json::Value::json_deserialize(parser)? else {
+                return Err(json::Error::InvalidField {
+                    field: "transactions_storage".into(),
+                    message: "expected object".into(),
+                });
+            };
+
+            let latest_block_value = map
+                .remove("latest_block")
+                .ok_or_else(|| json::Error::missing_field("latest_block"))?;
+            let blocks_value = map
+                .remove("blocks")
+                .ok_or_else(|| json::Error::missing_field("blocks"))?;
+
+            let latest_block = match latest_block_value {
+                json::Value::Null => None,
+                other => {
+                    let block: BlockInfo = json::value::from_value(other)?;
+                    Some(Arc::new(block))
+                }
+            };
+
+            let dash = DashMap::new();
+            let json::Value::Object(entries) = blocks_value else {
+                return Err(json::Error::InvalidField {
+                    field: "blocks".into(),
+                    message: "expected object".into(),
+                });
+            };
+            for (key_str, value_value) in entries {
+                let key = Key::decode_json_key(&key_str).map_err(|err| {
+                    json::Error::Message(format!("invalid transaction hash `{key_str}`: {err}"))
+                })?;
+                let value: Value = json::value::from_value(value_value)?;
+                dash.insert(key, value);
             }
 
-            let storage = Storage::deserialize(deserializer)?;
-            // See `serialize` implementation why filter is needed here
-            if let Some(latest_block) = &storage.latest_block {
-                let latest_block_height = latest_block.height;
-                storage
-                    .blocks
-                    .retain(|_, &mut height| height < latest_block_height);
+            if let Some(block) = &latest_block {
+                let latest_height = block.height;
+                dash.retain(|_, height| *height < latest_height);
             } else {
-                storage.blocks.clear();
+                dash.clear();
             }
 
             Ok(TransactionsStorage {
-                latest_block: ArcSwapOption::from(storage.latest_block),
-                blocks: storage.blocks,
+                latest_block: ArcSwapOption::from(latest_block),
+                blocks: dash,
                 write_lock: Mutex::new(()),
             })
         }
@@ -293,7 +398,8 @@ mod tests {
 
     fn random_hash() -> Key {
         use rand::Rng;
-        let bytes = rand::thread_rng().gen();
+        let mut rng = rand::rng();
+        let bytes = rng.random();
         let hash = iroha_crypto::Hash::prehashed(bytes);
         HashOf::from_untyped_unchecked(hash)
     }
@@ -326,21 +432,21 @@ mod tests {
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k0, k1, k2], v1);
-            block.commit()
+            block.commit().unwrap()
         }
         let view1 = storage.view();
 
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k0, k1, k3], v2);
-            block.commit()
+            block.commit().unwrap()
         }
         let view2 = storage.view();
 
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k1, k4], v3);
-            block.commit()
+            block.commit().unwrap()
         }
         let view3 = storage.view();
 
@@ -377,19 +483,20 @@ mod tests {
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k0], v1);
-            block.commit()
+            block.commit().unwrap()
         }
 
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k0], v2);
-            block.commit()
+            block.commit().unwrap()
         }
         let view1 = storage.view();
 
         {
-            let block = storage.block_and_revert();
-            block.commit();
+            let mut block = storage.block_and_revert();
+            block.insert_block(HashSet::new(), v2);
+            block.commit().unwrap();
         }
         let view2 = storage.view();
 
@@ -397,6 +504,51 @@ mod tests {
         assert_eq!(view1.get(&k0), Some(v2));
         // Revert is visible in the view created after revert was applied
         assert_eq!(view2.get(&k0), Some(v1));
+    }
+
+    #[test]
+    fn revert_drops_discarded_transactions() {
+        let [tx_a, tx_b, tx_b_prime] = get_keys();
+        let [height_a, height_b] = get_values();
+
+        let storage = TransactionsStorage::new();
+
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[tx_a], height_a);
+            block.commit().unwrap();
+        }
+
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[tx_b], height_b);
+            block.commit().unwrap();
+        }
+
+        let view_before_revert = storage.view();
+        assert_eq!(view_before_revert.get(&tx_b), Some(height_b));
+
+        {
+            let mut block = storage.block_and_revert();
+            block.insert_block(HashSet::from([tx_b_prime]), height_b);
+            block.commit().unwrap();
+        }
+
+        let view_after_revert = storage.view();
+        assert_eq!(view_after_revert.get(&tx_a), Some(height_a));
+        assert_eq!(view_after_revert.get(&tx_b_prime), Some(height_b));
+        assert_eq!(view_after_revert.get(&tx_b), None);
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn commit_succeeds_in_release() {
+        let [key] = get_keys();
+        let [height] = get_values();
+        let storage = TransactionsStorage::new();
+        let mut block = storage.block();
+        insert_keys(&mut block, &[key], height);
+        assert!(block.commit().is_ok());
     }
 
     #[test]
@@ -409,8 +561,8 @@ mod tests {
             }
         }
         fn check_view(view1: &TransactionsView, keys: &[Key]) {
-            let json = serde_json::to_string(&view1).unwrap();
-            let storage2: TransactionsStorage = serde_json::from_str(&json).unwrap();
+            let json = norito::json::to_json(&view1).unwrap();
+            let storage2: TransactionsStorage = norito::json::from_str(&json).unwrap();
             let view2 = storage2.view();
             assert_views_equal(view1, &view2, keys);
         }
@@ -433,7 +585,7 @@ mod tests {
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k0, k1, k2], v1);
-            block.commit()
+            block.commit().unwrap()
         }
         views.push(storage.view());
         check_views(&views, &keys);
@@ -441,7 +593,7 @@ mod tests {
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k0, k1, k3], v2);
-            block.commit()
+            block.commit().unwrap()
         }
         views.push(storage.view());
         check_views(&views, &keys);
@@ -449,7 +601,7 @@ mod tests {
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k1, k4], v3);
-            block.commit()
+            block.commit().unwrap()
         }
         views.push(storage.view());
         check_views(&views, &keys);
@@ -457,9 +609,99 @@ mod tests {
         {
             let mut block = storage.block_and_revert();
             insert_keys(&mut block, &[k2], v3);
-            block.commit()
+            block.commit().unwrap()
         }
         views.push(storage.view());
         check_views(&views, &keys);
+    }
+
+    #[test]
+    fn commit_without_insert_block_fails() {
+        let storage = TransactionsStorage::new();
+        let block = storage.block();
+        assert_eq!(
+            block.commit(),
+            Err(TransactionsBlockError::MissingInsertBlock)
+        );
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn commit_height_mismatch_fails_in_release() {
+        let [first_key, second_key] = get_keys();
+        let [first_height, _] = get_values();
+        let storage = TransactionsStorage::new();
+
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[first_key], first_height);
+            block.commit().unwrap();
+        }
+
+        let mut block = storage.block();
+        let transactions = HashSet::from([second_key]);
+        let wrong_height = NonZeroUsize::new(first_height.get() + 2).unwrap();
+        let expected_height = first_height.get() + 1;
+        block.insert_block(transactions, wrong_height);
+        assert_eq!(
+            block.commit(),
+            Err(TransactionsBlockError::HeightMismatch {
+                expected_current_height: expected_height,
+                actual_current_height: wrong_height.get(),
+            })
+        );
+    }
+
+    #[test]
+    fn commit_with_insert_block_succeeds() {
+        let [key] = get_keys();
+        let [value] = get_values();
+        let storage = TransactionsStorage::new();
+        let mut block = storage.block();
+        insert_keys(&mut block, &[key], value);
+        block.commit().unwrap();
+    }
+
+    #[test]
+    fn insert_block_allowed_twice_for_same_payload() {
+        let [key] = get_keys();
+        let [value] = get_values();
+        let storage = TransactionsStorage::new();
+        let mut block = storage.block();
+        let payload: HashSet<_> = HashSet::from([key]);
+
+        block.insert_block(payload.clone(), value);
+        block.insert_block(payload, value);
+
+        block.commit().unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "`TransactionsBlock::insert_block()` called multiple times with different height"
+    )]
+    fn insert_block_rejects_height_mismatch() {
+        let [key] = get_keys();
+        let [value1, value2] = get_values();
+        let storage = TransactionsStorage::new();
+        let mut block = storage.block();
+        let payload = HashSet::from([key]);
+
+        block.insert_block(payload.clone(), value1);
+        block.insert_block(payload, value2);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "`TransactionsBlock::insert_block()` called multiple times with different transactions"
+    )]
+    fn insert_block_rejects_transaction_mismatch() {
+        let [key1, key2] = get_keys();
+        let [value] = get_values();
+        let storage = TransactionsStorage::new();
+        let mut block = storage.block();
+
+        block.insert_block(HashSet::from([key1]), value);
+        block.insert_block(HashSet::from([key2]), value);
     }
 }

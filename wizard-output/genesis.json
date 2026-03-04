@@ -1,0 +1,232 @@
+{
+    "bls_domain": "bls-iroha2:npos-sumeragi:v1",
+    "chain": "809574f5-fee7-5e69-bfcf-52451e42d50f",
+    "consensus_fingerprint": "0xc731aafd4ac091f98b789331c6a16bcb3afb3349651d33213745435e15a85dce",
+    "consensus_mode": "Npos",
+    "crypto": {
+        "allowed_curve_ids": [
+            1,
+            4
+        ],
+        "allowed_signing": [
+            "ed25519",
+            "secp256k1"
+        ],
+        "default_hash": "blake2b-256",
+        "sm2_distid_default": "1234567812345678"
+    },
+    "executor": null,
+    "ivm_dir": [
+        "."
+    ],
+    "transactions": [
+        {
+            "instructions": [
+                {
+                    "Register": {
+                        "Domain": {
+                            "id": "wonderland",
+                            "logo": null,
+                            "metadata": {
+                                "key": "value"
+                            }
+                        }
+                    }
+                },
+                {
+                    "Register": {
+                        "Account": {
+                            "id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                            "metadata": {
+                                "key": "value"
+                            }
+                        }
+                    }
+                },
+                {
+                    "Register": {
+                        "Account": {
+                            "id": "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016@wonderland",
+                            "metadata": {
+                                "key": "value"
+                            }
+                        }
+                    }
+                },
+                {
+                    "Register": {
+                        "AssetDefinition": {
+                            "id": "rose#wonderland",
+                            "logo": null,
+                            "metadata": {},
+                            "mintable": "Infinitely",
+                            "spec": {
+                                "scale": null
+                            }
+                        }
+                    }
+                },
+                {
+                    "Register": {
+                        "Domain": {
+                            "id": "garden_of_live_flowers",
+                            "logo": null,
+                            "metadata": {}
+                        }
+                    }
+                },
+                {
+                    "Register": {
+                        "Account": {
+                            "id": "ed0120E9F632D3034BAB6BB26D92AC8FD93EF878D9C5E69E01B61B4C47101884EE2F99@garden_of_live_flowers",
+                            "metadata": {}
+                        }
+                    }
+                },
+                {
+                    "Register": {
+                        "AssetDefinition": {
+                            "id": "cabbage#garden_of_live_flowers",
+                            "logo": null,
+                            "metadata": {},
+                            "mintable": "Infinitely",
+                            "spec": {
+                                "scale": null
+                            }
+                        }
+                    }
+                }
+            ],
+            "ivm_triggers": [],
+            "parameters": {
+                "block": {
+                    "max_transactions": 512
+                },
+                "custom": {
+                    "sumeragi_npos_parameters": {
+                        "id": "sumeragi_npos_parameters",
+                        "payload": {
+                            "activation_lag_blocks": 1,
+                            "slashing_delay_blocks": 259200,
+                            "block_time_ms": 1000,
+                            "epoch_length_blocks": 3600,
+                            "evidence_horizon_blocks": 7200,
+                            "k_aggregators": 3,
+                            "max_entity_correlation_pct": 25,
+                            "max_nominator_concentration_pct": 25,
+                            "min_self_bond": 1000,
+                            "redundant_send_r": 2,
+                            "seat_band_pct": 5,
+                            "timeout_aggregator_ms": 120,
+                            "timeout_commit_ms": 150,
+                            "timeout_da_ms": 300,
+                            "timeout_precommit_ms": 250,
+                            "timeout_prevote_ms": 300,
+                            "timeout_propose_ms": 300,
+                            "vrf_commit_window_blocks": 100,
+                            "vrf_reveal_window_blocks": 40
+                        }
+                    }
+                },
+                "executor": {
+                    "execution_depth": 3,
+                    "fuel": 55000000,
+                    "memory": 55000000
+                },
+                "smart_contract": {
+                    "execution_depth": 3,
+                    "fuel": 55000000,
+                    "memory": 55000000
+                },
+                "sumeragi": {
+                    "block_time_ms": 2000,
+                    "collectors_k": 3,
+                    "collectors_redundant_send_r": 2,
+                    "commit_time_ms": 4000,
+                    "da_enabled": false,
+                    "max_clock_drift_ms": 1000
+                },
+                "transaction": {
+                    "ivm_bytecode_size": 4194304,
+                    "max_instructions": 4096,
+                    "max_signatures": 16
+                }
+            },
+            "topology": []
+        },
+        {
+            "instructions": [
+                {
+                    "Mint": {
+                        "Asset": {
+                            "destination": "rose##ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                            "object": "13"
+                        }
+                    }
+                },
+                {
+                    "Mint": {
+                        "Asset": {
+                            "destination": "cabbage#garden_of_live_flowers#ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                            "object": "44"
+                        }
+                    }
+                },
+                {
+                    "Transfer": {
+                        "AssetDefinition": {
+                            "destination": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                            "object": "rose#wonderland",
+                            "source": "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4@genesis"
+                        }
+                    }
+                },
+                {
+                    "Transfer": {
+                        "Domain": {
+                            "destination": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                            "object": "wonderland",
+                            "source": "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4@genesis"
+                        }
+                    }
+                },
+                {
+                    "Grant": {
+                        "Permission": {
+                            "destination": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                            "object": {
+                                "name": "CanSetParameters"
+                            }
+                        }
+                    }
+                },
+                {
+                    "Grant": {
+                        "Permission": {
+                            "destination": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                            "object": {
+                                "name": "CanRegisterDomain"
+                            }
+                        }
+                    }
+                }
+            ],
+            "ivm_triggers": [],
+            "topology": [],
+            "parameters": {
+                "sumeragi": {
+                    "next_mode": "Npos"
+                },
+                "custom": {
+                    "ivm_gas_limit_per_block": {
+                        "id": "ivm_gas_limit_per_block",
+                        "payload": 1680000
+                    }
+                }
+            }
+        }
+    ],
+    "wire_proto_versions": [
+        1
+    ]
+}

@@ -1,24 +1,47 @@
 #!/bin/sh
-# rustup default nightly-2025-05-08
 set -e
 # format checks
+# rustfmt reads edition 2024 from .rustfmt.toml
 cargo fmt --all -- --check
-cargo fmt --manifest-path ./wasm/Cargo.toml --all -- --check
+# guardrails: deny Cargo.lock edits and new workspace crates without approval
+bash ci/check_agents_guardrails.sh
+# guardrails: flag new dependencies without approval
+bash ci/check_dependency_discipline.sh
+# guardrails: block new #[allow(missing_docs)] additions
+bash ci/check_missing_docs_guard.sh
+# guardrails: require tests alongside code changes
+bash ci/check_tests_guard.sh
+# guardrails: require docs/tests/metrics updates when roadmap moves
+bash ci/check_docs_tests_metrics_guard.sh
+# guardrails: prevent silent TODO removal without docs/tests
+bash ci/check_todo_guard.sh
+# guardrails: enforce std-only posture (no wasm/no_std cfgs)
+bash ci/check_std_only.sh
+# roadmap/status sync: require open-work cleanliness and paired status updates
+bash ci/check_status_sync.sh
+# env/config guard: ensure env toggle inventory stays current
+bash ci/check_env_config_surface.sh
+# serde guard: ensure production serde/serde_json usage stays blocked and inventory is fresh
+bash ci/check_serde_guard.sh
+# proc-macro UI guard: run trybuild suites when derive/proc-macro crates change
+# bash ci/check_proc_macro_ui.sh
 # lints
 cargo clippy --workspace --benches --tests --examples --all-features
-cargo clippy --workspace --benches --tests --examples --all-features --manifest-path ./wasm/Cargo.toml
-# TODO: fails, re-enable
-# cargo clippy --workspace --benches --tests --examples --no-default-features
-# update the default genesis
-cargo run --bin kagami -- genesis --creation-time 1970-01-01T00:00:00Z --executor executor.wasm --wasm-dir libs > ./defaults/genesis.json
+# serialization policy guards (deny direct serde/serde_json and ad-hoc AoS/NCB helpers)
+make guards
+# Run clippy under minimal feature set as well; skip Norito binding sync to avoid
+# spurious failures when building outside CI.
+NORITO_SKIP_BINDINGS_SYNC=1 cargo clippy --workspace --benches --tests --examples --no-default-features
+# update the default genesis (no custom executor required); assumes the transaction authority is `iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID`
+cargo run --bin kagami -- genesis generate --ivm-dir . --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4 default > ./defaults/genesis.json
 # update schema
-cargo run --bin kagami -- schema > ./docs/source/references/schema.json
+cargo run --bin kagami -- schema --genesis-out ./docs/source/references/genesis_schema.json > ./docs/source/references/schema.json
 # update command-line help
-cargo run --bin iroha -- markdown-help > ./crates/iroha_cli/CommandLineHelp.md
+cargo run --bin iroha -- tools markdown-help > ./crates/iroha_cli/CommandLineHelp.md
 cargo run --bin kagami -- markdown-help > ./crates/iroha_kagami/CommandLineHelp.md
 # update docker compose files
 cargo run --bin kagami -- swarm -p 1 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.single.yml -F
 cargo run --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.local.yml -F
 cargo run --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev -o ./defaults/docker-compose.yml -F
 # stage updates
-git add ./defaults/genesis.json ./docs/source/references/schema.json ./crates/iroha_cli/CommandLineHelp.md ./defaults/docker-compose.single.yml ./defaults/docker-compose.local.yml ./defaults/docker-compose.yml
+git add ./defaults/genesis.json ./docs/source/references/schema.json ./docs/source/references/genesis_schema.json ./crates/iroha_cli/CommandLineHelp.md ./defaults/docker-compose.single.yml ./defaults/docker-compose.local.yml ./defaults/docker-compose.yml

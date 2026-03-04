@@ -1,0 +1,17 @@
+// Minimal Kotodama example: writes a detail for the current authority
+
+seiyaku Hello {
+  // Optional initializer; many runtimes call this on deploy
+  hajimari() {
+    info("Hello from Kotodama");
+  }
+
+  // Public entrypoint that sets an account detail on the caller
+  kotoage fn write_detail() permission(Admin) {
+    set_account_detail(
+      authority(),
+      name!("example"),
+      json!{ hello: "world" }
+    );
+  }
+}

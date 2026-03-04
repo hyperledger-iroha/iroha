@@ -1,0 +1,18 @@
+// Dynamic take(n) example (requires `kotodama_dynamic_bounds` feature).
+// Demonstrates guarded unrolling: the compiler emits up to K guarded
+// iterations with a runtime check `if (i < n)` to avoid extra body runs.
+// Default K = 2; see README for tuning via CompilerOptions.
+// Dynamic bounds are supported on state maps.
+
+seiyaku DynamicTake {
+  state Entries: Map<int, int>;
+
+  kotoage fn bounded_take_sum(n: int) -> int {
+    let acc = 0;
+    for (k, v) in Entries.take(n) {
+      // sum values deterministically
+      acc = acc + v;
+    }
+    return acc;
+  }
+}

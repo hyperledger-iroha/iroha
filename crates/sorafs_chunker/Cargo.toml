@@ -1,0 +1,13 @@
+[package]
+name = "sorafs_chunker"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Deterministic content-defined chunking primitives for SoraFS."
+
+[dependencies]
+sha3 = "0.10.8"
+blake3 = "1.8.2"
+norito = { workspace = true }
+iroha_crypto = { workspace = true }
+hex = "0.4.3"

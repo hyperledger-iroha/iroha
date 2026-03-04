@@ -1,0 +1,160 @@
+//! Golden test for the ABI syscall list ordering and contents.
+//! If you intentionally add/remove syscalls, update this list accordingly.
+
+#[test]
+fn abi_syscall_list_matches_golden() {
+    use ivm::syscalls as S;
+
+    // Keep the ordering sorted by canonical syscall number.
+    let golden: &[u32] = &[
+        S::SYSCALL_DEBUG_PRINT,
+        S::SYSCALL_EXIT,
+        S::SYSCALL_ABORT,
+        S::SYSCALL_DEBUG_LOG,
+        S::SYSCALL_REGISTER_DOMAIN,
+        S::SYSCALL_UNREGISTER_DOMAIN,
+        S::SYSCALL_TRANSFER_DOMAIN,
+        S::SYSCALL_REGISTER_ACCOUNT,
+        S::SYSCALL_UNREGISTER_ACCOUNT,
+        S::SYSCALL_REGISTER_PEER,
+        S::SYSCALL_UNREGISTER_PEER,
+        S::SYSCALL_ADD_SIGNATORY,
+        S::SYSCALL_REMOVE_SIGNATORY,
+        S::SYSCALL_SET_ACCOUNT_QUORUM,
+        S::SYSCALL_SET_ACCOUNT_DETAIL,
+        S::SYSCALL_REGISTER_ASSET,
+        S::SYSCALL_UNREGISTER_ASSET,
+        S::SYSCALL_MINT_ASSET,
+        S::SYSCALL_BURN_ASSET,
+        S::SYSCALL_TRANSFER_ASSET,
+        S::SYSCALL_NFT_MINT_ASSET,
+        S::SYSCALL_NFT_TRANSFER_ASSET,
+        S::SYSCALL_NFT_SET_METADATA,
+        S::SYSCALL_NFT_BURN_ASSET,
+        S::SYSCALL_TRANSFER_V1_BATCH_BEGIN,
+        S::SYSCALL_TRANSFER_V1_BATCH_END,
+        S::SYSCALL_TRANSFER_V1_BATCH_APPLY,
+        S::SYSCALL_CREATE_ROLE,
+        S::SYSCALL_DELETE_ROLE,
+        S::SYSCALL_GRANT_ROLE,
+        S::SYSCALL_REVOKE_ROLE,
+        S::SYSCALL_GRANT_PERMISSION,
+        S::SYSCALL_REVOKE_PERMISSION,
+        S::SYSCALL_CREATE_TRIGGER,
+        S::SYSCALL_REMOVE_TRIGGER,
+        S::SYSCALL_SET_TRIGGER_ENABLED,
+        S::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE,
+        S::SYSCALL_REMOVE_SMART_CONTRACT_BYTES,
+        S::SYSCALL_REGISTER_SMART_CONTRACT_CODE,
+        S::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+        S::SYSCALL_ACTIVATE_CONTRACT_INSTANCE,
+        S::SYSCALL_STATE_GET,
+        S::SYSCALL_STATE_SET,
+        S::SYSCALL_STATE_DEL,
+        S::SYSCALL_DECODE_INT,
+        S::SYSCALL_BUILD_PATH_MAP_KEY,
+        S::SYSCALL_ENCODE_INT,
+        S::SYSCALL_BUILD_PATH_KEY_NORITO,
+        S::SYSCALL_JSON_ENCODE,
+        S::SYSCALL_JSON_DECODE,
+        S::SYSCALL_SCHEMA_ENCODE,
+        S::SYSCALL_SCHEMA_DECODE,
+        S::SYSCALL_SCHEMA_INFO,
+        S::SYSCALL_NAME_DECODE,
+        S::SYSCALL_POINTER_TO_NORITO,
+        S::SYSCALL_POINTER_FROM_NORITO,
+        S::SYSCALL_TLV_EQ,
+        S::SYSCALL_ZK_VERIFY_TRANSFER,
+        S::SYSCALL_ZK_VERIFY_UNSHIELD,
+        S::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
+        S::SYSCALL_ZK_VOTE_VERIFY_TALLY,
+        S::SYSCALL_ZK_ROOTS_GET,
+        S::SYSCALL_ZK_VOTE_GET_TALLY,
+        S::SYSCALL_VRF_VERIFY,
+        S::SYSCALL_VRF_VERIFY_BATCH,
+        S::SYSCALL_ZK_VERIFY_BATCH,
+        S::SYSCALL_NUMERIC_FROM_INT,
+        S::SYSCALL_NUMERIC_TO_INT,
+        S::SYSCALL_NUMERIC_ADD,
+        S::SYSCALL_NUMERIC_SUB,
+        S::SYSCALL_NUMERIC_MUL,
+        S::SYSCALL_NUMERIC_DIV,
+        S::SYSCALL_NUMERIC_REM,
+        S::SYSCALL_NUMERIC_NEG,
+        S::SYSCALL_NUMERIC_EQ,
+        S::SYSCALL_NUMERIC_NE,
+        S::SYSCALL_NUMERIC_LT,
+        S::SYSCALL_NUMERIC_LE,
+        S::SYSCALL_NUMERIC_GT,
+        S::SYSCALL_NUMERIC_GE,
+        S::SYSCALL_TLV_LEN,
+        S::SYSCALL_JSON_GET_I64,
+        S::SYSCALL_JSON_GET_JSON,
+        S::SYSCALL_JSON_GET_NAME,
+        S::SYSCALL_JSON_GET_ACCOUNT_ID,
+        S::SYSCALL_JSON_GET_NFT_ID,
+        S::SYSCALL_JSON_GET_BLOB_HEX,
+        S::SYSCALL_VRF_EPOCH_SEED,
+        S::SYSCALL_SM3_HASH,
+        S::SYSCALL_SM2_VERIFY,
+        S::SYSCALL_SM4_GCM_SEAL,
+        S::SYSCALL_SM4_GCM_OPEN,
+        S::SYSCALL_SM4_CCM_SEAL,
+        S::SYSCALL_SM4_CCM_OPEN,
+        S::SYSCALL_SHA256_HASH,
+        S::SYSCALL_SHA3_HASH,
+        S::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+        S::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY,
+        S::SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
+        S::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH,
+        S::SYSCALL_GET_AUTHORITY,
+        S::SYSCALL_SUBSCRIPTION_BILL,
+        S::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+        S::SYSCALL_AXT_BEGIN,
+        S::SYSCALL_AXT_TOUCH,
+        S::SYSCALL_AXT_COMMIT,
+        S::SYSCALL_VERIFY_DS_PROOF,
+        S::SYSCALL_USE_ASSET_HANDLE,
+        S::SYSCALL_INPUT_PUBLISH_TLV,
+        S::SYSCALL_ALLOC,
+        S::SYSCALL_GET_PUBLIC_INPUT,
+        S::SYSCALL_PROVE_EXECUTION,
+        S::SYSCALL_GROW_HEAP,
+        S::SYSCALL_VERIFY_PROOF,
+        S::SYSCALL_GET_MERKLE_PATH,
+        S::SYSCALL_GET_ACCOUNT_BALANCE,
+        S::SYSCALL_GET_MERKLE_COMPACT,
+        S::SYSCALL_USE_NULLIFIER,
+        S::SYSCALL_VERIFY_SIGNATURE,
+        S::SYSCALL_GET_PRIVATE_INPUT,
+        S::SYSCALL_COMMIT_OUTPUT,
+        S::SYSCALL_GET_REGISTER_MERKLE_COMPACT,
+    ];
+
+    let actual = ivm::syscalls::abi_syscall_list();
+    assert_strictly_increasing(actual);
+    assert_eq!(
+        actual.len(),
+        golden.len(),
+        "ABI syscall list size changed ({} vs {}).",
+        actual.len(),
+        golden.len()
+    );
+    assert_eq!(
+        actual, golden,
+        "ABI syscall list changed; update the golden list if intentional."
+    );
+    // Sanity: the function is also referenced via constants to ensure names are in scope
+    assert!(golden.contains(&S::SYSCALL_EXIT));
+}
+
+fn assert_strictly_increasing(values: &[u32]) {
+    for window in values.windows(2) {
+        if let [prev, next] = window {
+            assert!(
+                prev < next,
+                "abi_syscall_list must be sorted and deduplicated; found {prev:#x} then {next:#x}"
+            );
+        }
+    }
+}

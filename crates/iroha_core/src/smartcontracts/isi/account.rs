@@ -14,8 +14,8 @@ use super::prelude::*;
 /// - Revoke permissions or roles
 pub mod isi {
     use iroha_data_model::isi::{
-        error::{MintabilityError, RepetitionError},
         InstructionType,
+        error::{MintabilityError, RepetitionError},
     };
 
     use super::*;
@@ -38,11 +38,11 @@ pub mod isi {
 
             let asset_definition = state_transaction.world.asset_definition_mut(&object)?;
 
-            if asset_definition.owned_by != source {
+            if asset_definition.owned_by() != &source {
                 return Err(Error::Find(FindError::Account(source)));
             }
 
-            asset_definition.owned_by = destination.clone();
+            asset_definition.set_owned_by(destination.clone());
             state_transaction
                 .world
                 .emit_events(Some(AssetDefinitionEvent::OwnerChanged(
@@ -63,24 +63,34 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let account_id = self.object;
+            // Destructure to move key/value once; avoid duplicate clones.
+            let SetKeyValue {
+                object: account_id,
+                key,
+                value,
+            } = self;
+            // Enforce metadata value size limit (custom parameter or default)
+            crate::smartcontracts::limits::enforce_json_size(
+                state_transaction,
+                &value,
+                "max_metadata_value_bytes",
+                crate::smartcontracts::limits::DEFAULT_JSON_LIMIT,
+            )?;
 
+            // Insert into account metadata; move key/value into the map directly.
             state_transaction
                 .world
                 .account_mut(&account_id)
                 .map_err(Error::from)
-                .map(|account| {
-                    account
-                        .metadata
-                        .insert(self.key.clone(), self.value.clone())
-                })?;
+                .map(|account| account.insert(key.clone(), value.clone()))?;
 
+            // Emit event with a single extra clone from inserted value.
             state_transaction
                 .world
                 .emit_events(Some(AccountEvent::MetadataInserted(MetadataChanged {
                     target: account_id,
-                    key: self.key,
-                    value: self.value,
+                    key,
+                    value,
                 })));
 
             Ok(())
@@ -94,29 +104,30 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let account_id = self.object;
+            let account_id = self.object().clone();
 
             let value = state_transaction
                 .world
                 .account_mut(&account_id)
                 .and_then(|account| {
                     account
-                        .metadata
-                        .remove(&self.key)
-                        .ok_or_else(|| FindError::MetadataKey(self.key.clone()))
+                        .remove(self.key())
+                        .ok_or_else(|| FindError::MetadataKey(self.key().clone()))
                 })?;
 
             state_transaction
                 .world
                 .emit_events(Some(AccountEvent::MetadataRemoved(MetadataChanged {
                     target: account_id,
-                    key: self.key,
+                    key: self.key().clone(),
                     value,
                 })));
 
             Ok(())
         }
     }
+
+    // centralized in smartcontracts::limits
 
     impl Execute for Grant<Permission, Account> {
         #[metrics(+"grant_account_permission")]
@@ -125,8 +136,8 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let account_id = self.destination;
-            let permission = self.object;
+            let account_id = self.destination().clone();
+            let permission = self.object().clone();
 
             // Check if account exists
             state_transaction.world.account_mut(&account_id)?;
@@ -150,10 +161,12 @@ pub mod isi {
                 .world
                 .emit_events(Some(AccountEvent::PermissionAdded(
                     AccountPermissionChanged {
-                        account: account_id,
+                        account: account_id.clone(),
                         permission,
                     },
                 )));
+
+            state_transaction.invalidate_permission_cache_for_account(&account_id);
 
             Ok(())
         }
@@ -166,8 +179,8 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let account_id = self.destination;
-            let permission = self.object;
+            let account_id = self.destination().clone();
+            let permission = self.object().clone();
 
             // Check if account exists
             state_transaction.world.account(&account_id)?;
@@ -183,10 +196,12 @@ pub mod isi {
                 .world
                 .emit_events(Some(AccountEvent::PermissionRemoved(
                     AccountPermissionChanged {
-                        account: account_id,
+                        account: account_id.clone(),
                         permission,
                     },
                 )));
+
+            state_transaction.invalidate_permission_cache_for_account(&account_id);
 
             Ok(())
         }
@@ -199,8 +214,8 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let account_id = self.destination;
-            let role_id = self.object;
+            let account_id = self.destination().clone();
+            let role_id = self.object().clone();
 
             state_transaction.world.role(&role_id)?;
             state_transaction.world.account(&account_id)?;
@@ -228,6 +243,8 @@ pub mod isi {
                     role: role_id,
                 })));
 
+            state_transaction.invalidate_permission_cache_for_account(&account_id);
+
             Ok(())
         }
     }
@@ -239,8 +256,8 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let account_id = self.destination;
-            let role_id = self.object;
+            let account_id = self.destination().clone();
+            let role_id = self.object().clone();
 
             if state_transaction
                 .world
@@ -261,6 +278,8 @@ pub mod isi {
                     role: role_id,
                 })));
 
+            state_transaction.invalidate_permission_cache_for_account(&account_id);
+
             Ok(())
         }
     }
@@ -271,8 +290,8 @@ pub mod isi {
     /// If the [`AssetDefinition`] is not `Mintable::Once`.
     #[inline]
     pub fn forbid_minting(definition: &mut AssetDefinition) -> Result<(), MintabilityError> {
-        if definition.mintable == Mintable::Once {
-            definition.mintable = Mintable::Not;
+        if definition.mintable() == Mintable::Once {
+            definition.set_mintable(Mintable::Not);
             Ok(())
         } else {
             Err(MintabilityError::ForbidMintOnMintable)
@@ -281,7 +300,7 @@ pub mod isi {
 
     #[cfg(test)]
     mod test {
-        use iroha_data_model::{prelude::AssetDefinition, ParseError};
+        use iroha_data_model::{error::ParseError, prelude::AssetDefinition};
         use iroha_test_samples::gen_account_in;
 
         use crate::smartcontracts::isi::Registrable as _;
@@ -303,7 +322,10 @@ pub mod query {
     use iroha_data_model::{
         account::Account,
         permission::Permission,
-        query::{dsl::CompoundPredicate, error::QueryExecutionFail as Error},
+        query::{
+            dsl::{CompoundPredicate, EvaluatePredicate},
+            error::QueryExecutionFail as Error,
+        },
     };
 
     use super::*;
@@ -316,7 +338,7 @@ pub mod query {
             filter: CompoundPredicate<RoleId>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = RoleId>, Error> {
-            let account_id = &self.id;
+            let account_id = self.account_id();
             state_ro.world().account(account_id)?;
             Ok(state_ro
                 .world()
@@ -333,7 +355,7 @@ pub mod query {
             filter: CompoundPredicate<Permission>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = Permission>, Error> {
-            let account_id = &self.id;
+            let account_id = self.account_id();
             Ok(state_ro
                 .world()
                 .account_permissions_iter(account_id)?
@@ -349,11 +371,17 @@ pub mod query {
             filter: CompoundPredicate<Account>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = Account>, Error> {
-            Ok(state_ro
-                .world()
-                .accounts_iter()
-                .filter(move |account| filter.applies_to_entry(account))
-                .map(|account| account.to_owned()))
+            Ok(state_ro.world().accounts_iter().filter_map(move |entry| {
+                let details = entry.value().clone().into_inner();
+                let account = Account {
+                    id: entry.id().clone(),
+                    metadata: details.metadata,
+                    label: details.label,
+                    uaid: details.uaid,
+                    opaque_ids: details.opaque_ids,
+                };
+                filter.applies(&account).then_some(account)
+            }))
         }
     }
 
@@ -364,24 +392,219 @@ pub mod query {
             filter: CompoundPredicate<Account>,
             state_ro: &impl StateReadOnly,
         ) -> std::result::Result<impl Iterator<Item = Account>, Error> {
-            let asset_definition_id = self.asset_definition.clone();
-            iroha_logger::trace!(%asset_definition_id);
+            let asset_definition_id = self.asset_definition_id().clone();
 
-            Ok(state_ro
-                .world()
-                .accounts_iter()
-                .filter(move |account| {
-                    state_ro
-                        .world()
-                        .assets()
-                        .get(&AssetId::new(
-                            asset_definition_id.clone(),
-                            account.id().clone(),
-                        ))
-                        .is_some()
-                })
-                .filter(move |account| filter.applies_to_entry(account))
-                .map(|account| account.to_owned()))
+            trace!(%asset_definition_id);
+
+            Ok(state_ro.world().accounts_iter().filter_map(move |entry| {
+                let has_balance = state_ro
+                    .world()
+                    .assets()
+                    .get(&AssetId::new(
+                        asset_definition_id.clone(),
+                        entry.id().clone(),
+                    ))
+                    // Skip zero-valued placeholders (including genesis seeds).
+                    .is_some_and(|amount| !(**amount).is_zero());
+
+                if !has_balance {
+                    return None;
+                }
+                let details = entry.value().clone().into_inner();
+                let account = Account {
+                    id: entry.id().clone(),
+                    metadata: details.metadata,
+                    label: details.label,
+                    uaid: details.uaid,
+                    opaque_ids: details.opaque_ids,
+                };
+                filter.applies(&account).then_some(account)
+            }))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use core::num::NonZeroU64;
+
+        use iroha_primitives::json::Json;
+        use iroha_test_samples::{ALICE_ID, gen_account_in};
+
+        use super::*;
+        use crate::{
+            block::ValidBlock,
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{State, World},
+        };
+
+        fn new_dummy_block() -> crate::block::CommittedBlock {
+            let (leader_public_key, leader_private_key) =
+                iroha_crypto::KeyPair::random().into_parts();
+            let peer_id = crate::PeerId::new(leader_public_key);
+            let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
+            ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
+                h.set_height(NonZeroU64::new(1).unwrap());
+            })
+            .commit(&topology)
+            .unpack(|_| {})
+            .unwrap()
+        }
+
+        #[test]
+        fn find_accounts_with_asset_ignores_zero_holdings() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            // Setup domain and two accounts
+            let domain_id: DomainId = "wonderland".parse().unwrap();
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("wonderland");
+            Register::account(Account::new(acc1.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(acc2.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            // Register asset definition and mint zero to acc1, one to acc2
+            let ad: AssetDefinitionId = "test_coin#wonderland".parse().unwrap();
+            Register::asset_definition(AssetDefinition::numeric(ad.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            let a1 = AssetId::new(ad.clone(), acc1.clone());
+            let a2 = AssetId::new(ad.clone(), acc2.clone());
+            // minting zero yields an asset entry with zero quantity
+            Mint::asset_numeric(Numeric::zero(), a1)
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Mint::asset_numeric(1u32, a2)
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            // Query should only return acc2
+            let view = state.view();
+            let results: Vec<_> = FindAccountsWithAsset::new(ad)
+                .execute(CompoundPredicate::PASS, &view)
+                .unwrap()
+                .map(|a| a.id)
+                .collect();
+            assert_eq!(results, vec![acc2]);
+        }
+
+        #[test]
+        fn find_accounts_applies_predicate() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let domain_id: DomainId = "wonderland".parse().unwrap();
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("wonderland");
+            Register::account(Account::new(acc1.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(acc2.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let tier_key: Name = "tier".parse().unwrap();
+            SetKeyValue::account(acc1.clone(), tier_key.clone(), Json::from("gold"))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            SetKeyValue::account(acc2.clone(), tier_key, Json::from("silver"))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate =
+                CompoundPredicate::<Account>::build(|p| p.equals("metadata.tier", "gold"));
+            let results: Vec<_> = FindAccounts
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+            assert_eq!(results, vec![acc1]);
+        }
+
+        #[test]
+        fn find_accounts_with_asset_applies_predicate() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let domain_id: DomainId = "wonderland".parse().unwrap();
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("wonderland");
+            Register::account(Account::new(acc1.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(acc2.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let ad: AssetDefinitionId = "test_coin#wonderland".parse().unwrap();
+            Register::asset_definition(AssetDefinition::numeric(ad.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc1.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc2.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let tier_key: Name = "tier".parse().unwrap();
+            SetKeyValue::account(acc1.clone(), tier_key.clone(), Json::from("gold"))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            SetKeyValue::account(acc2.clone(), tier_key, Json::from("silver"))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate =
+                CompoundPredicate::<Account>::build(|p| p.equals("metadata.tier", "gold"));
+            let results: Vec<_> = FindAccountsWithAsset::new(ad)
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+            assert_eq!(results, vec![acc1]);
         }
     }
 }

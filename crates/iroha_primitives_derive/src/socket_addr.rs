@@ -3,7 +3,7 @@ use std::net;
 use manyhow::Result;
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::quote;
-use syn::{bracketed, parse::ParseStream, Token};
+use syn::{Token, bracketed, parse::ParseStream};
 
 /// Stringify [`TokenStream`], without inserting any spaces in between
 fn stringify_tokens(tokens: TokenStream) -> String {
@@ -54,7 +54,7 @@ impl IpAddress {
             while let Some((tt, next)) = rest.token_tree() {
                 match tt {
                     TokenTree::Punct(punct) if punct.as_char() == ':' => {
-                        return Ok((IpAddress::IPv4 { ip_tokens }, rest))
+                        return Ok((IpAddress::IPv4 { ip_tokens }, rest));
                     }
                     other => {
                         ip_tokens.extend([other]);

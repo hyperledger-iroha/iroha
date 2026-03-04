@@ -1,6 +1,9 @@
-#![allow(missing_docs)]
+//! Tests covering the `EventSet` derive macro behaviour.
+
+#![allow(unexpected_cfgs)]
 mod events {
     use iroha_data_model_derive::EventSet;
+    /// Test event enumeration used with the `EventSet` derive.
     #[derive(EventSet)]
     pub enum TestEvent {
         Event1,
@@ -8,58 +11,63 @@ mod events {
         NestedEvent(AnotherEvent),
     }
 
+    /// Dummy nested event type used in the tests.
     pub struct AnotherEvent;
 }
 
 use events::{AnotherEvent, TestEvent, TestEventSet};
-use serde_json::json;
+use norito::json::{self, Value};
+
+fn array(strings: &[&str]) -> Value {
+    json::array(strings.iter().copied()).expect("serialize string array")
+}
 
 #[test]
 fn serialize() {
     assert_eq!(
-        serde_json::to_value(TestEventSet::Event1).unwrap(),
-        json!(["Event1"])
+        norito::json::to_value(&TestEventSet::Event1).unwrap(),
+        array(&["Event1"])
     );
     assert_eq!(
-        serde_json::to_value(TestEventSet::Event1 | TestEventSet::Event2).unwrap(),
-        json!(["Event1", "Event2"])
+        norito::json::to_value(&(TestEventSet::Event1 | TestEventSet::Event2)).unwrap(),
+        array(&["Event1", "Event2"])
     );
     assert_eq!(
-        serde_json::to_value(TestEventSet::Event1 | TestEventSet::AnyNestedEvent).unwrap(),
-        json!(["Event1", "AnyNestedEvent"])
+        norito::json::to_value(&(TestEventSet::Event1 | TestEventSet::AnyNestedEvent)).unwrap(),
+        array(&["Event1", "AnyNestedEvent"])
     );
     assert_eq!(
-        serde_json::to_value(TestEventSet::all()).unwrap(),
-        json!(["Event1", "Event2", "AnyNestedEvent"])
+        norito::json::to_value(&TestEventSet::all()).unwrap(),
+        array(&["Event1", "Event2", "AnyNestedEvent"])
     );
 }
 
 #[test]
 fn deserialize() {
     assert_eq!(
-        serde_json::from_value::<TestEventSet>(json!([])).unwrap(),
+        norito::json::from_value::<TestEventSet>(array(&[])).unwrap(),
         TestEventSet::empty()
     );
     assert_eq!(
-        serde_json::from_value::<TestEventSet>(json!(["Event1"])).unwrap(),
+        norito::json::from_value::<TestEventSet>(array(&["Event1"])).unwrap(),
         TestEventSet::Event1
     );
     assert_eq!(
-        serde_json::from_value::<TestEventSet>(json!(["Event1", "Event2"])).unwrap(),
+        norito::json::from_value::<TestEventSet>(array(&["Event1", "Event2"])).unwrap(),
         TestEventSet::Event1 | TestEventSet::Event2
     );
     assert_eq!(
-        serde_json::from_value::<TestEventSet>(json!(["Event1", "AnyNestedEvent"])).unwrap(),
+        norito::json::from_value::<TestEventSet>(array(&["Event1", "AnyNestedEvent"])).unwrap(),
         TestEventSet::Event1 | TestEventSet::AnyNestedEvent
     );
     assert_eq!(
-        serde_json::from_value::<TestEventSet>(json!(["Event1", "Event2", "AnyNestedEvent"]))
+        norito::json::from_value::<TestEventSet>(array(&["Event1", "Event2", "AnyNestedEvent"]))
             .unwrap(),
         TestEventSet::all(),
     );
 
     assert_eq!(
-        serde_json::from_value::<TestEventSet>(json!(["Event1", "Event1", "AnyNestedEvent"]))
+        norito::json::from_value::<TestEventSet>(array(&["Event1", "Event1", "AnyNestedEvent"]))
             .unwrap(),
         TestEventSet::Event1 | TestEventSet::AnyNestedEvent,
     );
@@ -68,28 +76,30 @@ fn deserialize() {
 #[test]
 fn deserialize_invalid() {
     assert_eq!(
-        serde_json::from_value::<TestEventSet>(json!(32))
+        norito::json::from_value::<TestEventSet>(json::to_value(&32).unwrap())
             .unwrap_err()
             .to_string(),
         "invalid type: integer `32`, expected a sequence of strings"
     );
 
     assert_eq!(
-        serde_json::from_value::<TestEventSet>(json!([32]))
-            .unwrap_err()
-            .to_string(),
+        norito::json::from_value::<TestEventSet>(
+            json::array([32]).expect("serialize integer array"),
+        )
+        .unwrap_err()
+        .to_string(),
         "invalid type: integer `32`, expected a string"
     );
 
     assert_eq!(
-        serde_json::from_value::<TestEventSet>(json!(["InvalidVariant"]))
+        norito::json::from_value::<TestEventSet>(array(&["InvalidVariant"]))
             .unwrap_err()
             .to_string(),
         "unknown event variant `InvalidVariant`, expected one of `Event1`, `Event2`, `AnyNestedEvent`"
     );
 
     assert_eq!(
-        serde_json::from_value::<TestEventSet>(json!(["Event1", "Event1", "InvalidVariant"]))
+        norito::json::from_value::<TestEventSet>(array(&["Event1", "Event1", "InvalidVariant"]),)
             .unwrap_err()
             .to_string(),
         "unknown event variant `InvalidVariant`, expected one of `Event1`, `Event2`, `AnyNestedEvent`"

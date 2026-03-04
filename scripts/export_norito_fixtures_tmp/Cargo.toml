@@ -1,0 +1,33 @@
+[package]
+name = "export_norito_fixtures"
+version = "0.1.0"
+edition = "2024"
+publish = false
+default-run = "export_norito_fixtures"
+
+[features]
+default = []
+kaigi-fixtures = []
+
+[dependencies]
+anyhow = "1.0.100"
+base64 = { version = "0.22.1", default-features = false, features = ["std"] }
+clap = { version = "4.5.51", features = ["derive"] }
+hex = { version = "0.4.3", default-features = false }
+iroha_crypto = { path = "../../crates/iroha_crypto", default-features = false, features = ["std"] }
+iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["json", "governance", "transparent_api"] }
+norito = { path = "../../crates/norito", features = ["json"] }
+time = { version = "0.3.44", default-features = false, features = ["std", "macros", "formatting"] }
+iroha_schema = { path = "../../crates/iroha_schema" }
+iroha_primitives = { path = "../../crates/iroha_primitives" }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+
+[workspace]
+
+[patch.crates-io]
+halo2-axiom = { path = "../../vendor/halo2-axiom" }
+halo2curves-axiom = { path = "../../vendor/halo2curves-axiom" }
+find_cuda_helper = { path = "../../vendor/find_cuda_helper" }
+#streebog = { path = "../../vendor/streebog" }
+#opus = { path = "../../vendor/opus_stub" }
+#icrate = { path = "../../vendor/icrate" }

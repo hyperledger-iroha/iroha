@@ -1,42 +1,64 @@
 [package]
 name = "integration_tests"
-edition = "2021"
+version.workspace = true
+edition = "2024"
 
 [lints]
 workspace = true
 
-[dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+[[bin]]
+name = "sorafs-gateway-fixtures"
+path = "src/bin/sorafs_gateway_fixtures.rs"
 
+[features]
+default = ["telemetry"]
+fault_injection = []
+telemetry = ["iroha_core/telemetry"]
+norito_streaming_fec = ["reed-solomon-erasure"]
+js_host_parity = []
+zk-stark = ["iroha_core/zk-stark", "iroha_torii/zk-stark"]
+
+[dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+eyre = { workspace = true }
+iroha_test_network = { workspace = true }
+reed-solomon-erasure = { version = "6", default-features = false, features = ["std"], optional = true }
+iroha_data_model = { workspace = true, features = ["http", "fast_dsl", "governance", "json"] }
+iroha_crypto = { workspace = true }
+iroha_torii = { workspace = true }
+norito = { workspace = true }
+sorafs_car = { workspace = true, features = ["manifest"] }
+sorafs_manifest = { workspace = true }
+blake3 = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+rand_chacha = "0.9.0"
+iroha = { workspace = true }
+
+[dev-dependencies]
 iroha_logger = { workspace = true }
 iroha_config = { workspace = true }
 iroha_config_base = { workspace = true }
-iroha_genesis = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_telemetry = { workspace = true }
-iroha_data_model = { workspace = true, features = ["http", "fault_injection"] }
 iroha_executor_data_model = { workspace = true }
+ivm = { workspace = true }
+base64 = { workspace = true }
 
-eyre = { workspace = true }
-rand = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
 toml = { workspace = true }
-derive_more = { workspace = true }
-parity-scale-codec = { workspace = true, default-features = false, features = ["derive"] }
-futures-util = "0.3.30"
+futures-util = "0.3.31"
 nonzero_ext = { workspace = true }
-iroha = { workspace = true }
 iroha_test_samples = { workspace = true }
-iroha_test_network = { workspace = true }
+iroha_genesis = { workspace = true }
+iroha_core = { workspace = true, features = ["quic", "iroha-core-tests"] }
+iroha_p2p = { workspace = true, features = ["quic"] }
 tracing = { workspace = true }
+sha2 = "0.10.9"
 
 mint_rose_trigger_data_model = { path = "../data_model/samples/mint_rose_trigger_data_model" }
 executor_custom_data_model = { path = "../data_model/samples/executor_custom_data_model" }
 
-reqwest = { version = "0.12.7", features = ["json"] }
-hex = { workspace = true }
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 assert_matches = "1.5.0"
-expect-test = { workspace = true }
 tempfile = { workspace = true }
-ascii_table = "=4.0.5" # note: 4.0.6 requires edition 2024
+ascii_table = "=5.0.0" # pinned for edition/format stability

@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://iroha.example.com/schemas/ios_metrics.schema.json",
+  "title": "Swift SDK Dashboard Feeds",
+  "description": "Schema for mobile_parity and mobile_ci JSON feeds consumed by the Swift dashboards.",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/definitions/mobile_parity" },
+    { "$ref": "#/definitions/mobile_ci" }
+  ],
+  "definitions": {
+    "isoTimestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "mobile_parity": {
+      "type": "object",
+      "required": ["generated_at", "fixtures", "pipeline", "regen_sla", "alerts"],
+      "properties": {
+        "generated_at": { "$ref": "#/definitions/isoTimestamp" },
+        "fixtures": {
+          "type": "object",
+          "required": ["outstanding_diffs", "oldest_diff_hours", "details"],
+          "properties": {
+            "outstanding_diffs": { "type": "integer", "minimum": 0 },
+            "oldest_diff_hours": { "type": "number", "minimum": 0 },
+            "details": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["instruction", "age_hours", "owner"],
+                "properties": {
+                  "instruction": { "type": "string" },
+                  "age_hours": { "type": "number", "minimum": 0 },
+                  "owner": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "pipeline": {
+          "type": "object",
+          "required": ["last_run", "status", "failed_tests"],
+          "properties": {
+            "last_run": { "oneOf": [ { "$ref": "#/definitions/isoTimestamp" }, { "type": "null" } ] },
+            "status": { "type": "string" },
+            "failed_tests": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "regen_sla": {
+          "type": "object",
+          "required": ["last_success", "hours_since_success", "breach"],
+          "properties": {
+            "last_success": { "oneOf": [ { "$ref": "#/definitions/isoTimestamp" }, { "type": "null" } ] },
+            "hours_since_success": { "type": "number", "minimum": 0 },
+            "breach": { "type": "boolean" }
+          }
+        },
+        "acceleration": {
+          "type": "object",
+          "properties": {
+            "metal": { "$ref": "#/definitions/accel_backend" },
+            "neon": { "$ref": "#/definitions/accel_backend" },
+            "strongbox": { "$ref": "#/definitions/accel_backend" }
+          },
+          "additionalProperties": false
+        },
+        "telemetry": { "$ref": "#/definitions/telemetry_summary" },
+        "alerts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["message"],
+            "properties": {
+              "message": { "type": "string" },
+              "severity": { "type": "string" }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "mobile_ci": {
+      "type": "object",
+      "required": ["generated_at", "buildkite", "devices", "alert_state"],
+      "properties": {
+        "generated_at": { "$ref": "#/definitions/isoTimestamp" },
+        "buildkite": {
+          "type": "object",
+          "required": ["lanes", "queue_depth", "average_runtime_minutes"],
+          "properties": {
+            "lanes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["name", "success_rate_14_runs", "last_failure", "flake_count", "mttr_hours"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "success_rate_14_runs": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "last_failure": { "oneOf": [ { "$ref": "#/definitions/isoTimestamp" }, { "type": "null" } ] },
+                  "flake_count": { "type": "integer", "minimum": 0 },
+                  "mttr_hours": { "type": "number", "minimum": 0 },
+                  "device_tag": { "type": "string" }
+                }
+              }
+            },
+            "queue_depth": { "type": "integer", "minimum": 0 },
+            "average_runtime_minutes": { "type": "number", "minimum": 0 }
+          }
+        },
+        "devices": {
+          "type": "object",
+          "required": ["emulators", "strongbox_capable"],
+          "properties": {
+            "emulators": { "$ref": "#/definitions/device_group" },
+            "strongbox_capable": { "$ref": "#/definitions/device_group" }
+          }
+        },
+        "acceleration_bench": {
+          "type": "object",
+          "properties": {
+            "metal_vs_cpu_merkle_ms": {
+              "type": "object",
+              "required": ["cpu", "metal"],
+              "properties": {
+                "cpu": { "type": "number", "minimum": 0 },
+                "metal": { "type": "number", "minimum": 0 }
+              }
+            },
+            "neon_crc64_throughput_mb_s": { "type": "number", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "alert_state": {
+          "type": "object",
+          "required": ["consecutive_failures", "open_incidents"],
+          "properties": {
+            "consecutive_failures": { "type": "integer", "minimum": 0 },
+            "open_incidents": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "accel_backend": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "parity": { "type": "string" },
+        "perf_delta_pct": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "telemetry_summary": {
+      "type": "object",
+      "properties": {
+        "salt_epoch": { "type": ["string", "null"] },
+        "salt_rotation_age_hours": { "type": ["number", "null"], "minimum": 0 },
+        "overrides_open": { "type": ["integer", "null"], "minimum": 0 },
+        "device_profile_alignment": { "type": ["string", "null"] },
+        "schema_version": { "type": ["string", "null"] },
+        "schema_policy_violation_count": { "type": ["integer", "null"], "minimum": 0 },
+        "schema_policy_violations": {
+          "type": ["array", "null"],
+          "items": { "type": "string" }
+        },
+        "connect_metrics_present": { "type": ["boolean", "null"] },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "device_group": {
+      "type": "object",
+      "required": ["passes", "failures"],
+      "properties": {
+        "passes": { "type": "integer", "minimum": 0 },
+        "failures": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

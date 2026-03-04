@@ -1,0 +1,6 @@
+// Create one NFT per known account (snapshot-based convenience).
+seiyaku CreateNftForEveryUser {
+  kotoage fn run() {
+    create_nfts_for_all_users();
+  }
+}

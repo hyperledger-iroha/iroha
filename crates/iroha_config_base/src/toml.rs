@@ -5,15 +5,18 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    convert::TryFrom,
     fs::File,
     io::Read,
     path::{Path, PathBuf},
 };
 
-use error_stack::ResultExt;
-use serde::Serialize;
+use error_stack::{Report, ResultExt};
+use norito::json::{self, Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use thiserror::Error;
 use toml::Table;
+
+type Result<T, E> = core::result::Result<T, Report<E>>;
 
 use crate::ParameterId;
 
@@ -26,10 +29,11 @@ pub struct TomlSource {
 
 /// Error of [`TomlSource::from_file`]
 #[derive(Error, Debug, Copy, Clone)]
-#[allow(missing_docs)]
 pub enum FromFileError {
+    /// File system error while opening or reading the file.
     #[error("File system error")]
     Read,
+    /// Error while deserializing file contents as TOML.
     #[error("Error while deserializing file contents as TOML")]
     Parse,
 }
@@ -44,7 +48,7 @@ impl TomlSource {
     ///
     /// # Errors
     /// If a file system or a TOML parsing error occurs.
-    pub fn from_file<P: AsRef<Path>>(path: P) -> error_stack::Result<Self, FromFileError> {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, FromFileError> {
         let path = path.as_ref().to_path_buf();
 
         log::trace!("reading TOML source: `{}`", path.display());
@@ -78,31 +82,16 @@ impl TomlSource {
     }
 
     /// Fetch a value by parameter path
-    // FIXME: not optimal code
-    // TODO: implement via `Index` trait?
-    pub fn fetch(&self, path: &ParameterId) -> Option<toml::Value> {
-        enum TableOrValue<'a> {
-            Table(&'a Table),
-            Value(&'a toml::Value),
+    pub fn fetch(&self, path: &ParameterId) -> Option<&toml::Value> {
+        let mut segments = path.segments.iter();
+        let first = segments.next()?;
+        let mut value = self.table.get(first)?;
+
+        for segment in segments {
+            value = value.get(segment)?;
         }
 
-        let mut value = TableOrValue::Table(&self.table);
-
-        for segment in &path.segments {
-            let table = match value {
-                TableOrValue::Table(table) | TableOrValue::Value(toml::Value::Table(table)) => {
-                    table
-                }
-                _ => return None,
-            };
-            value = TableOrValue::Value(table.get(segment)?);
-        }
-
-        // FIXME: cloning
-        match value {
-            TableOrValue::Table(table) => Some(toml::Value::Table(table.clone())),
-            TableOrValue::Value(value) => Some(value.clone()),
-        }
+        Some(value)
     }
 
     /// Get the file path of the source
@@ -110,14 +99,21 @@ impl TomlSource {
         &self.path
     }
 
-    // FIXME: false-positive
-    //        https://github.com/rust-lang/rust/issues/44752#issuecomment-1712086069
-    #[allow(single_use_lifetimes)]
-    pub(crate) fn find_unknown<'a>(
-        &self,
-        known: impl Iterator<Item = &'a ParameterId>,
-    ) -> BTreeSet<ParameterId> {
-        find_unknown_parameters(&self.table, &known.into())
+    pub(crate) fn find_unknown<'a, I>(&self, known: I) -> BTreeSet<ParameterId>
+    where
+        I: IntoIterator<Item = &'a ParameterId>,
+    {
+        let known_tree: ParamTree<'a> = known.into();
+        find_unknown_parameters(&self.table, &known_tree)
+    }
+}
+
+impl std::ops::Index<ParameterId> for TomlSource {
+    type Output = toml::Value;
+
+    fn index(&self, index: ParameterId) -> &Self::Output {
+        self.fetch(&index)
+            .unwrap_or_else(|| panic!("unknown parameter `{index}`"))
     }
 }
 
@@ -130,16 +126,16 @@ impl std::fmt::Debug for ParamTree<'_> {
     }
 }
 
-impl<'a, T> From<T> for ParamTree<'a>
+impl<'a, I> From<I> for ParamTree<'a>
 where
-    T: Iterator<Item = &'a ParameterId>,
+    I: IntoIterator<Item = &'a ParameterId>,
 {
-    fn from(value: T) -> Self {
+    fn from(iter: I) -> Self {
         let mut tree = Self(<_>::default());
-        for path in value {
-            let mut tree_tmp = &mut tree;
+        for path in iter {
+            let mut current = &mut tree;
             for segment in &path.segments {
-                tree_tmp = tree_tmp.0.entry(segment).or_default();
+                current = current.0.entry(segment).or_default();
             }
         }
         tree
@@ -225,7 +221,11 @@ impl<'a> Writer<'a> {
     ///
     /// - If there is existing non-table value along the path
     /// - If value cannot serialize into [`toml::Value`]
-    pub fn write<P: WritePath, T: Serialize>(&'a mut self, path: P, value: T) -> &'a mut Self {
+    pub fn write<P: WritePath, T: Into<toml::Value>>(
+        &'a mut self,
+        path: P,
+        value: T,
+    ) -> &'a mut Self {
         let mut current: Option<(&mut Table, &str)> = None;
 
         for i in path.path() {
@@ -243,8 +243,7 @@ impl<'a> Writer<'a> {
         }
 
         if let Some((table, key)) = current {
-            let value_toml = toml::Value::try_from(value).expect("value should be a valid TOML");
-            table.insert(key.to_string(), value_toml);
+            table.insert(key.to_string(), value.into());
         }
 
         self
@@ -290,14 +289,59 @@ impl<'a> From<&'a mut Table> for Writer<'a> {
 pub trait WriteExt: Sized {
     /// See [`Writer::write`].
     #[must_use]
-    fn write<P: WritePath, T: Serialize>(self, path: P, value: T) -> Self;
+    fn write<P: WritePath, T: Into<toml::Value>>(self, path: P, value: T) -> Self;
 }
 
 impl WriteExt for Table {
-    fn write<P: WritePath, T: Serialize>(mut self, path: P, value: T) -> Self {
+    fn write<P: WritePath, T: Into<toml::Value>>(mut self, path: P, value: T) -> Self {
         Writer::new(&mut self).write(path, value);
         self
     }
+}
+
+/// Convert a TOML value into its Norito JSON equivalent.
+///
+/// # Errors
+///
+/// Returns [`json::Error`] if the input contains an invalid floating-point value or if any
+/// nested element fails to convert into JSON.
+pub fn value_to_json(value: &toml::Value) -> Result<JsonValue, json::Error> {
+    Ok(match value {
+        toml::Value::Boolean(b) => JsonValue::Bool(*b),
+        toml::Value::Integer(i) => {
+            if *i >= 0 {
+                JsonValue::Number(JsonNumber::U64(
+                    u64::try_from(*i).expect("non-negative integer"),
+                ))
+            } else {
+                JsonValue::Number(JsonNumber::I64(*i))
+            }
+        }
+        toml::Value::Float(f) => JsonValue::Number(JsonNumber::from_f64(*f).ok_or_else(|| {
+            json::Error::InvalidField {
+                field: "float".into(),
+                message: format!("invalid float value {f} (NaN or infinite)"),
+            }
+        })?),
+        toml::Value::String(s) => JsonValue::String(s.clone()),
+        toml::Value::Datetime(dt) => JsonValue::String(dt.to_string()),
+        toml::Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(value_to_json(item)?);
+            }
+            JsonValue::Array(out)
+        }
+        toml::Value::Table(table) => JsonValue::Object(table_to_json(table)?),
+    })
+}
+
+fn table_to_json(table: &toml::Table) -> Result<JsonMap, json::Error> {
+    let mut out = JsonMap::default();
+    for (key, value) in table {
+        out.insert(key.clone(), value_to_json(value)?);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -306,6 +350,44 @@ mod tests {
     use toml::toml;
 
     use super::*;
+
+    #[test]
+    fn toml_integer_to_json() {
+        let value = toml::Value::Integer(42);
+        let json = value_to_json(&value).expect("integer");
+        assert_eq!(json, JsonValue::Number(JsonNumber::U64(42)));
+    }
+
+    #[test]
+    fn toml_table_to_json() {
+        let table = toml! {
+            answer = 42
+            nested = { flag = true }
+        };
+        let json = value_to_json(&toml::Value::Table(table)).expect("table");
+        if let JsonValue::Object(ref map) = json {
+            assert_eq!(map["answer"], JsonValue::Number(JsonNumber::U64(42)));
+            let mut nested_expected = JsonMap::default();
+            nested_expected.insert("flag".into(), JsonValue::Bool(true));
+            assert_eq!(map["nested"], JsonValue::Object(nested_expected));
+        } else {
+            panic!("unexpected JSON value {json:?}");
+        }
+    }
+
+    #[test]
+    fn fetch_returns_value() {
+        let table = toml! {
+            [foo]
+            bar = 42
+        };
+        let source = TomlSource::inline(table);
+        let id = ParameterId::from(["foo", "bar"]);
+
+        let value = source.fetch(&id).unwrap();
+        assert_eq!(value, &toml::Value::Integer(42));
+        assert_eq!(source[id], toml::Value::Integer(42));
+    }
 
     #[test]
     fn create_param_tree() {
@@ -409,24 +491,16 @@ mod tests {
 
     #[test]
     fn writing_into_toml_works() {
-        #[derive(Serialize)]
-        struct Complex {
-            foo: bool,
-            bar: bool,
-        }
-
         let mut table = Table::new();
+        let complex = toml! {
+            foo = false
+            bar = true
+        };
 
         Writer::new(&mut table)
             .write("foo", "test")
             .write(["bar", "foo"], 42)
-            .write(
-                ["bar", "complex"],
-                &Complex {
-                    foo: false,
-                    bar: true,
-                },
-            );
+            .write(["bar", "complex"], complex);
 
         expect![[r#"
             foo = "test"

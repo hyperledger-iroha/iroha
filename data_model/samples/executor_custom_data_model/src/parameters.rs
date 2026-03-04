@@ -1,15 +1,36 @@
 //! Module with custom parameters
-use alloc::{format, string::String, vec::Vec};
+use std::{format, string::String, vec::Vec};
 
-use iroha_executor_data_model::parameter::Parameter;
+use iroha_executor_data_model::parameter::{CustomParameter, Parameter};
 use iroha_schema::IntoSchema;
-use serde::{Deserialize, Serialize};
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json,
+};
 
 /// Parameter that controls domain limits
-#[derive(PartialEq, Eq, Parameter, Deserialize, Serialize, IntoSchema)]
+#[derive(PartialEq, Eq, JsonDeserialize, JsonSerialize, IntoSchema)]
 pub struct DomainLimits {
     /// Length of domain id in bytes
     pub id_len: u32,
+}
+
+impl Parameter for DomainLimits {}
+
+impl From<DomainLimits> for CustomParameter {
+    fn from(value: DomainLimits) -> Self {
+        CustomParameter::new(
+            <DomainLimits as Parameter>::id(),
+            json::to_value(&value)
+                .expect("INTERNAL BUG: Failed to serialize Executor data model entity"),
+        )
+    }
+}
+
+impl From<DomainLimits> for iroha_data_model::parameter::Parameter {
+    fn from(value: DomainLimits) -> Self {
+        Self::Custom(value.into())
+    }
 }
 
 impl Default for DomainLimits {

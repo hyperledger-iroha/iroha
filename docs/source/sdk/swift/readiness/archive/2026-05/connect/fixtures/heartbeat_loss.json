@@ -1,0 +1,16 @@
+{
+  "scenario": "heartbeat_loss",
+  "torii_build": "mock-2026-05-15",
+  "sid_base64url": "Y29ubmVjdC1maXh0dXJlLXNpZCE",
+  "description": "Miss two heartbeats mid-session, trigger resume, and confirm queue counters recover with OTLP-friendly samples.",
+  "frames": [
+    { "direction": "AppToWallet", "sequence": 1, "payload_hex": "00" },
+    { "direction": "AppToWallet", "sequence": 2, "payload_hex": "01" },
+    { "direction": "WalletToApp", "sequence": 7, "payload_hex": "02" }
+  ],
+  "events": [
+    { "timestamp_ms": 1778000000000, "state": "open", "note": "session opened, initial queue append" },
+    { "timestamp_ms": 1778000002500, "state": "heartbeat_lost", "note": "two consecutive heartbeat misses detected" },
+    { "timestamp_ms": 1778000003200, "state": "resumed", "note": "resume token accepted; telemetry resumes at steady depth" }
+  ]
+}

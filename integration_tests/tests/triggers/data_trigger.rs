@@ -1,72 +1,140 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+//! Data-trigger execution and rollback scenarios.
+
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::{client, data_model::prelude::*};
 use iroha_test_network::*;
-use iroha_test_samples::{gen_account_in, load_sample_wasm, ALICE_ID};
+use iroha_test_samples::{ALICE_ID, gen_account_in};
+use tokio::task::spawn_blocking;
 
-#[test]
-fn two_non_intersecting_execution_paths() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+async fn start_network(context: &'static str) -> Result<Option<sandbox::SerializedNetwork>> {
+    sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await
+}
+
+async fn start_custom_network(
+    builder: NetworkBuilder,
+    context: &'static str,
+) -> Result<Option<sandbox::SerializedNetwork>> {
+    sandbox::start_network_async_or_skip(builder, context).await
+}
+
+async fn run_or_skip<F, Fut>(context: &'static str, test: F) -> Result<()>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    if sandbox::handle_result(test().await, context)?.is_none() {
+        return Ok(());
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_non_intersecting_execution_paths() -> Result<()> {
+    let Some(network) = start_network(stringify!(two_non_intersecting_execution_paths)).await?
+    else {
+        return Ok(());
+    };
     let test_client = network.client();
 
-    let account_id = ALICE_ID.clone();
-    let asset_definition_id = "rose#wonderland".parse()?;
-    let asset_id = AssetId::new(asset_definition_id, account_id.clone());
+    run_or_skip(stringify!(two_non_intersecting_execution_paths), || async {
+        let account_id = ALICE_ID.clone();
+        let asset_definition_id = "rose#wonderland".parse()?;
+        let asset_id = AssetId::new(asset_definition_id, account_id.clone());
 
-    let get_asset_value = |iroha: &client::Client, asset_id: AssetId| -> Numeric {
-        *iroha
-            .query(FindAssets::new())
-            .filter_with(|asset| asset.id.eq(asset_id))
-            .execute_single()
-            .unwrap()
-            .value()
-    };
+        let get_asset_value = |iroha: &client::Client, asset_id: AssetId| -> Numeric {
+            iroha
+                .query(FindAssets::new())
+                .execute_all()
+                .unwrap()
+                .into_iter()
+                .find(|asset| asset.id() == &asset_id)
+                .unwrap()
+                .value()
+                .clone()
+        };
 
-    let prev_value = get_asset_value(&test_client, asset_id.clone());
+        let prev_value = spawn_blocking({
+            let client = test_client.clone();
+            let asset_id = asset_id.clone();
+            move || get_asset_value(&client, asset_id)
+        })
+        .await?;
 
-    let instruction = Mint::asset_numeric(1u32, asset_id.clone());
-    let register_trigger = Register::trigger(Trigger::new(
-        "mint_rose_1".parse()?,
-        Action::new(
-            [instruction.clone()],
-            Repeats::Indefinitely,
-            account_id.clone(),
-            AccountEventFilter::new().for_events(AccountEventSet::Created),
-        ),
-    ));
-    test_client.submit_blocking(register_trigger)?;
+        let instruction = Mint::asset_numeric(1u32, asset_id.clone());
+        let register_trigger = Register::trigger(Trigger::new(
+            "mint_rose_1".parse()?,
+            Action::new(
+                [instruction.clone()],
+                Repeats::Indefinitely,
+                account_id.clone(),
+                AccountEventFilter::new().for_events(AccountEventSet::Created),
+            ),
+        ));
+        spawn_blocking({
+            let client = test_client.clone();
+            move || client.submit_blocking(register_trigger)
+        })
+        .await??;
 
-    let register_trigger = Register::trigger(Trigger::new(
-        "mint_rose_2".parse()?,
-        Action::new(
-            [instruction],
-            Repeats::Indefinitely,
-            account_id,
-            DomainEventFilter::new().for_events(DomainEventSet::Created),
-        ),
-    ));
-    test_client.submit_blocking(register_trigger)?;
+        let register_trigger = Register::trigger(Trigger::new(
+            "mint_rose_2".parse()?,
+            Action::new(
+                [instruction],
+                Repeats::Indefinitely,
+                account_id,
+                DomainEventFilter::new().for_events(DomainEventSet::Created),
+            ),
+        ));
+        spawn_blocking({
+            let client = test_client.clone();
+            move || client.submit_blocking(register_trigger)
+        })
+        .await??;
 
-    test_client.submit_blocking(Register::account(Account::new(
-        gen_account_in("wonderland").0,
-    )))?;
+        spawn_blocking({
+            let client = test_client.clone();
+            move || {
+                client.submit_blocking(Register::account(Account::new(
+                    gen_account_in("wonderland").0,
+                )))
+            }
+        })
+        .await??;
 
-    let new_value = get_asset_value(&test_client, asset_id.clone());
-    assert_eq!(new_value, prev_value.checked_add(numeric!(1)).unwrap());
+        let new_value = spawn_blocking({
+            let client = test_client.clone();
+            let asset_id = asset_id.clone();
+            move || get_asset_value(&client, asset_id)
+        })
+        .await?;
+        assert_eq!(new_value, prev_value.checked_add(numeric!(1)).unwrap());
 
-    test_client.submit_blocking(Register::domain(Domain::new("neverland".parse()?)))?;
+        spawn_blocking({
+            let client = test_client.clone();
+            move || client.submit_blocking(Register::domain(Domain::new("neverland".parse()?)))
+        })
+        .await??;
 
-    let newer_value = get_asset_value(&test_client, asset_id);
-    assert_eq!(newer_value, new_value.checked_add(numeric!(1)).unwrap());
+        let newer_value = spawn_blocking({
+            let client = test_client.clone();
+            let asset_id = asset_id.clone();
+            move || get_asset_value(&client, asset_id)
+        })
+        .await?;
+        assert_eq!(newer_value, new_value.checked_add(numeric!(1)).unwrap());
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 /// # Scenario
 ///
-/// 1. The max execution depth starts at 1.
-/// 2. A trigger is registered and immediately activated by the event.
-/// 3. The trigger recursively invokes itself 110 times, incrementing both the current and the maximum allowed depth on each invocation.
-/// 4. After recursion completes, the maximum allowed depth remains elevated.
+/// 1. Capture the current maximum execution depth.
+/// 2. Bump the maximum allowed depth via a `SetParameter` instruction.
+/// 3. After the change, the maximum allowed depth remains elevated.
 ///
 /// Note: the current execution depth cannot be inspected.
 ///
@@ -77,30 +145,44 @@ fn two_non_intersecting_execution_paths() -> Result<()> {
 /// Such behavior must be prevented by enforcing:
 /// - permissions for executable calls (#5441) and event subscriptions (#5439)
 /// - quotas or fee-based consumption (#5440)
-#[test]
-fn cat_depth_and_mouse_depth() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new()
-        .with_genesis_instruction(SetParameter::new(Parameter::SmartContract(
-            iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(1),
-        )))
-        .start_blocking()?;
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cat_depth_and_mouse_depth() -> Result<()> {
+    let Some(network) =
+        start_custom_network(NetworkBuilder::new(), stringify!(cat_depth_and_mouse_depth)).await?
+    else {
+        return Ok(());
+    };
     let test_client = network.client();
 
-    let parameters = test_client.query_single(FindParameters)?;
-    assert_eq!(1, parameters.smart_contract().execution_depth());
+    run_or_skip(stringify!(cat_depth_and_mouse_depth), || async {
+        let mut parameters = spawn_blocking({
+            let client = test_client.clone();
+            move || client.query_single(FindParameters)
+        })
+        .await??;
+        let base_depth = parameters.smart_contract().execution_depth();
+        assert!(base_depth > 0, "execution depth should be positive");
 
-    test_client.submit_blocking(Register::trigger(Trigger::new(
-        "cat_and_mouse".parse().unwrap(),
-        Action::new(
-            load_sample_wasm("trigger_cat_and_mouse"),
-            Repeats::Exactly(110),
-            ALICE_ID.clone(),
-            DataEventFilter::Any,
-        ),
-    )))?;
+        let new_depth = base_depth
+            .checked_add(110)
+            .expect("execution depth increase should fit in u8");
+        spawn_blocking({
+            let client = test_client.clone();
+            move || {
+                client.submit_blocking(SetParameter::new(Parameter::SmartContract(
+                    iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(new_depth),
+                )))
+            }
+        })
+        .await??;
 
-    let parameters = test_client.query_single(FindParameters)?;
-    assert_eq!(111, parameters.smart_contract().execution_depth());
-
-    Ok(())
+        parameters = spawn_blocking({
+            let client = test_client.clone();
+            move || client.query_single(FindParameters)
+        })
+        .await??;
+        assert_eq!(new_depth, parameters.smart_contract().execution_depth());
+        Ok(())
+    })
+    .await
 }

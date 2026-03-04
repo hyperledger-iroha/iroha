@@ -1,0 +1,152 @@
+{
+  "version": 1,
+  "proposal_id": "AC-2026-041",
+  "panel_round_id": "RP-2026-05",
+  "language": "en",
+  "generated_at_unix_ms": 1780034567890,
+  "overview": {
+    "title": "Review Panel Summary — AC-2026-041",
+    "neutral_summary": "Panel reviewed 5 volunteer briefs (support 2, oppose 2, context 1) covering 9 fact rows; AI manifest 5f90d3a8-33f5-4549-8f7f-9915d5f3d210 (sorafs-ai-runner 0.5.0) enforced quarantine 7800/10_000 and escalate 3200/10_000.",
+    "decision_context": "Policy jury will evaluate 3 target(s) and 2 evidence attachment(s); highlights below summarise the balanced record reviewed by the panel."
+  },
+  "stance_distribution": [
+    {
+      "stance": "support",
+      "brief_count": 2,
+      "fact_row_count": 4
+    },
+    {
+      "stance": "oppose",
+      "brief_count": 2,
+      "fact_row_count": 3
+    },
+    {
+      "stance": "context",
+      "brief_count": 1,
+      "fact_row_count": 2
+    }
+  ],
+  "highlights": [
+    {
+      "id": "support-1",
+      "stance": "support",
+      "claim_id": "VB-2026-041-S1",
+      "statement": "Regional stewards obtained regulator takedown orders for the same perceptual hash — status `corroborated`; impacts governance, compliance (brief `VB-support-01`).",
+      "citations": [
+        {
+          "kind": "VolunteerFact",
+          "reference_id": "VB-2026-041-S1",
+          "uri": "https://evidence.example.org/case/s1#order"
+        },
+        {
+          "kind": "VolunteerFact",
+          "reference_id": "VB-2026-041-S1",
+          "uri": "https://evidence.example.org/case/s1#appeal"
+        },
+        {
+          "kind": "AiManifest",
+          "reference_id": "5f90d3a8-33f5-4549-8f7f-9915d5f3d210",
+          "uri": null
+        },
+        {
+          "kind": "ProposalEvidence",
+          "reference_id": "https://evidence.example.org/ac-2026-041/briefing.pdf",
+          "uri": "https://evidence.example.org/ac-2026-041/briefing.pdf"
+        }
+      ]
+    },
+    {
+      "id": "oppose-1",
+      "stance": "oppose",
+      "claim_id": "VB-2026-041-O2",
+      "statement": "Community maintainers warn that blanket removal would also erase 42 educational mirrors — status `disputed`; impacts technical, community (brief `VB-oppose-02`).",
+      "citations": [
+        {
+          "kind": "VolunteerFact",
+          "reference_id": "VB-2026-041-O2",
+          "uri": "https://mirror.example.net/report"
+        },
+        {
+          "kind": "AiManifest",
+          "reference_id": "5f90d3a8-33f5-4549-8f7f-9915d5f3d210",
+          "uri": null
+        },
+        {
+          "kind": "ProposalEvidence",
+          "reference_id": "https://evidence.example.org/ac-2026-041/briefing.pdf",
+          "uri": "https://evidence.example.org/ac-2026-041/briefing.pdf"
+        }
+      ]
+    },
+    {
+      "id": "context-1",
+      "stance": "context",
+      "claim_id": "VB-2026-041-C1",
+      "statement": "SoraNet operators can stage a scoped block targeting only the BLAKE3 family while appeals remain open — status `context-only`; impacts governance, technical (brief `VB-context-01`).",
+      "citations": [
+        {
+          "kind": "VolunteerFact",
+          "reference_id": "VB-2026-041-C1",
+          "uri": "https://ops.example.org/watcher/playbook#scoped-block"
+        },
+        {
+          "kind": "AiManifest",
+          "reference_id": "5f90d3a8-33f5-4549-8f7f-9915d5f3d210",
+          "uri": null
+        },
+        {
+          "kind": "ProposalEvidence",
+          "reference_id": "https://evidence.example.org/ac-2026-041/briefing.pdf",
+          "uri": "https://evidence.example.org/ac-2026-041/briefing.pdf"
+        }
+      ]
+    }
+  ],
+  "ai_manifest": {
+    "manifest_id": "5f90d3a8-33f5-4549-8f7f-9915d5f3d210",
+    "runtime_version": "sorafs-ai-runner 0.5.0",
+    "issued_at_unix": 1780000000,
+    "quarantine_threshold": 7800,
+    "escalate_threshold": 3200
+  },
+  "volunteer_references": [
+    {
+      "brief_id": "VB-support-01",
+      "stance": "support",
+      "language": "en",
+      "fact_rows": 2,
+      "cited_rows": 2
+    },
+    {
+      "brief_id": "VB-support-02",
+      "stance": "support",
+      "language": "ja",
+      "fact_rows": 2,
+      "cited_rows": 1
+    },
+    {
+      "brief_id": "VB-oppose-01",
+      "stance": "oppose",
+      "language": "en",
+      "fact_rows": 1,
+      "cited_rows": 1
+    },
+    {
+      "brief_id": "VB-oppose-02",
+      "stance": "oppose",
+      "language": "es",
+      "fact_rows": 2,
+      "cited_rows": 2
+    },
+    {
+      "brief_id": "VB-context-01",
+      "stance": "context",
+      "language": "en",
+      "fact_rows": 2,
+      "cited_rows": 1
+    }
+  ],
+  "warnings": [
+    "brief `VB-support-02` contained fact rows without citations; they were excluded from highlights"
+  ]
+}

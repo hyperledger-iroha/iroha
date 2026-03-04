@@ -1,0 +1,10 @@
+extends = "base.toml"
+
+[nexus]
+enabled = true
+
+[nexus.axt]
+slot_length_ms = 1_000
+max_clock_skew_ms = 250
+proof_cache_ttl_slots = 8
+replay_retention_slots = 256

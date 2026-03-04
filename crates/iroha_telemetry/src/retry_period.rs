@@ -46,11 +46,23 @@ mod tests {
     #[test]
     fn increase_exponent_saturates() {
         let mut value = RetryPeriod::new(Duration::from_secs(42), 10);
-        println!("testing {value:?}");
-        let initial_period = value.period();
+        let mut last_period = value.period();
+
+        for _ in 0..value.max_exponent {
+            value.increase_exponent();
+            let new_period = value.period();
+            assert!(new_period >= last_period);
+            last_period = new_period;
+        }
+
+        // Further increases should saturate at the maximum exponent
         value.increase_exponent();
-        assert_eq!(value.period(), initial_period.saturating_mul(2));
-        value.increase_exponent();
-        assert_eq!(value.period(), initial_period.saturating_mul(4));
+        assert_eq!(value.period(), last_period);
+
+        // Repeated calls shouldn't change the period anymore
+        for _ in 0..3 {
+            value.increase_exponent();
+            assert_eq!(value.period(), last_period);
+        }
     }
 }

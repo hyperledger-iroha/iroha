@@ -1,0 +1,10 @@
+{
+  "status": 428,
+  "body": {
+    "error": "missing_header",
+    "reason": "dag-scope header is required for trustless range requests",
+    "details": {
+      "header": "Sora-Dag-Scope"
+    }
+  }
+}

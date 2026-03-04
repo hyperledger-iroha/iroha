@@ -1,0 +1,41 @@
+{
+  "block_height": 8642,
+  "dataspace_id": 7,
+  "lane_id": 1,
+  "receipts": [
+    {
+      "local_amount_micro": 4000000,
+      "source_id": "4F25818E98F7B549A21CEDA9A1F3812D95D64C83F7D02C361E13CAF113E53344",
+      "timestamp_ms": 1726296400000,
+      "xor_after_haircut_micro": 1600000,
+      "xor_due_micro": 1620000,
+      "xor_variance_micro": 20000
+    },
+    {
+      "local_amount_micro": 3500000,
+      "source_id": "AB56BE456758D5BE8D3D24AE7EF44C6A0CA1CF4A788AD18CF3B987FE9954F0D2",
+      "timestamp_ms": 1726296401200,
+      "xor_after_haircut_micro": 1400000,
+      "xor_due_micro": 1430000,
+      "xor_variance_micro": 30000
+    }
+  ],
+  "swap_metadata": {
+    "epsilon_bps": 25,
+    "liquidity_profile": {
+      "profile": "Tier1",
+      "state": null
+    },
+    "twap_local_per_xor": "8123.445500",
+    "twap_window_seconds": 60,
+    "volatility_class": {
+      "bucket": "Stable",
+      "state": null
+    }
+  },
+  "total_local_micro": 7500000,
+  "total_xor_after_haircut_micro": 3000000,
+  "total_xor_due_micro": 3050000,
+  "total_xor_variance_micro": 50000,
+  "tx_count": 2
+}

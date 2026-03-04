@@ -1,9 +1,13 @@
 use darling::{FromAttributes, FromDeriveInput, FromField};
-use iroha_macro_utils::{find_single_attr_opt, Emitter};
-use manyhow::emit;
+use manyhow::{Emitter, emit};
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use syn::parse_quote;
+
+use crate::{
+    emitter_ext::EmitterExt,
+    utils::{darling_result, find_single_attr_opt},
+};
 
 mod kw {
     syn::custom_keyword!(transparent);
@@ -74,7 +78,8 @@ impl IdDeriveInput {
 }
 
 pub fn impl_id_eq_ord_hash(emitter: &mut Emitter, input: &syn::DeriveInput) -> TokenStream {
-    let Some(input) = emitter.handle(IdDeriveInput::from_derive_input(input)) else {
+    let Some(input) = emitter.handle(darling_result(IdDeriveInput::from_derive_input(input)))
+    else {
         return quote!();
     };
 

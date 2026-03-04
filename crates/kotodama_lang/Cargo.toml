@@ -1,0 +1,23 @@
+[package]
+name = "kotodama_lang"
+version.workspace = true
+edition = "2024"
+authors = ["Iroha Contributors"]
+description = "Kotodama compiler and analysis pipeline"
+license = "Apache-2.0"
+repository = "https://github.com/hyperledger-iroha/iroha"
+documentation = "https://docs.rs/kotodama_lang"
+
+[dependencies]
+base64 = { workspace = true }
+hex = { workspace = true }
+indexmap = "2.12.0"
+iroha_crypto = { path = "../iroha_crypto", features = ["rayon", "sm"] }
+iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "json", "governance"] }
+iroha_i18n = { path = "../iroha_i18n" }
+iroha_primitives = { path = "../iroha_primitives", default-features = false }
+ivm_abi = { path = "../ivm_abi" }
+norito = { path = "../norito" }
+
+[features]
+kotodama_dynamic_bounds = []

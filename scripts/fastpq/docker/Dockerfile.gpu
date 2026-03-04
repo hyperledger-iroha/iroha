@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# FASTPQ reproducible build container (CUDA).
+# Copies the pinned Rust toolchain from the CPU image to avoid drift.
+
+ARG CUDA_IMAGE=nvidia/cuda:12.2.2-devel-ubuntu22.04
+ARG RUST_IMAGE=rust:1.88.0-slim-bookworm
+ARG RUST_TOOLCHAIN=1.88.0
+
+FROM ${RUST_IMAGE} AS rust_toolchain
+
+FROM ${CUDA_IMAGE} AS fastpq_gpu
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH \
+    CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse \
+    FASTPQ_RUST_TOOLCHAIN=${RUST_TOOLCHAIN}
+
+COPY --from=rust_toolchain /usr/local/rustup /usr/local/rustup
+COPY --from=rust_toolchain /usr/local/cargo /usr/local/cargo
+COPY --from=rust_toolchain /usr/local/bin/rustc /usr/local/bin/rustc
+COPY --from=rust_toolchain /usr/local/bin/cargo /usr/local/bin/cargo
+COPY --from=rust_toolchain /usr/local/bin/rustfmt /usr/local/bin/rustfmt
+COPY --from=rust_toolchain /usr/local/bin/clippy-driver /usr/local/bin/clippy-driver
+
+RUN <<'EOF'
+  set -eu
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    clang \
+    git \
+    mold \
+    pkg-config \
+    python3
+  apt-get clean
+  rm -rf /var/lib/apt/lists/*
+EOF
+
+RUN rustup default "${FASTPQ_RUST_TOOLCHAIN}" && \
+    rustup component add --toolchain "${FASTPQ_RUST_TOOLCHAIN}" \
+      rustfmt \
+      clippy \
+      rust-src \
+      llvm-tools-preview
+
+WORKDIR /workspace
+
+ENTRYPOINT ["bash"]

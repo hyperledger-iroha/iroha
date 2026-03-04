@@ -1,7 +1,10 @@
 //! Iroha schema generation support library. Contains the
 //! `build_schemas` `fn`, which is the function which decides which
 //! types are included in the schema.
-use iroha_data_model::query::{QueryResponse, SignedQuery};
+use iroha_data_model::{
+    block::stream::{BlockMessage, BlockSubscriptionRequest},
+    query::{QueryResponse, SignedQuery},
+};
 use iroha_schema::prelude::*;
 use iroha_telemetry::metrics::Status;
 
@@ -25,640 +28,90 @@ macro_rules! types {
     }
 }
 
+// Macro containing the list of all top-level schema types. It is used both to
+// generate the schema map and to export the `map_all_schema_types!` macro for
+// compile-time iteration.
+macro_rules! schema_types {
+    ($callback:ident) => {
+        $callback! {
+            Peer,
+            SignedTransaction,
+            SignedQuery,
+            QueryResponse,
+            iroha_data_model::query::dsl::CommittedTxPredicate,
+            // Event stream
+            EventMessage,
+            EventSubscriptionRequest,
+            // Block stream
+            BlockMessage,
+            BlockSubscriptionRequest,
+            iroha_data_model::fastpq::TransferTranscript,
+            iroha_data_model::fastpq::TransferTranscriptBundle,
+            iroha_data_model::fastpq::FastpqTransitionBatch,
+            iroha_data_model::fastpq::FastpqStateTransition,
+            // Never referenced, but present in type signature. Like `PhantomData<X>`
+            MerkleTree<SignedTransaction>,
+            // Default permissions
+            iroha_executor_data_model::permission::peer::CanManagePeers,
+            iroha_executor_data_model::permission::domain::CanRegisterDomain,
+            iroha_executor_data_model::permission::domain::CanUnregisterDomain,
+            iroha_executor_data_model::permission::domain::CanModifyDomainMetadata,
+            iroha_executor_data_model::permission::account::CanRegisterAccount,
+            iroha_executor_data_model::permission::account::CanUnregisterAccount,
+            iroha_executor_data_model::permission::account::CanModifyAccountMetadata,
+            iroha_executor_data_model::permission::asset_definition::CanRegisterAssetDefinition,
+            iroha_executor_data_model::permission::asset_definition::CanUnregisterAssetDefinition,
+            iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata,
+            iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition,
+            iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition,
+            iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition,
+            iroha_executor_data_model::permission::asset::CanMintAsset,
+            iroha_executor_data_model::permission::asset::CanBurnAsset,
+            iroha_executor_data_model::permission::asset::CanTransferAsset,
+            iroha_executor_data_model::permission::nft::CanRegisterNft,
+            iroha_executor_data_model::permission::nft::CanUnregisterNft,
+            iroha_executor_data_model::permission::nft::CanTransferNft,
+            iroha_executor_data_model::permission::nft::CanModifyNftMetadata,
+            iroha_executor_data_model::permission::parameter::CanSetParameters,
+            iroha_executor_data_model::permission::role::CanManageRoles,
+            iroha_executor_data_model::permission::trigger::CanRegisterTrigger,
+            iroha_executor_data_model::permission::trigger::CanExecuteTrigger,
+            iroha_executor_data_model::permission::trigger::CanUnregisterTrigger,
+            iroha_executor_data_model::permission::trigger::CanModifyTrigger,
+            iroha_executor_data_model::permission::trigger::CanModifyTriggerMetadata,
+            iroha_executor_data_model::permission::executor::CanUpgradeExecutor,
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode,
+            // Multi-signature operations
+            iroha_executor_data_model::isi::multisig::MultisigInstructionBox,
+            // Multi-signature account metadata
+            iroha_executor_data_model::isi::multisig::MultisigSpec,
+            iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+            // It is exposed via Torii
+            Status
+        }
+    };
+}
+
 /// Builds the schema for the current state of Iroha.
 ///
 /// You should only include the top-level types because other types
 /// shall be included recursively.
 pub fn build_schemas() -> MetaMap {
     use iroha_data_model::prelude::*;
-    use iroha_executor_data_model::{isi::multisig, permission};
 
     macro_rules! schemas {
         ($($t:ty),* $(,)?) => {{
             let mut out = MetaMap::new(); $(
-            <$t as IntoSchema>::update_schema_map(&mut out); )*
+                <$t as IntoSchema>::update_schema_map(&mut out);
+            )*
             out
         }};
     }
 
-    schemas! {
-        Peer,
-
-        SignedTransaction,
-        SignedQuery,
-        QueryResponse,
-
-        // Event stream
-        EventMessage,
-        EventSubscriptionRequest,
-
-        // Block stream
-        BlockStreamMessage,
-        BlockSubscriptionRequest,
-
-        // Never referenced, but present in type signature. Like `PhantomData<X>`
-        MerkleTree<SignedTransaction>,
-
-        // Default permissions
-        permission::peer::CanManagePeers,
-
-        permission::domain::CanRegisterDomain,
-        permission::domain::CanUnregisterDomain,
-        permission::domain::CanModifyDomainMetadata,
-
-        permission::account::CanRegisterAccount,
-        permission::account::CanUnregisterAccount,
-        permission::account::CanModifyAccountMetadata,
-
-        permission::asset_definition::CanRegisterAssetDefinition,
-        permission::asset_definition::CanUnregisterAssetDefinition,
-        permission::asset_definition::CanModifyAssetDefinitionMetadata,
-
-        permission::asset::CanMintAssetWithDefinition,
-        permission::asset::CanBurnAssetWithDefinition,
-        permission::asset::CanTransferAssetWithDefinition,
-        permission::asset::CanMintAsset,
-        permission::asset::CanBurnAsset,
-        permission::asset::CanTransferAsset,
-
-        permission::nft::CanRegisterNft,
-        permission::nft::CanUnregisterNft,
-        permission::nft::CanTransferNft,
-        permission::nft::CanModifyNftMetadata,
-
-        permission::parameter::CanSetParameters,
-        permission::role::CanManageRoles,
-
-        permission::trigger::CanRegisterTrigger,
-        permission::trigger::CanExecuteTrigger,
-        permission::trigger::CanUnregisterTrigger,
-        permission::trigger::CanModifyTrigger,
-        permission::trigger::CanModifyTriggerMetadata,
-
-        permission::executor::CanUpgradeExecutor,
-
-        // Multi-signature operations
-        multisig::MultisigInstructionBox,
-        // Multi-signature account metadata
-        multisig::MultisigSpec,
-        multisig::MultisigProposalValue,
-
-        // It is exposed via Torii
-        Status
-    }
+    schema_types!(schemas)
 }
 
-types!(
-    Account,
-    AccountEvent,
-    AccountEventFilter,
-    AccountEventSet,
-    AccountId,
-    AccountIdPredicateAtom,
-    AccountIdProjection<PredicateMarker>,
-    AccountIdProjection<SelectorMarker>,
-    AccountPermissionChanged,
-    AccountPredicateAtom,
-    AccountProjection<PredicateMarker>,
-    AccountProjection<SelectorMarker>,
-    AccountRoleChanged,
-    Action,
-    ActionPredicateAtom,
-    ActionProjection<PredicateMarker>,
-    ActionProjection<SelectorMarker>,
-    Algorithm,
-    Asset,
-    AssetChanged,
-    AssetDefinition,
-    AssetDefinitionEvent,
-    AssetDefinitionEventFilter,
-    AssetDefinitionEventSet,
-    AssetDefinitionId,
-    AssetDefinitionIdPredicateAtom,
-    AssetDefinitionIdProjection<PredicateMarker>,
-    AssetDefinitionIdProjection<SelectorMarker>,
-    AssetDefinitionOwnerChanged,
-    AssetDefinitionPredicateAtom,
-    AssetDefinitionProjection<PredicateMarker>,
-    AssetDefinitionProjection<SelectorMarker>,
-    AssetDefinitionTotalQuantityChanged,
-    AssetEvent,
-    AssetEventFilter,
-    AssetEventSet,
-    AssetId,
-    AssetIdPredicateAtom,
-    AssetIdProjection<PredicateMarker>,
-    AssetIdProjection<SelectorMarker>,
-    AssetPredicateAtom,
-    AssetProjection<PredicateMarker>,
-    AssetProjection<SelectorMarker>,
-    BTreeMap<AccountId, u8>,
-    BTreeMap<CustomParameterId, CustomParameter>,
-    BTreeMap<Name, Json>,
-    BTreeSet<AccountId>,
-    BTreeSet<Permission>,
-    BTreeSet<BlockSignature>,
-    BTreeSet<String>,
-    BlockEvent,
-    BlockEventFilter,
-    BlockHeaderHashPredicateAtom,
-    BlockHeaderHashProjection<PredicateMarker>,
-    BlockHeaderHashProjection<SelectorMarker>,
-    BlockHeader,
-    BlockHeaderPredicateAtom,
-    BlockHeaderProjection<PredicateMarker>,
-    BlockHeaderProjection<SelectorMarker>,
-    BlockStreamMessage,
-    BlockParameter,
-    BlockParameters,
-    BlockPayload,
-    BlockRejectionReason,
-    BlockResult,
-    BlockSignature,
-    BlockStatus,
-    BlockSubscriptionRequest,
-    Box<AssetId>,
-    Box<CompoundPredicate<Account>>,
-    Box<CompoundPredicate<AssetDefinition>>,
-    Box<CompoundPredicate<Asset>>,
-    Box<CompoundPredicate<BlockHeader>>,
-    Box<CompoundPredicate<CommittedTransaction>>,
-    Box<CompoundPredicate<Domain>>,
-    Box<CompoundPredicate<Nft>>,
-    Box<CompoundPredicate<PeerId>>,
-    Box<CompoundPredicate<Permission>>,
-    Box<CompoundPredicate<RoleId>>,
-    Box<CompoundPredicate<Role>>,
-    Box<CompoundPredicate<SignedBlock>>,
-    Box<CompoundPredicate<TriggerId>>,
-    Box<CompoundPredicate<Trigger>>,
-    Box<InstructionExecutionFail>,
-    Box<Permission>,
-    Box<RepetitionError>,
-    Box<TransactionRejectionReason>,
-    Burn<Numeric, Asset>,
-    Burn<u32, Trigger>,
-    BurnBox,
-    ChainId,
-    CommittedTransaction,
-    CommittedTransactionPredicateAtom,
-    CommittedTransactionProjection<PredicateMarker>,
-    CommittedTransactionProjection<SelectorMarker>,
-    CompoundPredicate<Account>,
-    CompoundPredicate<AssetDefinition>,
-    CompoundPredicate<Asset>,
-    CompoundPredicate<BlockHeader>,
-    CompoundPredicate<CommittedTransaction>,
-    CompoundPredicate<Domain>,
-    CompoundPredicate<Nft>,
-    CompoundPredicate<PeerId>,
-    CompoundPredicate<Permission>,
-    CompoundPredicate<RoleId>,
-    CompoundPredicate<Role>,
-    CompoundPredicate<SignedBlock>,
-    CompoundPredicate<TriggerId>,
-    CompoundPredicate<Trigger>,
-    ConfigurationEvent,
-    ConfigurationEventFilter,
-    ConfigurationEventSet,
-    ConstString,
-    ConstVec<InstructionBox>,
-    ConstVec<u8>,
-    CustomInstruction,
-    CustomParameter,
-    CustomParameterId,
-    DataEvent,
-    DataEventFilter,
-    DataTriggerStep,
-    Domain,
-    DomainEvent,
-    DomainEventFilter,
-    DomainEventSet,
-    DomainId,
-    DomainIdPredicateAtom,
-    DomainIdProjection<PredicateMarker>,
-    DomainIdProjection<SelectorMarker>,
-    DomainOwnerChanged,
-    DomainPredicateAtom,
-    DomainProjection<PredicateMarker>,
-    DomainProjection<SelectorMarker>,
-    EventBox,
-    EventFilterBox,
-    EventMessage,
-    EventSubscriptionRequest,
-    Executable,
-    ExecuteTrigger,
-    ExecuteTriggerEvent,
-    ExecuteTriggerEventFilter,
-    ExecutionStep,
-    ExecutionTime,
-    Executor,
-    ExecutorDataModel,
-    ExecutorEvent,
-    ExecutorEventFilter,
-    ExecutorEventSet,
-    ExecutorUpgrade,
-    FetchSize,
-    FindAccounts,
-    FindAccountsWithAsset,
-    FindActiveTriggerIds,
-    FindAssets,
-    FindAssetsDefinitions,
-    FindBlockHeaders,
-    FindBlocks,
-    FindDomains,
-    FindError,
-    FindExecutorDataModel,
-    FindNfts,
-    FindParameters,
-    FindPeers,
-    FindPermissionsByAccountId,
-    FindRoleIds,
-    FindRoles,
-    FindRolesByAccountId,
-    FindTransactions,
-    FindTriggers,
-    ForwardCursor,
-    Grant<Permission, Account>,
-    Grant<Permission, Role>,
-    Grant<RoleId, Account>,
-    GrantBox,
-    Hash,
-    HashOf<BlockHeader>,
-    HashOf<MerkleTree<TransactionEntrypoint>>,
-    HashOf<MerkleTree<TransactionResult>>,
-    HashOf<SignedTransaction>,
-    HashOf<TransactionEntrypoint>,
-    HashOf<TransactionResult>,
-    HashOf<Vec<InstructionBox>>,
-    IdBox,
-    InstructionBox,
-    InstructionEvaluationError,
-    InstructionExecutionError,
-    InstructionExecutionFail,
-    InstructionType,
-    InvalidParameterError,
-    IpfsPath,
-    Ipv6Addr,
-    Ipv4Addr,
-    Json,
-    JsonPredicateAtom,
-    JsonProjection<PredicateMarker>,
-    JsonProjection<SelectorMarker>,
-    Level,
-    Log,
-    MathError,
-    MerkleProof<TransactionEntrypoint>,
-    MerkleProof<TransactionResult>,
-    MerkleTree<SignedTransaction>,
-    MerkleTree<TransactionEntrypoint>,
-    MerkleTree<TransactionResult>,
-    Metadata,
-    MetadataChanged<AccountId>,
-    MetadataChanged<AssetDefinitionId>,
-    MetadataChanged<DomainId>,
-    MetadataChanged<NftId>,
-    MetadataChanged<TriggerId>,
-    MetadataPredicateAtom,
-    MetadataProjection<PredicateMarker>,
-    MetadataProjection<SelectorMarker>,
-    MetadataKeyProjection<PredicateMarker>,
-    MetadataKeyProjection<SelectorMarker>,
-    Mint<Numeric, Asset>,
-    Mint<u32, Trigger>,
-    MintBox,
-    MintabilityError,
-    Mintable,
-    Mismatch<NumericSpec>,
-    Name,
-    NameProjection<PredicateMarker>,
-    NameProjection<SelectorMarker>,
-    NewAccount,
-    NewAssetDefinition,
-    NewDomain,
-    NewNft,
-    NewRole,
-    Nft,
-    NftEvent,
-    NftEventFilter,
-    NftEventSet,
-    NftId,
-    NftIdPredicateAtom,
-    NftIdProjection<PredicateMarker>,
-    NftIdProjection<SelectorMarker>,
-    NftOwnerChanged,
-    NftPredicateAtom,
-    NftProjection<PredicateMarker>,
-    NftProjection<SelectorMarker>,
-    NonZeroU16,
-    NonZeroU32,
-    NonZeroU64,
-    Numeric,
-    NumericPredicateAtom,
-    NumericProjection<PredicateMarker>,
-    NumericProjection<SelectorMarker>,
-    NumericSpec,
-    Option<AccountId>,
-    Option<AssetDefinitionId>,
-    Option<AssetId>,
-    Option<BlockStatus>,
-    Option<DomainId>,
-    Option<ForwardCursor>,
-    Option<HashOf<BlockHeader>>,
-    Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
-    Option<HashOf<MerkleTree<TransactionResult>>>,
-    Option<HashOf<SignedTransaction>>,
-    Option<HashOf<TransactionEntrypoint>>,
-    Option<HashOf<TransactionResult>>,
-    Option<IpfsPath>,
-    Option<Name>,
-    Option<NftId>,
-    Option<NonZeroU32>,
-    Option<NonZeroU64>,
-    Option<Option<NonZeroU64>>,
-    Option<PeerId>,
-    Option<RoleId>,
-    Option<TransactionStatus>,
-    Option<TriggerCompletedOutcomeType>,
-    Option<TriggerId>,
-    Option<bool>,
-    Option<u32>,
-    Option<u64>,
-    Order,
-    Pagination,
-    Parameter,
-    ParameterChanged,
-    Parameters,
-    PeerEvent,
-    PeerEventFilter,
-    PeerEventSet,
-    Peer,
-    PeerId,
-    PeerIdPredicateAtom,
-    PeerIdProjection<PredicateMarker>,
-    PeerIdProjection<SelectorMarker>,
-    Permission,
-    PermissionPredicateAtom,
-    PermissionProjection<PredicateMarker>,
-    PermissionProjection<SelectorMarker>,
-    PipelineEventBox,
-    PipelineEventFilterBox,
-    PublicKey,
-    PublicKeyPredicateAtom,
-    PublicKeyProjection<PredicateMarker>,
-    PublicKeyProjection<SelectorMarker>,
-    QueryBox,
-    QueryExecutionFail,
-    QueryOutput,
-    QueryOutputBatchBox,
-    QueryOutputBatchBoxTuple,
-    QueryParams,
-    QueryRequest,
-    QueryRequestWithAuthority,
-    QueryResponse,
-    QuerySignature,
-    QueryWithFilter<FindAccounts>,
-    QueryWithFilter<FindAccountsWithAsset>,
-    QueryWithFilter<FindActiveTriggerIds>,
-    QueryWithFilter<FindAssets>,
-    QueryWithFilter<FindAssetsDefinitions>,
-    QueryWithFilter<FindBlockHeaders>,
-    QueryWithFilter<FindBlocks>,
-    QueryWithFilter<FindDomains>,
-    QueryWithFilter<FindNfts>,
-    QueryWithFilter<FindPeers>,
-    QueryWithFilter<FindPermissionsByAccountId>,
-    QueryWithFilter<FindRoleIds>,
-    QueryWithFilter<FindRoles>,
-    QueryWithFilter<FindRolesByAccountId>,
-    QueryWithFilter<FindTransactions>,
-    QueryWithFilter<FindTriggers>,
-    QueryWithParams,
-    Register<Account>,
-    Register<AssetDefinition>,
-    Register<Domain>,
-    Register<Nft>,
-    Register<Peer>,
-    Register<Role>,
-    Register<Trigger>,
-    RegisterBox,
-    RemoveKeyValue<Account>,
-    RemoveKeyValue<AssetDefinition>,
-    RemoveKeyValue<Domain>,
-    RemoveKeyValue<Nft>,
-    RemoveKeyValue<Trigger>,
-    RemoveKeyValueBox,
-    Repeats,
-    RepetitionError,
-    Result<DataTriggerSequence, TransactionRejectionReason>,
-    Revoke<Permission, Account>,
-    Revoke<Permission, Role>,
-    Revoke<RoleId, Account>,
-    RevokeBox,
-    Role,
-    RoleEvent,
-    RoleEventFilter,
-    RoleEventSet,
-    RoleId,
-    RoleIdPredicateAtom,
-    RoleIdProjection<PredicateMarker>,
-    RoleIdProjection<SelectorMarker>,
-    RolePermissionChanged,
-    RolePredicateAtom,
-    RoleProjection<PredicateMarker>,
-    RoleProjection<SelectorMarker>,
-    SelectorTuple<Account>,
-    SelectorTuple<AssetDefinition>,
-    SelectorTuple<Asset>,
-    SelectorTuple<BlockHeader>,
-    SelectorTuple<CommittedTransaction>,
-    SelectorTuple<Domain>,
-    SelectorTuple<Nft>,
-    SelectorTuple<PeerId>,
-    SelectorTuple<Permission>,
-    SelectorTuple<RoleId>,
-    SelectorTuple<Role>,
-    SelectorTuple<SignedBlock>,
-    SelectorTuple<TriggerId>,
-    SelectorTuple<Trigger>,
-    SetKeyValue<Account>,
-    SetKeyValue<AssetDefinition>,
-    SetKeyValue<Domain>,
-    SetKeyValue<Nft>,
-    SetKeyValue<Trigger>,
-    SetKeyValueBox,
-    SetParameter,
-    Signature,
-    SignatureOf<BlockHeader>,
-    SignatureOf<QueryRequestWithAuthority>,
-    SignatureOf<TransactionPayload>,
-    SignedBlock,
-    SignedBlockPredicateAtom,
-    SignedBlockProjection<PredicateMarker>,
-    SignedBlockProjection<SelectorMarker>,
-    SignedBlockV1,
-    SignedQuery,
-    SignedQueryV1,
-    SignedTransaction,
-    SignedTransactionV1,
-    SingularQueryBox,
-    SingularQueryOutputBox,
-    SmartContractParameter,
-    SmartContractParameters,
-    SocketAddr,
-    SocketAddrHost,
-    SocketAddrV4,
-    SocketAddrV6,
-    Sorting,
-    Status,
-    String,
-    StringPredicateAtom,
-    SumeragiParameter,
-    SumeragiParameters,
-    TimeEvent,
-    TimeEventFilter,
-    TimeInterval,
-    TimeSchedule,
-    TimeTriggerEntrypoint,
-    TransactionEntrypoint,
-    TransactionEntrypointHashPredicateAtom,
-    TransactionEntrypointHashProjection<PredicateMarker>,
-    TransactionEntrypointHashProjection<SelectorMarker>,
-    TransactionEntrypointPredicateAtom,
-    TransactionEntrypointProjection<PredicateMarker>,
-    TransactionEntrypointProjection<SelectorMarker>,
-    TransactionEvent,
-    TransactionEventFilter,
-    TransactionLimitError,
-    TransactionParameter,
-    TransactionParameters,
-    TransactionPayload,
-    TransactionRejectionReason,
-    TransactionResult,
-    TransactionResultHashPredicateAtom,
-    TransactionResultHashProjection<PredicateMarker>,
-    TransactionResultHashProjection<SelectorMarker>,
-    TransactionResultPredicateAtom,
-    TransactionResultProjection<PredicateMarker>,
-    TransactionResultProjection<SelectorMarker>,
-    TransactionSignature,
-    TransactionStatus,
-    Transfer<Account, AssetDefinitionId, Account>,
-    Transfer<Account, DomainId, Account>,
-    Transfer<Account, NftId, Account>,
-    Transfer<Asset, Numeric, Account>,
-    TransferBox,
-    Trigger,
-    TriggerCompletedEvent,
-    TriggerCompletedEventFilter,
-    TriggerCompletedOutcome,
-    TriggerCompletedOutcomeType,
-    TriggerEvent,
-    TriggerEventFilter,
-    TriggerEventSet,
-    TriggerExecutionFail,
-    TriggerId,
-    TriggerIdPredicateAtom,
-    TriggerIdProjection<PredicateMarker>,
-    TriggerIdProjection<SelectorMarker>,
-    TriggerNumberOfExecutionsChanged,
-    TriggerPredicateAtom,
-    TriggerProjection<PredicateMarker>,
-    TriggerProjection<SelectorMarker>,
-    DataTriggerSequence,
-    TypeError,
-    Unregister<Account>,
-    Unregister<AssetDefinition>,
-    Unregister<Domain>,
-    Unregister<Nft>,
-    Unregister<Peer>,
-    Unregister<Role>,
-    Unregister<Trigger>,
-    UnregisterBox,
-    Upgrade,
-    Uptime,
-    ValidationFail,
-    Vec<Account>,
-    Vec<AccountId>,
-    Vec<Action>,
-    Vec<Asset>,
-    Vec<AssetId>,
-    Vec<AssetDefinition>,
-    Vec<AssetDefinitionId>,
-    Vec<BlockHeader>,
-    Vec<CommittedTransaction>,
-    Vec<CompoundPredicate<Account>>,
-    Vec<CompoundPredicate<AssetDefinition>>,
-    Vec<CompoundPredicate<Asset>>,
-    Vec<CompoundPredicate<BlockHeader>>,
-    Vec<CompoundPredicate<CommittedTransaction>>,
-    Vec<CompoundPredicate<Domain>>,
-    Vec<CompoundPredicate<Nft>>,
-    Vec<CompoundPredicate<PeerId>>,
-    Vec<CompoundPredicate<Permission>>,
-    Vec<CompoundPredicate<RoleId>>,
-    Vec<CompoundPredicate<Role>>,
-    Vec<CompoundPredicate<SignedBlock>>,
-    Vec<CompoundPredicate<TriggerId>>,
-    Vec<CompoundPredicate<Trigger>>,
-    Vec<Domain>,
-    Vec<DomainId>,
-    Vec<EventFilterBox>,
-    Vec<InstructionBox>,
-    Vec<Json>,
-    Vec<Nft>,
-    Vec<NftId>,
-    Vec<NftProjection<SelectorMarker>>,
-    Vec<Parameter>,
-    Vec<PeerId>,
-    Vec<Permission>,
-    Vec<QueryOutputBatchBox>,
-    Vec<Role>,
-    Vec<RoleId>,
-    Vec<SignedBlock>,
-    Vec<SignedTransaction>,
-    Vec<AccountProjection<SelectorMarker>>,
-    Vec<AssetDefinitionProjection<SelectorMarker>>,
-    Vec<AssetProjection<SelectorMarker>>,
-    Vec<BlockHeaderProjection<SelectorMarker>>,
-    Vec<CommittedTransactionProjection<SelectorMarker>>,
-    Vec<DomainProjection<SelectorMarker>>,
-    Vec<HashOf<BlockHeader>>,
-    Vec<HashOf<TransactionEntrypoint>>,
-    Vec<HashOf<TransactionResult>>,
-    Vec<Metadata>,
-    Vec<Name>,
-    Vec<Numeric>,
-    Vec<Option<HashOf<TransactionEntrypoint>>>,
-    Vec<Option<HashOf<TransactionResult>>>,
-    Vec<PeerIdProjection<SelectorMarker>>,
-    Vec<PermissionProjection<SelectorMarker>>,
-    Vec<PublicKey>,
-    Vec<RoleIdProjection<SelectorMarker>>,
-    Vec<RoleProjection<SelectorMarker>>,
-    Vec<SignedBlockProjection<SelectorMarker>>,
-    Vec<String>,
-    Vec<TransactionEntrypoint>,
-    Vec<TransactionResult>,
-    Vec<TimeTriggerEntrypoint>,
-    Vec<TriggerIdProjection<SelectorMarker>>,
-    Vec<TriggerProjection<SelectorMarker>>,
-    Vec<Trigger>,
-    Vec<TriggerId>,
-    Vec<u8>,
-    WasmExecutionFail,
-    WasmSmartContract,
-
-    (),
-    [u16; 8],
-    [u8; 4],
-    [u8; 32],
-    bool,
-    u16,
-    u32,
-    u64,
-    u8,
-);
+schema_types!(types);
 
 pub mod complete_data_model {
     //! Complete set of types participating in the schema
@@ -668,23 +121,28 @@ pub mod complete_data_model {
 
     pub use iroha_crypto::*;
     pub use iroha_data_model::{
+        Level,
         account::NewAccount,
         asset::NewAssetDefinition,
         block::{
+            BlockHeader, BlockPayload, BlockResult, BlockSignature, SignedBlock,
             error::BlockRejectionReason,
-            stream::{BlockStreamMessage, BlockSubscriptionRequest},
-            BlockHeader, BlockPayload, BlockResult, BlockSignature, SignedBlock, SignedBlockV1,
+            stream::{BlockMessage, BlockSubscriptionRequest},
         },
         domain::NewDomain,
         events::pipeline::{BlockEventFilter, TransactionEventFilter},
         executor::{Executor, ExecutorDataModel},
+        fastpq::{
+            FastpqStateTransition, FastpqTransitionBatch, TransferDeltaTranscript,
+            TransferTranscript, TransferTranscriptBundle,
+        },
         ipfs::IpfsPath,
         isi::{
+            InstructionType,
             error::{
                 InstructionEvaluationError, InstructionExecutionError, InvalidParameterError,
                 MathError, MintabilityError, Mismatch, RepetitionError, TypeError,
             },
-            InstructionType,
         },
         parameter::{
             BlockParameter, BlockParameters, CustomParameter, CustomParameterId, Parameter,
@@ -693,20 +151,20 @@ pub mod complete_data_model {
         },
         prelude::*,
         query::{
+            CommittedTransaction, QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple,
+            QueryRequestWithAuthority, QueryResponse, QuerySignature, QueryWithFilter,
+            QueryWithParams, SignedQuery, SingularQueryOutputBox,
             dsl::{CompoundPredicate, PredicateMarker, SelectorMarker},
             error::{FindError, QueryExecutionFail},
             parameters::{ForwardCursor, QueryParams},
-            CommittedTransaction, QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple,
-            QueryRequestWithAuthority, QueryResponse, QuerySignature, QueryWithFilter,
-            QueryWithParams, SignedQuery, SignedQueryV1, SingularQueryOutputBox,
         },
         transaction::{
-            error::TransactionLimitError, SignedTransactionV1, TransactionPayload,
             TransactionSignature,
+            error::TransactionLimitError,
+            signed::{SignedTransaction, TransactionPayload},
         },
-        Level,
     };
-    pub use iroha_genesis::{GenesisWasmAction, GenesisWasmTrigger, WasmPath};
+    pub use iroha_genesis::{GenesisIvmAction, GenesisIvmTrigger, IvmPath};
     pub use iroha_primitives::{
         addr::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrHost, SocketAddrV4, SocketAddrV6},
         const_vec::ConstVec,
@@ -721,7 +179,7 @@ pub mod complete_data_model {
 mod tests {
     use iroha_schema::MetaMapEntry;
 
-    use super::{complete_data_model::*, IntoSchema};
+    use super::{IntoSchema, complete_data_model::*};
 
     fn is_const_generic(generic: &str) -> bool {
         generic.parse::<usize>().is_ok()
@@ -745,64 +203,9 @@ mod tests {
 
         map_all_schema_types!(insert_into_test_map);
 
-        insert_into_test_map!(Compact<u128>);
-        insert_into_test_map!(Compact<u64>);
-        insert_into_test_map!(Compact<u32>);
-
-        insert_into_test_map!(iroha_executor_data_model::permission::peer::CanManagePeers);
-        insert_into_test_map!(iroha_executor_data_model::permission::domain::CanRegisterDomain);
-        insert_into_test_map!(iroha_executor_data_model::permission::domain::CanUnregisterDomain);
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::domain::CanModifyDomainMetadata
-        );
-        insert_into_test_map!(iroha_executor_data_model::permission::account::CanRegisterAccount);
-        insert_into_test_map!(iroha_executor_data_model::permission::account::CanUnregisterAccount);
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::account::CanModifyAccountMetadata
-        );
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::asset_definition::CanRegisterAssetDefinition
-        );
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::asset_definition::CanUnregisterAssetDefinition
-        );
-        insert_into_test_map!(iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata);
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition
-        );
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition
-        );
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition
-        );
-        insert_into_test_map!(iroha_executor_data_model::permission::asset::CanMintAsset);
-        insert_into_test_map!(iroha_executor_data_model::permission::asset::CanBurnAsset);
-        insert_into_test_map!(iroha_executor_data_model::permission::asset::CanTransferAsset);
-
-        insert_into_test_map!(iroha_executor_data_model::permission::nft::CanRegisterNft);
-        insert_into_test_map!(iroha_executor_data_model::permission::nft::CanUnregisterNft);
-        insert_into_test_map!(iroha_executor_data_model::permission::nft::CanTransferNft);
-        insert_into_test_map!(iroha_executor_data_model::permission::nft::CanModifyNftMetadata);
-
-        insert_into_test_map!(iroha_executor_data_model::permission::parameter::CanSetParameters);
-        insert_into_test_map!(iroha_executor_data_model::permission::role::CanManageRoles);
-
-        insert_into_test_map!(iroha_executor_data_model::permission::trigger::CanRegisterTrigger);
-        insert_into_test_map!(iroha_executor_data_model::permission::trigger::CanExecuteTrigger);
-        insert_into_test_map!(iroha_executor_data_model::permission::trigger::CanUnregisterTrigger);
-        insert_into_test_map!(iroha_executor_data_model::permission::trigger::CanModifyTrigger);
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::trigger::CanModifyTriggerMetadata
-        );
-        insert_into_test_map!(iroha_executor_data_model::permission::executor::CanUpgradeExecutor);
-
-        insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigInstructionBox);
         insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigRegister);
         insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigPropose);
         insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigApprove);
-        insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigSpec);
-        insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigProposalValue);
 
         map
     }
@@ -846,18 +249,10 @@ mod tests {
             .collect::<HashMap<_, _>>();
         let map_types = generate_test_map();
 
-        let mut extra_types = HashSet::new();
-        for (type_id, schema) in &map_types {
-            if !schemas_types.contains_key(type_id) {
-                extra_types.insert(schema);
-            }
-        }
-        assert!(extra_types.is_empty(), "Extra types: {extra_types:#?}");
-
         let mut missing_types = HashSet::new();
-        for (type_id, schema) in &schemas_types {
-            if !map_types.contains_key(type_id) && !exceptions.contains(type_id) {
-                missing_types.insert(schema);
+        for (type_id, type_name) in &map_types {
+            if !schemas_types.contains_key(type_id) && !exceptions.contains(type_id) {
+                missing_types.insert(type_name);
             }
         }
         assert!(
@@ -886,6 +281,24 @@ mod tests {
     fn no_schema_type_overlap() {
         let mut schemas = super::build_schemas();
         <Vec<PublicKey>>::update_schema_map(&mut schemas);
-        <BTreeSet<SignedTransactionV1>>::update_schema_map(&mut schemas);
+        <BTreeSet<SignedTransaction>>::update_schema_map(&mut schemas);
+    }
+
+    #[test]
+    fn fastpq_types_have_schema_entries() {
+        use iroha_data_model::fastpq::{
+            FastpqTransitionBatch, TransferTranscript, TransferTranscriptBundle,
+        };
+
+        let schemas = super::build_schemas();
+        let has_transcript = schemas.contains_key::<TransferTranscript>();
+        let has_bundle = schemas.contains_key::<TransferTranscriptBundle>();
+        let has_batch = schemas.contains_key::<FastpqTransitionBatch>();
+        assert!(has_transcript, "TransferTranscript missing from schema map");
+        assert!(
+            has_bundle,
+            "TransferTranscriptBundle missing from schema map"
+        );
+        assert!(has_batch, "FastpqTransitionBatch missing from schema map");
     }
 }

@@ -1,4 +1,4 @@
-//! WASM runtime contol and monitoring utilities.
+//! IVM runtime control and monitoring utilities.
 
 /// Allocate more fuel in the current runtime.
 ///
@@ -32,18 +32,15 @@ pub fn get_fuel() -> u64 {
 
 #[cfg(not(test))]
 mod host {
-    #[link(wasm_import_module = "iroha")]
-    extern "C" {
+    unsafe extern "C" {
         pub(super) fn add_fuel(ptr: *const u8, len: usize);
     }
 
-    #[link(wasm_import_module = "iroha")]
-    extern "C" {
+    unsafe extern "C" {
         pub(super) fn consume_fuel(ptr: *const u8, len: usize);
     }
 
-    #[link(wasm_import_module = "iroha")]
-    extern "C" {
+    unsafe extern "C" {
         pub(super) fn get_fuel() -> u64;
     }
 }

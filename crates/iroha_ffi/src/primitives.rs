@@ -1,44 +1,47 @@
 //! Logic related to the conversion of primitives to and from FFI-compatible representation
 
 use crate::{
-    ffi_type,
+    FfiTuple2, ReprC, Result,
     ir::Ir,
     repr_c::{
-        read_non_local, write_non_local, COutPtr, COutPtrRead, COutPtrWrite, CType, CTypeConvert,
-        CWrapperType, Cloned, NonLocal,
+        COutPtr, COutPtrRead, COutPtrWrite, CType, CTypeConvert, CWrapperType, Cloned, NonLocal,
+        read_non_local, write_non_local,
     },
-    FfiTuple2, ReprC, Result,
 };
 
-#[cfg(target_family = "wasm")]
-mod wasm {
-    use alloc::{boxed::Box, vec::Vec};
+#[cfg(feature = "ivm")]
+mod ivm {
+    use std::{boxed::Box, vec::Vec};
 
     use crate::{
-        ir::{Robust, Transparent},
-        repr_c::{COutPtr, COutPtrRead, COutPtrWrite, CType, CTypeConvert, CWrapperType},
         FfiReturn, Result,
+        ir::{Robust, Transparent, transmute::SpecializedTransmute},
+        repr_c::{
+            COutPtr, COutPtrRead, COutPtrWrite, CType, CTypeConvert, CWrapperType, read_non_local,
+            write_non_local,
+        },
     };
 
-    /// Marker for an integer primitive type that is not recognized by the `WebAssembly`.
+    /// Marker for an integer primitive type that is not recognized by the IVM.
     /// This struct is meant only to be used internally, i.e. there are no constructors.
     // NOTE: There are no blanket impls because it's meant to be used only on a specific set of types
     #[derive(Debug, Clone, Copy)]
-    pub enum NonWasmIntPrimitive {}
+    pub enum NonIvmIntPrimitive {}
 
-    impl crate::ir::IrTypeFamily for NonWasmIntPrimitive {
+    impl crate::ir::IrTypeFamily for NonIvmIntPrimitive {
         type Ref<'itm> = Transparent;
         type RefMut<'itm> = Transparent;
         type Box = Box<Robust>;
+        type BoxedSlice = Box<[Robust]>;
         type RefSlice<'itm> = &'itm [Robust];
         type RefMutSlice<'itm> = &'itm mut [Robust];
         type Vec = Vec<Robust>;
         type Arr<const N: usize> = Robust;
     }
 
-    macro_rules! wasm_repr_impls {
+    macro_rules! ivm_repr_impls {
         ( $($src:ty => $dst:ty),+ ) => {$(
-            // SAFETY: Even if it is not used in `wasm` API it is still a `ReprC` type
+            // SAFETY: Even if it is not used in IVM APIs it is still a `ReprC` type
             unsafe impl $crate::ReprC for $src {}
 
             impl $crate::option::Niche<'_> for $src {
@@ -53,13 +56,13 @@ mod wasm {
             }
 
             impl $crate::ir::Ir for $src {
-                type Type = NonWasmIntPrimitive;
+                type Type = NonIvmIntPrimitive;
             }
 
-            impl CType<NonWasmIntPrimitive> for $src {
+            impl CType<NonIvmIntPrimitive> for $src {
                 type ReprC = $dst;
             }
-            impl CTypeConvert<'_, NonWasmIntPrimitive, $dst> for $src {
+            impl CTypeConvert<'_, NonIvmIntPrimitive, $dst> for $src {
                 type RustStore = ();
                 type FfiStore = ();
 
@@ -71,30 +74,44 @@ mod wasm {
                 }
             }
 
-            impl CWrapperType<NonWasmIntPrimitive> for $src {
+            impl CWrapperType<NonIvmIntPrimitive> for $src {
                 type InputType = Self;
                 type ReturnType = Self;
             }
-            impl COutPtr<NonWasmIntPrimitive> for $src {
-                type OutPtr = $src;
+            impl COutPtr<NonIvmIntPrimitive> for $src {
+                type OutPtr = $dst;
             }
-            impl COutPtrWrite<NonWasmIntPrimitive> for $src {
+            impl COutPtrWrite<NonIvmIntPrimitive> for $src {
                 unsafe fn write_out(self, out_ptr: *mut Self::OutPtr) {
-                    out_ptr.write(self)
+                    unsafe { write_non_local::<_, NonIvmIntPrimitive>(self, out_ptr) }
                 }
             }
-            impl COutPtrRead<NonWasmIntPrimitive> for $src {
+            impl COutPtrRead<NonIvmIntPrimitive> for $src {
                 unsafe fn try_read_out(out_ptr: Self::OutPtr) -> Result<Self> {
-                    Ok(out_ptr)
+                    unsafe { read_non_local::<Self, NonIvmIntPrimitive>(out_ptr) }
+                }
+            }
+            unsafe impl SpecializedTransmute<NonIvmIntPrimitive> for &$src {
+                type Target = *const $src;
+
+                unsafe fn is_valid(target: &Self::Target) -> bool {
+                    !target.is_null()
+                }
+            }
+            unsafe impl SpecializedTransmute<NonIvmIntPrimitive> for &mut $src {
+                type Target = *mut $src;
+
+                unsafe fn is_valid(target: &Self::Target) -> bool {
+                    !target.is_null()
                 }
             }
 
-            // SAFETY: Conversion of non wasm primitive doesn't use store
-            unsafe impl $crate::repr_c::NonLocal<NonWasmIntPrimitive> for $src {})+
+            // SAFETY: Conversion of non IVM primitive doesn't use store
+            unsafe impl $crate::repr_c::NonLocal<NonIvmIntPrimitive> for $src {})+
         };
     }
 
-    wasm_repr_impls! {u8 => u32, i8 => i32, u16 => u32, i16 => i32}
+    ivm_repr_impls! {u8 => u32, i8 => i32, u16 => u32, i16 => i32}
 }
 
 /// # Safety
@@ -124,7 +141,7 @@ macro_rules! fieldless_enum_derive {
 macro_rules! primitive_derive {
     ( $($primitive:ty),* $(,)? ) => { $(
         unsafe impl $crate::ReprC for $primitive {}
-        ffi_type! { impl Robust for $primitive {} } )*
+        $crate::ffi_type! { impl Robust for $primitive {} } )*
     };
 }
 
@@ -138,7 +155,7 @@ fieldless_enum_derive! {
 }
 
 primitive_derive! { u32, i32, u64, i64 }
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(feature = "ivm"))]
 primitive_derive! { u8, i8, u16, i16 }
 
 macro_rules! int128_derive {
@@ -189,13 +206,13 @@ macro_rules! int128_derive {
 
         impl COutPtrWrite<Self> for $src {
             unsafe fn write_out(self, out_ptr: *mut Self::OutPtr) {
-                write_non_local::<_, Self>(self, out_ptr);
+                unsafe { write_non_local::<_, Self>(self, out_ptr) };
             }
         }
 
         impl COutPtrRead<Self> for $src {
             unsafe fn try_read_out(out_ptr: Self::OutPtr) -> Result<Self> {
-                read_non_local::<Self, Self>(out_ptr)
+                unsafe { read_non_local::<Self, Self>(out_ptr) }
             }
         }
     )*};

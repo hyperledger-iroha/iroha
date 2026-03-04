@@ -1,0 +1,92 @@
+# Sample configuration for the MOCHI supervisor bundle.
+#
+# Copy this file to `config/local.toml` next to the MOCHI binary to override
+# defaults. All paths are resolved relative to the bundle directory.
+
+[supervisor]
+# Directory where MOCHI will generate peer configs, logs, genesis manifests,
+# and Kura storage. The directory will be created if it does not exist.
+data_root = "./data"
+
+# When enabled, MOCHI will try to run `cargo build` for missing binaries
+# (`irohad`, `iroha_cli`, and `kagami`) before launching peers.
+build_binaries = false
+
+# Choose a topology profile. Use a preset string or a custom table:
+# profile = "single-peer"
+# profile = "four-peer-bft"
+# profile = { peer_count = 3, consensus_mode = "permissioned" }
+# profile = { peer_count = 3, consensus_mode = "npos", genesis_profile = "iroha3-dev" }
+profile = "single-peer"
+# Override the generated chain identifier. Leave blank to use `mochi-local`.
+# If `genesis_profile` is set, the chain id must match the profile default.
+chain_id = ""
+# Optional Kagami genesis profile (NPoS). For custom profiles, include
+# `genesis_profile` inside the profile table shown above.
+# genesis_profile = "iroha3-dev"
+# Optional VRF seed for genesis profiles that require it (testus/nexus).
+# vrf_seed_hex = ""
+
+# When enabled, MOCHI submits a small “smoke” transaction and waits for it to be
+# committed before marking a peer ready.
+readiness_smoke = true
+
+[supervisor.restart]
+# Configure how many times MOCHI restarts a crashed peer before surfacing the
+# failure. Use `mode = "never"` to disable automatic restarts entirely.
+mode = "on_failure"
+# Maximum restart attempts (1-based). `0` means “do not retry”.
+max_restarts = 3
+# Base backoff in milliseconds before the first retry. Backoff doubles until
+# capping after the 5th attempt.
+backoff_ms = 1000
+
+[ports]
+# Base ports for the supervisor-managed peers. MOCHI allocates sequential Torii
+# and P2P ports starting from these values.
+torii_start = 11300
+p2p_start = 1337
+
+[binaries]
+# Set these paths if `irohad`, `iroha_cli`, or `kagami` are not discoverable in
+# your PATH. Leave empty to inherit the PATH lookup. You can also set the
+# `MOCHI_IROHAD` or `MOCHI_KAGAMI` environment variables—or pass CLI flags like
+# `./bin/mochi --kagami /path/to/kagami`—to override these values without editing
+# this file.
+irohad = ""
+iroha_cli = ""
+kagami = ""
+
+[nexus]
+# Enable Nexus/multi-lane configuration in generated peer configs.
+# enabled = true
+# Optional explicit lane count (defaults to 1 when omitted).
+# lane_count = 3
+#
+# Optional lane catalog entries:
+# [[nexus.lane_catalog]]
+# index = 0
+# alias = "core"
+# dataspace = "universal"
+# visibility = "public"
+#
+# [[nexus.lane_catalog]]
+# index = 1
+# alias = "governance"
+# dataspace = "universal"
+# visibility = "restricted"
+#
+# Optional dataspace catalog entries:
+# [[nexus.dataspace_catalog]]
+# alias = "universal"
+# id = 0
+
+[sumeragi.da]
+# Enable/disable data availability gating (RBC + availability QC).
+# enabled = true # on-chain SumeragiParameters.da_enabled is authoritative after genesis
+
+[torii]
+# Optional overrides for DA ingest spool roots (used when DA is enabled).
+# [torii.da_ingest]
+# replay_cache_store_dir = "./data/torii/da_replay"
+# manifest_store_dir = "./data/torii/da_manifests"

@@ -1,10 +1,18 @@
-//! Contains wrapper type to annotate types with `must_use` attribute
+//! Utility to mark returned values as [`must_use`](https://doc.rust-lang.org/reference/attributes/diagnostics.html#the-must_use-attribute).
+//!
+//! Wrapping a value in [`MustUse`] triggers a compiler warning if the caller
+//! drops it without handling, preventing accidental omission of important
+//! results. This is particularly helpful for functions returning [`Result`]
+//! that might otherwise be ignored in tests or prototypes.
 
 use core::borrow::{Borrow, BorrowMut};
 
 use derive_more::{AsMut, AsRef, Constructor, Deref, Display};
 
-/// Wrapper type to annotate types with `must_use` attribute. Only to be used with [`Result`]
+/// Wrapper type that propagates the `#[must_use]` attribute to any inner value.
+///
+/// This is most commonly used with [`Result`] to ensure that error values are
+/// not dropped silently.
 ///
 /// # Example
 /// ```
@@ -26,7 +34,7 @@ use derive_more::{AsMut, AsRef, Constructor, Deref, Display};
 ///     println!("2 is odd");
 /// }
 ///
-/// // Will produce a warning, case `#[warn(unused_must_use)]` on by default
+/// // Will produce a warning, because `#[warn(unused_must_use)]` is on by default
 /// // is_odd(3).unwrap();
 /// ```
 #[derive(
@@ -37,7 +45,7 @@ use derive_more::{AsMut, AsRef, Constructor, Deref, Display};
 pub struct MustUse<T>(pub T);
 
 impl<T> MustUse<T> {
-    /// Get inner value
+    /// Consumes the wrapper, returning the inner value.
     #[inline]
     pub fn into_inner(self) -> T {
         self.0

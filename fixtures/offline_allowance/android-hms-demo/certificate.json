@@ -1,0 +1,37 @@
+{
+  "allowance": {
+    "amount": "90",
+    "asset": "jpy#sora#34mSYnDgbaJM58rbLoif4Tkp7G5jowHzX2wpqErt5uNjSaXGjsQoTGzsyFsSZwxLQRwJhJgfu",
+    "commitment_hex": "1224573F290A69CC4DEB201F4ABAF2C5C8AA0A2BD8515CFAC5FC306D4E06C365"
+  },
+  "attestation_nonce_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+  "attestation_report_b64": "zHfMdw==",
+  "controller": "34mSYnDgbaJM58rbLoif4Tkp7G5jowHzX2wpqErt5uNjSaXGjsQoTGzsyFsSZwxLQRwJhJgfu",
+  "expires_at_ms": 1745900000000,
+  "issued_at_ms": 1730314876000,
+  "metadata": {
+    "android.hms_safety_detect.app_id": "103000042",
+    "android.hms_safety_detect.max_token_age_ms": 3600000,
+    "android.hms_safety_detect.package_names": [
+      "tech.iroha.retail.harmony"
+    ],
+    "android.hms_safety_detect.required_evaluations": [
+      "strong_integrity",
+      "system_integrity"
+    ],
+    "android.hms_safety_detect.signing_digests_sha256": [
+      "1f2e3d4c5b6a79880796a5b4c3d2e1f0ffeeddccbbaa99887766554433221100"
+    ],
+    "android.integrity.policy": "hms_safety_detect"
+  },
+  "operator": "34mSYnDgbaJM58rbLoif4Tkp7G7VrmEx2UvM5oSfSY6GU46aEca41RKqHEBCLgaEgkuxPBX6W",
+  "operator_signature_hex": "322116E7791722383703A50F6A050D9B8427F3DEE7269D0E5BB2D8DBEB13310D104D9B531F1B93BE64AF4848D0939945E2AF2A482AA74179F62AE0022FAB550F",
+  "policy": {
+    "expires_at_ms": 1745900000000,
+    "max_balance": "180",
+    "max_tx_value": "60"
+  },
+  "refresh_at_ms": 1730318476000,
+  "spend_public_key": "ed01207233BFC89DCBD68C19FDE6CE6158225298EC1131B6A130D1AEB454C1AB5183C0",
+  "verdict_id_hex": null
+}

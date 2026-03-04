@@ -12,8 +12,10 @@ from typing import Callable, Optional
 import allure  # type: ignore
 
 from ...common.helpers import extract_hash, read_isi_from_json, write_isi_to_json
-from ...common.settings import IROHA_CLI_BINARY, ISI_PATH, IROHA_CLI_CONFIG, BASE_DIR
 from .configuration import Config
+from ...common.settings import IROHA_CLI_BINARY, ISI_PATH, IROHA_CLI_CONFIG
+
+FUZZ_CLI_DSL_DIR = Path(__file__).resolve().parents[3] / "fuzz" / "cli_dsl"
 
 
 class IrohaCli:
@@ -295,7 +297,7 @@ class IrohaCli:
         :return: The path to the temporary JSON file.
         :rtype: str
         """
-        json_template_path = Path("common") / "json_isi_examples" / template_filename
+        json_template_path = FUZZ_CLI_DSL_DIR / template_filename
         data = read_isi_from_json(str(json_template_path))
 
         if changes:

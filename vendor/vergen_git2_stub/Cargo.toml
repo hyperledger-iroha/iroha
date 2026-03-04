@@ -1,0 +1,14 @@
+[package]
+name = "vergen-git2"
+version = "1.0.7"
+edition = "2024"
+description = "Stub vergen-git2 implementation for offline builds"
+license = "MIT OR Apache-2.0"
+authors = ["Iroha Offline Stub"]
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[features]
+cargo = []

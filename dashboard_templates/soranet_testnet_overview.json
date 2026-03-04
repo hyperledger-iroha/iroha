@@ -1,0 +1,97 @@
+{
+  "$schema": "https://grafana.com/schemas/v0/json-dashboard",
+  "title": "SoraNet Testnet Overview",
+  "timezone": "browser",
+  "tags": ["soranet", "testnet", "snnet-10"],
+  "templating": {
+    "list": [
+      {
+        "name": "region",
+        "type": "query",
+        "datasource": "Prometheus",
+        "label": "Region",
+        "query": "label_values(soranet_privacy_circuit_events_total, region)",
+        "refresh": 1,
+        "current": {
+          "text": "testnet-t0",
+          "value": "testnet-t0"
+        }
+      },
+      {
+        "name": "relay_id",
+        "type": "query",
+        "datasource": "Prometheus",
+        "label": "Relay",
+        "query": "label_values(soranet_privacy_circuit_events_total{region=\"$region\"}, relay_id)",
+        "refresh": 1,
+        "includeAll": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Circuit Outcomes",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (kind) (rate(soranet_privacy_circuit_events_total{region=\"$region\", relay_id=~\"$relay_id\"}[5m]))",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "PQ Ratio",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "avg_over_time(sorafs_orchestrator_pq_ratio{region=\"$region\"}[10m])",
+          "legendFormat": "PQ ratio"
+        }
+      ],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          { "value": null, "color": "green" },
+          { "value": 0.66, "color": "yellow" },
+          { "value": 0.5, "color": "red" }
+        ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "PoW Solve Time (P95)",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(soranet_privacy_pow_solve_seconds_bucket{region=\"$region\"}[5m])))",
+          "legendFormat": "solve p95"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Brownout Count",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(sorafs_orchestrator_policy_events_total{region=\"$region\", outcome=\"brownout\"}[15m]))",
+          "legendFormat": "brownouts"
+        }
+      ],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          { "value": null, "color": "green" },
+          { "value": 0.05, "color": "yellow" },
+          { "value": 0.1, "color": "red" }
+        ]
+      }
+    }
+  ],
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "cycle_id": "2025-W12",
+  "generated_at": "2025-03-24T09:30:00Z",
+  "summary": {
+    "total_challenges": 1536,
+    "success_rate": 0.992,
+    "mean_latency_ms": 720,
+    "p95_latency_ms": 2100
+  },
+  "providers": [
+    {
+      "provider_id": "prov_8d3a",
+      "manifests": 14,
+      "challenges": 96,
+      "success_rate": 0.989,
+      "failures": 1,
+      "repair_ticket": "REP-342",
+      "notes": "Disk saturation handled within SLA."
+    },
+    {
+      "provider_id": "prov_1a2b",
+      "manifests": 21,
+      "challenges": 144,
+      "success_rate": 0.941,
+      "failures": 8,
+      "repair_ticket": "REP-351",
+      "notes": "Pending repair acknowledgement."
+    }
+  ],
+  "anomalies": [
+    {
+      "provider_id": "prov_1a2b",
+      "reason": "missed_repair_sla",
+      "details": "Two consecutive failures without repair completion within 4h threshold."
+    }
+  ]
+}

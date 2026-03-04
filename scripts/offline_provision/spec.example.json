@@ -1,0 +1,31 @@
+{
+  "inspector": {
+    "private_key": "ed25519:13e39eb6c47c1fef4d6c3756378f01c1af4f4e3d0ece8f1d4cf4a1633c2e6c08",
+    "manifest_schema": "offline_provisioning_v1",
+    "manifest_version": 1
+  },
+  "proofs": [
+    {
+      "label": "kiosk-demo",
+      "manifest_issued_at_ms": 1730314876000,
+      "counter": 7,
+      "device_manifest": {
+        "android.provisioned.device_id": "retail-device-001",
+        "android.provisioned.audit_ticket": "A1B2C3-INSPECT-9001",
+        "android.provisioned.os_patch": "2025-10-05",
+        "android.provisioned.boot_slot": "a",
+        "android.provisioned.notes": {
+          "operator": "Sora Retail Pilot"
+        }
+      },
+      "challenge": {
+        "invoice_id": "INV-OA10-3-DEMO",
+        "receiver": "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016@wonderland",
+        "asset": "xor#sora#ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E@sora",
+        "amount": "25.00",
+        "issued_at_ms": 1730314876000,
+        "nonce_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    }
+  ]
+}

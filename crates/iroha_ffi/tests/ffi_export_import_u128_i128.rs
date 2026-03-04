@@ -1,11 +1,11 @@
-#![allow(missing_docs)]
-
+//! Tests for u128/i128 freestanding FFI import/export helpers.
 use iroha_ffi::{ffi_export, ffi_import};
 
 macro_rules! derive_freestanding_export_import {
     ($(fn $ident:ident($inp:ty) -> $out:ty);+ $(;)?) => {
         // FFI imports
         $(
+            #[doc = "FFI import function"]
             #[ffi_import]
             pub fn $ident(value: $inp) -> $out {
                 unreachable!("replaced by ffi_import")
@@ -14,12 +14,12 @@ macro_rules! derive_freestanding_export_import {
 
         // FFI exports
         mod exports {
-            use std::alloc;
-            use super::*;
+                        use super::*;
 
             iroha_ffi::def_ffi_fns! { dealloc }
 
             $(
+                #[doc = "FFI export function"]
                 #[ffi_export]
                 pub fn $ident(value: $inp) -> $out {
                     value
@@ -72,7 +72,6 @@ fn i128_values() -> [i128; 11] {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn u128_conversion() {
     let values = u128_values();
 
@@ -82,7 +81,6 @@ fn u128_conversion() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn i128_conversion() {
     let values = i128_values();
 
@@ -92,7 +90,6 @@ fn i128_conversion() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn u128_ref_conversion() {
     let values = u128_values();
 
@@ -102,7 +99,6 @@ fn u128_ref_conversion() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn i128_ref_conversion() {
     let values = i128_values();
 
@@ -112,7 +108,6 @@ fn i128_ref_conversion() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn u128_slice_conversion() {
     let values = u128_values();
 
@@ -120,7 +115,6 @@ fn u128_slice_conversion() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn i128_slice_conversion() {
     let values = i128_values();
 
@@ -128,7 +122,6 @@ fn i128_slice_conversion() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn u128_vec_conversion() {
     let values = u128_values().to_vec();
 
@@ -136,7 +129,6 @@ fn u128_vec_conversion() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn i128_vec_conversion() {
     let values = i128_values().to_vec();
 
@@ -144,7 +136,6 @@ fn i128_vec_conversion() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn u128_box_conversion() {
     let values = u128_values();
     for value in values {
@@ -154,7 +145,6 @@ fn u128_box_conversion() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn i128_box_conversion() {
     let values = i128_values();
 
@@ -165,7 +155,6 @@ fn i128_box_conversion() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn u128_array_conversion() {
     let values = u128_values();
 
@@ -173,7 +162,6 @@ fn u128_array_conversion() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn i128_array_conversion() {
     let values = i128_values();
 

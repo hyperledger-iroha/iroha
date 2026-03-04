@@ -1,0 +1,90 @@
+error: The struct didn't have the required field named `context` of type `iroha_executor :: prelude :: Context`
+ --> tests/ui/fail/derive_missing_fields.rs:5:17
+  |
+5 | #[derive(Visit, Entrypoints, Execute)]
+  |                 ^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `Entrypoints` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: The struct didn't have the required field named `verdict` of type `:: iroha_executor :: prelude :: Result`
+ --> tests/ui/fail/derive_missing_fields.rs:5:17
+  |
+5 | #[derive(Visit, Entrypoints, Execute)]
+  |                 ^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `Entrypoints` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: The struct didn't have the required field named `context` of type `iroha_executor :: prelude :: Context`
+ --> tests/ui/fail/derive_missing_fields.rs:5:30
+  |
+5 | #[derive(Visit, Entrypoints, Execute)]
+  |                              ^^^^^^^
+  |
+  = note: this error originates in the derive macro `Execute` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: The struct didn't have the required field named `verdict` of type `:: iroha_executor :: prelude :: Result`
+ --> tests/ui/fail/derive_missing_fields.rs:5:30
+  |
+5 | #[derive(Visit, Entrypoints, Execute)]
+  |                              ^^^^^^^
+  |
+  = note: this error originates in the derive macro `Execute` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0560]: struct `BrokenExecutor` has no field named `context`
+ --> tests/ui/fail/derive_missing_fields.rs:5:17
+  |
+5 | #[derive(Visit, Entrypoints, Execute)]
+  |                 ^^^^^^^^^^^ `BrokenExecutor` does not have this field
+  |
+  = note: all struct fields are already assigned
+  = note: this error originates in the derive macro `Entrypoints` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0560]: struct `BrokenExecutor` has no field named `verdict`
+ --> tests/ui/fail/derive_missing_fields.rs:5:17
+  |
+5 | #[derive(Visit, Entrypoints, Execute)]
+  |                 ^^^^^^^^^^^ `BrokenExecutor` does not have this field
+  |
+  = note: all struct fields are already assigned
+  = note: this error originates in the derive macro `Entrypoints` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0615]: attempted to take value of method `verdict` on type `BrokenExecutor`
+ --> tests/ui/fail/derive_missing_fields.rs:5:17
+  |
+5 | #[derive(Visit, Entrypoints, Execute)]
+  |                 ^^^^^^^^^^^ method, not a field
+  |
+  = note: this error originates in the derive macro `Entrypoints` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0615]: attempted to take value of method `context` on type `&BrokenExecutor`
+ --> tests/ui/fail/derive_missing_fields.rs:5:30
+  |
+5 | #[derive(Visit, Entrypoints, Execute)]
+  |                              ^^^^^^^ method, not a field
+  |
+  = note: this error originates in the derive macro `Execute` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0615]: attempted to take value of method `context` on type `&mut BrokenExecutor`
+ --> tests/ui/fail/derive_missing_fields.rs:5:30
+  |
+5 | #[derive(Visit, Entrypoints, Execute)]
+  |                              ^^^^^^^ method, not a field
+  |
+  = note: this error originates in the derive macro `Execute` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0615]: attempted to take value of method `verdict` on type `&BrokenExecutor`
+ --> tests/ui/fail/derive_missing_fields.rs:5:30
+  |
+5 | #[derive(Visit, Entrypoints, Execute)]
+  |                              ^^^^^^^ method, not a field
+  |
+  = note: this error originates in the derive macro `Execute` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0615]: attempted to take value of method `verdict` on type `&mut BrokenExecutor`
+ --> tests/ui/fail/derive_missing_fields.rs:5:30
+  |
+5 | #[derive(Visit, Entrypoints, Execute)]
+  |                              ^^^^^^^ method, not a field
+  |
+  = help: methods are immutable and cannot be assigned to
+  = note: this error originates in the derive macro `Execute` (in Nightly builds, run with -Z macro-backtrace for more info)

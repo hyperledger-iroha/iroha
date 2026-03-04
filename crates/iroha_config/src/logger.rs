@@ -6,22 +6,15 @@ use std::{
 };
 
 pub use iroha_data_model::Level;
-use serde_with::{DeserializeFromStr, SerializeDisplay};
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    core::{self as ncore, Archived},
+    json::{self, JsonDeserialize, JsonSerialize},
+};
 use tracing_subscriber::filter::Directive;
 
 /// Reflects formatters in [`mod@tracing_subscriber::fmt::format`]
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    Eq,
-    PartialEq,
-    strum::Display,
-    strum::EnumString,
-    Default,
-    SerializeDisplay,
-    DeserializeFromStr,
-)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, strum::Display, strum::EnumString, Default)]
 #[strum(serialize_all = "snake_case")]
 pub enum Format {
     /// See [`tracing_subscriber::fmt::format::Full`]
@@ -35,8 +28,51 @@ pub enum Format {
     Json,
 }
 
+impl JsonSerialize for Format {
+    fn json_serialize(&self, out: &mut String) {
+        json::write_json_string(&self.to_string(), out);
+    }
+}
+
+impl JsonDeserialize for Format {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let text = parser.parse_string()?;
+        Format::from_str(&text).map_err(|err| json::Error::InvalidField {
+            field: "format".into(),
+            message: err.to_string(),
+        })
+    }
+}
+
+impl NoritoSerialize for Format {
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+        let text = self.to_string();
+        <String as NoritoSerialize>::serialize(&text, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(self.to_string().len())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.encoded_len_hint()
+    }
+}
+
+impl<'de> NoritoDeserialize<'de> for Format {
+    fn deserialize(archived: &'de Archived<Self>) -> Self {
+        Self::try_deserialize(archived)
+            .expect("stored logger format strings must parse successfully")
+    }
+
+    fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, ncore::Error> {
+        let text = <String as NoritoDeserialize>::deserialize(archived.cast());
+        Format::from_str(&text).map_err(|err| ncore::Error::Message(err.to_string()))
+    }
+}
+
 /// List of filtering directives
-#[derive(Clone, DeserializeFromStr, SerializeDisplay, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Directives(Vec<Directive>);
 
 impl Directives {
@@ -93,6 +129,48 @@ impl Default for Directives {
     }
 }
 
+impl JsonSerialize for Directives {
+    fn json_serialize(&self, out: &mut String) {
+        json::write_json_string(&self.to_string(), out);
+    }
+}
+
+impl JsonDeserialize for Directives {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let value = parser.parse_string()?;
+        Directives::from_str(&value).map_err(|err| json::Error::InvalidField {
+            field: "directives".into(),
+            message: err.to_string(),
+        })
+    }
+}
+
+impl NoritoSerialize for Directives {
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+        let text = self.to_string();
+        <String as NoritoSerialize>::serialize(&text, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(self.to_string().len())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.encoded_len_hint()
+    }
+}
+
+impl<'de> NoritoDeserialize<'de> for Directives {
+    fn deserialize(archived: &'de Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("stored logger directives must parse successfully")
+    }
+
+    fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, ncore::Error> {
+        let text = <String as NoritoDeserialize>::deserialize(archived.cast());
+        Directives::from_str(&text).map_err(|err| ncore::Error::Message(err.to_string()))
+    }
+}
+
 /// Convert [`Level`] into [`tracing::Level`]
 fn into_tracing_level(level: Level) -> tracing::Level {
     match level {
@@ -113,7 +191,7 @@ mod tests {
     #[test]
     fn serialize_pretty_format_in_lowercase() {
         let value = Format::Pretty;
-        let actual = serde_json::to_string(&value).unwrap();
+        let actual = norito::json::to_json(&value).unwrap();
         assert_eq!("\"pretty\"", actual);
     }
 

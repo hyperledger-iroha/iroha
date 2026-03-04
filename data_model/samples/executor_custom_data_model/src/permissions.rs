@@ -1,10 +1,10 @@
 //! Module with custom tokens
-use alloc::{format, string::String, vec::Vec};
+use std::{format, string::String, vec::Vec};
 
 use iroha_executor_data_model::permission::Permission;
 use iroha_schema::IntoSchema;
-use serde::{Deserialize, Serialize};
+use norito::derive::{JsonDeserialize, JsonSerialize};
 
 /// Token to identify if user can (un-)register domains.
-#[derive(Clone, Copy, PartialEq, Eq, Permission, Deserialize, Serialize, IntoSchema)]
+#[derive(Clone, Copy, PartialEq, Eq, Permission, JsonDeserialize, JsonSerialize, IntoSchema)]
 pub struct CanControlDomainLives;

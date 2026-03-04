@@ -1,0 +1,20 @@
+[package]
+name = "iroha_i18n"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Internationalization utilities shared across Iroha components."
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+norito = { workspace = true }
+
+[package.metadata.cargo-all-features]
+denylist = []
+skip_optional_dependencies = true

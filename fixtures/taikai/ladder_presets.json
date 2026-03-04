@@ -1,0 +1,46 @@
+{
+  "presets": [
+    {
+      "id": "uhd-2160p-hevc",
+      "track_kind": "video",
+      "codec": "hevc-main10",
+      "bitrate_kbps": 25000,
+      "resolution": "3840x2160"
+    },
+    {
+      "id": "fhd-1080p-av1",
+      "track_kind": "video",
+      "codec": "av1-main",
+      "bitrate_kbps": 8000,
+      "resolution": "1920x1080"
+    },
+    {
+      "id": "hd-720p-av1",
+      "track_kind": "video",
+      "codec": "av1-main",
+      "bitrate_kbps": 4000,
+      "resolution": "1280x720"
+    },
+    {
+      "id": "sd-480p-avc",
+      "track_kind": "video",
+      "codec": "avc-high",
+      "bitrate_kbps": 2000,
+      "resolution": "854x480"
+    },
+    {
+      "id": "audio-opus-stereo",
+      "track_kind": "audio",
+      "codec": "opus",
+      "bitrate_kbps": 128,
+      "audio_layout": "stereo"
+    },
+    {
+      "id": "audio-aac-low",
+      "track_kind": "audio",
+      "codec": "aac-lc",
+      "bitrate_kbps": 64,
+      "audio_layout": "mono"
+    }
+  ]
+}

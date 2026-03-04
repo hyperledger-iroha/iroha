@@ -1,9 +1,10 @@
 //! Crate with trigger procedural macros.
 
-use iroha_macro_utils::Emitter;
-use manyhow::{emit, manyhow};
+use manyhow::{Emitter, emit, manyhow};
 use proc_macro2::TokenStream;
 
+mod emitter_ext;
+use crate::emitter_ext::EmitterExt;
 mod entrypoint;
 
 /// Annotate the user-defined function that starts the execution of the trigger.
@@ -23,7 +24,8 @@ mod entrypoint;
 ///
 /// #[main]
 /// fn main(host: Iroha, context: Context) {
-///     todo!()
+///     // trigger execution logic goes here
+///     let _ = (host, context);
 /// }
 /// ```
 #[manyhow]

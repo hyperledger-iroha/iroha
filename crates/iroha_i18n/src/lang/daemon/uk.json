@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Ласкаво просимо до Hyperledger Iroha!",
+  "error.trace_config_setup": "Не вдалося налаштувати трасування конфігурації",
+  "error.config": "Помилка налаштування",
+  "error.logger": "Не вдалося ініціалізувати систему журналювання",
+  "error.start": "Не вдалося запустити Iroha",
+  "error.run": "Під час запуску Iroha сталася помилка",
+  "error.start_p2p": "Неможливо запустити однорангову мережу",
+  "error.init_kura": "Не вдалося ініціалізувати Kura (блочне сховище)",
+  "error.start_dev_telemetry": "Не вдалося запустити службу телеметрії для розробки",
+  "error.start_telemetry": "Не вдалося запустити службу телеметрії",
+  "error.listen_os_signal": "Неможливо налаштувати прослуховування сигналів ОС",
+  "error.start_torii": "Не вдалося запустити Torii (шлюз Iroha HTTP API)"
+}

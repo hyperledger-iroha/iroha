@@ -1,15 +1,18 @@
-# Parity Scale Decoder
+# Norito Decoder
 
-These commands help you decode **Iroha 2** data types from binaries using [Parity Scale Codec](https://github.com/paritytech/parity-scale-codec).
+These commands help you decode **Iroha 2** data types from binaries using the Norito codec.
+
+> **Note:** The codec subcommands are gated behind the optional `codec` feature.
+> Run them via `cargo run -p iroha_kagami --features codec -- codec <SUBCOMMAND>` or build the binary with that feature enabled.
 
 ### Subcommands
 
 | Command                                             | Description                                                                                                                        |
 |-----------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
 | [`list-types`](#list-types)                         | List all available data types                                                                                                      |
-| [`scale-to-json`](#scale-to-json-and-json-to-scale) | Decode the data type from SCALE to JSON                                                                                            |
-| [`json-to-scale`](#scale-to-json-and-json-to-scale) | Encode the data type from JSON to SCALE                                                                                            |
-| [`scale-to-rust`](#scale-to-rust)                   | Decode the data type from SCALE binary file to Rust debug format.<br>Can be used to analyze binary input if data type is not known |
+| [`norito-to-json`](#norito-to-json-and-json-to-norito) | Decode the data type from Norito to JSON                                                                                            |
+| [`json-to-norito`](#norito-to-json-and-json-to-norito) | Encode the data type from JSON to Norito                                                                                            |
+| [`norito-to-rust`](#norito-to-rust)                   | Decode the data type from Norito binary file to Rust debug format.<br>Can be used to analyze binary input if data type is not known |
 | `help`                                              | Print the help message for the tool or a subcommand                                                                                |
 
 ## `list-types`
@@ -40,34 +43,34 @@ Algorithm
 
 </details>
 
-## `scale-to-json` and `json-to-scale`
+## `norito-to-json` and `json-to-norito`
 
 Both commands by default read data from `stdin` and print result to `stdout`.
 There are flags `--input` and `--output` which can be used to read/write from files instead.
 
-These commands require `--type` argument. If data type is not known, [`scale-to-rust`](#scale-to-rust) can be used to detect it.
+These commands require `--type` argument. If data type is not known, [`norito-to-rust`](#norito-to-rust) can be used to detect it.
 
 * Decode the specified data type from a binary:
 
   ```bash
-  kagami codec scale-to-json --input <path_to_binary> --type <type>
+  kagami codec norito-to-json --input <path_to_binary> --type <type>
   ```
 
-### `scale-to-json` and `json-to-scale` usage examples
+### `norito-to-json` and `json-to-norito` usage examples
 
 * Decode the `NewAccount` data type from the `samples/account.bin` binary:
 
   ```bash
-  kagami codec scale-to-json --input crates/iroha_kagami/src/codec/samples/account.bin --type NewAccount
+  kagami codec norito-to-json --input crates/iroha_kagami/src/codec/samples/account.bin --type NewAccount
   ```
 
 * Encode the `NewAccount` data type from the `samples/account.json`:
 
   ```bash
-  kagami codec json-to-scale --input crates/iroha_kagami/src/codec/samples/account.json --output result.bin --type NewAccount
+  kagami codec json-to-norito --input crates/iroha_kagami/src/codec/samples/account.json --output result.bin --type NewAccount
   ```
 
-## `scale-to-rust`
+## `norito-to-rust`
 
 Decode the data type from a given binary.
 
@@ -79,25 +82,25 @@ Decode the data type from a given binary.
 * Decode the specified data type from a binary:
 
   ```bash
-  kagami codec scale-to-rust <path_to_binary> --type <type>
+  kagami codec norito-to-rust <path_to_binary> --type <type>
   ```
 
 * If you are not sure which data type is encoded in the binary, run the tool without the `--type` option:
 
   ```bash
-    kagami codec scale-to-rust <path_to_binary>
+    kagami codec norito-to-rust <path_to_binary>
   ```
 
-### `scale-to-rust` usage examples
+### `norito-to-rust` usage examples
 
 * Decode the `NewAccount` data type from the `samples/account.bin` binary:
 
   ```bash
-  kagami codec scale-to-rust crates/iroha_kagami/src/codec/samples/account.bin --type NewAccount
+  kagami codec norito-to-rust crates/iroha_kagami/src/codec/samples/account.bin --type NewAccount
   ```
 
 * Decode the `NewDomain` data type from the `samples/domain.bin` binary:
 
   ```bash
-  kagami codec scale-to-rust crates/iroha_kagami/src/codec/samples/domain.bin --type NewDomain
+  kagami codec norito-to-rust crates/iroha_kagami/src/codec/samples/domain.bin --type NewDomain
   ```

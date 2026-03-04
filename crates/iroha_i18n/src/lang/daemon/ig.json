@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Nnọọ na Hyperledger Iroha!",
+  "error.trace_config_setup": "Enweghị ike ịtọlite usoro nchọpụtaghị nhazi",
+  "error.config": "Mperi nhazi!",
+  "error.logger": "Enweghị ike ịmalite sistemụ ndekọ",
+  "error.start": "Iroha anaghị amalite",
+  "error.run": "Mperi mere mgbe Iroha na-arụ ọrụ",
+  "error.start_p2p": "Enweghị ike ịmalite netwọk P2P",
+  "error.init_kura": "Enweghị ike ịmalite Kura (ebe nchekwa blọkụ)",
+  "error.start_dev_telemetry": "Enweghị ike ịmalite ọrụ telemetry maka mmepe",
+  "error.start_telemetry": "Enweghị ike ịmalite ọrụ telemetry",
+  "error.listen_os_signal": "Enweghị ike ịtọlite ịnụ akara OS",
+  "error.start_torii": "Enweghị ike ịmalite Torii (ọnụ ụzọ Iroha HTTP API)"
+}

@@ -1,370 +1,236 @@
 # Iroha v2.0
 
-The following is a specification for Hyperledger Iroha 2.0
+Hyperledger Iroha v2 is a deterministic, Byzantine fault tolerant distributed ledger that emphasises a
+modular architecture, strong defaults, and approachable APIs. The platform ships as a set of Rust crates
+that can be embedded into bespoke deployments or used together to operate a production blockchain network.
 
 ---
 
 ## 1. Overview
 
-Hyperledger Iroha 2 aims to be an even more simple, highly performant distributed ledger platform than Iroha 1.
-Iroha 2 carries on the tradition of putting emphasis on having a library of pre-defined smart contracts in the core, so that developers do not have to write their own code to perform many tasks related to digital identity and asset management.
-
-### 1.1. Relationship to Hyperledger Fabric, Hyperledger Sawtooth, Hyperledger Besu, and Others
-
-It is our vision that in the future Hyperledger will consist less of disjointed projects and more of coherent libraries of components that can be selected and installed in order to run a Hyperledger network.
-To this end, Iroha provides encapsulated components for use by other projects, particularly those in Hyperledger.
-
-### 1.2. Mobile and Web libraries
-
-Having a solid distributed ledger system is not useful if there are no applications that can easily utilize it.
-To ease use, we created and opened sourced software development kits for iOS, Android, and JavaScript.
-Using these libraries, cryptographic public/private key pairs that are compatible with Iroha can be created and common API functions can be conveniently called.
-
-## 2. System architecture
-
-### 2.1. P2P Network
-
-Generally, $3f+1$ peers are needed to tolerate $f$ Byzantine peers in the network (albeit some consensus algorithms may have higher peers requirements).
-The number of $f$ that a system should be made to tolerate should be determined by the system maintainer,
-based on the requirements for expected use cases.
-
-The following peer types are considered:
-
-* Voting peers (participate in consensus)
-* Normal peer (receives and relays blocks, but does not participate in consensus)
-however, normal peers do validate all received data, with the mantra of *don't trust, verify*)
-
-#### 2.1.2. Peers discovery and membership
-
-Membership is provided in a decentralized way, on ledger.
-By default $2f+1$ signatures are needed to confirm adding or removing peers to or from the network.
-If peers drop out and are unresponsive for "too long," then other peers will automatically execute a remove peer smart contract to remove the peer from the consensus process.
-
-### 2.2. Cryptography
-
-We maintain [Hyperledger Ursa](https://github.com/hyperledger/ursa).
-
-### 2.3. Data Model
-
-Iroha uses a simple data model made up of world with domains, accounts, assets and signatories,
-as shown in the figure below:
-
-```
-
-   +-----------------------------------------------+
-   |                                               |
-   |     +-----------------+                       |
-   |     |Domain           |                       |
-   |     +--------------+  |                       |
-   |     ||Asset        |  |                       |
-+--+--+  ||Definition(s)|  |                       |
-|World|  +--------------+  |                       |
-+--+--+  |                 |                       |
-   |     +------------+    |                       |
-   |     ||Account(s)||    | has   +-----------+   |
-   |     |------------------------->Signatories|   |
-   |     +-----------------+       +-----------+   |
-   |                       |                       |
-   |                       |  has  +--------+      |
-   |                       +------->Asset(s)|      |
-   |                               +--------+      |
-   +-----------------------------------------------+
-```
-
-### 2.4. Smart Contracts
-
-Iroha provides a library of smart contracts called Iroha Special Instructions (ISI).
-To execute logic on the ledger, these instructions can be invoked via either transactions
-or registered [Iroha Trigger](#iroha-triggers).
-
-More information about Iroha Special Instructions can be found in an
-[Architecture Decision Record](https://wiki.hyperledger.org/display/iroha/Iroha+Special+Instructions+DSL).
-
-### 2.5. Iroha Triggers
-
-Triggers are [Iroha Special Instructions](#smart-contracts) that may be invoked based on condition.
-This is very powerful feature and enables Turing complete computation for Iroha's Special Instructions.
-
-* Trigger at timestamp
-* Trigger at blockchain
-* Trigger at *condition*
-
-### 2.6. Transactions
-
-Transactions are used to invoke an [Iroha Special Instruction](#smart-contracts) or a set of instructions.
-
-#### 2.6.1 Multisignature Transactions
-
-**TBD**
-
-Using [Iroha Special Instructions](#smart-contracts) we can conditionally check transactions signatures.
-
-```
-[condition,
-   [signatory_set, ...],
-    ...
-]
-```
-
-where ```signatory_set``` is an m-of-n signatory set.
-If multiple ```signatory_set```s exist for a given condition, they can be either ```OR``` or ```AND``` unioned.
-
-As an example illustrating why conditional multisig is useful,
-consider a situation where a bank wants to allow either 2 tellers or 1 manager to sign off on any transfer transaction over $500 and under $1000.
-In this case, the condition will be: ```Condition.asset("usd@nbc").qty(500).comparison(">").qty(1000).comparison("<")```
-and the ```signatory_set```s for the tellers and manager will be ```OR``` unioned,
-so that either the m-of-n signatues from the tellers
-or the single signature from the manager will be acceptable for transaction signing.
-
-### 2.7. Data storage
-
-Data in Hyperledger Iroha v2 is stored in two places: the block store (persistent storage) and a world-state-view (in volatile RAM).
-
-To reach the performance targets, Iroha 2 does not use a database to store data, but instead implements a custom storage solution, called **Kura**, designed specifically for storing and validating blockchain data.
-One of the design goals of Kura is to store transactional data in a tamper-evident cryptographic format even when no multi-peer consensus is available.
-
-
-**TODO**:
-
-When Kura is initialized, data is read from the on-disk block store using either of two methods
-(depending on the config settings): `fastInit` or `strictInit`.
-`fastInit` reads all transactions in all blocks in order and recreates all the in-memory data structures,
-but without doing any validation.
-`strictInit` validates that all transactions and blocks have correct signatures
-and that all transactions follow the business rules (e.g., no accounts should have a negative balance).
-
-Additionally, an auditor job can be spawned that will go through the block store strictly
-and compare the result with the world-state-view,
-in case the server suspects that something has been compromised and wants to check.
-
-Kura takes as input blocks, which comprise multiple transactions.
-Kura is meant to take only blocks as input that have passed stateless and stateful validation,
-and have been finalized by consensus. For finalized blocks,
-Kura simply commits the block to the block storage on the disk
-and updates atomically the in-memory data structures that make up the world-state-view.
-To optimize networking syncing, which works on 100 block chunks,
-chunks of 100 blocks each are stored in files in the block store.
-
-Kura also helps out with stateful validation, by providing functions that retrieve a copy of values affected in the world-state-view by the transactions in a block, returning the values as a copy.
-This then allows the stateful validation component to apply the transactions to update the world-state-view and confirm that no transactions in the block violate business rule invariants (e.g., no account shall have a negative balance of an asset after a transaction).
-
-Iroha uses the in-memory World State View to also store information, such as the latest input/output transactions for an account and for an asset, in order to simplify the query API and allow real-time querying of Iroha 2 directly, without requiring end-user applications to rely on middleware.
-To confirm that transactions are indeed correct, Merkle proofs are also stored with and readily available from Kura.
-
-### 2.8. Consensus
-
-Byzantine fault tolerant systems are engineered to tolerate $f$ numbers of Byzantine faulty peers in a network.
-Iroha introduces a Byzantine Fault Tolerant consensus algorithm called Sumeragi.
-Sumeragi is a Byzantine fault tolerant consensus algorithm for permissioned,
-peer-to-peer networks that try to reach consensus about some set of data.
-It is heavily inspired by the B-Chain algorithm:
-
-Duan, S., Meling, H., Peisert, S., & Zhang, H. (2014).
-*Bchain: Byzantine replication with high throughput and embedded reconfiguration*.
-In International Conference on Principles of Distributed Systems (pp. 91-106). Springer.
-
-As in B-Chain, we consider the concept of a global order over validating peers and sets *$a$* and *$b$* of peers, where $A$ consists of the first $2f+1$ peers and $B$ consists of the remainder.
-As $2f+1$ signatures are needed to confirm a transaction, under the normal case only $2f+1$ peers are involved in transaction validation;
-the remaining peers only join the validation when faults are exhibited in peers in set *$a$*.
-The $2f+1$th peer is called the *proxy tail*.
-
-#### 2.8.1. The Basics
-
-- no ordering service; instead, the leader of each round just uses the transactions they have at hand
-to create a block and the leader changes each round to prevent long-term censorship
-
-- $3f+1$ validators that are split into two groups, $a$ and $b$, of $2f+1$ and $f$ validators each
-
-- $2f+1$ validators must sign off on a block in order for it to be committed
-
-- the first node in set $a$ is called the *leader* (sumeragi) and the $2f+1$th node in set $a$ is called the *proxy tail*
-
-- the basic idea is that up to $f$ validators can fail and the system should run,
-so if there are $f$ Byzantine faulty nodes, you want them to be in the $b$ set as much as possible
-
-- empty blocks are not produced, so to prevent an evil leader from censoring transactions
-and claiming there are no transactions to create blocks with, everytime a node sends a transaction to the leader,
-the leader has to submit a signed receipt of receiving it;
-then, if the leader does not create a block in an orderly amount of time (the *block time*),
-the submitting peer can use this as proof to convince non-faulty nodes to do a view change and elect a new leader
-
-- after a node signs off on a block and forwards it to the *proxy tail*,
-they expect a commit message within a reasonable amount of time (the *commit time*);
-if there is no commit message in time, the node starts suspecting the $a$ set.
-
-- once a commit message is received from the proxy tail, all nodes commit the block locally;
-if a node complains that they never received the commit message,
-then a peer that has the block will provide that peer with the committed block
-(note: there is no danger of a leader creating a new block while the network is waiting
-for a commit message because the next round cannot continue nor can a new leader be elected
-until after the current round is committed or leader election takes place)
-
-- every time there is a problem, such as a block not being committed in time, a new $a$ set is selected;
-this is because we want to just move on and not worry about assigning blame, which would come with considerable overhead
-
-- $2f+1$ signatures are needed to commit, $f+1$ are needed to change the leader and proxy tail
-
-##### 2.8.2. The Details
-
-###### Network Topology
-
-A network of nodes is assumed, where each node knows the identity of all other nodes on the network.
-These nodes are called *validators*. We also assume that there are $3f+1$ validators on the network,
-where $f$ is the number of simultaneous Byzantine faulty nodes that the network can contain
-and still properly function (albeit, performance will degrade in the presence of a Byzantine faulty node,
-but this is okay because Hyperledger Iroha is designed to operate in a permissioned environment).
-
-Because the identities of the nodes are known by all and can be proven through digital signatures,
-it makes sense to overlay a topology on top of the network of nodes in order to provide guarantees
-that can enable consensus to be reached faster.
-
-For each round (e.g., block), the previous round's (block's) hash is used to determine an ordering over the set of nodes,
-such that there is a deterministic and canonical order for each block.
-In this ordering, the first $2f+1$ nodes are grouped into a set called set $a$.
-Under normal (non-faulty) conditions, consensus for a block is performed by set $a$.
-The remaining $f$ nodes are grouped into a set called set $b$. Under normal conditions,
-set $b$ acts as a passive set of validators to view and receive committed blocks,
-but otherwise they do not participate in consensus.
-
-###### Data Flow: Normal Case
-
-Assume the leader has at least one transaction.
-The leader creates a block either when the *block timer* goes off or its transaction cache is full.
-The leader then sends the block to each node in set $a$. Each peer in set $a$ then validates and signs the block,
-and sends it to the proxy tail.
-When each node in set $a$ sends the block to the proxy tail, they set a timer, the *commit timer*,
-within which time the node expects to get a commit message (or else it will suspect the $a$ set).
-
-The proxy tail should at this point have received the block from at least one of the peers.
-From the time the first peer contacts the proxy tail with a block proposal, a timer is set, the *commit timer*.
-Before the *commit timer* is over, the proxy tail expects to get $2f$ votes from the other nodes in set $a$,
-to which it then will add its vote in order to get $2f+1$ votes to commit the block.
-
-###### Handling Faulty Cases
-
-**Possible faulty cases related to the leader are:**
-
-- leader ignores all transactions and never creates a block
-
-  - the solution to this is to have other nodes broadcast a transaction across the network
-  and if someone sends a transaction to the leader and it gets ignored, then the leader can be suspected;
-  the suspected message is sent around the network and a new leader is elected if $f+1$ nodes are submitting transactions to
-  the leader but no blocks are produced.
-
-- leader creates a block, but only sends it to a minority of peers, so that $2f+1$ votes cannot be obtained for consensus
-
-  - the solution is to have a *commit timer* on each node where a new leader will be elected.
-
-- leader creates multiple blocks and sends them to different peers, causing the network to not reach consensus about a block
-
-  - the solution is to have a *commit timer* on each node where a new leader will be elected
-  if a block is not agreed upon.
-
-**Possible faulty cases related to the proxy tail are:**
-
-- proxy tail received some votes, but does not receive enough votes for a block to commit
-
-  - the *commit timer* on regular nodes or the *commit timer* on the proxy tail will go off and a new leader and proxy tail will be elected
-  when $f+1$ nodes are suspecting.
-
-- proxy tail receives enough votes for a block, but lies and says that they didn't
-
-  - the *commit timer* on nodes will go off and a new leader and proxy tail are elected.
-
-- proxy tail does not inform any other node about a block commit (block withholding attack)
-
-  - the *commit timer* on nodes will go off and a new leader and proxy tail will be elected. Once 2 blocks have passed,
-  arbitrary rewriting of history in the future is not possible. Once a subsequent block is produced, it is not possible
-  to replace the block.
-
-- proxy tail does not inform set $b$ about a block commit
-
-  - through normal data synchronization (P2P gossip), set $b$ will get up to date
-
-- proxy tail selectively sends a committed block to some, but not other nodes
-
-  - Either the *commit timer* on nodes will go off and a new leader and proxy tail are elected, or the other nodes
-  will receive the block through P2P sync. If a new round is performed, the leader will add information to the new block
-  containing the block hashes it invalidates. If the block passes, then the peers are to replace partially shared block with the
-  new block but not the other way around due to the signatures invalidating the hash.
-
-**Possible faulty cases related to any node in set $a$ are:**
-
-- a peer could delay signing on purpose so they slow down consensus, without withholding their signature
-
-  - this is not very nice, but it is also hard to prove;
-  the Hijiri reputation system can be used to lower the reputation of slow nodes anyway
-
-- a peer may not sign off on a block
-
-  - if the lack of a signature causes a block to not commit, a new node will be brought in from set $b$
-
-- a peer may make falsely suspect the $a$ set
-
-  - $f+1$ suspicion claims are required to make a block invalid and change the leader and the proxy tail
-
-### 2.9. Blocks synchronization
-
-When nodes gossip to each other, they include the latest known block hash.
-If a receiving node does not know about this block, they will then request data.
-
-
-### 2.10. Data permissions
-
-Data permissioning is crucial to many real use cases.
-For example, companies will not likely accept distributed ledger technology
-if it means that competing institutions will know the intricate details of transactions.
-
-
-### 2.12. Hijiri: Peer reputation system
-
-The hijiri reputation system is based on rounds.
-At each round, validating peers that are registered with the membership service perform the following tasks
-to establish trust (reliability) ratings for the peers:
-
-* data throughput test
-* version test
-* computational test
-* data consistency test
-
-Which peers validate each other are based on the pairwise distance between hashes
-(e.g., ```sort(abs(hash && 0x0000ffff - publicKey && 0x0000ffff))```).
-The hashes are computed based on the public keys of the peers that are concatenated with the round number
-and then SHA-3 hashed. Rounds occur whenever the Merkle root is less than TODO:XXX.
-Results are shared in a separate Merkle tree, maintained independently of the transactions (so the systems can run in parallel).
-
-### 2.13 Iroha Queries
-
-To retrieve information about World State View of the Peer clients will use Iroha Queries API.
-
-### 2.14 Client API
-
-Client libraries interact with Iroha over the HTTP and WebSocket. For details about the available endpoints, see [Reference > Torii Endpoints](https://docs.iroha.tech/reference/torii-endpoints.html).
-
-### 2.15 Versioning
-
-As the system develops and new Iroha 2.x versions are released some of the formats and structures might change.
-It is practical to track these changes in the following serialized objects:
-
-1. Client API data formats
-2. Internal P2P message formats
-3. Transactions
-4. Blocks
-
-For this purpose these structures will be serialized together with their version information. The detailed description of the versioning support in relation to the serialization formats used in Iroha can be found in this [RFC](https://wiki.hyperledger.org/display/iroha/Message+Versioning).
-
-Versioning support will have the following benefits:
-1. Client libraries will be able to clearly indicate if they receive an unsupported versioned response.
-2. Iroha peers will be able to clearly indicate if they receive an unsupported versioned request.
-3. The network upgrade will not require for all peers to be upgraded simultaneously.
-4. Transactions and Blocks older versions can be handled conditionally after the network upgrade.
-
-## 3.0 Performance Goals
-
-- 20,000 tps
-- 2-3 s block time
-
+Iroha 2 continues the design philosophy introduced with Iroha 1: provide a curated collection of
+capabilities out of the box so operators can stand up a network without writing large amounts of custom
+code. The v2 release consolidates the execution environment, consensus pipeline, and data model into a
+single cohesive workspace.
+
+The v2 line is designed for organisations that want to operate their own permissioned or consortium
+blockchains. Each deployment runs its own consensus network, maintains independent governance, and can tailor
+configuration, genesis data, and upgrade cadence without depending on third parties. The shared workspace
+allows multiple independent networks to build against the exact same codebase while choosing the features and
+policies that match their use cases.
+
+Both Iroha 2 and SORA Nexus (Iroha 3) run the same Iroha Virtual Machine (IVM). Developers can author Kotodama
+contracts once and deploy them across self-hosted networks or the global Nexus ledger without recompiling or
+forking the execution environment.
+### 1.1 Relationship to the Hyperledger ecosystem
+
+Iroha components are designed to interoperate with other Hyperledger projects. Consensus, data-model, and
+serialization crates can be reused in composite stacks or alongside Fabric, Sawtooth, and Besu deployments.
+Common tooling—such as Norito codecs and governance manifests—helps keep interfaces consistent across the
+ecosystem while allowing Iroha to provide an opinionated default implementation.
+
+### 1.2 Client libraries and SDKs
+
+To ensure first-class mobile and web experiences, the project publishes maintained SDKs:
+
+- `IrohaSwift` for iOS and macOS clients, integrating Metal/NEON acceleration behind deterministic fallbacks.
+- `iroha_js` for JavaScript and TypeScript applications, including Kaigi builders and Norito helpers.
+- `iroha_python` for Python integrations, with HTTP, WebSocket, and telemetry support.
+- `iroha_cli` for terminal-driven administration and scripting.
+
+languages and platforms.
+
+### 1.3 Design principles
+
+- **Determinism first:** Every node executes the same code paths and produces the same results given the same
+  inputs. SIMD/CUDA/NEON paths are feature-gated and fall back to deterministic scalar implementations.
+- **Composable modules:** Networking, consensus, execution, telemetry, and storage each live in dedicated
+  crates so embedders can adopt subsets without carrying the entire stack.
+- **Explicit configuration:** Behavioural knobs are surfaced through `iroha_config`; environment toggles are
+  limited to developer conveniences.
+- **Secure defaults:** Canonical codecs, strict pointer ABI enforcement, and versioned manifests make
+  cross-network upgrades predictable.
+
+## 2. Platform architecture
+
+### 2.1 Node composition
+
+An Iroha node runs several cooperating services:
+
+- **Torii (`iroha_torii`)** exposes HTTP/WebSocket APIs for transactions, queries, streaming events, and
+  telemetry (`/v1/...` endpoints).
+- **Core (`iroha_core`)** coordinates validation, consensus, execution, governance, and state management.
+- **Sumeragi (`iroha_core::sumeragi`)** implements the NPoS-ready consensus pipeline with view changes,
+  reliable broadcast data availability, and commit certificates. See the
+  [Sumeragi consensus guide](./sumeragi.md) for details.
+- **Kura (`iroha_core::kura`)** persists canonical blocks, recovery sidecars, and witness metadata on disk.
+- **World State View (`iroha_core::state`)** stores the authoritative in-memory snapshot used for validation
+  and queries.
+- **Iroha Virtual Machine (`ivm`)** executes Kotodama bytecode (`.to`) and enforces the pointer ABI policy.
+- **Norito (`crates/norito`)** provides deterministic binary and JSON serialization for every on-wire type.
+- **Telemetry (`iroha_telemetry`)** exports Prometheus metrics, structured logging, and streaming events.
+- **P2P (`iroha_p2p`)** manages gossip, topology, and secure connections between peers.
+
+### 2.2 Networking and topology
+
+Iroha peers maintain an ordered topology derived from committed state. Each consensus round selects a leader,
+validating set, proxy tail, and Set B validators. Transactions are gossiped using Norito-encoded messages
+before the leader bundles them into a proposal. Reliable broadcast guarantees that blocks and supporting
+evidence reach all honest peers, ensuring data availability even under network churn. View changes rotate
+leadership when deadlines are missed, and commit certificates ensure that every committed block carries the
+canonical signature set used by all peers.
+
+### 2.3 Cryptography
+
+The `iroha_crypto` crate powers key management, hashing, and signature verification:
+
+- Ed25519 is the default validator key scheme.
+- Optional backends include Secp256k1, TC26 GOST, BLS (for aggregate attestations), and ML-DSA helpers.
+- Streaming channels pair Ed25519 identities with Kyber-based HPKE to secure Norito streaming sessions.
+- All hashing routines use deterministic implementations (SHA-2, SHA-3, Blake2, Poseidon2) with workspace
+  audits documented in `docs/source/crypto/dependency_audits.md`.
+
+### 2.4 Streaming and application bridges
+
+- **Norito streaming (`iroha_core::streaming`, `norito::streaming`)** provides deterministic, encrypted media
+  and data channels with session snapshots, HPKE key rotation, and telemetry hooks. Kaigi conferencing and
+  confidential evidence transfers use this lane.
+- **Connect bridge (`connect_norito_bridge`)** exposes a C ABI surface that powers platform SDKs
+  (Swift, Kotlin/Android) while reusing the Rust clients under the hood.
+- **ISO 20022 bridge (`iroha_torii::iso20022_bridge`)** converts regulated payment messages into Norito
+  transactions, enabling interoperability with financial workflows without bypassing consensus or validation.
+- All bridges preserve deterministic Norito payloads so downstream systems can verify state transitions.
+
+## 3. Data model
+
+The `iroha_data_model` crate defines all ledger objects, instructions, queries, and events. Highlights:
+
+- **Domains, accounts, and assets** use canonical IH58 account IDs (preferred); `name@domain` remains a routing
+  alias when explicitly supplied. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+  operations; NFTs carry arbitrary structured metadata.
+- **Roles and permissions** use Norito-enumerated tokens that map directly to executor checks.
+- **Triggers** (time-based, block-based, or predicate-driven) emit deterministic transactions via the on-chain
+  executor.
+- **Events** stream via Torii and mirror committed state transitions, including confidential flows and
+  governance actions.
+- **Transactions, blocks, and manifests** are Norito-encoded (`SignedTransaction`, `SignedBlockWire`) with
+  explicit version headers, ensuring forward-extendable decoding.
+- **Customisation** happens through the executor data model: operators may register custom instructions,
+  permissions, and parameters while preserving determinism.
+- **Repositories (`RepoInstruction`)** allow bundling deterministic upgrade plans (executors, manifests, and
+  assets) so multi-step rollouts can be managed on-chain with governance approval.
+- **Consensus artifacts**—such as commit certificates and witness lists—reside in the data model and
+  round-trip through golden tests to guarantee compatibility between `iroha_core`, Torii, and SDKs.
+- **Confidential registries and events** capture shielded asset descriptors, verifier keys, commitments,
+  nullifiers, and event payloads (`ConfidentialEvent::{Shielded,Transferred,Unshielded}`) so confidential flows
+  remain auditable without leaking plaintext data.
+
+## 4. Transaction lifecycle
+
+1. **Admission:** Torii decodes the Norito payload, checks signatures, TTL, and size limits, then enqueues the
+   transaction locally.
+2. **Gossip:** The transaction propagates across the topology; peers deduplicate by hash and repeat admission
+   checks.
+3. **Selection:** The current leader pulls transactions from the pending set and performs stateless validation.
+4. **Stateful simulation:** Candidate transactions execute inside a transient `StateBlock`, invoking IVM or
+   built-in instructions. Conflicts or rule violations are dropped deterministically.
+5. **Trigger materialisation:** Scheduled triggers due in the round are converted into internal transactions
+   and validated using the same pipeline.
+6. **Proposal sealing:** When block limits are reached or timeouts expire, the leader emits a Norito-encoded
+   `BlockCreated` message.
+7. **Validation:** Peers in the validating set re-run stateless/stateful checks. Successful peers sign
+   `BlockSigned` messages and forward them to the deterministic collector set.
+8. **Commit:** A collector assembles a commit certificate once it collects the canonical signature set,
+   broadcasts `BlockCommitted`, and finalises the block locally.
+9. **Application:** All peers record the block in Kura, apply state updates, emit telemetry/events, purge
+   committed transactions from the mempool, and rotate topology roles.
+
+Recovery paths use deterministic broadcast to retransmit missing blocks, and view changes rotate leadership
+when deadlines lapse. Sidecars and telemetry provide diagnostic insights without mutating consensus results.
+
+## 5. Smart contracts and execution
+
+Smart contracts run on the Iroha Virtual Machine (IVM):
+
+- **Kotodama** compiles high-level `.ko` sources into deterministic `.to` bytecode.
+- **Pointer ABI enforcement** ensures contracts interact with host memory through validated pointer types.
+  Syscall surfaces are described in `ivm/docs/syscalls.md`; the ABI list is hashed and versioned.
+- **Syscalls and hosts** cover ledger state access, trigger scheduling, confidential primitives, Kaigi media
+  flows, and deterministic randomness.
+- **Built-in executor** continues to support Iroha Special Instructions (ISI) for asset, account, permission,
+  and governance operations. Custom executors can extend the instruction set while honouring Norito schemas.
+- **Confidential features**—including shielded transfers and verifier registries—are exposed via executor
+  instructions and validated by hosts with Poseidon commitments.
+
+## 6. Storage and persistence
+
+- **Kura block store** writes each finalised block as a `SignedBlockWire` payload with a Norito header, keeping
+  canonical headers, transactions, commit certificates, and witness data together.
+- **World State View** keeps the authoritative state in memory for fast queries. Deterministic snapshots and
+  pipeline sidecars (`pipeline/sidecars.norito` + `pipeline/sidecars.index`) support recovery and audits.
+- **State tiering** allows hot/cold partitioning for large deployments while preserving deterministic
+  validation.
+- **Sync and replay** load committed blocks back into state using the same validation rules. Deterministic
+  broadcast ensures peers can recover missing data from neighbours without relying on trusted storage.
+
+## 7. Governance and economics
+
+- On-chain parameters (`SetParameter`) control consensus timers, mempool limits, telemetry knobs, fee bands,
+  and feature flags. Genesis manifests generated by `kagami` install the initial configuration.
+- **Kaigi** instructions manage collaborative sessions (create/join/leave/end) and feed Norito streaming
+  telemetry for conferencing use cases.
+- **Hijiri** provides deterministic peer and account reputation, integrating with consensus, admission
+  policies, and fee multipliers (Q16 fixed-point math). Evidence manifests, checkpoints, and reputation
+  registries are committed on-chain, and observer profiles govern receipt provenance.
+- **NPoS mode** (when enabled) uses VRF-backed election windows and stake-weighted committees while preserving
+  deterministic configuration defaults.
+- **Confidential registries** govern zero-knowledge verifier keys, proof lifecycles, and commitments for
+  shielded flows.
+
+## 8. Client experience and tooling
+
+- **Torii API** offers REST and WebSocket interfaces for transactions, queries, event streams, telemetry, and
+  governance endpoints. JSON projections are derived from Norito schemas.
+- **CLI tooling** (`iroha_cli`, `iroha_monitor`) covers administration, live peer dashboards, and pipeline
+  inspection.
+- **Genesis tooling** (`kagami`) generates Norito-encoded manifests, validator key material, and configuration
+  templates.
+- **SDKs** (Swift, JS/TS, Python) provide idiomatic access to instructions, queries, triggers, and telemetry.
+- **Scripts and CI hooks** inside `scripts/` automate dashboard validation, codec regeneration, and smoke
+  tests.
+
+## 9. Performance, resilience, and roadmap
+
+- The current pipeline targets **20,000 tps** with **2–3 second** block times under favourable network
+  conditions, backed by batch signature verification and deterministic scheduling.
+- **Telemetry** exposes Prometheus metrics for consensus timers, mempool occupancy, block propagation health,
+  Kaigi usage, and Hijiri reputation updates.
+- **Resilience features** include deterministic data availability, recovery sidecars, topology rotation, and
+  configurable view/change thresholds.
+- Future roadmap milestones (see `roadmap.md`) continue work on Nexus data spaces, enhanced confidential
+  tooling, and broader hardware acceleration while preserving deterministic outputs.
+
+## 10. Operations and deployment
+
+- **Artifacts:** Dockerfiles, Nix flake, and `cargo` workflows support reproducible builds. `kagami` emits
+  genesis manifests, validator keys, and example configs for both permissioned and NPoS deployments.
+- **Self-hosted networks:** Operators manage their own peer sets, admission rules, and upgrade cadence. The
+  workspace supports many independent Iroha 2 networks co-existing without coordination, sharing only the
+  upstream code.
+- **Configuration lifecycle:** `iroha_config` resolves user → actual → defaults layers, ensuring every knob is
+  explicit and version-controlled. Runtime changes flow through `SetParameter` instructions.
+- **Observability:** `iroha_telemetry` exports Prometheus metrics, structured logs, and dashboard data checked
+  by CI scripts (`ci/check_swift_dashboards.sh`, `scripts/render_swift_dashboards.sh`,
+  `scripts/check_swift_dashboard_data.py`). Streaming, consensus, and Hijiri events are available over
+  WebSocket, and `scripts/sumeragi_backpressure_log_scraper.py` correlates pacemaker backpressure with
+  telemetry for troubleshooting.
+- **Testing:** `cargo test --workspace`, integration tests (`integration_tests/`), language SDK suites, and
+  Norito golden fixtures protect determinism. Pointer ABI, syscall lists, and governance manifests have
+  dedicated golden tests.
+- **Recovery:** Kura sidecars, deterministic replay, and broadcast sync allow nodes to recover state from disk
+  or peers. Hijiri checkpoints and governance manifests provide auditable snapshots for compliance.
 
 # Glossary
 
-The glossary of commonly used terms can be found [here](https://docs.iroha.tech/reference/glossary.html)
+For terminology referenced in this document, consult the project-wide glossary at
+<https://docs.iroha.tech/reference/glossary.html>.

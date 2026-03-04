@@ -1,0 +1,40 @@
+{
+  "timestamp": "2025-11-21T19:14:52.349061Z",
+  "environment": {
+    "target": "",
+    "arch": "aarch64",
+    "os": "macos",
+    "cpu": null
+  },
+  "samples": [
+    {
+      "size_bytes": 4067,
+      "iterations": 5,
+      "default_ms_per_iter": 0.11939999999999999,
+      "scalar_ms_per_iter": 0.023391600000000002,
+      "speedup_vs_scalar": 0.19590954773869348
+    },
+    {
+      "size_bytes": 16379,
+      "iterations": 5,
+      "default_ms_per_iter": 0.5627332,
+      "scalar_ms_per_iter": 0.192825,
+      "speedup_vs_scalar": 0.34265794163202024
+    },
+    {
+      "size_bytes": 65513,
+      "iterations": 5,
+      "default_ms_per_iter": 2.987875,
+      "scalar_ms_per_iter": 0.3133834,
+      "speedup_vs_scalar": 0.10488504371836171
+    },
+    {
+      "size_bytes": 131063,
+      "iterations": 5,
+      "default_ms_per_iter": 3.3607,
+      "scalar_ms_per_iter": 0.6097916,
+      "speedup_vs_scalar": 0.18144779361442556
+    }
+  ],
+  "recommended_threshold_bytes": 131063
+}

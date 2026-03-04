@@ -1,6 +1,6 @@
 //! Crate containing procedural macros for `iroha_primitives`.
 
-use manyhow::{manyhow, Result};
+use manyhow::{Result, manyhow};
 use proc_macro2::TokenStream;
 
 mod numeric;

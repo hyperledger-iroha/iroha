@@ -1,0 +1,7 @@
+error: Please don't use named fields on enums. It is against Iroha styleguide
+ --> tests/ui_fail/enum_named_fields.rs:3:10
+  |
+3 | #[derive(IntoSchema)]
+  |          ^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `IntoSchema` (in Nightly builds, run with -Z macro-backtrace for more info)

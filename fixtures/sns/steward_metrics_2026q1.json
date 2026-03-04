@@ -1,0 +1,72 @@
+{
+  "quarter": "2026-Q1",
+  "generated_at": "2026-04-05T18:45:00Z",
+  "suffixes": [
+    {
+      "suffix_id": 1,
+      "suffix": ".sora",
+      "steward": "Sora Foundation Steward Desk",
+      "renewals": {
+        "expiring": 12845,
+        "renewed_on_time": 10900,
+        "renewed_late": 820
+      },
+      "support": {
+        "tickets_total": 420,
+        "tickets_within_sla": 410,
+        "p1_breach_count": 1,
+        "median_resolution_hours": 4.2
+      },
+      "disputes": {
+        "cases_opened": 37,
+        "cases_resolved": 36,
+        "median_resolution_hours": 96.0,
+        "sla_breaches": 1
+      },
+      "revenue": {
+        "treasury_xor": 182540,
+        "steward_xor": 78320
+      },
+      "incidents": {
+        "guardian_freezes": 0,
+        "pager_incidents": 1
+      },
+      "notes": [
+        "Referral rebates launched mid-quarter; telemetry steady."
+      ]
+    },
+    {
+      "suffix_id": 2,
+      "suffix": ".dao",
+      "steward": "DAO Launchpad Guild",
+      "renewals": {
+        "expiring": 6000,
+        "renewed_on_time": 2800,
+        "renewed_late": 400
+      },
+      "support": {
+        "tickets_total": 310,
+        "tickets_within_sla": 250,
+        "p1_breach_count": 6,
+        "median_resolution_hours": 16.0
+      },
+      "disputes": {
+        "cases_opened": 22,
+        "cases_resolved": 17,
+        "median_resolution_hours": 220.0,
+        "sla_breaches": 5
+      },
+      "revenue": {
+        "treasury_xor": 54200,
+        "steward_xor": 23200
+      },
+      "incidents": {
+        "guardian_freezes": 1,
+        "pager_incidents": 3
+      },
+      "notes": [
+        "Guardian freeze (2026-02-10) pending remediation; staffing ramp in progress."
+      ]
+    }
+  ]
+}

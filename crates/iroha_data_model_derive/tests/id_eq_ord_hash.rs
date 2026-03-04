@@ -1,7 +1,5 @@
 //! Basic tests for traits derived by [`IdEqOrdHash`] macro
 
-#![allow(missing_docs)]
-
 use std::collections::BTreeSet;
 
 use iroha_data_model_derive::IdEqOrdHash;
@@ -17,15 +15,18 @@ pub trait Identifiable: Ord + Eq {
     fn id(&self) -> &Self::Id;
 }
 
+/// Simple identifier wrapper used in the tests.
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 struct ObjectId(char);
 
+/// Example struct deriving `IdEqOrdHash`.
 #[derive(Debug, IdEqOrdHash)]
 struct Object {
     id: ObjectId,
     #[allow(unused)]
     data: i32,
 }
+/// Example struct that uses the `#[id]` attribute.
 #[derive(Debug, IdEqOrdHash)]
 struct ObjectWithExplicitId {
     #[id]
@@ -33,6 +34,7 @@ struct ObjectWithExplicitId {
     #[allow(unused)]
     data: i32,
 }
+/// Example struct delegating identifier handling via `#[id(transparent)]`.
 #[derive(Debug, IdEqOrdHash)]
 struct ObjectWithTransparentId {
     #[id(transparent)] // delegate the id to `Object` type

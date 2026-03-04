@@ -1,16 +1,13 @@
 //! A suite of Diffie-Hellman key exchange methods.
 //!
-//! [`X25519Sha256`] is the only key exchange scheme currently supported,
+//! [`crate::kex::X25519Sha256`] is the only key exchange scheme currently supported,
 //! as it is the only one used by the Iroha p2p transport protocol.
 
 mod x25519;
 
-#[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
-
 pub use x25519::X25519Sha256;
 
-use crate::{error::ParseError, KeyGenOption, SessionKey};
+use crate::{Error, KeyGenOption, SessionKey, error::ParseError};
 
 /// A Generic trait for key exchange schemes. Each scheme provides a way to generate keys and
 /// do a diffie-hellman computation
@@ -19,7 +16,6 @@ pub trait KeyExchangeScheme {
     type PublicKey: Send;
     /// Private key used by the scheme.
     type PrivateKey: Send;
-
     /// Generate a new instance of the scheme.
     fn new() -> Self;
 
@@ -37,25 +33,25 @@ pub trait KeyExchangeScheme {
     /// Compute the diffie-hellman shared secret.
     /// `local_private_key` is the key generated from calling `keypair` while
     /// `remote_public_key` is the key received from a different call to `keypair` from another party.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the shared secret fails contributory checks (e.g. low-order points).
     fn compute_shared_secret(
         &self,
         local_private_key: &Self::PrivateKey,
         remote_public_key: &Self::PublicKey,
-    ) -> SessionKey;
+    ) -> Result<SessionKey, Error>;
 
     /// Get byte representation of a public key.
-    //
-    // TODO: Return `[u8; Self::PUBLIC_KEY_SIZE]` after https://github.com/rust-lang/rust/issues/76560
-    fn encode_public_key(pk: &Self::PublicKey) -> &[u8];
+    fn encode_public_key(pk: &Self::PublicKey) -> Vec<u8>;
 
     /// Decode public key from byte representation.
     ///
     /// # Errors
     ///
     /// Any error during key decoding, e.g. wrong `bytes` length.
-    //
-    // TODO: Accept `[u8; Self::PUBLIC_KEY_SIZE]` after https://github.com/rust-lang/rust/issues/76560
-    fn decode_public_key(bytes: Vec<u8>) -> Result<Self::PublicKey, ParseError>;
+    fn decode_public_key(bytes: &[u8]) -> Result<Self::PublicKey, ParseError>;
 
     /// Size of the shared secret in bytes.
     const SHARED_SECRET_SIZE: usize;

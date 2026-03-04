@@ -1,0 +1,46 @@
+{
+  "link.title.Docs": {
+    "message": "ドキュメント",
+    "description": "The title of the footer links column with title=Docs in the footer"
+  },
+  "link.title.Community": {
+    "message": "コミュニティ",
+    "description": "The title of the footer links column with title=Community in the footer"
+  },
+  "link.title.More": {
+    "message": "その他",
+    "description": "The title of the footer links column with title=More in the footer"
+  },
+  "link.item.label.Overview": {
+    "message": "概要",
+    "description": "The label of footer link with label=Overview linking to /"
+  },
+  "link.item.label.Norito": {
+    "message": "Norito",
+    "description": "The label of footer link with label=Norito linking to /norito/overview"
+  },
+  "link.item.label.Reference": {
+    "message": "リファレンス",
+    "description": "The label of footer link with label=Reference linking to /reference"
+  },
+  "link.item.label.Hyperledger Discord": {
+    "message": "Hyperledger Discord",
+    "description": "The label of footer link with label=Hyperledger Discord linking to https://discord.gg/hyperledger"
+  },
+  "link.item.label.Hyperledger Iroha Wiki": {
+    "message": "Hyperledger Iroha Wiki",
+    "description": "The label of footer link with label=Hyperledger Iroha Wiki linking to https://wiki.hyperledger.org/display/iroha"
+  },
+  "link.item.label.GitHub": {
+    "message": "GitHub",
+    "description": "The label of footer link with label=GitHub linking to https://github.com/hyperledger-iroha/iroha"
+  },
+  "link.item.label.Roadmap": {
+    "message": "ロードマップ",
+    "description": "The label of footer link with label=Roadmap linking to https://github.com/hyperledger-iroha/iroha/blob/master/roadmap.md"
+  },
+  "copyright": {
+    "message": "Copyright © 2025 Hyperledger Iroha コントリビューター。",
+    "description": "The footer copyright"
+  }
+}

@@ -1,15 +1,21 @@
-#![allow(missing_docs)]
+//! Integration tests for logger setup routines.
+//!
+//! Ensures that setting the global logger twice fails gracefully and that
+//! installing the panic hook multiple times is idempotent.
 
-use iroha_logger::{init_global, Config, InitConfig};
+use iroha_logger::{Config, init_global};
 
 #[tokio::test]
 async fn setting_logger_twice_fails() {
-    let cfg = Config::default();
+    let cfg = Config {
+        terminal_colors: false,
+        ..Config::default()
+    };
 
-    let first = init_global(InitConfig::new(cfg.clone(), false));
+    let first = init_global(cfg.clone());
     assert!(first.is_ok());
 
-    let second = init_global(InitConfig::new(cfg, false));
+    let second = init_global(cfg);
     assert!(second.is_err());
 }
 

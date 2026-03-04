@@ -1,0 +1,54 @@
+{
+  "format_version": 1,
+  "default_grace_period_secs": 900,
+  "jurors": [
+    {
+      "juror_id": "citizen:ada",
+      "pop_identity": "pop:ada",
+      "weight": 2,
+      "metadata": {
+        "region": "americas"
+      }
+    },
+    {
+      "juror_id": "citizen:ben",
+      "pop_identity": "pop:ben",
+      "weight": 1,
+      "metadata": {
+        "region": "europe"
+      }
+    },
+    {
+      "juror_id": "citizen:chai",
+      "pop_identity": "pop:chai",
+      "grace_period_secs": 1200,
+      "metadata": {
+        "region": "asia-pacific"
+      }
+    },
+    {
+      "juror_id": "citizen:dina",
+      "pop_identity": "pop:dina",
+      "weight": 1,
+      "metadata": {
+        "region": "emea"
+      }
+    },
+    {
+      "juror_id": "citizen:eric",
+      "pop_identity": "pop:eric",
+      "weight": 1,
+      "metadata": {
+        "region": "americas"
+      }
+    },
+    {
+      "juror_id": "citizen:fran",
+      "pop_identity": "pop:fran",
+      "eligible": false,
+      "metadata": {
+        "region": "observing"
+      }
+    }
+  ]
+}

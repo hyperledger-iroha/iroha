@@ -1,0 +1,9 @@
+[package]
+name = "opus"
+version = "0.3.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Stubbed opus crate for offline builds"
+
+[lib]
+path = "src/lib.rs"

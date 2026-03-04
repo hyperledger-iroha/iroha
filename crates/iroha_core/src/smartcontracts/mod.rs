@@ -1,11 +1,16 @@
 //! Iroha smart contract functionality.
 //!
 //! Most of the traits mentioned [`isi`] or Iroha Special Instructions are the main way of interacting
-//! with the [`State`](crate::state::State), even [`wasm`] based smart-contracts can only interact with the [`World`](crate::state::World), via
-//! instructions.
+//! with the [`State`](crate::state::State); even IVM-based smart contracts can only interact with the
+//! [`World`](crate::state::World) via instructions.
 
+/// On-chain smart contract manifest/code registry helpers.
+pub mod code;
 pub mod isi;
-pub mod wasm;
+/// Iroha Virtual Machine integration.
+pub mod ivm;
+/// Helpers for size limits and similar guards.
+pub mod limits;
 
 use iroha_data_model::{
     isi::error::InstructionExecutionError as Error,

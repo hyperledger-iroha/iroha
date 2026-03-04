@@ -1,9 +1,9 @@
 use crate::query::{
-    builder::{
-        batch_downcast::{HasTypedBatchIter, TypedBatchDowncastError},
-        QueryExecutor,
-    },
     QueryOutputBatchBoxTuple,
+    builder::{
+        QueryExecutor,
+        batch_downcast::{HasTypedBatchIter, TypedBatchDowncastError},
+    },
 };
 
 /// An iterator over results of an iterable query.
@@ -37,6 +37,11 @@ where
             continue_cursor,
         })
     }
+
+    /// Returns the cursor for the next batch, if available.
+    pub fn continue_cursor(&self) -> Option<&E::Cursor> {
+        self.continue_cursor.as_ref()
+    }
 }
 
 impl<E, T> Iterator for QueryIterator<E, T>
@@ -47,30 +52,34 @@ where
     type Item = Result<T, E::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // if we haven't exhausted the current batch yet - return it
-        if let Some(item) = self.current_batch_iter.next() {
-            return Some(Ok(item));
+        // Keep fetching next batches until we either return an item,
+        // encounter an error, or reach the end (no cursor).
+        loop {
+            // If we haven't exhausted the current batch yet - return its next item.
+            if let Some(item) = self.current_batch_iter.next() {
+                return Some(Ok(item));
+            }
+
+            // No cursor means the query result is exhausted or an error occurred on a previous iteration.
+            let cursor = self.continue_cursor.take()?;
+
+            // Get the next batch from the executor.
+            let (batch, remaining_items, cursor) = match E::continue_query(cursor) {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e)),
+            };
+            self.continue_cursor = cursor;
+
+            // Downcast the batch to the expected type.
+            // We've already downcast the first batch to the expected type, so if the executor
+            // returns a different type here, it surely is a bug.
+            let batch_iter =
+                T::downcast(batch).expect("BUG: iroha returned unexpected type in iterable query");
+
+            self.current_batch_iter = batch_iter;
+            self.remaining_items = remaining_items;
+            // Loop and attempt to yield from the refreshed batch.
         }
-
-        // no cursor means the query result is exhausted or an error occurred on one of the previous iterations
-        let cursor = self.continue_cursor.take()?;
-
-        // get a next batch from iroha
-        let (batch, remaining_items, cursor) = match E::continue_query(cursor) {
-            Ok(r) => r,
-            Err(e) => return Some(Err(e)),
-        };
-        self.continue_cursor = cursor;
-
-        // downcast the batch to the expected type
-        // we've already downcast the first batch to the expected type, so if iroha returns a different type here, it surely is a bug
-        let batch_iter =
-            T::downcast(batch).expect("BUG: iroha returned unexpected type in iterable query");
-
-        self.current_batch_iter = batch_iter;
-        self.remaining_items = remaining_items;
-
-        self.next()
     }
 }
 
@@ -85,5 +94,73 @@ where
             .ok()
             .and_then(|r: usize| r.checked_add(self.current_batch_iter.len()))
             .expect("should be within the range of usize")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_primitives::numeric::Numeric;
+
+    use super::*;
+    use crate::query::QueryOutputBatchBox;
+
+    // A dummy executor that returns a configurable number of empty batches
+    // before finally returning a single-item batch and then terminating.
+    struct DummyExec;
+
+    impl QueryExecutor for DummyExec {
+        type Cursor = usize; // how many empty batches left
+        type Error = ();
+
+        fn execute_singular_query(
+            &self,
+            _query: crate::query::SingularQueryBox,
+        ) -> Result<crate::query::SingularQueryOutputBox, Self::Error> {
+            unreachable!()
+        }
+
+        fn start_query(
+            &self,
+            _query: crate::query::QueryWithParams,
+        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+            unreachable!()
+        }
+
+        fn continue_query(
+            cursor: Self::Cursor,
+        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+            if cursor > 0 {
+                Ok((
+                    QueryOutputBatchBoxTuple {
+                        tuple: vec![QueryOutputBatchBox::Numeric(vec![])],
+                    },
+                    1,
+                    Some(cursor - 1),
+                ))
+            } else {
+                Ok((
+                    QueryOutputBatchBoxTuple {
+                        tuple: vec![QueryOutputBatchBox::Numeric(vec![Numeric::new(42, 0)])],
+                    },
+                    0,
+                    None,
+                ))
+            }
+        }
+    }
+
+    #[test]
+    fn iterator_handles_many_empty_batches_without_recursion() {
+        // First batch is empty, but there are 64 empty batches to skip via cursor before one item appears.
+        let first = QueryOutputBatchBoxTuple {
+            tuple: vec![QueryOutputBatchBox::Numeric(vec![])],
+        };
+        let mut iter = QueryIterator::<DummyExec, Numeric>::new(first, 1, Some(64))
+            .expect("downcast should succeed");
+
+        let item = iter.next().expect("some result").expect("ok result");
+        assert_eq!(item, Numeric::new(42, 0));
+        // Now iterator should be exhausted
+        assert!(iter.next().is_none());
     }
 }

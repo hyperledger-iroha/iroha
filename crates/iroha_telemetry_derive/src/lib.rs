@@ -1,21 +1,46 @@
 //! Attribute-like macro for instrumenting `isi` for `prometheus`
 //! metrics. See [`macro@metrics`] for more details.
 
-// FIXME
-#![allow(unused)]
+mod emitter_ext;
 
-use iroha_macro_utils::Emitter;
-use manyhow::{emit, manyhow, Result};
+use emitter_ext::EmitterExt;
+use manyhow::{Emitter, Result, emit, manyhow};
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
-use syn::{parse::Parse, punctuated::Punctuated, token::Comma, FnArg, LitStr, Path, Type};
+use quote::{ToTokens, quote};
+use syn::{FnArg, LitStr, Path, Type, parse::Parse, punctuated::Punctuated, token::Comma};
 
-// TODO: export these as soon as proc-macro crates are able to export
-// anything other than proc-macros.
+// Procedural macro crates cannot export ordinary constants, so dedicated
+// `metric_*_label!` helpers below provide a public surface for downstream crates.
+
+/// Emit the canonical "total" metric label as a string literal.
+///
+/// Usage: `metric_total_label!()` expands to `"total"`.
+/// The macro accepts no input tokens.
 #[cfg(feature = "metric-instrumentation")]
-const TOTAL_STR: &str = "total";
+#[proc_macro]
+pub fn metric_total_label(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    if !input.is_empty() {
+        return "compile_error!(\"metric_total_label!() takes no arguments\");"
+            .parse()
+            .expect("valid TokenStream");
+    }
+    "\"total\"".parse().expect("valid TokenStream")
+}
+
+/// Emit the canonical "success" metric label as a string literal.
+///
+/// Usage: `metric_success_label!()` expands to `"success"`.
+/// The macro accepts no input tokens.
 #[cfg(feature = "metric-instrumentation")]
-const SUCCESS_STR: &str = "success";
+#[proc_macro]
+pub fn metric_success_label(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    if !input.is_empty() {
+        return "compile_error!(\"metric_success_label!() takes no arguments\");"
+            .parse()
+            .expect("valid TokenStream");
+    }
+    "\"success\"".parse().expect("valid TokenStream")
+}
 
 fn type_has_metrics_field(ty: &Type) -> bool {
     match ty {
@@ -89,7 +114,7 @@ struct MetricSpec {
 
 impl Parse for MetricSpec {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let timing = <syn::Token![+]>::parse(input).is_ok();
+        let timing_requested = <syn::Token![+]>::parse(input).is_ok();
         let metric_name_lit = syn::Lit::parse(input)?;
 
         let metric_name = match metric_name_lit {
@@ -106,13 +131,15 @@ impl Parse for MetricSpec {
                 return Err(syn::Error::new(
                     proc_macro2::Span::call_site(),
                     "Must be a string literal. Format `[+]\"name_of_metric\"`.",
-                ))
+                ));
             }
         };
+        #[cfg(not(feature = "metric-instrumentation"))]
+        let _ = timing_requested;
         Ok(Self {
             metric_name,
             #[cfg(feature = "metric-instrumentation")]
-            timing,
+            timing: timing_requested,
         })
     }
 }
@@ -129,9 +156,9 @@ impl ToTokens for MetricSpec {
 ///
 /// This will increment the `prometheus::IntVec` metric
 /// corresponding to the literal provided in quotes, with the second
-/// argument being `TOTAL_STR == "total"`. If the execution of the
+/// argument being `METRIC_TOTAL_LABEL == "total"`. If the execution of the
 /// `Fn`'s body doesn't result in an [`Err`] variant, another metric
-/// with the same first argument and `SUCCESS_STR = "success"` is also
+/// with the same first argument and `METRIC_SUCCESS_LABEL = "success"` is also
 /// incremented. Thus one can infer the number of rejected
 /// transactions based on this parameter. If necessary, this macro
 /// should be edited to record different [`Err`] variants as different
@@ -140,14 +167,50 @@ impl ToTokens for MetricSpec {
 /// e.g. `SignatureCondition` failure.
 ///
 /// If you also want to track the execution time of the `isi`, you
-/// should prefix the quoted metric with the `+` symbol.
+/// should prefix the quoted metric with the `+` symbol. Timing metrics
+/// are emitted only when the `metric-instrumentation` feature is enabled;
+/// without it the `+` prefix is accepted but timings are a no-op.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use iroha_telemetry_derive::metrics;
 ///
-/// # struct StateTransaction;
+/// # struct DummyCounter;
+/// # impl DummyCounter {
+/// #     fn with_label_values(&self, _: &[&str]) -> DummyCounterHandle {
+/// #         DummyCounterHandle
+/// #     }
+/// # }
+/// # struct DummyCounterHandle;
+/// # impl DummyCounterHandle {
+/// #     fn inc(&self) {}
+/// # }
+/// # struct DummyHistogram;
+/// # impl DummyHistogram {
+/// #     fn with_label_values(&self, _: &[&str]) -> DummyHistogramHandle {
+/// #         DummyHistogramHandle
+/// #     }
+/// # }
+/// # struct DummyHistogramHandle;
+/// # impl DummyHistogramHandle {
+/// #     fn observe(&self, _: f64) {}
+/// # }
+/// # struct Metrics {
+/// #     isi: DummyCounter,
+/// #     isi_times: DummyHistogram,
+/// # }
+/// # impl Default for Metrics {
+/// #     fn default() -> Self {
+/// #         Self {
+/// #             isi: DummyCounter,
+/// #             isi_times: DummyHistogram,
+/// #         }
+/// #     }
+/// # }
+/// # struct StateTransaction {
+/// #     metrics: Metrics,
+/// # }
 ///
 /// #[metrics(+"test_query", "another_test_query_without_timing")]
 /// fn execute(state: &StateTransaction) -> Result<(), ()> {
@@ -190,11 +253,7 @@ pub fn metrics(attr: TokenStream, item: TokenStream) -> TokenStream {
     emitter.finish_token_stream_with(result)
 }
 
-fn impl_metrics(
-    emitter: &mut Emitter,
-    #[cfg_attr(not(feature = "metric-instrumentation"), expect(unused))] specs: &MetricSpecs,
-    func: &syn::ItemFn,
-) -> TokenStream {
+fn impl_metrics(emitter: &mut Emitter, specs: &MetricSpecs, func: &syn::ItemFn) -> TokenStream {
     let syn::ItemFn {
         attrs,
         vis,
@@ -208,7 +267,7 @@ fn impl_metrics(
             sig.output,
             "`Fn` must return `Result`. Returns nothing instead. "
         ),
-        #[allow(clippy::string_to_string)]
+        #[allow(clippy::implicit_clone)]
         syn::ReturnType::Type(_, typ) => match *typ {
             Type::Path(pth) => {
                 let Path { segments, .. } = pth.path;
@@ -245,71 +304,125 @@ fn impl_metrics(
         }
     };
 
-    // #[cfg(feature = "metric-instrumentation")]
-    // {
-    //     let (totals, successes, times) = write_metrics(metric_arg_ident, &specs);
-    //     quote!(
-    //         #(#attrs)* #vis #sig {
-    //             let closure = || #block;
-    //             let started_at = std::time::Instant::now();
-    //
-    //             #totals
-    //             let res = closure();
-    //
-    //             #times
-    //             if let Ok(_) = res {
-    //                 #successes
-    //             };
-    //             res
-    //     })
-    // }
+    #[cfg(feature = "metric-instrumentation")]
+    let generated = {
+        let (totals, successes, times, needs_timing) = write_metrics(&metric_arg_ident, specs);
+        let timing_start = if needs_timing {
+            quote!(
+                #[cfg(feature = "telemetry")]
+                let started_at = std::time::Instant::now();
+            )
+        } else {
+            TokenStream::new()
+        };
+        quote!(
+            #(#attrs)* #vis #sig {
+                #timing_start
+                let res = (|| #block)();
+                #times
+                #totals
+                if res.is_ok() {
+                    #successes
+                }
+                res
+            }
+        )
+    };
 
-    // #[cfg(not(feature = "metric-instrumentation"))]
-    quote!(
-        #(#attrs)* #vis #sig {
-            #block
-        }
-    )
+    #[cfg(not(feature = "metric-instrumentation"))]
+    let generated = {
+        let _ = specs;
+        quote!(
+            #(#attrs)* #vis #sig {
+                #block
+            }
+        )
+    };
+
+    generated
 }
 
-// FIXME: metrics were removed https://github.com/hyperledger-iroha/iroha/issues/5134
+// NOTE: metrics wiring stays behind `metric-instrumentation` so builds can
+// opt in to ISI counters/timing without forcing telemetry overhead by default.
 #[cfg(feature = "metric-instrumentation")]
 fn write_metrics(
     metric_arg_ident: &proc_macro2::Ident,
     specs: &MetricSpecs,
-) -> (TokenStream, TokenStream, TokenStream) {
-    let inc_metric = |spec: &MetricSpec, kind: &str| {
-        quote!(
-            #metric_arg_ident
-                .metrics
-                .isi
-                .with_label_values( &[#spec, #kind ]).inc();
-        )
+) -> (TokenStream, TokenStream, TokenStream, bool) {
+    let record_total = |spec: &MetricSpec| {
+        let body = quote!(#metric_arg_ident.metrics().record_isi_total(#spec););
+        wrap_metrics(metric_arg_ident, &body)
     };
-    let track_time = |spec: &MetricSpec| {
-        quote!(
-            #metric_arg_ident
-                .metrics
-                .isi_times
-                .with_label_values( &[#spec])
-                .observe(started_at.elapsed().as_millis() as f64);
-        )
+    let record_success = |spec: &MetricSpec| {
+        let body = quote!(#metric_arg_ident.metrics().record_isi_success(#spec););
+        wrap_metrics(metric_arg_ident, &body)
     };
-    let totals: TokenStream = specs
-        .0
-        .iter()
-        .map(|spec| inc_metric(spec, "total"))
-        .collect();
-    let successes: TokenStream = specs
-        .0
-        .iter()
-        .map(|spec| inc_metric(spec, "success"))
-        .collect();
+    let record_time = |spec: &MetricSpec| {
+        let body =
+            quote!(#metric_arg_ident.metrics().record_isi_time(#spec, started_at.elapsed()););
+        wrap_metrics(metric_arg_ident, &body)
+    };
+    let totals: TokenStream = specs.0.iter().map(record_total).collect();
+    let successes: TokenStream = specs.0.iter().map(record_success).collect();
+    let needs_timing = specs.0.iter().any(|spec| spec.timing);
     let times: TokenStream = specs
         .0
         .iter()
         .filter(|spec| spec.timing)
-        .map(track_time)
+        .map(record_time)
         .collect();
-    (totals, successes, times)
+    (totals, successes, times, needs_timing)
+}
+
+#[cfg(feature = "metric-instrumentation")]
+fn wrap_metrics(metric_arg_ident: &proc_macro2::Ident, body: &TokenStream) -> TokenStream {
+    quote!(
+        #[cfg(feature = "telemetry")]
+        {
+            #body
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            let _ = &#metric_arg_ident;
+        }
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metric_spec_parses_plus_prefix() {
+        let spec: MetricSpec = syn::parse_str("+\"timed_metric\"").expect("parse metric spec");
+        assert_eq!(spec.metric_name.value(), "timed_metric");
+        #[cfg(feature = "metric-instrumentation")]
+        assert!(spec.timing);
+    }
+
+    #[test]
+    fn metric_spec_parses_plain_name() {
+        let spec: MetricSpec = syn::parse_str("\"plain_metric\"").expect("parse metric spec");
+        assert_eq!(spec.metric_name.value(), "plain_metric");
+        #[cfg(feature = "metric-instrumentation")]
+        assert!(!spec.timing);
+    }
+
+    #[cfg(feature = "metric-instrumentation")]
+    #[test]
+    fn wrap_metrics_emits_cfg_blocks() {
+        let metric_ident = proc_macro2::Ident::new("state_tx", proc_macro2::Span::call_site());
+        let body = quote!(state_tx.metrics().record_isi_total("x"););
+        let wrapped = wrap_metrics(&metric_ident, &body);
+        let compact: String = wrapped
+            .to_string()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+
+        assert!(compact.contains("record_isi_total"));
+        assert!(compact.contains("cfg(feature=\"telemetry\")"));
+        assert!(compact.contains("cfg(not(feature=\"telemetry\"))"));
+        assert!(compact.contains("let_=&state_tx;"));
+    }
 }

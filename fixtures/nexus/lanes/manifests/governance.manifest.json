@@ -1,0 +1,26 @@
+{
+  "lane": "governance",
+  "governance": "parliament",
+  "version": 1,
+  "validators": [
+    "alice@wonderland",
+    "bob@wonderland",
+    "charlie@wonderland"
+  ],
+  "quorum": 2,
+  "protected_namespaces": [
+    "apps",
+    "governance"
+  ],
+  "hooks": {
+    "runtime_upgrade": {
+      "allow": true,
+      "require_metadata": true,
+      "metadata_key": "gov_upgrade_id",
+      "allowed_ids": [
+        "upgrade-1",
+        "upgrade-2"
+      ]
+    }
+  }
+}

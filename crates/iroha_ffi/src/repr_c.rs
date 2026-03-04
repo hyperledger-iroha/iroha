@@ -1,4 +1,5 @@
 #![allow(trivial_casts)]
+#![allow(unsafe_op_in_unsafe_fn)]
 
 //! Logic related to the conversion of IR types to equivalent robust C types.
 //!
@@ -7,14 +8,14 @@
 //!
 //! Traits in this module mainly exist to bridge the gap between IR and C type equivalents. User should
 //! only implement these traits if none of the predefined IR types provide an adequate mapping.
-use alloc::{boxed::Box, vec::Vec};
 use core::{mem::ManuallyDrop, ptr::addr_of_mut};
+use std::{boxed::Box, vec::Vec};
 
 use crate::{
-    ir::{External, Ir, Opaque, Robust, Transmute, Transparent},
-    slice::{OutBoxedSlice, RefMutSlice, RefSlice},
     Extern, FfiConvert, FfiOutPtr, FfiOutPtrRead, FfiOutPtrWrite, FfiReturn, FfiType,
     FfiWrapperType, LocalRef, LocalSlice, ReprC, Result, WrapperTypeOf,
+    ir::{External, Ir, Opaque, Robust, Transmute, Transparent},
+    slice::{LinearSlice, OutBoxedSlice, OwnedLinearSlice, RefMutSlice, RefSlice},
 };
 
 /// A type that can be converted into a C type.
@@ -143,7 +144,10 @@ impl<R: Ir> Cloned for &R where R::Type: Cloned {}
 impl<R> Cloned for Box<R> {}
 impl<R> Cloned for &[R] {}
 impl<R> Cloned for Vec<R> {}
-// TODO: This means there is unnecessary clone?
+// Arrays of opaque elements must be duplicated when crossing the FFI boundary,
+// because each entry is represented by a raw pointer in the generated wrapper.
+// Keep this `Cloned` impl so the conversion logic can materialise a temporary
+// copy without relying on transmute semantics.
 impl<const N: usize> Cloned for [Opaque; N] {}
 impl<R: Ir, const N: usize> Cloned for [R; N] where R::Type: Cloned {}
 
@@ -201,12 +205,12 @@ impl<'itm, R: CTypeConvert<'itm, S, C> + Clone, S: Cloned, C: ReprC>
     }
 
     unsafe fn try_from_repr_c(source: *const C, store: &'itm mut Self::FfiStore) -> Result<Self> {
-        if source.as_ref().is_none() {
+        let Some(_) = (unsafe { source.as_ref() }) else {
             return Err(FfiReturn::ArgIsNull);
-        }
+        };
 
         Ok(store.0.insert(
-            R::try_from_repr_c(source.read(), &mut store.1)
+            unsafe { R::try_from_repr_c(source.read(), &mut store.1) }
                 .map(ManuallyDrop::new)
                 .map(|item| (*item).clone())?,
         ))
@@ -227,11 +231,11 @@ impl<'itm, R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone, S: Cloned +
         let mut store = Default::default();
         // NOTE: Bypasses the erroneous lifetime check.
         // Correct as long as `R::into_repr_c` doesn't return a reference to the store (`R: NonLocal`)
-        let store_borrow = &mut *addr_of_mut!(store);
+        let store_borrow = unsafe { &mut *addr_of_mut!(store) };
         CTypeConvert::<&S, _>::into_repr_c(self, store_borrow);
 
         // NOTE: None value indicates a bug in the implementation
-        out_ptr.write(store.0.expect("Store must be initialized"));
+        unsafe { out_ptr.write(store.0.expect("Store must be initialized")) };
     }
 }
 impl<'itm, R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm, S: Cloned>
@@ -241,8 +245,8 @@ impl<'itm, R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm, S: C
         let mut store = Default::default();
         // NOTE: Bypasses the erroneous lifetime check.
         // Correct as long as `R::try_from_repr_c` doesn't return a reference to the store (`R: NonLocal`)
-        let store_borrow = &mut *addr_of_mut!(store);
-        let item = R::try_from_repr_c(out_ptr, store_borrow)?;
+        let store_borrow = unsafe { &mut *addr_of_mut!(store) };
+        let item = unsafe { R::try_from_repr_c(out_ptr, store_borrow)? };
         Ok(Self(item, core::marker::PhantomData))
     }
 }
@@ -260,11 +264,11 @@ impl<'itm, R: CTypeConvert<'itm, S, C> + Clone, S: Cloned, C: ReprC>
         store.0.insert((*self).into_repr_c(&mut store.1))
     }
     unsafe fn try_from_repr_c(source: *mut C, store: &'itm mut Self::FfiStore) -> Result<Self> {
-        if source.as_mut().is_none() {
+        let Some(_) = (unsafe { source.as_mut() }) else {
             return Err(FfiReturn::ArgIsNull);
-        }
+        };
 
-        R::try_from_repr_c(source.read(), store)
+        unsafe { R::try_from_repr_c(source.read(), store) }
             .map(ManuallyDrop::new)
             .map(|item| (*item).clone())
             .map(Box::new)
@@ -285,11 +289,11 @@ impl<'itm, R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm, S: C
         let mut store = <(_, _)>::default();
         // NOTE: Bypasses the erroneous lifetime check.
         // Correct as long as `R::into_repr_c` doesn't return a reference to the store (`R: NonLocal`)
-        let store_borrow = &mut *addr_of_mut!(store);
+        let store_borrow = unsafe { &mut *addr_of_mut!(store) };
         CTypeConvert::<Box<S>, _>::into_repr_c(self, store_borrow);
 
         // NOTE: None value indicates a bug in the implementation
-        out_ptr.write(store.0.expect("Store must be initialized"));
+        unsafe { out_ptr.write(store.0.expect("Store must be initialized")) };
     }
 }
 impl<'itm, R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm, S: Cloned + 'itm>
@@ -299,8 +303,8 @@ impl<'itm, R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm, S: C
         let mut store = Default::default();
         // NOTE: Bypasses the erroneous lifetime check.
         // Correct as long as `R::try_from_repr_c` doesn't return a reference to the store (`R: NonLocal`)
-        let store_borrow = &mut *addr_of_mut!(store);
-        let item = R::try_from_repr_c(out_ptr, store_borrow)?;
+        let store_borrow = unsafe { &mut *addr_of_mut!(store) };
+        let item = unsafe { R::try_from_repr_c(out_ptr, store_borrow)? };
         Ok(Box::new(item))
     }
 }
@@ -333,7 +337,8 @@ impl<'itm, R: CTypeConvert<'itm, S, C> + Clone, S: Cloned, C: ReprC>
         source: RefMutSlice<C>,
         store: &'itm mut Self::FfiStore,
     ) -> Result<Self> {
-        let slice = source.into_rust().ok_or(FfiReturn::ArgIsNull)?;
+        let mut linear = unsafe { LinearSlice::from_ref_mut(source) };
+        let slice = linear.try_borrow_mut().ok_or(FfiReturn::ArgIsNull)?;
 
         *store = core::iter::repeat_with(Default::default)
             .take(slice.len())
@@ -373,7 +378,8 @@ impl<'itm, R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm, S: C
     COutPtrRead<Box<[S]>> for Box<[R]>
 {
     unsafe fn try_read_out(out_ptr: Self::OutPtr) -> Result<Self> {
-        let slice = RefMutSlice::from_raw_parts_mut(out_ptr.as_mut_ptr(), out_ptr.len());
+        let owned = unsafe { OwnedLinearSlice::from_out_boxed(out_ptr) };
+        let slice = owned.as_ref_mut_slice();
 
         let mut store = Box::default();
         // NOTE: Bypasses the erroneous lifetime check.
@@ -381,7 +387,7 @@ impl<'itm, R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm, S: C
         let store_borrow = &mut *addr_of_mut!(store);
         let res = Self::try_from_repr_c(slice, store_borrow);
 
-        if !out_ptr.deallocate() {
+        if !owned.deallocate() {
             return Err(FfiReturn::TrapRepresentation);
         }
 
@@ -419,12 +425,14 @@ impl<'slice, R: CTypeConvert<'slice, S, C> + Clone, S: Cloned, C: ReprC>
         source: RefSlice<C>,
         store: &'slice mut Self::FfiStore,
     ) -> Result<Self> {
+        let linear = unsafe { LinearSlice::from_ref(source) };
+
         store.1 = core::iter::repeat_with(Default::default)
-            .take(source.len())
+            .take(linear.len())
             .collect();
 
-        let source: Box<[_]> = source
-            .into_rust()
+        let source: Box<[_]> = linear
+            .try_borrow()
             .ok_or(FfiReturn::ArgIsNull)?
             .iter()
             .zip(&mut *store.1)
@@ -464,7 +472,8 @@ impl<'itm, R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm, S: C
     COutPtrRead<&'itm [S]> for LocalSlice<'itm, R>
 {
     unsafe fn try_read_out(out_ptr: OutBoxedSlice<R::ReprC>) -> Result<Self> {
-        let slice = RefSlice::from_raw_parts(out_ptr.as_mut_ptr(), out_ptr.len());
+        let owned = unsafe { OwnedLinearSlice::from_out_boxed(out_ptr) };
+        let slice = owned.as_ref_slice();
 
         let mut store = <(_, _)>::default();
         // NOTE: Bypasses the erroneous lifetime check.
@@ -472,7 +481,7 @@ impl<'itm, R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm, S: C
         let store_borrow = &mut *addr_of_mut!(store);
         let res = <&[R]>::try_from_repr_c(slice, store_borrow);
 
-        if !out_ptr.deallocate() {
+        if !owned.deallocate() {
             return Err(FfiReturn::TrapRepresentation);
         }
 
@@ -509,7 +518,8 @@ impl<'itm, R: CTypeConvert<'itm, S, C> + Clone, S: Cloned, C: ReprC>
         source: RefMutSlice<C>,
         store: &'itm mut Self::FfiStore,
     ) -> Result<Self> {
-        let slice = source.into_rust().ok_or(FfiReturn::ArgIsNull)?;
+        let mut linear = unsafe { LinearSlice::from_ref_mut(source) };
+        let slice = linear.try_borrow_mut().ok_or(FfiReturn::ArgIsNull)?;
 
         *store = core::iter::repeat_with(Default::default)
             .take(slice.len())
@@ -549,7 +559,8 @@ impl<'itm, R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm, S: C
     COutPtrRead<Vec<S>> for Vec<R>
 {
     unsafe fn try_read_out(out_ptr: Self::OutPtr) -> Result<Self> {
-        let slice = RefMutSlice::from_raw_parts_mut(out_ptr.as_mut_ptr(), out_ptr.len());
+        let owned = unsafe { OwnedLinearSlice::from_out_boxed(out_ptr) };
+        let slice = owned.as_ref_mut_slice();
 
         let mut store = Box::default();
         // NOTE: Bypasses the erroneous lifetime check.
@@ -557,7 +568,7 @@ impl<'itm, R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm, S: C
         let store_borrow = &mut *addr_of_mut!(store);
         let res = Self::try_from_repr_c(slice, store_borrow);
 
-        if !out_ptr.deallocate() {
+        if !owned.deallocate() {
             return Err(FfiReturn::TrapRepresentation);
         }
 
@@ -642,11 +653,11 @@ impl<R: NonLocal<S> + CType<S>, S: Cloned, const N: usize> COutPtr<[S; N]> for [
     type OutPtr = Self::ReprC;
 }
 impl<
-        'itm,
-        R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm,
-        S: Cloned + 'itm,
-        const N: usize,
-    > COutPtrWrite<[S; N]> for [R; N]
+    'itm,
+    R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm,
+    S: Cloned + 'itm,
+    const N: usize,
+> COutPtrWrite<[S; N]> for [R; N]
 where
     [R::RustStore; N]: Default,
     [R::FfiStore; N]: Default,
@@ -655,18 +666,18 @@ where
         let mut store = Default::default();
         // NOTE: Bypasses the erroneous lifetime check.
         // Correct as long as `R::into_repr_c` doesn't return a reference to the store (`R: NonLocal`)
-        let store_borrow = &mut *addr_of_mut!(store);
+        let store_borrow = unsafe { &mut *addr_of_mut!(store) };
         let item = Self::into_repr_c(self, store_borrow);
 
         out_ptr.write(item);
     }
 }
 impl<
-        'itm,
-        R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm,
-        S: Cloned + 'itm,
-        const N: usize,
-    > COutPtrRead<[S; N]> for [R; N]
+    'itm,
+    R: NonLocal<S> + CTypeConvert<'itm, S, R::ReprC> + Clone + 'itm,
+    S: Cloned + 'itm,
+    const N: usize,
+> COutPtrRead<[S; N]> for [R; N]
 where
     //[R; N]: CTypeConvert<'itm, [S; N], [R; N]::ReprC>
     [R::RustStore; N]: Default,
@@ -676,7 +687,7 @@ where
         let mut store = Default::default();
         // NOTE: Bypasses the erroneous lifetime check.
         // Correct as long as `R::try_from_repr_c` doesn't return a reference to the store (`R: NonLocal`)
-        let store_borrow = &mut *addr_of_mut!(store);
+        let store_borrow = unsafe { &mut *addr_of_mut!(store) };
         Self::try_from_repr_c(out_ptr, store_borrow)
     }
 }
@@ -784,10 +795,11 @@ impl<R: ReprC> CTypeConvert<'_, Box<[Robust]>, RefMutSlice<R>> for Box<[R]> {
     }
 
     unsafe fn try_from_repr_c(source: RefMutSlice<R>, (): &mut ()) -> Result<Self> {
-        source
-            .into_rust()
-            .ok_or(FfiReturn::ArgIsNull)
+        let mut linear = unsafe { LinearSlice::from_ref_mut(source) };
+        linear
+            .try_borrow_mut()
             .map(|slice| (&*slice).into())
+            .ok_or(FfiReturn::ArgIsNull)
     }
 }
 
@@ -801,16 +813,20 @@ impl<R: ReprC> COutPtr<Box<[Robust]>> for Box<[R]> {
 impl<R: ReprC> COutPtrWrite<Box<[Robust]>> for Box<[R]> {
     unsafe fn write_out(self, out_ptr: *mut Self::OutPtr) {
         let mut store = Box::default();
-        CTypeConvert::<Box<[Robust]>, _>::into_repr_c(self, &mut store);
+        // NOTE: Bypasses the erroneous lifetime check.
+        // Correct as long as `R::into_repr_c` doesn't return a reference to the store (`R: NonLocal`)
+        let store_borrow = &mut *addr_of_mut!(store);
+        CTypeConvert::<Box<[Robust]>, _>::into_repr_c(self, store_borrow);
         out_ptr.write(OutBoxedSlice::from_boxed_slice(Some(store)));
     }
 }
 impl<R: ReprC> COutPtrRead<Box<[Robust]>> for Box<[R]> {
     unsafe fn try_read_out(out_ptr: Self::OutPtr) -> Result<Self> {
-        let slice = RefMutSlice::from_raw_parts_mut(out_ptr.as_mut_ptr(), out_ptr.len());
+        let owned = unsafe { OwnedLinearSlice::from_out_boxed(out_ptr) };
+        let slice = owned.as_ref_mut_slice();
         let res = CTypeConvert::<Box<[Robust]>, _>::try_from_repr_c(slice, &mut ());
 
-        if !out_ptr.deallocate() {
+        if !owned.deallocate() {
             return Err(FfiReturn::TrapRepresentation);
         }
 
@@ -899,10 +915,10 @@ impl<R: ReprC> CTypeConvert<'_, Vec<Robust>, RefMutSlice<R>> for Vec<R> {
     }
 
     unsafe fn try_from_repr_c(source: RefMutSlice<R>, (): &mut ()) -> Result<Self> {
-        source
-            .into_rust()
-            .ok_or(FfiReturn::ArgIsNull)
+        unsafe { LinearSlice::from_ref_mut(source) }
+            .try_borrow_mut()
             .map(|slice| slice.to_vec())
+            .ok_or(FfiReturn::ArgIsNull)
     }
 }
 
@@ -916,16 +932,18 @@ impl<R: ReprC> COutPtr<Vec<Robust>> for Vec<R> {
 impl<R: ReprC> COutPtrWrite<Vec<Robust>> for Vec<R> {
     unsafe fn write_out(self, out_ptr: *mut Self::OutPtr) {
         let mut store = Box::default();
-        CTypeConvert::<Vec<Robust>, _>::into_repr_c(self, &mut store);
+        let store_borrow = &mut *addr_of_mut!(store);
+        CTypeConvert::<Vec<Robust>, _>::into_repr_c(self, store_borrow);
         out_ptr.write(OutBoxedSlice::from_boxed_slice(Some(store)));
     }
 }
 impl<R: ReprC> COutPtrRead<Vec<Robust>> for Vec<R> {
     unsafe fn try_read_out(out_ptr: Self::OutPtr) -> Result<Self> {
-        let slice = RefMutSlice::from_raw_parts_mut(out_ptr.as_mut_ptr(), out_ptr.len());
+        let owned = unsafe { OwnedLinearSlice::from_out_boxed(out_ptr) };
+        let slice = owned.as_ref_mut_slice();
         let res = CTypeConvert::<Vec<Robust>, _>::try_from_repr_c(slice, &mut ());
 
-        if !out_ptr.deallocate() {
+        if !owned.deallocate() {
             return Err(FfiReturn::TrapRepresentation);
         }
 
@@ -1017,8 +1035,9 @@ impl<R> CTypeConvert<'_, Box<[Opaque]>, RefMutSlice<*mut R>> for Box<[R]> {
     }
 
     unsafe fn try_from_repr_c(source: RefMutSlice<*mut R>, (): &mut ()) -> Result<Self> {
-        source
-            .into_rust()
+        let mut linear = unsafe { LinearSlice::from_ref_mut(source) };
+        linear
+            .try_borrow_mut()
             .ok_or(FfiReturn::ArgIsNull)?
             .iter()
             .map(|&item| {
@@ -1038,7 +1057,8 @@ impl<R> COutPtr<Box<[Opaque]>> for Box<[R]> {
 impl<R> COutPtrWrite<Box<[Opaque]>> for Box<[R]> {
     unsafe fn write_out(self, out_ptr: *mut Self::OutPtr) {
         let mut store = Box::default();
-        CTypeConvert::<Box<[Opaque]>, _>::into_repr_c(self, &mut store);
+        let store_borrow = &mut *addr_of_mut!(store);
+        CTypeConvert::<Box<[Opaque]>, _>::into_repr_c(self, store_borrow);
         out_ptr.write(OutBoxedSlice::from_boxed_slice(Some(store)));
     }
 }
@@ -1061,9 +1081,11 @@ impl<'slice, R: Clone> CTypeConvert<'slice, &'slice [Opaque], RefSlice<*const R>
         source: RefSlice<*const R>,
         store: &'slice mut Self::FfiStore,
     ) -> Result<Self> {
-        let source = source.into_rust().ok_or(FfiReturn::ArgIsNull)?;
+        let linear = unsafe { LinearSlice::from_ref(source) };
 
-        *store = source
+        *store = linear
+            .try_borrow()
+            .ok_or(FfiReturn::ArgIsNull)?
             .iter()
             .map(|item| {
                 item.as_ref()
@@ -1084,7 +1106,8 @@ impl<R> COutPtr<&[Opaque]> for &[R] {
 impl<R: Clone> COutPtrWrite<&[Opaque]> for &[R] {
     unsafe fn write_out(self, out_ptr: *mut Self::OutPtr) {
         let mut store = Box::default();
-        CTypeConvert::<&[Opaque], _>::into_repr_c(self, &mut store);
+        let store_borrow = &mut *addr_of_mut!(store);
+        CTypeConvert::<&[Opaque], _>::into_repr_c(self, store_borrow);
         out_ptr.write(OutBoxedSlice::from_boxed_slice(Some(store)));
     }
 }
@@ -1107,9 +1130,11 @@ impl<'slice, R: Clone> CTypeConvert<'slice, &mut [Opaque], RefMutSlice<*mut R>>
         source: RefMutSlice<*mut R>,
         store: &'slice mut Self::FfiStore,
     ) -> Result<Self> {
-        let source = source.into_rust().ok_or(FfiReturn::ArgIsNull)?;
+        let mut linear = unsafe { LinearSlice::from_ref_mut(source) };
 
-        *store = source
+        *store = linear
+            .try_borrow_mut()
+            .ok_or(FfiReturn::ArgIsNull)?
             .iter()
             .map(|item| {
                 item.as_mut()
@@ -1130,7 +1155,8 @@ impl<R> COutPtr<&mut [Opaque]> for &mut [R] {
 impl<R: Clone> COutPtrWrite<&mut [Opaque]> for &mut [R] {
     unsafe fn write_out(self, out_ptr: *mut Self::OutPtr) {
         let mut store = Box::default();
-        CTypeConvert::<&mut [Opaque], _>::into_repr_c(self, &mut store);
+        let store_borrow = &mut *addr_of_mut!(store);
+        CTypeConvert::<&mut [Opaque], _>::into_repr_c(self, store_borrow);
         out_ptr.write(OutBoxedSlice::from_boxed_slice(Some(store)));
     }
 }
@@ -1148,8 +1174,9 @@ impl<R> CTypeConvert<'_, Vec<Opaque>, RefMutSlice<*mut R>> for Vec<R> {
     }
 
     unsafe fn try_from_repr_c(source: RefMutSlice<*mut R>, (): &mut ()) -> Result<Self> {
-        source
-            .into_rust()
+        let mut linear = unsafe { LinearSlice::from_ref_mut(source) };
+        linear
+            .try_borrow_mut()
             .ok_or(FfiReturn::ArgIsNull)?
             .iter()
             .map(|&item| {
@@ -1169,7 +1196,8 @@ impl<R> COutPtr<Vec<Opaque>> for Vec<R> {
 impl<R> COutPtrWrite<Vec<Opaque>> for Vec<R> {
     unsafe fn write_out(self, out_ptr: *mut Self::OutPtr) {
         let mut store = Box::default();
-        CTypeConvert::<Vec<Opaque>, _>::into_repr_c(self, &mut store);
+        let store_borrow = &mut *addr_of_mut!(store);
+        CTypeConvert::<Vec<Opaque>, _>::into_repr_c(self, store_borrow);
         out_ptr.write(OutBoxedSlice::from_boxed_slice(Some(store)));
     }
 }
@@ -1754,7 +1782,7 @@ unsafe fn transmute_from_target_box<R: Transmute>(source: Box<R::Target>) -> Res
 fn transmute_into_target_boxed_slice<R: Transmute>(mut source: Box<[R]>) -> Box<[R::Target]> {
     let (ptr, len) = (source.as_mut_ptr().cast::<R::Target>(), source.len());
     // SAFETY: `R` is guaranteed to be transmutable into `R::Target`
-    unsafe { Box::from_raw(core::slice::from_raw_parts_mut(ptr, len)) }
+    unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)) }
 }
 #[allow(clippy::boxed_local)]
 unsafe fn transmute_from_target_boxed_slice<R: Transmute>(
@@ -1764,7 +1792,7 @@ unsafe fn transmute_from_target_boxed_slice<R: Transmute>(
         return Err(FfiReturn::TrapRepresentation);
     }
 
-    Ok(Box::from_raw(core::slice::from_raw_parts_mut(
+    Ok(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
         source.as_mut_ptr().cast(),
         source.len(),
     )))
@@ -1854,7 +1882,7 @@ pub unsafe fn write_non_local<
     let mut store = Default::default();
     // NOTE: Bypasses the erroneous lifetime check.
     // Correct as long as `R::into_repr_c` doesn't return a reference to the store (`R: NonLocal`)
-    let store_borrow = &mut *addr_of_mut!(store);
+    let store_borrow = unsafe { &mut *addr_of_mut!(store) };
     out_ptr.write(CTypeConvert::into_repr_c(source, store_borrow));
 }
 
@@ -1878,6 +1906,6 @@ pub unsafe fn read_non_local<
     let mut store = Default::default();
     // NOTE: Bypasses the erroneous lifetime check.
     // Correct as long as `R::try_from_repr_c` doesn't return a reference to the store (`R: NonLocal`)
-    let store_borrow = &mut *addr_of_mut!(store);
+    let store_borrow = unsafe { &mut *addr_of_mut!(store) };
     CTypeConvert::try_from_repr_c(out_ptr, store_borrow)
 }

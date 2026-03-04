@@ -1,0 +1,34 @@
+{
+  "body": {
+    "feed_id": [
+      "price_xor_usd"
+    ],
+    "feed_config_version": [
+      1
+    ],
+    "slot": 10,
+    "request_hash": "hash:59CFEA4268FB255E2FDB550B37CB83DF836D62744F835F121E5731AB62679BDB#844C",
+    "entries": [
+      {
+        "oracle_id": "34mSYnLrmfrui7Ba2h9RbAPY1hHNEQje517tbXn44vUUkA7F8361DR6aQeHKSaNSKFruciKzA@validators",
+        "observation_hash": "hash:E42A3CF266BE136EB8B4B9F5B3ED3E5E47E78A5BFA4DD665CF5CFC5CD2716865#7658",
+        "value": {
+          "mantissa": "1001500",
+          "scale": 5
+        },
+        "outlier": false
+      },
+      {
+        "oracle_id": "34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA@validators",
+        "observation_hash": "hash:8798748E7AB132D96F5050604D5FE8239480A5B9C0EA108CD22832FC59DF0C41#8873",
+        "value": {
+          "mantissa": "1002500",
+          "scale": 5
+        },
+        "outlier": false
+      }
+    ],
+    "submitter": "34mSYnLrmfrui7Ba2h9RbAPY1hHNEQje517tbXn44vUUkA7F8361DR6aQeHKSaNSKFruciKzA@validators"
+  },
+  "signature": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+}

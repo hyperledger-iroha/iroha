@@ -1,18 +1,21 @@
-//! Small-string optimisation-related implementations and structs.
+//! Types that store small data inline to avoid heap allocations.
 //!
-//! Thin wrapper around the `smallstr` crate. The array type `[u8; 32]` should be the standard for strings.
-//! The size of the `SmallVec` should be determined based on the average case size of the collection.
-#[cfg(not(feature = "std"))]
-use alloc::{format, string::String, vec::Vec};
+//! This module provides wrappers around the `smallstr` and `smallvec` crates
+//! with sensible defaults for Iroha. Short strings fit into a `[u8; 32]`
+//! buffer, while [`SmallVec`] can be tuned to store a handful of elements on
+//! the stack before spilling onto the heap.
 use core::fmt;
+use std::{format, io::Write, string::String, vec::Vec};
 
 use iroha_schema::{IntoSchema, TypeId};
-use parity_scale_codec::{WrapperTypeDecode, WrapperTypeEncode};
-use serde::{Deserialize, Serialize};
+use norito::{
+    NoritoDeserialize, NoritoSerialize, core as ncore,
+    json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize},
+};
 pub use small_string::SmallStr;
 pub use small_vector::SmallVec;
 use smallstr::SmallString;
-pub use smallvec::{smallvec, Array};
+pub use smallvec::{Array, smallvec};
 
 /// The go-to size for `SmallVec`. When in doubt, use this.
 pub const SMALL_SIZE: usize = 8_usize;
@@ -20,13 +23,10 @@ pub const SMALL_SIZE: usize = 8_usize;
 mod small_string {
     use super::*;
 
-    #[derive(
-        Debug, derive_more::Display, Clone, PartialEq, Eq, Deserialize, Serialize, IntoSchema,
-    )]
+    #[derive(Debug, derive_more::Display, Clone, PartialEq, Eq, IntoSchema)]
     /// Wrapper around the [`smallstr::SmallString`] type, enforcing a
     /// specific size of stack-based strings.
     #[schema(transparent = "String")]
-    #[serde(transparent)]
     #[repr(transparent)]
     pub struct SmallStr(SmallString<[u8; 32]>);
 
@@ -61,11 +61,156 @@ mod small_string {
             Self(SmallString::from_str(SmallString::as_str(&string)))
         }
     }
+
+    impl AsRef<str> for SmallStr {
+        fn as_ref(&self) -> &str {
+            self.0.as_str()
+        }
+    }
+
+    impl SmallStr {
+        #[inline]
+        fn as_str(&self) -> &str {
+            self.0.as_str()
+        }
+    }
+
+    impl FastJsonWrite for SmallStr {
+        fn write_json(&self, out: &mut String) {
+            json::write_json_string(self.as_str(), out);
+        }
+    }
+
+    impl JsonDeserialize for SmallStr {
+        fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+            let value = parser.parse_string()?;
+            Ok(Self::from_str(&value))
+        }
+    }
+
+    impl NoritoSerialize for SmallStr {
+        fn serialize<W: Write>(&self, writer: W) -> Result<(), ncore::Error> {
+            <&str as NoritoSerialize>::serialize(&self.as_str(), writer)
+        }
+    }
+
+    impl<'a> NoritoDeserialize<'a> for SmallStr {
+        fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
+            let archived_str: &ncore::Archived<String> = archived.cast();
+            let string = <String as NoritoDeserialize>::deserialize(archived_str);
+            Self::from_str(&string)
+        }
+    }
+
+    impl<'a> ncore::DecodeFromSlice<'a> for SmallStr {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+            let (value, used) = <&str as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
+            Ok((Self::from_str(value), used))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use norito::{
+        NoritoDeserialize, NoritoSerialize,
+        codec::{Decode, Encode},
+        core as ncore, decode_from_bytes, json, to_bytes,
+    };
+
+    use super::*;
+
+    // Encoding and decoding a `SmallVec` should produce an identical vector.
+    #[test]
+    fn smallvec_encode_decode_round_trip() {
+        let vec: SmallVec<[u32; 4]> = SmallVec(smallvec![1, 2, 3]);
+        let bytes = vec.encode();
+        let decoded = SmallVec::<[u32; 4]>::decode(&mut bytes.as_slice()).expect("decode");
+        assert_eq!(vec, decoded);
+    }
+
+    #[test]
+    fn smallvec_decode_heap_allocation() {
+        let vec: SmallVec<[u32; 4]> = SmallVec(smallvec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
+        let bytes = vec.encode();
+        let decoded = SmallVec::<[u32; 4]>::decode(&mut bytes.as_slice()).expect("decode");
+        assert_eq!(vec, decoded);
+    }
+
+    #[test]
+    fn smallstr_json_roundtrip() {
+        for sample in ["", "abc", "Δfire🔥"] {
+            let small = SmallStr::from_str(sample);
+            let json_repr = json::to_json(&small).expect("serialize SmallStr");
+            let expected = json::to_json(&sample.to_string()).expect("serialize string");
+            assert_eq!(json_repr, expected);
+            let decoded: SmallStr = json::from_json(&json_repr).expect("deserialize SmallStr");
+            assert_eq!(decoded, small);
+        }
+    }
+
+    #[test]
+    fn smallvec_json_roundtrip() {
+        let vec: SmallVec<[u32; 4]> = SmallVec(smallvec![1, 2, 3, 4]);
+        let json_repr = json::to_json(&vec).expect("serialize SmallVec");
+        assert_eq!(json_repr, "[1,2,3,4]");
+        let decoded: SmallVec<[u32; 4]> =
+            json::from_json(&json_repr).expect("deserialize SmallVec");
+        assert_eq!(decoded, vec);
+    }
+
+    #[test]
+    fn smallstr_norito_roundtrip() {
+        let value = SmallStr::from_str("tiny");
+        let bytes = to_bytes(&value).expect("encode SmallStr");
+        let decoded: SmallStr = decode_from_bytes(&bytes).expect("decode SmallStr");
+        assert_eq!(decoded, value);
+    }
+
+    #[test]
+    fn smallvec_norito_roundtrip() {
+        let value: SmallVec<[u32; 4]> = SmallVec(smallvec![4, 3, 2, 1]);
+        let bytes = to_bytes(&value).expect("encode SmallVec");
+        let decoded: SmallVec<[u32; 4]> = decode_from_bytes(&bytes).expect("decode SmallVec");
+        assert_eq!(decoded, value);
+    }
+
+    #[test]
+    fn smallvec_zero_sized_round_trip() {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        struct Zst;
+
+        impl NoritoSerialize for Zst {
+            fn serialize<W: Write>(&self, _writer: W) -> Result<(), ncore::Error> {
+                Ok(())
+            }
+        }
+
+        impl<'a> NoritoDeserialize<'a> for Zst {
+            fn deserialize(_: &'a ncore::Archived<Self>) -> Self {
+                Self
+            }
+        }
+
+        impl<'a> ncore::DecodeFromSlice<'a> for Zst {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+                if !bytes.is_empty() {
+                    return Err(ncore::Error::LengthMismatch);
+                }
+                Ok((Self, 0))
+            }
+        }
+
+        let vec: SmallVec<[Zst; 4]> = SmallVec(smallvec![Zst, Zst, Zst]);
+        let bytes = vec.encode();
+        let decoded = SmallVec::<[Zst; 4]>::decode(&mut bytes.as_slice()).expect("decode");
+        assert_eq!(decoded, vec);
+    }
 }
 
 mod small_vector {
-    use iroha_macro::serde_where;
-
     use super::*;
 
     /// Wrapper struct around [`smallvec::SmallVec`] type. Keeps `N`
@@ -78,9 +223,6 @@ mod small_vector {
     ///
     /// let a: SmallVec<[u8; 24]> = SmallVec(smallvec::smallvec![32]);
     /// ```
-    #[serde_where(A::Item)]
-    #[derive(Deserialize, Serialize)]
-    #[serde(transparent)]
     #[repr(transparent)]
     pub struct SmallVec<A: Array>(pub smallvec::SmallVec<A>);
 
@@ -172,6 +314,12 @@ mod small_vector {
             self.0.push(value);
         }
 
+        /// Remove all elements from the vector without altering capacity.
+        #[inline]
+        pub fn clear(&mut self) {
+            self.0.clear();
+        }
+
         /// Remove and return the element at position `index`, shifting all elements after it to the
         /// left.
         ///
@@ -244,11 +392,127 @@ mod small_vector {
         }
     }
 
-    impl<A: Array> WrapperTypeEncode for SmallVec<A> {}
+    impl<A: smallvec::Array> FastJsonWrite for SmallVec<A>
+    where
+        A::Item: JsonSerialize,
+    {
+        fn write_json(&self, out: &mut String) {
+            out.push('[');
+            let mut iter = self.0.iter();
+            if let Some(first) = iter.next() {
+                first.json_serialize(out);
+                for item in iter {
+                    out.push(',');
+                    item.json_serialize(out);
+                }
+            }
+            out.push(']');
+        }
+    }
 
-    // Decode into Vec and then convert into SmallVec.
-    // TODO: Maybe this conversion can be optimized?
-    impl<A: Array> WrapperTypeDecode for SmallVec<A> {
-        type Wrapped = Vec<A::Item>;
+    impl<A: smallvec::Array> JsonDeserialize for SmallVec<A>
+    where
+        A::Item: JsonDeserialize,
+    {
+        fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+            let values = parser.parse_array::<A::Item>()?;
+            let mut out = smallvec::SmallVec::<A>::with_capacity(values.len());
+            out.extend(values);
+            Ok(Self(out))
+        }
+    }
+
+    impl<A: Array> NoritoSerialize for SmallVec<A>
+    where
+        A::Item: NoritoSerialize,
+    {
+        fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
+            use ncore::WriteBytesExt;
+            writer.write_u64::<ncore::LittleEndian>(self.0.len() as u64)?;
+            for item in &self.0 {
+                let mut buf = Vec::new();
+                item.serialize(&mut buf)?;
+                writer.write_u64::<ncore::LittleEndian>(buf.len() as u64)?;
+                writer.write_all(&buf)?;
+            }
+            Ok(())
+        }
+    }
+
+    impl<'a, A: Array> NoritoDeserialize<'a> for SmallVec<A>
+    where
+        A::Item: NoritoDeserialize<'a> + for<'slice> ncore::DecodeFromSlice<'slice>,
+    {
+        fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
+            Self::try_deserialize(archived).unwrap_or_else(|err| {
+                panic!(
+                    "SmallVec<{}> decode failed: {err:?}",
+                    core::any::type_name::<A::Item>()
+                )
+            })
+        }
+
+        fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
+            if let Some((_, len)) = ncore::payload_ctx()
+                && len == 0
+            {
+                return Ok(Self::new());
+            }
+            let ptr = core::ptr::from_ref(archived).cast::<u8>();
+            let ctx_len = ncore::payload_ctx().map(|(_, len)| len);
+            let bytes_full = ncore::payload_slice_from_ptr(ptr)?;
+            let bytes = ctx_len
+                .and_then(|len| bytes_full.get(..len))
+                .unwrap_or(bytes_full);
+            let (value, _used) = <Self as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
+            Ok(value)
+        }
+    }
+
+    impl<'a, A: Array> ncore::DecodeFromSlice<'a> for SmallVec<A>
+    where
+        A::Item: ncore::DecodeFromSlice<'a>,
+    {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+            let (len, mut offset) = <u64 as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
+            let len = usize::try_from(len).map_err(|_| ncore::Error::LengthMismatch)?;
+            let mut out = smallvec::SmallVec::<A>::with_capacity(len);
+
+            for _ in 0..len {
+                let (elem_len, used_len) =
+                    <u64 as ncore::DecodeFromSlice>::decode_from_slice(&bytes[offset..])?;
+                offset = offset
+                    .checked_add(used_len)
+                    .ok_or(ncore::Error::LengthMismatch)?;
+                let elem_len =
+                    usize::try_from(elem_len).map_err(|_| ncore::Error::LengthMismatch)?;
+
+                if elem_len == 0 {
+                    if core::mem::size_of::<ncore::Archived<A::Item>>() != 0 {
+                        return Err(ncore::Error::LengthMismatch);
+                    }
+                    let (value, used) =
+                        <A::Item as ncore::DecodeFromSlice>::decode_from_slice(&[])?;
+                    if used != 0 {
+                        return Err(ncore::Error::LengthMismatch);
+                    }
+                    out.push(value);
+                    continue;
+                }
+
+                let end = offset
+                    .checked_add(elem_len)
+                    .ok_or(ncore::Error::LengthMismatch)?;
+                let slice = bytes.get(offset..end).ok_or(ncore::Error::LengthMismatch)?;
+                let (value, used) = <A::Item as ncore::DecodeFromSlice>::decode_from_slice(slice)?;
+                if used != elem_len {
+                    return Err(ncore::Error::LengthMismatch);
+                }
+                out.push(value);
+                offset = end;
+            }
+
+            Ok((Self(out), offset))
+        }
     }
 }

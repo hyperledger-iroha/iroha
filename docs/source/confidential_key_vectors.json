@@ -1,0 +1,41 @@
+[
+  {
+    "seed_label": "all_zero",
+    "seed_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "seed_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "nullifier_key_hex": "982df44a1f2e7f1d914e3da70f745f56d7f1652ab2c82186277e09e454aab32a",
+    "nullifier_key_b64": "mC30Sh8ufx2RTj2nD3RfVtfxZSqyyCGGJ34J5FSqsyo=",
+    "incoming_view_key_hex": "4aef3f316cc4e294a8dde5dedb06207e5005d0acd4dca0f10e5ed1a814ff9896",
+    "incoming_view_key_b64": "Su8/MWzE4pSo3eXe2wYgflAF0KzU3KDxDl7RqBT/mJY=",
+    "outgoing_view_key_hex": "b7b2d192766f3603954b5e794ff83bd3bfec022e46bd924c1a1e0ff48a43c676",
+    "outgoing_view_key_b64": "t7LRknZvNgOVS155T/g707/sAi5GvZJMGh4P9IpDxnY=",
+    "full_view_key_hex": "45cff7ac6465b7a162de9e43fb8d5bd1bd1d2deb8818a088f7654b9081587006",
+    "full_view_key_b64": "Rc/3rGRlt6Fi3p5D+41b0b0dLeuIGKCI92VLkIFYcAY="
+  },
+  {
+    "seed_label": "0x42_repeat",
+    "seed_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+    "seed_b64": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
+    "nullifier_key_hex": "cb7149cc545b97fe5ab1ffe85550f9b0146f3dbff7cf9d2921b9432b641bf0dc",
+    "nullifier_key_b64": "y3FJzFRbl/5asf/oVVD5sBRvPb/3z50pIblDK2Qb8Nw=",
+    "incoming_view_key_hex": "fc0f3bf333d454923522f723ef589e0ca31ac1206724b1cd607e41ef0d4230f7",
+    "incoming_view_key_b64": "/A878zPUVJI1Ivcj71ieDKMawSBnJLHNYH5B7w1CMPc=",
+    "outgoing_view_key_hex": "5dc50806af739fa5577484268fd77c4e2345c70dae5b55a132b4f9b1a3e00c4c",
+    "outgoing_view_key_b64": "XcUIBq9zn6VXdIQmj9d8TiNFxw2uW1WhMrT5saPgDEw=",
+    "full_view_key_hex": "9a0fe79f768aeb440e07751dbddfa17ac97cbf21f3e79c2e0206e56b3c2629af",
+    "full_view_key_b64": "mg/nn3aK60QOB3Udvd+hesl8vyHz55wuAgblazwmKa8="
+  },
+  {
+    "seed_label": "all_ff",
+    "seed_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "seed_b64": "//////////////////////////////////////////8=",
+    "nullifier_key_hex": "ab4dac3c99d636ba0c440c99b6b06bbea0f9f2d32d33e0884e9d7c976342a5bb",
+    "nullifier_key_b64": "q02sPJnWNroMRAyZtrBrvqD58tMtM+CITp18l2NCpbs=",
+    "incoming_view_key_hex": "b1eb8edb0bfb660781174105b3dbed762f7200a3b865ce017ea5449dfac5f2e0",
+    "incoming_view_key_b64": "seuO2wv7ZgeBF0EFs9vtdi9yAKO4Zc4BfqVEnfrF8uA=",
+    "outgoing_view_key_hex": "280669126137bf58441f727a59394e0f642159512164e96a55cefcacb3679e52",
+    "outgoing_view_key_b64": "KAZpEmE3v1hEH3J6WTlOD2QhWVEhZOlqVc78rLNnnlI=",
+    "full_view_key_hex": "cd7a687132aa3121df6960370abf21f31efad53e03d9904a86843bf7cb7f3068",
+    "full_view_key_b64": "zXpocTKqMSHfaWA3Cr8h8x761T4D2ZBKhoQ798t/MGg="
+  }
+]

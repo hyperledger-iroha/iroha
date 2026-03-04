@@ -1,12 +1,10 @@
 #![allow(single_use_lifetimes)] // NOTE: Triggered by &str implementation
 
-use alloc::{boxed::Box, string::String, vec::Vec};
-use core::{mem::ManuallyDrop, ptr::NonNull};
+use std::{boxed::Box, mem::ManuallyDrop, ptr::NonNull, string::String, vec::Vec};
 
 use crate::{
-    ffi_type,
+    ReprC, WrapperTypeOf, ffi_type,
     slice::{RefMutSlice, RefSlice},
-    ReprC, WrapperTypeOf,
 };
 
 // NOTE: This can be contested as it is nowhere documented that String is

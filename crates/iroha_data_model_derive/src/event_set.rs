@@ -1,10 +1,12 @@
 #![allow(unused)]
 
 use darling::{FromDeriveInput, FromVariant};
-use iroha_macro_utils::Emitter;
+use manyhow::Emitter;
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use syn::{DeriveInput, Variant};
+
+use crate::{emitter_ext::EmitterExt, utils::darling_result};
 
 enum FieldsStyle {
     Unit,
@@ -188,7 +190,9 @@ impl ToTokens for EventSetEnum {
             },
         );
 
-        let doc = format!(" An event set for [`{event_enum_ident}`]s\n\nEvent sets of the same type can be combined with a custom `|` operator");
+        let doc = format!(
+            " An event set for [`{event_enum_ident}`]s\n\nEvent sets of the same type can be combined with a custom `|` operator"
+        );
 
         tokens.extend(quote! {
             #[derive(
@@ -201,8 +205,8 @@ impl ToTokens for EventSetEnum {
                 Hash,
                 // this introduces tight coupling with these crates
                 // but it's the easiest way to make sure those traits are implemented
-                parity_scale_codec::Decode,
-                parity_scale_codec::Encode,
+                norito::codec::Decode,
+                norito::codec::Encode,
                 iroha_schema::TypeId,
             )]
             #[repr(transparent)]
@@ -300,89 +304,90 @@ impl ToTokens for EventSetEnum {
                 }
             }
 
-            impl serde::Serialize for #set_ident {
-                fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-                where
-                    S: serde::Serializer,
-                {
-                    use serde::ser::*;
-
-                    let basis = self.decompose();
-                    let mut seq = serializer.serialize_seq(Some(basis.len()))?;
-                    for event in basis {
-                        let str = match event {
+            impl norito::json::FastJsonWrite for #set_ident {
+                fn write_json(&self, out: &mut String) {
+                    out.push('[');
+                    let mut first = true;
+                    for event in self.decompose() {
+                        if !first {
+                            out.push(',');
+                        } else {
+                            first = false;
+                        }
+                        let label = match event {
                             #(#flag_idents => #flag_names,)*
                             _ => unreachable!(),
                         };
-
-                        seq.serialize_element(&str)?;
+                        norito::json::write_json_string(label, out);
                     }
-                    seq.end()
+                    out.push(']');
                 }
             }
 
-            impl<'de> serde::Deserialize<'de> for #set_ident {
-                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-                where
-                    D: serde::Deserializer<'de>,
-                {
-                    struct Visitor;
+            impl norito::json::JsonDeserialize for #set_ident {
+                fn json_deserialize(
+                    parser: &mut norito::json::Parser<'_>,
+                ) -> Result<Self, norito::json::Error> {
+                    let value =
+                        <norito::json::Value as norito::json::JsonDeserialize>::json_deserialize(
+                            parser,
+                        )?;
+                    <Self as norito::json::JsonDeserialize>::json_from_value(&value)
+                }
 
-                    impl<'de> serde::de::Visitor<'de> for Visitor {
-                        type Value = #set_ident;
-
-                        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
-                            formatter.write_str("a sequence of strings")
-                        }
-
-                        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-                        where
-                            A: serde::de::SeqAccess<'de>,
-                        {
-                            let mut result = #set_ident::empty();
-
-                            struct SingleEvent(#set_ident);
-                            impl<'de> serde::Deserialize<'de> for SingleEvent {
-                                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-                                where
-                                    D: serde::Deserializer<'de>,
-                                {
-                                    struct Visitor;
-
-                                    impl<'de> serde::de::Visitor<'de> for Visitor {
-                                        type Value = SingleEvent;
-
-                                        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
-                                            formatter.write_str("a string")
-                                        }
-
-                                        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-                                        where
-                                            E: serde::de::Error,
-                                        {
-                                            let event = match v {
-                                                #(
-                                                    #flag_names => #flag_idents,
-                                                )*
-                                                _ => return Err(serde::de::Error::custom(format!("unknown event variant `{}`, expected one of {}", v, #flag_names_str))),
-                                            };
-
-                                            Ok(SingleEvent(event))
-                                        }
-                                    }
-
-                                    deserializer.deserialize_str(Visitor)
+                fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+                    fn format_invalid_type(value: &norito::json::Value) -> String {
+                        match value {
+                            norito::json::Value::Null => String::from("unit value"),
+                            norito::json::Value::Bool(value) => format!("boolean `{value}`"),
+                            norito::json::Value::Number(number) => match number {
+                                norito::json::Number::I64(value) => format!("integer `{value}`"),
+                                norito::json::Number::U64(value) => format!("integer `{value}`"),
+                                norito::json::Number::F64(value) => {
+                                    format!("floating point `{value}`")
                                 }
-                            }
-                            while let Some(SingleEvent(event)) = seq.next_element::<SingleEvent>()? {
-                                result |= event;
-                            }
-
-                            Ok(result)
+                            },
+                            norito::json::Value::String(value) => format!("string {value:?}"),
+                            norito::json::Value::Array(_) => String::from("sequence"),
+                            norito::json::Value::Object(_) => String::from("map"),
                         }
                     }
 
-                    deserializer.deserialize_seq(Visitor)
+                    let values = match value {
+                        norito::json::Value::Array(values) => values,
+                        other => {
+                            return Err(norito::json::Error::Message(format!(
+                                "invalid type: {}, expected a sequence of strings",
+                                format_invalid_type(other)
+                            )));
+                        }
+                    };
+
+                    let mut result = #set_ident::empty();
+                    for value in values {
+                        let name = match value {
+                            norito::json::Value::String(name) => name,
+                            other => {
+                                return Err(norito::json::Error::Message(format!(
+                                    "invalid type: {}, expected a string",
+                                    format_invalid_type(other)
+                                )));
+                            }
+                        };
+
+                        let event = match name.as_str() {
+                            #(#flag_names => #flag_idents,)*
+                            other => {
+                                return Err(norito::json::Error::Message(format!(
+                                    "unknown event variant `{other}`, expected one of {}",
+                                    #flag_names_str
+                                )));
+                            }
+                        };
+                        result |= event;
+                    }
+
+                    Ok(result)
                 }
             }
 
@@ -416,7 +421,7 @@ impl ToTokens for EventSetEnum {
 }
 
 pub fn impl_event_set_derive(emitter: &mut Emitter, input: &syn::DeriveInput) -> TokenStream {
-    let Some(enum_) = emitter.handle(EventSetEnum::from_derive_input(input)) else {
+    let Some(enum_) = emitter.handle(darling_result(EventSetEnum::from_derive_input(input))) else {
         return quote! {};
     };
 

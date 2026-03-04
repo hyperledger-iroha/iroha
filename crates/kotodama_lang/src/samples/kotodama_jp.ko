@@ -1,0 +1,20 @@
+// Japanese sample simplified to supported syntax.
+seiyaku KotodamaJp {
+  hajimari() {
+    info("初期化");
+  }
+
+  kotoage fn swap(trader: AccountId,
+                  pool: AccountId,
+                  input_asset: AssetDefinitionId,
+                  output_asset: AssetDefinitionId,
+                  amount_in: int,
+                  reserve_in: int,
+                  reserve_out: int) -> int permission(Admin) {
+    let effective = (amount_in * 997) / 1000;
+    let out = (reserve_out * effective) / (reserve_in + effective);
+    transfer_asset(trader, pool, input_asset, amount_in);
+    transfer_asset(pool, trader, output_asset, out);
+    return out;
+  }
+}

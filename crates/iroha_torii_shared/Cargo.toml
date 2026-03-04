@@ -18,6 +18,30 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
-iroha_primitives.workspace = true
+norito.workspace = true
+iroha_crypto = { workspace = true, default-features = false, features = [] }
+iroha_data_model = { workspace = true, default-features = false, features = [] }
+blake3.workspace = true
+rand.workspace = true
+hex.workspace = true
+hkdf = "0.12.4"
+sha2 = { version = "0.10.9", default-features = false }
+blake2 = { version = "0.10.6", default-features = false }
 
-serde = { workspace = true, features = ["derive"] }
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
+tungstenite = { workspace = true }
+futures-util = { version = "0.3.31" }
+base64 = { workspace = true }
+anyhow = "1.0.100"
+hex = { workspace = true }
+
+[features]
+default = []
+# Allow norito derive macros to detect optional packed-struct layout without
+# tripping unexpected-cfg checks in this destination crate.
+packed-struct = []
+# Enable Connect examples (WS demo) gating to avoid unexpected-cfg warnings
+connect = []

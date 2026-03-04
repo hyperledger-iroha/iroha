@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "service_name": "web_portal",
+  "service_version": "2026.02.0",
+  "container": {
+    "manifest_hash": "hash:1112131415161718191A1B1C1D1E1F202122232425262728292A2B2C2D2E2F31#011A",
+    "expected_schema_version": 1
+  },
+  "replicas": 3,
+  "route": {
+    "host": "portal.sora",
+    "path_prefix": "/app",
+    "service_port": 8080,
+    "visibility": {
+      "visibility": "Public",
+      "value": null
+    },
+    "tls_mode": {
+      "tls": "Required",
+      "value": null
+    }
+  },
+  "rollout": {
+    "canary_percent": 20,
+    "max_unavailable_replicas": 1,
+    "health_window_secs": 45,
+    "automatic_rollback_failures": 3
+  },
+  "state_bindings": [
+    {
+      "schema_version": 1,
+      "binding_name": "session_store",
+      "scope": {
+        "scope": "ServiceState",
+        "value": null
+      },
+      "mutability": {
+        "mutability": "ReadWrite",
+        "value": null
+      },
+      "encryption": {
+        "encryption": "ClientCiphertext",
+        "value": null
+      },
+      "key_prefix": "/state/session",
+      "max_item_bytes": 4096,
+      "max_total_bytes": 262144
+    },
+    {
+      "schema_version": 1,
+      "binding_name": "patient_records",
+      "scope": {
+        "scope": "ConfidentialState",
+        "value": null
+      },
+      "mutability": {
+        "mutability": "AppendOnly",
+        "value": null
+      },
+      "encryption": {
+        "encryption": "FheCiphertext",
+        "value": null
+      },
+      "key_prefix": "/state/health",
+      "max_item_bytes": 16384,
+      "max_total_bytes": 16777216
+    }
+  ]
+}

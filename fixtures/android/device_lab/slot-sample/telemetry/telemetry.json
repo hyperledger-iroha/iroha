@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "slot_id": "slot-sample",
+  "suite": "android-and6-smoke",
+  "metrics": {
+    "battery_pct": 91,
+    "avg_latency_ms": 124
+  },
+  "note": "synthetic telemetry capture for AND6 CI evidence"
+}

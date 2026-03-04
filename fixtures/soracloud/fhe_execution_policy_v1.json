@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "policy_name": "fhe_policy_med",
+  "param_set": "fhe_bfv_med",
+  "param_set_version": 2,
+  "max_ciphertext_bytes": 131072,
+  "max_plaintext_bytes": 16384,
+  "max_input_ciphertexts": 8,
+  "max_output_ciphertexts": 4,
+  "max_multiplication_depth": 2,
+  "max_rotation_count": 128,
+  "max_bootstrap_count": 1,
+  "rounding_mode": {
+    "rounding_mode": "NearestTiesToEven",
+    "value": null
+  }
+}

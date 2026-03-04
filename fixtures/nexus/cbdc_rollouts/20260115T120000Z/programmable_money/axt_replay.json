@@ -1,0 +1,41 @@
+{
+  "descriptor": {
+    "axt_id": "axt-cbdc-demo",
+    "group_id_hex": "7ab3f9b3b2777e9f8b3d6fae50264a1e0ffab7c74542ff10d67fbdd073d55710"
+  },
+  "handle_requests": [
+    {
+      "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
+      "digest": "0x01",
+      "result": "Issued"
+    },
+    {
+      "uaid": "uaid:5f77b4fcb89cb03a0ab8f46d98a72d585e3b115a55b6bdb2e893d3f49d9342f1",
+      "digest": "0x02",
+      "result": "Accepted"
+    }
+  ],
+  "envelope": {
+    "instructions": [
+      "mint CBDC",
+      "transfer CBDC"
+    ],
+    "proof": "fastpq-demo-proof"
+  },
+  "receipts": [
+    {
+      "status": "Approved",
+      "lane": "cbdc"
+    }
+  ],
+  "telemetry": [
+    {
+      "metric": "telemetry::fastpq.execution_mode",
+      "value": "gpu"
+    },
+    {
+      "metric": "nexus_scheduler_lane_teu_slot_committed",
+      "value": 128
+    }
+  ]
+}

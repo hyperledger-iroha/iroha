@@ -1,0 +1,13 @@
+{
+  "provider_id_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+  "epoch_start": 1700600360,
+  "epoch_end": 1700600720,
+  "declared_capacity_gib": 320,
+  "effective_capacity_gib": 310,
+  "utilised_capacity_gib": 295,
+  "successful_replications": 11,
+  "failed_replications": 1,
+  "uptime_percent_milli": 99500,
+  "por_success_percent_milli": 99000,
+  "notes": "Failover window handling rerouted demand"
+}

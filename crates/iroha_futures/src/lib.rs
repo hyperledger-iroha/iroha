@@ -9,10 +9,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub use iroha_futures_derive::*;
+pub use iroha_derive::telemetry_future;
 use iroha_logger::telemetry::{Event as Telemetry, Fields as TelemetryFields};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    derive::{JsonDeserialize, JsonSerialize},
+    json::Value,
+};
 
 /// Future which sends info with telemetry about number and length of polls
 #[derive(Debug, Clone, Copy)]
@@ -31,14 +34,22 @@ impl<F> TelemetryFuture<F> {
 }
 
 /// Telemetry info for future polling
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 pub struct FuturePollTelemetry {
     /// Future id
     pub id: u64,
     /// Future name
     pub name: String,
-    /// Duration of poll
-    pub duration: Duration,
+    /// Duration of poll encoded in nanoseconds
+    pub duration: u64,
+}
+
+impl FuturePollTelemetry {
+    /// Poll duration as a `Duration` value.
+    #[inline]
+    pub fn duration(&self) -> Duration {
+        Duration::from_nanos(self.duration)
+    }
 }
 
 const ID: &str = "id";
@@ -69,7 +80,7 @@ impl TryFrom<&Telemetry> for FuturePollTelemetry {
                 }
                 (NAME, Value::String(name_value)) if name.is_none() => name = Some(name_value),
                 (DURATION, Value::Number(duration_value)) if duration.is_none() => {
-                    duration = Some(Duration::from_nanos(duration_value.as_u64().unwrap()))
+                    duration = Some(duration_value.as_u64().unwrap())
                 }
                 _ => return Err(TelemetryConversionError),
             }
@@ -101,7 +112,7 @@ impl TryFrom<Telemetry> for FuturePollTelemetry {
                 }
                 (NAME, Value::String(name_value)) if name.is_none() => name = Some(name_value),
                 (DURATION, Value::Number(duration_value)) if duration.is_none() => {
-                    duration = Some(Duration::from_nanos(duration_value.as_u64().unwrap()))
+                    duration = Some(duration_value.as_u64().unwrap())
                 }
                 _ => return Err(TelemetryConversionError),
             }
@@ -133,5 +144,29 @@ impl<F: Future> Future for TelemetryFuture<F> {
         iroha_logger::telemetry_future!(id, name, duration);
 
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    #[test]
+    fn future_poll_telemetry_json_roundtrip() {
+        let sample = FuturePollTelemetry {
+            id: 42,
+            name: "test-future".into(),
+            duration: 123_456,
+        };
+
+        let json = norito::json::to_json(&sample).expect("serialize telemetry");
+        let decoded: FuturePollTelemetry =
+            norito::json::from_json(&json).expect("deserialize telemetry");
+
+        assert_eq!(decoded.id, sample.id);
+        assert_eq!(decoded.name, sample.name);
+        assert_eq!(decoded.duration, sample.duration);
+        assert_eq!(decoded.duration(), Duration::from_nanos(sample.duration));
     }
 }

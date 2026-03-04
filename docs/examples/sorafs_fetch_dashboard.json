@@ -1,0 +1,103 @@
+{
+  "title": "SoraFS Orchestrator Overview",
+  "panels": [
+    {
+      "title": "Active Fetches by Region",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "id": 1,
+      "targets": [
+        {
+          "expr": "sum by (region)(sorafs_orchestrator_active_fetches)",
+          "legendFormat": "{{region}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Fetch Duration p50/p95",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "id": 2,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (region, le)(rate(sorafs_orchestrator_fetch_duration_ms_bucket[5m])))",
+          "legendFormat": "{{region}} p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (region, le)(rate(sorafs_orchestrator_fetch_duration_ms_bucket[5m])))",
+          "legendFormat": "{{region}} p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "milliseconds"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Failure Reasons",
+      "type": "piechart",
+      "datasource": "Prometheus",
+      "id": 3,
+      "targets": [
+        {
+          "expr": "sum by (failure_reason)(rate(sorafs_orchestrator_fetch_failures_total[5m]))",
+          "legendFormat": "{{failure_reason}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        }
+      }
+    },
+    {
+      "title": "Retries per Provider",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "id": 4,
+      "targets": [
+        {
+          "expr": "topk(8, sum by (provider_id)(rate(sorafs_orchestrator_retries_total[5m])))",
+          "legendFormat": "{{provider_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Provider Failure Rate",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "id": 5,
+      "targets": [
+        {
+          "expr": "topk(8, sum by (provider_id)(rate(sorafs_orchestrator_provider_failures_total[5m])))",
+          "legendFormat": "{{provider_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    }
+  ],
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  }
+}

@@ -16,13 +16,13 @@ pub fn impl_derive_permission(input: &syn::DeriveInput) -> TokenStream {
             type Error = ::iroha_executor_data_model::TryFromDataModelObjectError;
 
             fn try_from(value: &::iroha_data_model::permission::Permission) -> core::result::Result<Self, Self::Error> {
-                use alloc::borrow::ToOwned as _;
+                use std::borrow::ToOwned as _;
 
                 if *value.name() != <Self as ::iroha_executor_data_model::permission::Permission>::name() {
                     return Err(Self::Error::UnknownIdent(value.name().to_owned()));
                 }
 
-                serde_json::from_str::<Self>(value.payload().as_ref()).map_err(Self::Error::Deserialize)
+                ::norito::json::from_str::<Self>(value.payload().as_ref()).map_err(Self::Error::Deserialize)
             }
         }
 
@@ -30,7 +30,7 @@ pub fn impl_derive_permission(input: &syn::DeriveInput) -> TokenStream {
             fn from(value: #ident #ty_generics) -> Self {
                 ::iroha_data_model::permission::Permission::new(
                     <#ident as ::iroha_executor_data_model::permission::Permission>::name(),
-                    ::serde_json::to_value::<#ident #ty_generics>(value)
+                    ::norito::json::to_value::<#ident #ty_generics>(&value)
                         .expect("INTERNAL BUG: Failed to serialize executor data model entity"),
                 )
             }

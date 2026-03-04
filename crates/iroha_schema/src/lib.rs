@@ -1,28 +1,25 @@
 //! Module for schematizing rust types in other languages for translation.
 
-#![no_std]
-
-extern crate alloc;
-
-mod serialize;
-
-use alloc::{
+use core::{
+    num::{
+        NonZeroI8, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI128, NonZeroU8, NonZeroU16,
+        NonZeroU32, NonZeroU64, NonZeroU128,
+    },
+    ops::RangeInclusive,
+};
+use std::{
     borrow::ToOwned as _,
     boxed::Box,
     collections::{btree_map, btree_set},
     format,
     string::String,
+    sync::Arc,
     vec,
     vec::Vec,
-};
-use core::{
-    num::{NonZeroU16, NonZeroU32, NonZeroU64},
-    ops::RangeInclusive,
 };
 
 /// Derive schema. It will make your structure schemaable
 pub use iroha_schema_derive::*;
-use serde::Serialize;
 
 /// An entry in the schema map
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -79,6 +76,11 @@ impl MetaMap {
     pub fn get<K: 'static>(&self) -> Option<&Metadata> {
         self.0.get(&Self::key::<K>()).map(|value| &value.metadata)
     }
+
+    /// Iterate over all registered schema entries.
+    pub fn iter(&self) -> impl Iterator<Item = (&core::any::TypeId, &MetaMapEntry)> {
+        self.0.iter()
+    }
 }
 
 impl IntoIterator for MetaMap {
@@ -90,7 +92,10 @@ impl IntoIterator for MetaMap {
     }
 }
 
-// TODO: Should be &str or ConstString.
+// NOTE: Using `ConstString` here would avoid heap allocations for static
+// identifiers, but that type lives in `iroha_primitives` which already depends
+// on this crate. Switching would introduce a cyclic dependency.  Until the
+// crates are reorganized (see issue #3943), we keep `Ident` as `String`.
 /// Identifier of the type
 pub type Ident = String;
 
@@ -171,7 +176,7 @@ pub struct ArrayMeta {
     /// Type
     pub ty: core::any::TypeId,
     /// Length
-    pub len: u64,
+    pub len: u128,
 }
 
 /// Vector metadata
@@ -249,7 +254,7 @@ pub struct FixedMeta {
 }
 
 /// Integer mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntMode {
     /// Fixed width
     FixedWidth,
@@ -267,7 +272,7 @@ pub struct BitmapMeta {
 }
 
 /// Bitmap mask
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BitmapMask {
     /// Symbolic name of the mask
     pub name: String,
@@ -277,7 +282,7 @@ pub struct BitmapMask {
 }
 
 /// Compact predicate. Just for documentation purposes
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Compact<T>(T);
 
 impl TypeId for () {
@@ -358,7 +363,18 @@ macro_rules! impl_schema_non_zero_int {
     )*};
 }
 
-impl_schema_non_zero_int!(NonZeroU64 => u64, NonZeroU32 => u32, NonZeroU16 => u16);
+impl_schema_non_zero_int!(
+    NonZeroU128 => u128,
+    NonZeroU64 => u64,
+    NonZeroU32 => u32,
+    NonZeroU16 => u16,
+    NonZeroU8 => u8,
+    NonZeroI128 => i128,
+    NonZeroI64 => i64,
+    NonZeroI32 => i32,
+    NonZeroI16 => i16,
+    NonZeroI8 => i8
+);
 
 impl TypeId for String {
     fn id() -> String {
@@ -446,6 +462,29 @@ impl<T: IntoSchema> IntoSchema for Box<T> {
                 T::update_schema_map(map);
             }
 
+            if let Some(schema) = map.get::<T>() {
+                map.insert::<Self>(schema.clone());
+            }
+        }
+    }
+}
+
+impl<T: TypeId> TypeId for Arc<T> {
+    fn id() -> String {
+        format!("Arc<{}>", T::id())
+    }
+}
+
+impl<T: IntoSchema> IntoSchema for Arc<T> {
+    fn type_name() -> String {
+        T::type_name()
+    }
+
+    fn update_schema_map(map: &mut MetaMap) {
+        if !map.contains_key::<Self>() {
+            if !map.contains_key::<T>() {
+                T::update_schema_map(map);
+            }
             if let Some(schema) = map.get::<T>() {
                 map.insert::<Self>(schema.clone());
             }
@@ -552,7 +591,7 @@ impl<T: IntoSchema, const L: usize> IntoSchema for [T; L] {
         if !map.contains_key::<Self>() {
             map.insert::<Self>(Metadata::Array(ArrayMeta {
                 ty: core::any::TypeId::of::<T>(),
-                len: L.try_into().expect("usize should always fit in u64"),
+                len: L as u128,
             }));
 
             T::update_schema_map(map);

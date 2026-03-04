@@ -1,14 +1,16 @@
-#![allow(missing_docs)]
+//! Versioned JSON codec tests for `iroha_version_derive`.
 #[cfg(test)]
 mod tests {
     use iroha_version::{
+        RawVersioned,
         error::{Error, Result},
         json::*,
-        RawVersioned,
     };
     use iroha_version_derive::{declare_versioned, version};
-    use parity_scale_codec::{Decode, Encode};
-    use serde::{Deserialize, Serialize};
+    use norito::{
+        Decode as NoritoDecode, Encode as NoritoEncode,
+        json::{JsonDeserialize, JsonSerialize, Value},
+    };
 
     mod model_1 {
         #![allow(unused_results)]
@@ -17,12 +19,42 @@ mod tests {
         declare_versioned!(VersionedMessage 1..3, Debug, Clone, iroha_macro::FromVariant);
 
         #[version(version = 1, versioned_alias = "VersionedMessage")]
-        #[derive(Debug, Clone, Decode, Encode, Serialize, Deserialize)]
+        #[derive(Debug, Clone, NoritoDecode, NoritoEncode)]
         pub struct Message;
 
+        impl JsonSerialize for Message {
+            fn json_serialize(&self, out: &mut String) {
+                out.push_str("null");
+            }
+        }
+
+        impl JsonDeserialize for Message {
+            fn json_deserialize(
+                p: &mut norito::json::Parser<'_>,
+            ) -> Result<Self, norito::json::Error> {
+                p.parse_null()?;
+                Ok(Self)
+            }
+        }
+
         #[version(version = 2, versioned_alias = "VersionedMessage")]
-        #[derive(Debug, Clone, Decode, Encode, Serialize, Deserialize)]
+        #[derive(Debug, Clone, NoritoDecode, NoritoEncode)]
         pub struct Message2;
+
+        impl JsonSerialize for Message2 {
+            fn json_serialize(&self, out: &mut String) {
+                out.push_str("null");
+            }
+        }
+
+        impl JsonDeserialize for Message2 {
+            fn json_deserialize(
+                p: &mut norito::json::Parser<'_>,
+            ) -> Result<Self, norito::json::Error> {
+                p.parse_null()?;
+                Ok(Self)
+            }
+        }
     }
 
     mod model_2 {
@@ -33,16 +65,61 @@ mod tests {
         declare_versioned!(VersionedMessage 1..4, Debug, Clone, iroha_macro::FromVariant);
 
         #[version(version = 1, versioned_alias = "VersionedMessage")]
-        #[derive(Debug, Clone, Decode, Encode, Serialize, Deserialize)]
+        #[derive(Debug, Clone, NoritoDecode, NoritoEncode)]
         pub struct Message;
 
+        impl JsonSerialize for Message {
+            fn json_serialize(&self, out: &mut String) {
+                out.push_str("null");
+            }
+        }
+
+        impl JsonDeserialize for Message {
+            fn json_deserialize(
+                p: &mut norito::json::Parser<'_>,
+            ) -> Result<Self, norito::json::Error> {
+                p.parse_null()?;
+                Ok(Self)
+            }
+        }
+
         #[version(version = 2, versioned_alias = "VersionedMessage")]
-        #[derive(Debug, Clone, Decode, Encode, Serialize, Deserialize)]
+        #[derive(Debug, Clone, NoritoDecode, NoritoEncode)]
         pub struct Message2;
 
+        impl JsonSerialize for Message2 {
+            fn json_serialize(&self, out: &mut String) {
+                out.push_str("null");
+            }
+        }
+
+        impl JsonDeserialize for Message2 {
+            fn json_deserialize(
+                p: &mut norito::json::Parser<'_>,
+            ) -> Result<Self, norito::json::Error> {
+                p.parse_null()?;
+                Ok(Self)
+            }
+        }
+
         #[version(version = 3, versioned_alias = "VersionedMessage")]
-        #[derive(Debug, Clone, Decode, Encode, Serialize, Deserialize)]
+        #[derive(Debug, Clone, NoritoDecode, NoritoEncode)]
         pub struct Message3(pub String);
+
+        impl JsonSerialize for Message3 {
+            fn json_serialize(&self, out: &mut String) {
+                self.0.json_serialize(out);
+            }
+        }
+
+        impl JsonDeserialize for Message3 {
+            fn json_deserialize(
+                p: &mut norito::json::Parser<'_>,
+            ) -> Result<Self, norito::json::Error> {
+                let inner = String::json_deserialize(p)?;
+                Ok(Self(inner))
+            }
+        }
     }
 
     #[test]
@@ -86,6 +163,9 @@ mod tests {
             Err(Error::UnsupportedVersion(unsupported_version)) => {
                 assert_eq!(unsupported_version.version, 3);
                 if let RawVersioned::Json(json) = unsupported_version.raw {
+                    let json: Value = norito::json::from_str(&json).map_err(|e| e.to_string())?;
+                    let raw_string: Value =
+                        norito::json::from_str(raw_string).map_err(|e| e.to_string())?;
                     assert_eq!(json, raw_string);
                     Ok(())
                 } else {

@@ -1,7 +1,6 @@
 //! Module [`executor_entrypoint`](crate::executor_entrypoint) macro implementation
 
-use iroha_macro_utils::Emitter;
-use manyhow::emit;
+use manyhow::{Emitter, emit};
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -90,7 +89,7 @@ fn impl_validate_entrypoint_priv(
         ///
         /// This function transfers the ownership of allocated
         /// [`Result`](::iroha_executor::data_model::executor::Result)
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         #[doc(hidden)]
         unsafe extern "C" fn #generated_entrypoint_ident(context: *const u8) -> *const u8 {
             let host = ::iroha_executor::Iroha;
@@ -105,7 +104,7 @@ fn impl_validate_entrypoint_priv(
             bytes_box.as_ptr()
         }
 
-        // NOTE: Host objects are always passed by value to wasm
+        // NOTE: Host objects are always passed by value to the IVM
         #[allow(clippy::needless_pass_by_value)]
         #(#attrs)*
         #[inline]
@@ -135,8 +134,8 @@ pub fn impl_migrate_entrypoint(fn_item: syn::ItemFn) -> TokenStream {
         ///
         /// # Memory safety
         ///
-        /// This function transfers the ownership of allocated [`Vec`](alloc::vec::Vec).
-        #[no_mangle]
+        /// This function transfers the ownership of allocated [`Vec`](std::vec::Vec).
+        #[unsafe(no_mangle)]
         #[doc(hidden)]
         unsafe extern "C" fn #migrate_fn_name(context: *const u8) {
             let host = ::iroha_executor::smart_contract::Iroha;

@@ -16,9 +16,6 @@ categories.workspace = true
 [dependencies]
 iroha_crypto = { workspace = true }
 iroha_data_model = { workspace = true }
-iroha_wasm_builder = { workspace = true }
-
-serde = { workspace = true, features = ["derive"] }
 toml = { workspace = true }
 
 [lints]

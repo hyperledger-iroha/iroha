@@ -1,0 +1,32 @@
+[
+  {
+    "chunk_index": 0,
+    "offset": 0,
+    "length": 177082,
+    "digest_blake3": "7789b490337d16c51b59a92e354a657ba450da4bab872c31e85e4d4fedcb3a27"
+  },
+  {
+    "chunk_index": 1,
+    "offset": 177082,
+    "length": 210377,
+    "digest_blake3": "56397fe0ff8cc24c790e0719505fff05c49dca09289b595d17455bedcc1f7438"
+  },
+  {
+    "chunk_index": 2,
+    "offset": 387459,
+    "length": 403145,
+    "digest_blake3": "2a2a47eedcc11effdb5d13190fe09143d6b31f959c72980bb0f2b8a5058971fd"
+  },
+  {
+    "chunk_index": 3,
+    "offset": 790604,
+    "length": 187169,
+    "digest_blake3": "8dbb40d7a3439aa57bd69a3adfe98ff43b9043764072bc42d7dc211942e46ef8"
+  },
+  {
+    "chunk_index": 4,
+    "offset": 977773,
+    "length": 70803,
+    "digest_blake3": "194c8180f4b90e021a86199d17092af3b2bd29792dc028e401258d903616b664"
+  }
+]

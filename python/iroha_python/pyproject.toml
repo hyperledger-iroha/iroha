@@ -1,0 +1,67 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "iroha-python"
+version = "0.0.1"
+description = "Python SDK for interacting with Hyperledger Iroha v2 nodes."
+readme = "README.md"
+authors = [{name = "Hyperledger Iroha Contributors"}]
+license = {text = "Apache-2.0"}
+requires-python = ">=3.9"
+dependencies = [
+  "iroha-norito>=0.1.0",
+  "requests>=2.31",
+  "urllib3<2",
+]
+keywords = ["iroha", "sdk", "blockchain", "norito"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "typing-extensions>=4.9.0",
+  "mypy>=1.8.0",
+  "ruff>=0.1.9",
+]
+
+[project.urls]
+Homepage = "https://github.com/hyperledger/iroha"
+Repository = "https://github.com/hyperledger/iroha"
+
+[tool.maturin]
+python-source = "src"
+manifest-path = "iroha_python_rs/Cargo.toml"
+include = [
+  "src/iroha_python/examples/connect_app_metadata.json",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I"]
+ignore = ["E203", "E501"]
+
+[tool.mypy]
+python_version = "3.9"
+strict = false
+warn_unused_ignores = true
+show_error_codes = true
+ignore_missing_imports = true
+files = ["src/iroha_python", "tests"]

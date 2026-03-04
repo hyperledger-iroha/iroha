@@ -1,0 +1,326 @@
+{
+  "title": "Sora Name Service KPIs",
+  "uid": "sns-kpis",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "tags": ["sns", "governance", "kpi"],
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "suffix",
+        "label": "Suffix",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sns_registrar_status_total, suffix)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      },
+      {
+        "name": "release",
+        "label": "Bulk Release",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sns_bulk_release_requests_total, release)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Registrations (last 24h)",
+      "id": 1,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 7, "w": 6, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(increase(sns_registrar_status_total{result=\"ok\",suffix=~\"$suffix\"}[24h]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 1000},
+              {"color": "red", "value": 5000}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Successful registrar events per suffix over the last day. Use the suffix filter to spotlight .sora/.nexus/.dao cohorts."
+    },
+    {
+      "type": "stat",
+      "title": "Governance activations (30d)",
+      "id": 5,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 7, "w": 6, "x": 6, "y": 0},
+      "targets": [
+        {
+          "expr": "increase(sns_governance_activation_total[30d])",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 1},
+              {"color": "red", "value": 4}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Number of charter/policy activations recorded via sns governance in the look-back window."
+    },
+    {
+      "type": "timeseries",
+      "title": "Registrar throughput",
+      "id": 2,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "sum by (suffix) (rate(sns_registrar_status_total{result=\"ok\",suffix=~\"$suffix\"}[$__rate_interval]))",
+          "legendFormat": "{{suffix}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "Per-suffix rate of successful registrar events (registrations + renewals). Watch for drops before billing closes."
+    },
+    {
+      "type": "table",
+      "title": "Registrar error modes (5m rate)",
+      "id": 3,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 7},
+      "targets": [
+        {
+          "expr": "sum by (result,suffix) (rate(sns_registrar_status_total{result!=\"ok\",suffix=~\"$suffix\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"Time": true},
+            "renameByName": {
+              "suffix": "Suffix",
+              "result": "Result",
+              "Value": "Rate (5m)"
+            }
+          }
+        }
+      ],
+      "description": "Highlights spikes in registrar failures per suffix so stewards can coordinate mitigations."
+    },
+    {
+      "type": "table",
+      "title": "Guardian freeze windows",
+      "id": 4,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 7},
+      "targets": [
+        {
+          "expr": "guardian_freeze_active",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bool"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"Time": true},
+            "renameByName": {
+              "selector": "Selector",
+              "Value": "Frozen"
+            }
+          }
+        }
+      ],
+      "description": "Active guardian freeze tickets exported by the CLI. Alert if a selector stays frozen past the declared SLA."
+    },
+    {
+      "type": "table",
+      "title": "Net payment units by asset",
+      "id": 6,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 15},
+      "targets": [
+        {
+          "expr": "sum by (asset_id) (sns_bulk_release_payment_net_units{release=~\"$release\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"Time": true},
+            "renameByName": {
+              "asset_id": "Asset",
+              "Value": "Net units"
+            }
+          }
+        }
+      ],
+      "description": "Net payment units reported by sns_bulk_release.sh for the selected release(s); used for ARPU calcs."
+    },
+    {
+      "type": "table",
+      "title": "Bulk requests per suffix",
+      "id": 7,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 15},
+      "targets": [
+        {
+          "expr": "sum by (suffix_id) (sns_bulk_release_requests_total{release=~\"$release\",suffix_id!=\"all\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"Time": true},
+            "renameByName": {
+              "suffix_id": "Suffix ID",
+              "Value": "Requests"
+            }
+          }
+        }
+      ],
+      "description": "Bulk registrar manifest volumes by suffix to reconcile steward allocations and referral programs."
+    },
+    {
+      "type": "stat",
+      "title": "Net units per request",
+      "id": 8,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 7, "w": 6, "x": 18, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(sns_bulk_release_payment_net_units{release=~\"$release\"}) / clamp_min(sum(sns_bulk_release_requests_total{release=~\"$release\",suffix_id=\"all\"}), 1)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Average net units collected per bulk request, driven by the manifest metrics output."
+    }
+  ]
+}

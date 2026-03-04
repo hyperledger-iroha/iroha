@@ -9,7 +9,4 @@ fn execute(_state_transaction: &StateTransaction) -> MyNotResult {
     None
 }
 
-fn main() {
-
-}
-
+fn main() {}

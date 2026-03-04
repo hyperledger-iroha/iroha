@@ -1,0 +1,32 @@
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/reference/torii-swagger.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+'@سائٹ/src/اجزاء/swagruipanel.jsx' سے Swagruipanel درآمد کریں ؛
+
+# Torii API (سویگر UI)
+
+اس صفحے میں `swagger-ui-react` کا استعمال کرتے ہوئے Torii OpenAPI دستاویز کو سرایت کیا گیا ہے۔ جب اسے استعمال کریں
+آپ واقف سویگر لے آؤٹ ، درخواست کے نمونے ، اور کوشش کرنے کی صلاحیت چاہتے ہیں
+براہ راست براؤزر کے اندر درخواستیں۔
+
+## استعمال کے نکات
+
+- ہر درخواست کو پہلے سے اجازت دینے کے لئے پینل میں ایکئرر ٹوکن فراہم کریں۔ ٹوکن ہیں
+  `X-TryIt-Auth` ہیڈر کا استعمال کرتے ہوئے پراکسی کو آگے بھیج دیا گیا ہے اور کبھی بھی برقرار نہیں رہتا ہے۔
+- جب پورٹل کی خدمت کرتے ہو تو `TRYIT_PROXY_PUBLIC_URL` تشکیل دیں تاکہ ویجیٹ
+  بنڈل اسٹیجنگ پراکسی کے ذریعے آگے کی درخواستیں۔ ایک انتباہی بینر ظاہر ہوتا ہے
+  اگر پراکسی غیر فعال ہے۔
+- تازہ ترین قیاس کے درمیان سوئچ کرنے کے لئے ڈراپ ڈاؤن سے OpenAPI اسنیپ شاٹ منتخب کریں
+  اور `npm run sync-openapi` کے ذریعہ تیار کردہ محفوظ شدہ ورژن۔
+- پراکسی کی حمایت یافتہ "[اسے آزمائیں] (/api/overview#try-it-sandbox-docs-3)" ​​کنسول آزمائیں
+  اسٹیجڈ ماحول کے لئے جہاں CORs براہ راست Torii رسائی کو روکتا ہے۔
+- OpenAPI اسنیپ شاٹ کو `cargo xtask openapi` کے ساتھ تازہ رکھیں (دیکھیں
+  `docs/portal/static/openapi/torii.json`)۔
+

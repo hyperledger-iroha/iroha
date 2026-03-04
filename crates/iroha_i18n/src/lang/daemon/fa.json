@@ -1,0 +1,14 @@
+{
+  "info.welcome": "به Hyperledger Iroha خوش آمدید!",
+  "error.trace_config_setup": "راه‌اندازی ردیابی پیکربندی ممکن نشد",
+  "error.config": "خطای پیکربندی!",
+  "error.logger": "سیستم ثبت رخداد راه‌اندازی نشد",
+  "error.start": "Iroha راه‌اندازی نشد",
+  "error.run": "حین اجرای Iroha خطا رخ داد",
+  "error.start_p2p": "شبکه P2P راه‌اندازی نشد",
+  "error.init_kura": "Kura (ذخیره‌سازی بلاک) راه‌اندازی نشد",
+  "error.start_dev_telemetry": "سرویس تله‌متری توسعه‌دهندگان راه‌اندازی نشد",
+  "error.start_telemetry": "سرویس تله‌متری راه‌اندازی نشد",
+  "error.listen_os_signal": "تنظیم شنود سیگنال‌های سیستم‌عامل ممکن نشد",
+  "error.start_torii": "Torii (درگاه Iroha HTTP API) راه‌اندازی نشد"
+}

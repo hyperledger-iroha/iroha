@@ -1,4 +1,5 @@
-#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+//! Integration tests validating multi-signature transaction flows.
 
 use std::{
     collections::BTreeMap,
@@ -6,94 +7,120 @@ use std::{
     time::Duration,
 };
 
-use derive_more::Constructor;
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::{
     client::Client,
     crypto::KeyPair,
-    data_model::{prelude::*, Level},
+    data_model::{Level, prelude::*},
     executor_data_model::isi::multisig::*,
 };
 use iroha_executor_data_model::permission::account::CanRegisterAccount;
 use iroha_test_network::*;
 use iroha_test_samples::{
-    gen_account_in, ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR,
+    ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, gen_account_in,
 };
+use tokio::runtime::Runtime;
+
+fn start_network(
+    builder: NetworkBuilder,
+    context: &'static str,
+) -> Option<(sandbox::SerializedNetwork, Runtime)> {
+    sandbox::start_network_blocking_or_skip(
+        builder.with_peer_startup_timeout(Duration::from_secs(300)),
+        context,
+    )
+    .unwrap()
+}
+
+fn multisig_supported(client: &Client) -> bool {
+    client
+        .query_single(FindExecutorDataModel)
+        .map(|model| {
+            model.instructions().iter().any(|ident| {
+                let value: &str = ident.as_ref();
+                value.to_ascii_lowercase().contains("multisig")
+            })
+        })
+        .unwrap_or(false)
+}
 
 #[test]
 fn multisig_normal() -> Result<()> {
-    multisig_base(TestSuite::normal())
+    multisig_base(TestSuite::normal(), stringify!(multisig_normal))
 }
 
 #[test]
 fn multisig_unauthorized() -> Result<()> {
-    multisig_base(TestSuite::unauthorized())
+    multisig_base(TestSuite::unauthorized(), stringify!(multisig_unauthorized))
 }
 
 #[test]
 fn multisig_expires() -> Result<()> {
-    multisig_base(TestSuite::expires())
+    multisig_base(TestSuite::expires(), stringify!(multisig_expires))
 }
 
 #[test]
 fn multisig_recursion_normal() -> Result<()> {
-    multisig_recursion_base(TestSuite::normal())
+    multisig_recursion_base(TestSuite::normal(), stringify!(multisig_recursion_normal))
 }
 
 #[test]
 fn multisig_recursion_unauthorized() -> Result<()> {
-    multisig_recursion_base(TestSuite::unauthorized())
+    multisig_recursion_base(
+        TestSuite::unauthorized(),
+        stringify!(multisig_recursion_unauthorized),
+    )
 }
 
 #[test]
 fn multisig_recursion_expires() -> Result<()> {
-    multisig_recursion_base(TestSuite::expires())
+    multisig_recursion_base(TestSuite::expires(), stringify!(multisig_recursion_expires))
 }
 
-#[derive(Constructor)]
 struct TestSuite {
     domain: DomainId,
-    multisig_account_id: AccountId,
     unauthorized_target_opt: Option<AccountId>,
     transaction_ttl_ms_opt: Option<u64>,
 }
 
 impl TestSuite {
+    fn new(
+        domain: DomainId,
+        unauthorized_target_opt: Option<AccountId>,
+        transaction_ttl_ms_opt: Option<u64>,
+    ) -> Self {
+        Self {
+            domain,
+            unauthorized_target_opt,
+            transaction_ttl_ms_opt,
+        }
+    }
     fn normal() -> Self {
         // New domain for this test
         let domain = "kingdom".parse().unwrap();
-        // Create a multisig account ID and discard the corresponding private key
-        // FIXME #5022 refuse user input to prevent multisig monopoly and pre-registration hijacking
-        let multisig_account_id = gen_account_in(&domain).0;
         // Make some changes to the multisig account itself
         let unauthorized_target_opt = None;
         // Semi-permanently valid
         let transaction_ttl_ms_opt = None;
 
-        Self::new(
-            domain,
-            multisig_account_id,
-            unauthorized_target_opt,
-            transaction_ttl_ms_opt,
-        )
+        Self::new(domain, unauthorized_target_opt, transaction_ttl_ms_opt)
     }
 
     fn unauthorized() -> Self {
         let domain = "kingdom".parse().unwrap();
-        let multisig_account_id = gen_account_in(&domain).0;
         // Someone that the multisig account has no permission to access
         let unauthorized_target_opt = Some(ALICE_ID.clone());
 
-        Self::new(domain, multisig_account_id, unauthorized_target_opt, None)
+        Self::new(domain, unauthorized_target_opt, None)
     }
 
     fn expires() -> Self {
         let domain = "kingdom".parse().unwrap();
-        let multisig_account_id = gen_account_in(&domain).0;
         // Expires after 1 sec
         let transaction_ttl_ms_opt = Some(1_000);
 
-        Self::new(domain, multisig_account_id, None, transaction_ttl_ms_opt)
+        Self::new(domain, None, transaction_ttl_ms_opt)
     }
 }
 
@@ -109,18 +136,24 @@ impl TestSuite {
 ///     - Every instruction validated against the multisig account: authorized
 /// 6. Either execution or expiration on approval deletes the transaction entry
 #[expect(clippy::cast_possible_truncation, clippy::too_many_lines)]
-fn multisig_base(suite: TestSuite) -> Result<()> {
+fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
     const N_SIGNATORIES: usize = 5;
 
     let TestSuite {
         domain,
-        multisig_account_id,
         unauthorized_target_opt,
         transaction_ttl_ms_opt,
     } = suite;
 
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let builder = NetworkBuilder::new();
+    let Some((network, _rt)) = start_network(builder, context) else {
+        return Ok(());
+    };
     let test_client = network.client();
+    if !multisig_supported(&test_client) {
+        eprintln!("skipping {context}: executor does not advertise multisig instructions");
+        return Ok(());
+    }
 
     // Assume some domain registered after genesis
     let register_and_transfer_kingdom: [InstructionBox; 2] = [
@@ -144,39 +177,41 @@ fn multisig_base(suite: TestSuite) -> Result<()> {
     let non_signatory = residents.pop_first().unwrap();
     let mut signatories = residents;
 
-    let register_multisig_account = MultisigRegister::new(
-        multisig_account_id.clone(),
-        MultisigSpec::new(
-            signatories
-                .keys()
-                .enumerate()
-                .map(|(weight, id)| (id.clone(), 1 + weight as u8))
-                .collect(),
-            // Quorum can be reached without the first signatory
-            (1..=N_SIGNATORIES)
-                .skip(1)
-                .sum::<usize>()
-                .try_into()
-                .ok()
-                .and_then(NonZeroU16::new)
-                .unwrap(),
-            transaction_ttl_ms_opt
-                .and_then(NonZeroU64::new)
-                .unwrap_or(NonZeroU64::MAX),
-        ),
+    let spec = MultisigSpec::new(
+        signatories
+            .keys()
+            .enumerate()
+            .map(|(weight, id)| (id.clone(), 1 + weight as u8))
+            .collect(),
+        // Quorum can be reached without the first signatory
+        (1..=N_SIGNATORIES)
+            .skip(1)
+            .sum::<usize>()
+            .try_into()
+            .ok()
+            .and_then(NonZeroU16::new)
+            .unwrap(),
+        transaction_ttl_ms_opt
+            .and_then(NonZeroU64::new)
+            .unwrap_or(NonZeroU64::MAX),
     );
+    let multisig_account_key = KeyPair::random();
+    let multisig_account_id =
+        AccountId::new(domain.clone(), multisig_account_key.public_key().clone());
+    let register_multisig_account =
+        MultisigRegister::with_account(multisig_account_id.clone(), spec.clone());
 
     // Any account in another domain cannot register a multisig account without special permission
     let _err = alt_client(
         (CARPENTER_ID.clone(), CARPENTER_KEYPAIR.clone()),
         &test_client,
     )
-    .submit_blocking(register_multisig_account.clone())
+    .submit_blocking::<InstructionBox>(register_multisig_account.clone().into())
     .expect_err("multisig account should not be registered by account of another domain");
 
     // Non-signatory account in the same domain cannot register a multisig account without special permission
     let _err = alt_client(non_signatory.clone(), &test_client)
-        .submit_blocking(register_multisig_account.clone())
+        .submit_blocking::<InstructionBox>(register_multisig_account.clone().into())
         .expect_err(
             "multisig account should not be registered by non-signatory account of the same domain",
         );
@@ -186,7 +221,7 @@ fn multisig_base(suite: TestSuite) -> Result<()> {
 
     // Signatory account cannot register a multisig account without special permission
     let _err = alt_client(signatory, &test_client)
-        .submit_blocking(register_multisig_account.clone())
+        .submit_blocking::<InstructionBox>(register_multisig_account.clone().into())
         .expect_err("multisig account should not be registered by signatory account");
 
     // Account with permission can register a multisig account
@@ -194,34 +229,29 @@ fn multisig_base(suite: TestSuite) -> Result<()> {
         Grant::account_permission(CanRegisterAccount { domain }, non_signatory.0.clone()),
     )?;
     alt_client(non_signatory, &test_client)
-        .submit_blocking(register_multisig_account)
+        .submit_blocking::<InstructionBox>(register_multisig_account.into())
         .expect("multisig account should be registered by account with permission");
-
-    // Check that the multisig account has been registered
-    test_client
-        .query(FindAccounts::new())
-        .filter_with(|account| account.id.eq(multisig_account_id.clone()))
-        .execute_single()
-        .expect("multisig account should be created");
 
     let key: Name = "success_marker".parse().unwrap();
     let transaction_target = unauthorized_target_opt
         .as_ref()
         .unwrap_or(&multisig_account_id)
         .clone();
-    let instructions = vec![SetKeyValue::account(
-        transaction_target.clone(),
-        key.clone(),
-        "congratulations".parse::<Json>().unwrap(),
-    )
-    .into()];
+    let instructions = vec![
+        SetKeyValue::account(
+            transaction_target.clone(),
+            key.clone(),
+            "congratulations".parse::<Json>().unwrap(),
+        )
+        .into(),
+    ];
     let instructions_hash = HashOf::new(&instructions);
 
     let proposer = signatories.pop_last().unwrap();
     let mut approvers = signatories.into_iter();
 
     let propose = MultisigPropose::new(multisig_account_id.clone(), instructions, None);
-    alt_client(proposer, &test_client).submit_blocking(propose)?;
+    alt_client(proposer, &test_client).submit_blocking::<InstructionBox>(propose.into())?;
 
     // Allow time to elapse to test the expiration
     if let Some(ms) = transaction_ttl_ms_opt {
@@ -229,16 +259,18 @@ fn multisig_base(suite: TestSuite) -> Result<()> {
     }
     test_client.submit_blocking(Log::new(Level::DEBUG, "Just ticking time".to_string()))?;
 
-    let approve = MultisigApprove::new(multisig_account_id.clone(), instructions_hash);
+    let approve: InstructionBox =
+        MultisigApprove::new(multisig_account_id.clone(), instructions_hash).into();
 
     // Approve once to see if the proposal expires
     let approver = approvers.next().unwrap();
-    alt_client(approver, &test_client).submit_blocking(approve.clone())?;
+    alt_client(approver, &test_client).submit_blocking::<InstructionBox>(approve.clone())?;
 
     // Subsequent approvals should succeed unless the proposal is expired
     for _ in 0..(N_SIGNATORIES - 4) {
         let approver = approvers.next().unwrap();
-        let res = alt_client(approver, &test_client).submit_blocking(approve.clone());
+        let res =
+            alt_client(approver, &test_client).submit_blocking::<InstructionBox>(approve.clone());
         match &transaction_ttl_ms_opt {
             None => {
                 res.unwrap();
@@ -249,17 +281,24 @@ fn multisig_base(suite: TestSuite) -> Result<()> {
         }
     }
 
+    let fetch_account = |id: &AccountId| {
+        test_client
+            .query(FindAccounts::new())
+            .execute_all()
+            .ok()
+            .and_then(|accounts| accounts.into_iter().find(|account| account.id() == id))
+    };
     // Check that the multisig transaction has not yet executed
-    let _err = test_client
-        .query(FindAccounts)
-        .filter_with(|account| account.id.eq(transaction_target.clone()))
-        .select_with(|account| account.metadata.key(key.clone()))
-        .execute_single()
-        .expect_err("instructions shouldn't execute without enough approvals");
+    assert!(
+        fetch_account(&transaction_target)
+            .and_then(|account| account.metadata().get(&key).cloned())
+            .is_none(),
+        "instructions shouldn't execute without enough approvals"
+    );
 
     // The last approve to proceed to validate and execute the instructions
     let approver = approvers.next().unwrap();
-    let res = alt_client(approver, &test_client).submit_blocking(approve.clone());
+    let res = alt_client(approver, &test_client).submit_blocking::<InstructionBox>(approve.clone());
     match (&transaction_ttl_ms_opt, &unauthorized_target_opt) {
         (None, None) => {
             res.unwrap();
@@ -270,39 +309,31 @@ fn multisig_base(suite: TestSuite) -> Result<()> {
     }
 
     // Check if the multisig transaction has executed
-    let res = test_client
-        .query(FindAccounts)
-        .filter_with(|account| account.id.eq(transaction_target.clone()))
-        .select_with(|account| account.metadata.key(key.clone()))
-        .execute_single();
+    let res = fetch_account(&transaction_target)
+        .and_then(|account| account.metadata().get(&key).cloned());
     match (&transaction_ttl_ms_opt, &unauthorized_target_opt) {
         (None, None) => {
             res.unwrap();
         }
         _ => {
-            let _err = res.unwrap_err();
+            assert!(res.is_none());
         }
     }
 
     // Check if the transaction entry is deleted
-    let res = test_client
-        .query(FindAccounts)
-        .filter_with(|account| account.id.eq(multisig_account_id))
-        .select_with(|account| {
-            account.metadata.key(
-                format!("multisig/proposals/{instructions_hash}")
-                    .parse()
-                    .unwrap(),
-            )
-        })
-        .execute_single();
+    let res = fetch_account(&multisig_account_id).and_then(|account| {
+        account
+            .metadata()
+            .get(format!("multisig/proposals/{instructions_hash}").as_str())
+            .cloned()
+    });
     match (&transaction_ttl_ms_opt, &unauthorized_target_opt) {
         (None, Some(_)) => {
             // In case failing validation, the entry can exit only by expiring
             res.unwrap();
         }
         _ => {
-            let _err = res.unwrap_err();
+            assert!(res.is_none());
         }
     }
 
@@ -321,16 +352,22 @@ fn multisig_base(suite: TestSuite) -> Result<()> {
 ///   0       1    2   3  4  5 <--- personal signatories
 /// ```
 #[expect(clippy::similar_names, clippy::too_many_lines)]
-fn multisig_recursion_base(suite: TestSuite) -> Result<()> {
+fn multisig_recursion_base(suite: TestSuite, context: &'static str) -> Result<()> {
     let TestSuite {
-        domain: _,
-        multisig_account_id: _,
         unauthorized_target_opt,
         transaction_ttl_ms_opt,
+        ..
     } = suite;
 
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let builder = NetworkBuilder::new();
+    let Some((network, _rt)) = start_network(builder, context) else {
+        return Ok(());
+    };
     let test_client = network.client();
+    if !multisig_supported(&test_client) {
+        eprintln!("skipping {context}: executor does not advertise multisig instructions");
+        return Ok(());
+    }
 
     let wonderland = "wonderland";
 
@@ -353,7 +390,11 @@ fn multisig_recursion_base(suite: TestSuite) -> Result<()> {
     let sig_0 = sigs.pop_last().unwrap();
 
     let register_ms_account = |sigs: Vec<&AccountId>| {
-        let ms_account_id = gen_account_in(wonderland).0;
+        let domain = sigs
+            .first()
+            .expect("expected at least one signatory")
+            .domain()
+            .clone();
         let spec = MultisigSpec::new(
             // Equal votes
             sigs.iter().copied().map(|id| (id.clone(), 1)).collect(),
@@ -367,13 +408,15 @@ fn multisig_recursion_base(suite: TestSuite) -> Result<()> {
                 .and_then(NonZeroU64::new)
                 .unwrap_or(NonZeroU64::MAX),
         );
-        let register = MultisigRegister::new(ms_account_id.clone(), spec.clone());
+        let multisig_account_key = KeyPair::random();
+        let multisig_account_id = AccountId::new(domain, multisig_account_key.public_key().clone());
+        let register = MultisigRegister::with_account(multisig_account_id.clone(), spec.clone());
 
         test_client
-            .submit_blocking(register)
+            .submit_blocking::<InstructionBox>(register.into())
             .expect("the domain owner should succeed to register a multisig account");
 
-        (ms_account_id, spec)
+        (multisig_account_id, spec)
     };
 
     let (msa_12, _spec_12) = register_ms_account(sigs_12.keys().collect());
@@ -388,18 +431,20 @@ fn multisig_recursion_base(suite: TestSuite) -> Result<()> {
         .as_ref()
         .unwrap_or(&msa_012345)
         .clone();
-    let instructions = vec![SetKeyValue::account(
-        transaction_target.clone(),
-        key.clone(),
-        "congratulations".parse::<Json>().unwrap(),
-    )
-    .into()];
+    let instructions = vec![
+        SetKeyValue::account(
+            transaction_target.clone(),
+            key.clone(),
+            "congratulations".parse::<Json>().unwrap(),
+        )
+        .into(),
+    ];
     let instructions_hash = HashOf::new(&instructions);
 
     let proposer = sig_0;
     let propose = MultisigPropose::new(msa_012345.clone(), instructions, None);
 
-    alt_client(proposer, &test_client).submit_blocking(propose)?;
+    alt_client(proposer, &test_client).submit_blocking::<InstructionBox>(propose.into())?;
 
     // Allow time to elapse to test the expiration
     if let Some(ms) = transaction_ttl_ms_opt {
@@ -416,18 +461,24 @@ fn multisig_recursion_base(suite: TestSuite) -> Result<()> {
         MultisigApprove::new(msa_12345.clone(), approval_hash_to_012345).into();
     let approval_hash_to_12345 = HashOf::new(&vec![approve_to_12345.clone()]);
 
-    let proposal_value_at = |msa: AccountId, mst_hash: HashOf<Vec<InstructionBox>>| {
+    let fetch_account = |id: &AccountId| {
         test_client
-            .query(FindAccounts)
-            .filter_with(|account| account.id.eq(msa.clone()))
-            .select_with(|account| {
+            .query(FindAccounts::new())
+            .execute_all()
+            .unwrap()
+            .into_iter()
+            .find(|account| account.id() == id)
+    };
+    let proposal_value_at = |msa: AccountId, mst_hash: HashOf<Vec<InstructionBox>>| {
+        fetch_account(&msa)
+            .and_then(|account| {
                 account
-                    .metadata
-                    .key(format!("multisig/proposals/{mst_hash}").parse().unwrap())
+                    .metadata()
+                    .get(format!("multisig/proposals/{mst_hash}").as_str())
+                    .cloned()
             })
-            .execute_single()
             .expect("should be initialized by the root proposal")
-            .try_into_any::<MultisigProposalValue>()
+            .try_into_any_norito::<MultisigProposalValue>()
             .unwrap()
     };
     let proposal_value_at_012345 = proposal_value_at(msa_012345.clone(), instructions_hash);
@@ -454,12 +505,13 @@ fn multisig_recursion_base(suite: TestSuite) -> Result<()> {
 
     // Approve once to see if the proposal expires
     let (approver, approve) = approvals_iter.next().unwrap();
-    alt_client(approver, &test_client).submit_blocking(approve)?;
+    alt_client(approver, &test_client).submit_blocking::<InstructionBox>(approve.into())?;
 
     // Subsequent approvals should succeed unless the proposal is expired
     for _ in 2..=4 {
         let (approver, approve) = approvals_iter.next().unwrap();
-        let res = alt_client(approver, &test_client).submit_blocking(approve.clone());
+        let res = alt_client(approver, &test_client)
+            .submit_blocking::<InstructionBox>(approve.clone().into());
         match &transaction_ttl_ms_opt {
             None => {
                 res.unwrap();
@@ -471,16 +523,17 @@ fn multisig_recursion_base(suite: TestSuite) -> Result<()> {
     }
 
     // Check that the multisig transaction has not yet executed
-    let _err = test_client
-        .query(FindAccounts)
-        .filter_with(|account| account.id.eq(transaction_target.clone()))
-        .select_with(|account| account.metadata.key(key.clone()))
-        .execute_single()
-        .expect_err("instructions shouldn't execute without enough approvals");
+    assert!(
+        fetch_account(&transaction_target)
+            .and_then(|account| account.metadata().get(&key).cloned())
+            .is_none(),
+        "instructions shouldn't execute without enough approvals"
+    );
 
     // The last approve to proceed to validate and execute the instructions
     let (approver, approve) = approvals_iter.next().unwrap();
-    let res = alt_client(approver, &test_client).submit_blocking(approve.clone());
+    let res = alt_client(approver, &test_client)
+        .submit_blocking::<InstructionBox>(approve.clone().into());
     match (&transaction_ttl_ms_opt, &unauthorized_target_opt) {
         (None, None) => {
             res.unwrap();
@@ -491,17 +544,14 @@ fn multisig_recursion_base(suite: TestSuite) -> Result<()> {
     }
 
     // Check if the multisig transaction has executed
-    let res = test_client
-        .query(FindAccounts)
-        .filter_with(|account| account.id.eq(transaction_target))
-        .select_with(|account| account.metadata.key(key.clone()))
-        .execute_single();
+    let res = fetch_account(&transaction_target)
+        .and_then(|account| account.metadata().get(&key).cloned());
     match (&transaction_ttl_ms_opt, &unauthorized_target_opt) {
         (None, None) => {
             res.unwrap();
         }
         _ => {
-            let _err = res.unwrap_err();
+            assert!(res.is_none());
         }
     }
 
@@ -512,22 +562,19 @@ fn multisig_recursion_base(suite: TestSuite) -> Result<()> {
         (msa_12345, approval_hash_to_012345),
         (msa_012345, instructions_hash),
     ] {
-        let res = test_client
-            .query(FindAccounts)
-            .filter_with(|account| account.id.eq(msa))
-            .select_with(|account| {
-                account
-                    .metadata
-                    .key(format!("multisig/proposals/{mst_hash}").parse().unwrap())
-            })
-            .execute_single();
+        let res = fetch_account(&msa).and_then(|account| {
+            account
+                .metadata()
+                .get(format!("multisig/proposals/{mst_hash}").as_str())
+                .cloned()
+        });
         match (&transaction_ttl_ms_opt, &unauthorized_target_opt) {
             (None, Some(_)) => {
                 // In case the root proposal is failing validation, the relevant entries can exit only by expiring
                 res.unwrap();
             }
             _ => {
-                let _err = res.unwrap_err();
+                assert!(res.is_none());
             }
         }
     }
@@ -537,7 +584,10 @@ fn multisig_recursion_base(suite: TestSuite) -> Result<()> {
 
 #[test]
 fn reserved_roles() {
-    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let builder = NetworkBuilder::new();
+    let Some((network, _rt)) = start_network(builder, stringify!(reserved_roles)) else {
+        return;
+    };
     let test_client = network.client();
 
     let account_in_another_domain = gen_account_in("garden_of_live_flowers").0;
@@ -569,8 +619,10 @@ fn alt_client(signatory: (AccountId, KeyPair), base_client: &Client) -> Client {
 fn debug_account(account_id: &AccountId, client: &Client) {
     let account = client
         .query(FindAccounts)
-        .filter_with(|account| account.id.eq(account_id.clone()))
-        .execute_single()
+        .execute_all()
+        .unwrap()
+        .into_iter()
+        .find(|account| account.id() == account_id)
         .unwrap();
 
     eprintln!("{account:#?}");

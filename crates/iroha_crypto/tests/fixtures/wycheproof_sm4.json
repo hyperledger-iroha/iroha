@@ -1,0 +1,57 @@
+{
+  "algorithm": "SM4-AEAD",
+  "generatorVersion": "iroha-sm4-snapshot-20250301",
+  "numberOfTests": 4,
+  "testGroups": [
+    {
+      "mode": "GCM",
+      "tests": [
+        {
+          "tcId": 1,
+          "comment": "invalid tag (bit flip)",
+          "key": "0123456789abcdeffedcba9876543210",
+          "nonce": "00001234567800000000abcd",
+          "aad": "feedfacedeadbeeffeedfacedeadbeefabaddad2",
+          "ciphertext": "42831ec2217774244b7221b784d0d49c",
+          "tag": "5d5c2af327cd64a62cf35abd2ba6fab4",
+          "result": "invalid"
+        }
+      ]
+    },
+    {
+      "mode": "CCM",
+      "tests": [
+        {
+          "tcId": 17,
+          "comment": "invalid tag (bit flip)",
+          "key": "404142434445464748494a4b4c4d4e4f",
+          "nonce": "10111213141516",
+          "aad": "000102030405060708090a0b0c0d0e0f",
+          "ciphertext": "7162015b4dac2555",
+          "tag": "5d26de5a",
+          "result": "invalid"
+        },
+        {
+          "tcId": 18,
+          "comment": "truncated tag (3 bytes)",
+          "key": "404142434445464748494a4b4c4d4e4f",
+          "nonce": "10111213141516",
+          "aad": "000102030405060708090a0b0c0d0e0f",
+          "ciphertext": "7162015b4dac2555",
+          "tag": "5d26de",
+          "result": "invalid"
+        },
+        {
+          "tcId": 19,
+          "comment": "tampered ciphertext (bit flip)",
+          "key": "404142434445464748494a4b4c4d4e4f",
+          "nonce": "10111213141516",
+          "aad": "000102030405060708090a0b0c0d0e0f",
+          "ciphertext": "7162015b4dac2554",
+          "tag": "5d26de5a",
+          "result": "invalid"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Barka da zuwa Hyperledger Iroha!",
+  "error.trace_config_setup": "An kasa saita bin sahun saituna",
+  "error.config": "Kuskuren saitawa!",
+  "error.logger": "Ba a iya kunna tsarin rikodin ba",
+  "error.start": "Ba a iya kunna Iroha ba",
+  "error.run": "An sami kuskure yayin gudanar da Iroha",
+  "error.start_p2p": "Ba a iya kunna hanyar sadarwa ta P2P ba",
+  "error.init_kura": "Ba a iya kunna Kura (ajiya ta toshe) ba",
+  "error.start_dev_telemetry": "Ba a iya kunna sabis na telemetry na masu haɓakawa ba",
+  "error.start_telemetry": "Ba a iya kunna sabis na telemetry ba",
+  "error.listen_os_signal": "An kasa saita sauraron siginar tsarin aiki",
+  "error.start_torii": "Ba a iya kunna Torii (ƙofar Iroha HTTP API) ba"
+}

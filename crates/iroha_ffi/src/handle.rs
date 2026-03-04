@@ -66,8 +66,8 @@ macro_rules! def_ffi_fns {
                 Ok(()) => $crate::FfiReturn::Ok,
                 Err(err) => err.into(),
             },
-            Err(_) => {
-                // TODO: Implement error handling (https://github.com/hyperledger-iroha/iroha/issues/2252)
+            Err(panic_payload) => {
+                $crate::panic_notifier::log_panic(&panic_payload);
                 $crate::FfiReturn::UnrecoverableError
             },
         }
@@ -85,7 +85,7 @@ macro_rules! def_ffi_fns {
         ///
         /// All of the given pointers must be valid and the given handle id must match the expected
         /// pointer type
-        #[export_name = concat!($prefix, "__clone")]
+        #[unsafe(export_name = concat!($prefix, "__clone"))]
         unsafe extern "C" fn __clone(
             handle_id: <$crate::handle::Id as $crate::FfiType>::ReprC,
             handle_ptr: *const core::ffi::c_void,
@@ -97,8 +97,10 @@ macro_rules! def_ffi_fns {
                         let handle_ref: &$other = $crate::FfiConvert::try_from_ffi(handle_ptr as <&$other as $crate::FfiType>::ReprC, &mut ())?;
                         <$other as $crate::FfiOutPtrWrite>::write_out(Clone::clone(handle_ref), out_ptr.cast::<<$other as $crate::FfiType>::ReprC>());
                     } )+
-                    // TODO: Implement error handling (https://github.com/hyperledger-iroha/iroha/issues/2252)
-                    _ => return Err($crate::FfiReturn::UnknownHandle),
+                    unknown_id => {
+                        $crate::panic_notifier::log_unknown_handle(unknown_id);
+                        return Err($crate::FfiReturn::UnknownHandle);
+                    },
                 }
 
                 Ok(())
@@ -112,8 +114,8 @@ macro_rules! def_ffi_fns {
         ///
         /// All of the given pointers must be valid and the given handle id must match the expected
         /// pointer type
-        #[no_mangle]
-        #[export_name = concat!($prefix, "__default")]
+        #[unsafe(no_mangle)]
+        #[unsafe(export_name = concat!($prefix, "__default"))]
         unsafe extern "C" fn __default(
             handle_id: <$crate::handle::Id as $crate::FfiType>::ReprC,
             out_ptr: *mut *mut core::ffi::c_void
@@ -126,8 +128,10 @@ macro_rules! def_ffi_fns {
                         let out_ptr = out_ptr.cast::<<$other as $crate::FfiType>::ReprC>();
                         <$other as $crate::FfiOutPtrWrite>::write_out(default_value, out_ptr);
                     } )+
-                    // TODO: Implement error handling (https://github.com/hyperledger-iroha/iroha/issues/2252)
-                    _ => return Err($crate::FfiReturn::UnknownHandle),
+                    unknown_id => {
+                        $crate::panic_notifier::log_unknown_handle(unknown_id);
+                        return Err($crate::FfiReturn::UnknownHandle);
+                    },
                 }
 
                 Ok(())
@@ -141,7 +145,7 @@ macro_rules! def_ffi_fns {
         ///
         /// All of the given pointers must be valid and the given handle id must match the expected
         /// pointer type
-        #[export_name = concat!($prefix, "__eq")]
+        #[unsafe(export_name = concat!($prefix, "__eq"))]
         unsafe extern "C" fn __eq(
             handle_id: <$crate::handle::Id as $crate::FfiType>::ReprC,
             left_handle_ptr: *const core::ffi::c_void,
@@ -164,8 +168,10 @@ macro_rules! def_ffi_fns {
 
                         <bool as $crate::FfiOutPtrWrite>::write_out(lhandle == rhandle, out_ptr);
                     } )+
-                    // TODO: Implement error handling (https://github.com/hyperledger-iroha/iroha/issues/2252)
-                    _ => return Err($crate::FfiReturn::UnknownHandle),
+                    unknown_id => {
+                        $crate::panic_notifier::log_unknown_handle(unknown_id);
+                        return Err($crate::FfiReturn::UnknownHandle);
+                    },
                 }
 
                 Ok(())
@@ -179,7 +185,7 @@ macro_rules! def_ffi_fns {
         ///
         /// All of the given pointers must be valid and the given handle id must match the expected
         /// pointer type
-        #[export_name = concat!($prefix, "__ord")]
+        #[unsafe(export_name = concat!($prefix, "__ord"))]
         unsafe extern "C" fn __ord(
             handle_id: <$crate::handle::Id as $crate::FfiType>::ReprC,
             left_handle_ptr: *const core::ffi::c_void,
@@ -202,8 +208,10 @@ macro_rules! def_ffi_fns {
 
                         <core::cmp::Ordering as $crate::FfiOutPtrWrite>::write_out(lhandle.cmp(rhandle), out_ptr);
                     } )+
-                    // TODO: Implement error handling (https://github.com/hyperledger-iroha/iroha/issues/2252)
-                    _ => return Err($crate::FfiReturn::UnknownHandle),
+                    unknown_id => {
+                        $crate::panic_notifier::log_unknown_handle(unknown_id);
+                        return Err($crate::FfiReturn::UnknownHandle);
+                    },
                 }
 
                 Ok(())
@@ -217,7 +225,7 @@ macro_rules! def_ffi_fns {
         ///
         /// All of the given pointers must be valid and the given handle id must match the expected
         /// pointer type
-        #[export_name = concat!($prefix, "__drop")]
+        #[unsafe(export_name = concat!($prefix, "__drop"))]
         unsafe extern "C" fn __drop(
             handle_id: <$crate::handle::Id as $crate::FfiType>::ReprC,
             handle_ptr: *mut core::ffi::c_void,
@@ -228,8 +236,10 @@ macro_rules! def_ffi_fns {
                         let handle_ptr = handle_ptr as <$other as $crate::FfiType>::ReprC;
                         let _handle: $other = $crate::FfiConvert::try_from_ffi(handle_ptr, &mut ())?;
                     } )+
-                    // TODO: Implement error handling (https://github.com/hyperledger-iroha/iroha/issues/2252)
-                    _ => return Err($crate::FfiReturn::UnknownHandle),
+                    unknown_id => {
+                        $crate::panic_notifier::log_unknown_handle(unknown_id);
+                        return Err($crate::FfiReturn::UnknownHandle);
+                    },
                 }
 
                 Ok(())
@@ -237,19 +247,19 @@ macro_rules! def_ffi_fns {
         }
     };
     ( dealloc ) => {
-        /// FFI function equivalent of [`alloc::alloc::dealloc`]
+        /// FFI function equivalent of [`std::alloc::dealloc`]
         ///
         /// # Safety
         ///
         /// See [`GlobalAlloc::dealloc`]
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         unsafe extern "C" fn __dealloc(ptr: *mut u8, size: usize, align: usize) -> $crate::FfiReturn {
             if ptr.is_null() {
                 return $crate::FfiReturn::ArgIsNull;
             }
 
             if let Ok(layout) = core::alloc::Layout::from_size_align(size, align) {
-                alloc::dealloc(ptr, layout);
+                std::alloc::dealloc(ptr, layout);
                 return $crate::FfiReturn::Ok;
             }
 
@@ -262,8 +272,8 @@ macro_rules! def_ffi_fns {
 #[macro_export]
 macro_rules! decl_ffi_fns {
     ( dealloc ) => {
-        extern "C" {
-            /// FFI function equivalent of [`alloc::alloc::dealloc`]
+        unsafe extern "C" {
+            /// FFI function equivalent of [`std::alloc::dealloc`]
             ///
             /// # Safety
             ///
@@ -282,7 +292,7 @@ macro_rules! decl_ffi_fns {
         $( $crate::decl_ffi_fns!{ @decl: $prefix $fn_names } )+
     };
     ( @decl: $prefix:literal Clone ) => {
-        extern {
+        unsafe extern "C" {
             /// FFI function equivalent of [`Clone::clone`]
             ///
             /// # Safety
@@ -298,7 +308,7 @@ macro_rules! decl_ffi_fns {
         }
     };
     ( @decl: $prefix:literal Default ) => {
-        extern {
+        unsafe extern "C" {
             /// FFI function equivalent of [`Default::default`]
             ///
             /// # Safety
@@ -313,7 +323,7 @@ macro_rules! decl_ffi_fns {
         }
     };
     ( @decl: $prefix:literal Eq ) => {
-        extern {
+        unsafe extern "C" {
             /// FFI function equivalent of [`Eq::eq`]
             ///
             /// # Safety
@@ -325,12 +335,12 @@ macro_rules! decl_ffi_fns {
                 handle_id: <$crate::handle::Id as $crate::FfiType>::ReprC,
                 left_handle_ptr: *const $crate::Extern,
                 right_handle_ptr: *const $crate::Extern,
-                out_ptr: *mut u8,
+                out_ptr: *mut <bool as $crate::FfiOutPtr>::OutPtr,
             ) -> $crate::FfiReturn;
         }
     };
     ( @decl: $prefix:literal Ord ) => {
-        extern {
+        unsafe extern "C" {
             /// FFI function equivalent of [`Ord::ord`]
             ///
             /// # Safety
@@ -342,12 +352,12 @@ macro_rules! decl_ffi_fns {
                 handle_id: <$crate::handle::Id as $crate::FfiType>::ReprC,
                 left_handle_ptr: *const $crate::Extern,
                 right_handle_ptr: *const $crate::Extern,
-                out_ptr: *mut i8,
+                out_ptr: *mut <core::cmp::Ordering as $crate::FfiOutPtr>::OutPtr,
             ) -> $crate::FfiReturn;
         }
     };
     ( @decl: $prefix:literal Drop ) => {
-        extern {
+        unsafe extern "C" {
             /// FFI function equivalent of [`Drop::drop`]
             ///
             /// # Safety

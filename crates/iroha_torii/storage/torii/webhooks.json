@@ -1,0 +1,9 @@
+[
+  {
+    "active": true,
+    "filter": null,
+    "id": 1,
+    "secret": null,
+    "url": "https://example.com/callback"
+  }
+]

@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.IrohaWallet" parent="Theme.MaterialComponents.DayNight.NoActionBar" />
+</resources>

@@ -1,29 +1,28 @@
-#![allow(missing_docs)]
+//! FFI export/getset tests: ensures getters/setters are exported and callable.
 #![allow(unsafe_code)]
 
 use std::mem::MaybeUninit;
 
 use getset::{Getters, MutGetters, Setters};
-use iroha_ffi::{ffi_export, FfiType};
+use iroha_ffi::{FfiType, ffi_export};
 
-/// Struct
+/// Wrapper type used to exercise export conversion.
 #[derive(Debug, Clone, PartialEq, Eq, FfiType)]
 pub struct Name(String);
 
-/// FfiStruct
+/// Struct exported over FFI for getter/setter validation.
 #[ffi_export]
 #[derive(Clone, Setters, Getters, MutGetters, FfiType)]
 #[getset(get = "pub")]
 pub struct FfiStruct {
-    /// id
+    /// Stored identifier value.
     #[getset(set = "pub", get_mut = "pub")]
     id: u32,
-    /// Name
+    /// Nested `Name` field.
     name: Name,
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn export_getset_get() {
     let init_name = Name("Name".to_owned());
     let ffi_struct = &mut FfiStruct {
