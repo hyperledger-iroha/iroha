@@ -672,7 +672,7 @@ final class ToriiClientTests: XCTestCase {
             }
             XCTAssertEqual(code, 400)
             XCTAssertEqual(rejectCode, "PRTRY:TX_SIGNATURE_MISSING")
-            XCTAssertEqual(message, HTTPURLResponse.localizedString(forStatusCode: 400))
+            XCTAssertEqual(message, "failed to accept transaction")
         } catch {
             XCTFail("unexpected error: \(error)")
         }
@@ -7231,6 +7231,269 @@ id: 88
         waitForExpectations(timeout: 1)
     }
 
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetTransactionStatusMapsCancelledTransportToCancellationError() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+            throw URLError(.cancelled)
+        }
+
+        do {
+            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            XCTFail("expected cancellation")
+        } catch is CancellationError {
+            // expected
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetTransactionStatusHttpErrorSurfacesBodyMessageAndRejectCode() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 400,
+                httpVersion: nil,
+                headerFields: ["x-iroha-reject-code": "build_claim_missing"]
+            )!
+            let body = """
+            {"message":"missing build claim for transaction status"}
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        do {
+            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            XCTFail("expected status failure")
+        } catch let error as ToriiClientError {
+            guard case let .httpStatus(code, message, rejectCode) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(code, 400)
+            XCTAssertEqual(rejectCode, "build_claim_missing")
+            XCTAssertEqual(message, "missing build claim for transaction status")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetTransactionStatusHttpErrorUsesNestedJsonMessage() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 502,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let body = """
+            {"error":{"detail":"upstream status pipeline unavailable"}}
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        do {
+            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            XCTFail("expected status failure")
+        } catch let error as ToriiClientError {
+            guard case let .httpStatus(code, message, rejectCode) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(code, 502)
+            XCTAssertNil(rejectCode)
+            XCTAssertEqual(message, "upstream status pipeline unavailable")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetTransactionStatusHttpErrorFallsBackToPlainTextBody() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 503,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/plain"]
+            )!
+            return (response, Data("proxy temporarily unavailable".utf8))
+        }
+
+        do {
+            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            XCTFail("expected status failure")
+        } catch let error as ToriiClientError {
+            guard case let .httpStatus(code, message, rejectCode) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(code, 503)
+            XCTAssertNil(rejectCode)
+            XCTAssertEqual(message, "proxy temporarily unavailable")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetTransactionStatusHttpErrorUsesErrorsArrayMessage() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 422,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let body = """
+            {
+              "errors": [
+                {"message":"status query validation failed"},
+                {"message":"hash malformed"}
+              ]
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        do {
+            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            XCTFail("expected status failure")
+        } catch let error as ToriiClientError {
+            guard case let .httpStatus(code, message, rejectCode) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(code, 422)
+            XCTAssertNil(rejectCode)
+            XCTAssertEqual(message, "status query validation failed")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetTransactionStatusHttpErrorFallsBackToCompactJsonBody() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 500,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let body = """
+            {"status":"invalid","code":"E123"}
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        do {
+            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            XCTFail("expected status failure")
+        } catch let error as ToriiClientError {
+            guard case let .httpStatus(code, message, rejectCode) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(code, 500)
+            XCTAssertNil(rejectCode)
+            XCTAssertEqual(message, #"{"code":"E123","status":"invalid"}"#)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetTransactionStatusHttpErrorTruncatesOversizedBodyText() async throws {
+        let oversized = String(repeating: "x", count: 700)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 500,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/plain"]
+            )!
+            return (response, Data(oversized.utf8))
+        }
+
+        do {
+            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            XCTFail("expected status failure")
+        } catch let error as ToriiClientError {
+            guard case let .httpStatus(code, message, rejectCode) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(code, 500)
+            XCTAssertNil(rejectCode)
+            let value = try XCTUnwrap(message)
+            XCTAssertEqual(value.count, 515)
+            XCTAssertTrue(value.hasSuffix("..."), "message should be truncated with ASCII ellipsis")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetTransactionStatusMatchesSharedErrorMessageContractFixture() async throws {
+        let fixtureCases = try loadTxStatusErrorContractCases()
+        XCTAssertFalse(fixtureCases.isEmpty, "fixture cases should not be empty")
+
+        for fixtureCase in fixtureCases {
+            StubURLProtocol.handler = { request in
+                XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+                var headers: [String: String] = [:]
+                if let contentType = fixtureCase.contentType {
+                    headers["Content-Type"] = contentType
+                }
+                if let rejectCode = fixtureCase.rejectCodeHeader {
+                    headers[fixtureCase.rejectCodeHeaderName ?? "X-Iroha-Reject-Code"] = rejectCode
+                }
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: fixtureCase.statusCode,
+                    httpVersion: nil,
+                    headerFields: headers.isEmpty ? nil : headers
+                )!
+                let bodyData: Data?
+                if let bodyJSON = fixtureCase.bodyJSON {
+                    bodyData = try JSONSerialization.data(withJSONObject: bodyJSON, options: [])
+                } else if let bodyText = fixtureCase.bodyText {
+                    bodyData = Data(bodyText.utf8)
+                } else {
+                    bodyData = nil
+                }
+                return (response, bodyData)
+            }
+
+            do {
+                _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+                XCTFail("\(fixtureCase.id): expected status failure")
+            } catch let error as ToriiClientError {
+                guard case let .httpStatus(code, message, rejectCode) = error else {
+                    return XCTFail("\(fixtureCase.id): unexpected error shape \(error)")
+                }
+                XCTAssertEqual(code, fixtureCase.statusCode, "\(fixtureCase.id): status code mismatch")
+                if let expectedRejectCode = fixtureCase.expectedRejectCode {
+                    XCTAssertEqual(rejectCode, expectedRejectCode, "\(fixtureCase.id): reject code mismatch")
+                }
+                if let expectedMessage = fixtureCase.expectedMessage {
+                    XCTAssertEqual(message, expectedMessage, "\(fixtureCase.id): message mismatch")
+                }
+                if let expectedLength = fixtureCase.expectedMessageLength {
+                    XCTAssertEqual(message?.count, expectedLength, "\(fixtureCase.id): message length mismatch")
+                }
+                if let expectedSuffix = fixtureCase.expectedMessageSuffix {
+                    XCTAssertEqual(message?.hasSuffix(expectedSuffix), true, "\(fixtureCase.id): message suffix mismatch")
+                }
+            } catch {
+                XCTFail("\(fixtureCase.id): unexpected error: \(error)")
+            }
+        }
+    }
+
     func testPipelineStatusStateMapping() throws {
         let json = """
         {"kind":"Transaction","content":{"hash":"deadbeef","status":{"kind":"Committed","content":null}}}
@@ -7906,4 +8169,55 @@ final class ToriiClientIntegrationTests: XCTestCase {
             proofs: [proof]
         )
     }
+}
+
+private struct TxStatusErrorContractCase {
+    let id: String
+    let statusCode: Int
+    let contentType: String?
+    let bodyJSON: Any?
+    let bodyText: String?
+    let rejectCodeHeader: String?
+    let rejectCodeHeaderName: String?
+    let expectedMessage: String?
+    let expectedRejectCode: String?
+    let expectedMessageLength: Int?
+    let expectedMessageSuffix: String?
+
+    init?(raw: [String: Any]) {
+        guard let id = raw["id"] as? String,
+              let statusCode = raw["status_code"] as? Int
+        else {
+            return nil
+        }
+        self.id = id
+        self.statusCode = statusCode
+        contentType = raw["content_type"] as? String
+        bodyJSON = raw["body_json"]
+        bodyText = raw["body_text"] as? String
+        rejectCodeHeader = raw["reject_code_header"] as? String
+        rejectCodeHeaderName = raw["reject_code_header_name"] as? String
+        expectedMessage = raw["expected_message"] as? String
+        expectedRejectCode = raw["expected_reject_code"] as? String
+        expectedMessageLength = raw["expected_message_length"] as? Int
+        expectedMessageSuffix = raw["expected_message_suffix"] as? String
+    }
+}
+
+private func loadTxStatusErrorContractCases() throws -> [TxStatusErrorContractCase] {
+    let fixtureURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent() // ToriiClientTests.swift
+        .deletingLastPathComponent() // IrohaSwiftTests
+        .deletingLastPathComponent() // Tests
+        .deletingLastPathComponent() // IrohaSwift
+        .appendingPathComponent("fixtures/sdk/tx_status_error_message_contract.json")
+    let data = try Data(contentsOf: fixtureURL)
+    guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let rawCases = root["cases"] as? [[String: Any]]
+    else {
+        throw NSError(domain: "ToriiClientTests",
+                      code: -1,
+                      userInfo: [NSLocalizedDescriptionKey: "invalid tx-status error-message contract fixture"])
+    }
+    return rawCases.compactMap(TxStatusErrorContractCase.init(raw:))
 }

@@ -43,5 +43,37 @@ IROHA_APPLE_ATTEST_REAL_DEVICE_SETTLEMENT_FIXTURE=fixtures/offline_allowance/ios
 cargo test -p iroha_torii --test offline_app_api offline_settlements_submit_app_attest_real_device_fixture_replay_respects_strict_signature_policy -- --ignored --nocapture
 ```
 
+If you have a pk-deploy run directory with iOS send + Android receive artifacts,
+you can auto-generate a replay fixture from those captures:
+
+```
+scripts/offline_topup/make_pkdeploy_app_attest_settlement_fixture.sh \
+  --run-dir ../pk-deploy/e2e-offline-offline-e2e/20260218_063747-offline-offline
+```
+
+The script prints an `export IROHA_APPLE_ATTEST_REAL_DEVICE_SETTLEMENT_FIXTURE=...`
+line. It now also prints capture-quality metadata (`attestation_capture_quality`,
+`attestation_key_id`, `attestation_assertion_len`) so placeholder captures are
+visible immediately.
+
+To hard-fail when the selected payload is simulator/placeholder data, add:
+
+```
+scripts/offline_topup/make_pkdeploy_app_attest_settlement_fixture.sh \
+  --run-dir ../pk-deploy/e2e-offline-offline-e2e/20260218_063747-offline-offline \
+  --require-real-device
+```
+
+To scan large pk-deploy archives and list real-device candidates before generating
+a fixture:
+
+```
+scripts/offline_topup/scan_pkdeploy_app_attest_payloads.sh \
+  --output /tmp/pkdeploy_app_attest_payload_scan.tsv
+```
+
+Add `--require-real-device` to the scan command to fail CI/local automation when
+no real App Attest captures are present.
+
 This replay test is also intentionally `#[ignore]` because it requires a
 redacted real-device settlement capture.

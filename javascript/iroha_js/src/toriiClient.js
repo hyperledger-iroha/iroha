@@ -708,6 +708,20 @@ function stripBase64Padding(value) {
   return value.replace(/=+$/u, "");
 }
 
+function sortJsonForErrorMessage(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => sortJsonForErrorMessage(item));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const sorted = {};
+  for (const key of Object.keys(value).sort()) {
+    sorted[key] = sortJsonForErrorMessage(value[key]);
+  }
+  return sorted;
+}
+
 /**
  * Minimal Torii HTTP client mirroring the Python helper.
  *
@@ -7891,20 +7905,87 @@ export class ToriiClient {
     return match ? match[0] : null;
   }
 
-  _extractErrorMessage(payload, fallbackText) {
-    if (payload && typeof payload === "object") {
-      if (typeof payload.message === "string" && payload.message) {
-        return payload.message;
+  _trimErrorBodyText(text, maxLength = 512) {
+    if (typeof text !== "string") {
+      return null;
+    }
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed.length <= maxLength) {
+      return trimmed;
+    }
+    return `${trimmed.slice(0, maxLength)}...`;
+  }
+
+  _extractErrorMessageValue(value) {
+    if (typeof value === "string") {
+      return this._trimErrorBodyText(value);
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const nested = this._extractErrorMessageValue(item);
+        if (nested) {
+          return nested;
+        }
       }
-      if (typeof payload.error === "string" && payload.error) {
-        return payload.error;
-      }
-      if (typeof payload.detail === "string" && payload.detail) {
-        return payload.detail;
+      return null;
+    }
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+    const candidateKeys = [
+      "message",
+      "error",
+      "errors",
+      "detail",
+      "details",
+      "reason",
+      "rejection_reason",
+      "description",
+    ];
+    const caseInsensitiveValues = new Map();
+    for (const [key, entryValue] of Object.entries(value)) {
+      const normalizedKey = String(key).toLowerCase();
+      if (!caseInsensitiveValues.has(normalizedKey)) {
+        caseInsensitiveValues.set(normalizedKey, entryValue);
       }
     }
-    if (typeof fallbackText === "string" && fallbackText) {
-      return fallbackText;
+    for (const key of candidateKeys) {
+      if (!caseInsensitiveValues.has(key)) {
+        continue;
+      }
+      const nested = this._extractErrorMessageValue(caseInsensitiveValues.get(key));
+      if (nested) {
+        return nested;
+      }
+    }
+    return null;
+  }
+
+  _compactErrorJson(value) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    try {
+      return this._trimErrorBodyText(JSON.stringify(sortJsonForErrorMessage(value)));
+    } catch {
+      return null;
+    }
+  }
+
+  _extractErrorMessage(payload, fallbackText) {
+    const nested = this._extractErrorMessageValue(payload);
+    if (nested) {
+      return nested;
+    }
+    const compact = this._compactErrorJson(payload);
+    if (compact) {
+      return compact;
+    }
+    if (typeof fallbackText === "string" && fallbackText.trim()) {
+      return this._trimErrorBodyText(fallbackText);
     }
     return null;
   }

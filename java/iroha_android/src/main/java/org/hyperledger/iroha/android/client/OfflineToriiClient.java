@@ -664,34 +664,11 @@ public final class OfflineToriiClient {
   }
 
   private static String extractRejectCode(final Map<String, List<String>> headers) {
-    if (headers == null || headers.isEmpty()) {
-      return null;
-    }
-    final List<String> values = headers.get("x-iroha-reject-code");
-    if (values == null || values.isEmpty()) {
-      return null;
-    }
-    for (final String value : values) {
-      if (value != null && !value.isBlank()) {
-        return value.trim();
-      }
-    }
-    return null;
+    return HttpErrorMessageExtractor.extractRejectCode(headers, "x-iroha-reject-code");
   }
 
   private static String decodeBodyPreview(final byte[] payload) {
-    if (payload == null || payload.length == 0) {
-      return null;
-    }
-    final String text = new String(payload, StandardCharsets.UTF_8).trim();
-    if (text.isEmpty()) {
-      return null;
-    }
-    final int maxLength = 512;
-    if (text.length() <= maxLength) {
-      return text;
-    }
-    return text.substring(0, maxLength) + "...";
+    return HttpErrorMessageExtractor.extractMessage(payload);
   }
 
   private static String summarizeCauseMessage(final Throwable cause) {

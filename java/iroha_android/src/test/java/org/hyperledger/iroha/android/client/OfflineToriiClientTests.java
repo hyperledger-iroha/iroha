@@ -40,6 +40,9 @@ public final class OfflineToriiClientTests {
     listAllowancesParsesResponse();
     propagatesNon2xxResponses();
     propagatesRejectCodeFromNon2xxResponses();
+    propagatesNestedJsonMessageFromNon2xxResponses();
+    propagatesCaseInsensitiveNestedJsonMessageFromNon2xxResponses();
+    propagatesCompactJsonFallbackFromNon2xxResponses();
     queryTransfersUsesPostBody();
     queryEnvelopeFromParamsParsesJson();
     builderRejectsInvalidVerdictFilters();
@@ -170,7 +173,7 @@ public final class OfflineToriiClientTests {
             400,
             "{\"error\":\"missing build claim\"}",
             "Bad Request",
-            Map.of("x-iroha-reject-code", List.of("build_claim_missing")));
+            Map.of("X-IrOhA-ReJeCt-CoDe", List.of("build_claim_missing")));
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
             .executor(executor)
@@ -193,6 +196,76 @@ public final class OfflineToriiClientTests {
       return;
     }
     throw new AssertionError("Expected CompletionException for non-2xx responses");
+  }
+
+  private static void propagatesNestedJsonMessageFromNon2xxResponses() {
+    final StubExecutor executor =
+        new StubExecutor(
+            422,
+            "{\"error\":{\"detail\":\"offline settlement policy validation failed\"}}");
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    try {
+      client.listTransfers(null).join();
+    } catch (final CompletionException ex) {
+      assert ex.getCause() instanceof OfflineToriiException : "expected OfflineToriiException";
+      final OfflineToriiException error = (OfflineToriiException) ex.getCause();
+      assert "offline settlement policy validation failed".equals(error.responseBody().orElse(null))
+          : "expected nested message to be extracted";
+      assert error.getMessage().contains("offline settlement policy validation failed")
+          : "nested message missing from exception";
+      return;
+    }
+    throw new AssertionError("Expected CompletionException for nested non-2xx errors");
+  }
+
+  private static void propagatesCaseInsensitiveNestedJsonMessageFromNon2xxResponses() {
+    final StubExecutor executor =
+        new StubExecutor(
+            422,
+            "{\"Error\":{\"Detail\":\"offline settlement policy validation failed\"}}");
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    try {
+      client.listTransfers(null).join();
+    } catch (final CompletionException ex) {
+      assert ex.getCause() instanceof OfflineToriiException : "expected OfflineToriiException";
+      final OfflineToriiException error = (OfflineToriiException) ex.getCause();
+      assert "offline settlement policy validation failed".equals(error.responseBody().orElse(null))
+          : "expected case-insensitive nested message to be extracted";
+      assert error.getMessage().contains("offline settlement policy validation failed")
+          : "case-insensitive nested message missing from exception";
+      return;
+    }
+    throw new AssertionError("Expected CompletionException for case-insensitive nested non-2xx errors");
+  }
+
+  private static void propagatesCompactJsonFallbackFromNon2xxResponses() {
+    final StubExecutor executor =
+        new StubExecutor(422, "{\"status\":\"invalid\",\"code\":\"E123\"}");
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    try {
+      client.listTransfers(null).join();
+    } catch (final CompletionException ex) {
+      assert ex.getCause() instanceof OfflineToriiException : "expected OfflineToriiException";
+      final OfflineToriiException error = (OfflineToriiException) ex.getCause();
+      assert "{\"code\":\"E123\",\"status\":\"invalid\"}".equals(error.responseBody().orElse(null))
+          : "expected compact sorted JSON fallback";
+      assert error.getMessage().contains("{\"code\":\"E123\",\"status\":\"invalid\"}")
+          : "compact fallback missing from exception";
+      return;
+    }
+    throw new AssertionError("Expected CompletionException for compact fallback non-2xx errors");
   }
 
   private static void queryTransfersUsesPostBody() {

@@ -467,6 +467,11 @@ fn should_resubmit_tx(allow_resubmit: bool, now: Instant, next_resubmit_at: Inst
     allow_resubmit && now >= next_resubmit_at
 }
 
+fn is_submission_accepted_duplicate(err: &eyre::Report) -> bool {
+    err.chain()
+        .any(|cause| cause.to_string().contains("ALREADY_ENQUEUED"))
+}
+
 fn allow_supply_resubmit(faulty_peers: usize, force_soft_fork: bool) -> bool {
     faulty_peers > 0 || force_soft_fork
 }
@@ -1246,12 +1251,6 @@ impl UnstableNetwork {
                     .max(Duration::from_secs(5)),
             )
             .max(Duration::from_secs(2));
-        let is_already_accepted = |err: &eyre::Report| {
-            err.chain().any(|cause| {
-                let message = cause.to_string();
-                message.contains("ALREADY_ENQUEUED") || message.contains("already committed")
-            })
-        };
         if stagger_faults {
             let per_peer_pause = relay_pause
                 .checked_div(u32::try_from(self.n_faulty_peers).unwrap_or(1))
@@ -1296,7 +1295,7 @@ impl UnstableNetwork {
                             match res {
                                 Ok(Ok(_hash)) => accepted = true,
                                 Ok(Err(err)) => {
-                                    if is_already_accepted(&err) {
+                                    if is_submission_accepted_duplicate(&err) {
                                         accepted = true;
                                         continue;
                                     }
@@ -1701,6 +1700,15 @@ mod tests {
         assert!(!allow_supply_resubmit(0, false));
         assert!(allow_supply_resubmit(1, false));
         assert!(allow_supply_resubmit(0, true));
+    }
+
+    #[test]
+    fn submit_acceptance_uses_enqueued_duplicate_only() {
+        let enqueued = eyre!("PRTRY:ALREADY_ENQUEUED");
+        assert!(is_submission_accepted_duplicate(&enqueued));
+
+        let committed = eyre!("transaction already committed to the blockchain");
+        assert!(!is_submission_accepted_duplicate(&committed));
     }
 
     #[test]
