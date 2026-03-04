@@ -107,11 +107,11 @@ final class OfflineNoritoEncodingTests: XCTestCase {
             publicKey: keypair.publicKey
         )
         let defaultIh58 = try defaultAddress.toIH58(networkPrefix: 0x02F1)
-        let providedLiteral = "\(defaultIh58)@bank1"
+        let providedLiteral = "\(defaultIh58)@hbl"
 
-        let expectedAddress = try defaultAddress.rebasedFromDefaultDomain(to: "bank1")
+        let expectedAddress = try defaultAddress.rebasedFromDefaultDomain(to: "hbl")
         let expectedIh58 = try expectedAddress.toIH58(networkPrefix: 0x02F1)
-        let expected = try OfflineNorito.encodeAccountId("\(expectedIh58)@bank1")
+        let expected = try OfflineNorito.encodeAccountId("\(expectedIh58)@hbl")
 
         let encoded = try OfflineNorito.encodeAccountId(providedLiteral)
         XCTAssertEqual(encoded, expected)

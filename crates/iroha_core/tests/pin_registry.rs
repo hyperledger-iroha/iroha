@@ -823,7 +823,7 @@ fn default_policy() -> PinPolicy {
 fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     let alice = alice();
     {
-        let world = tx.world_mut_for_testing();
+        let world = &mut tx.world;
         for perm in [
             Permission::from(CanRegisterSorafsPin),
             Permission::from(CanApproveSorafsPin),

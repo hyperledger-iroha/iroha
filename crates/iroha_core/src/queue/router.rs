@@ -1077,7 +1077,7 @@ mod tests {
     #[test]
     fn matches_account_domain_wildcard_rule() {
         let (uae_id, uae_keypair) = gen_account_in("uae");
-        let (bank_id, bank_keypair) = gen_account_in("bank1");
+        let (bank_id, bank_keypair) = gen_account_in("hbl");
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
@@ -1121,7 +1121,7 @@ mod tests {
 
     #[test]
     fn matches_transfer_destination_domain_rule() {
-        let (sender_id, sender_keypair) = gen_account_in("bank1");
+        let (sender_id, sender_keypair) = gen_account_in("hbl");
         let (receiver_id, _) = gen_account_in("sbp");
 
         let policy = LaneRoutingPolicy {
@@ -1157,7 +1157,7 @@ mod tests {
     #[test]
     fn account_rule_takes_precedence_over_transfer_destination_rule() {
         let (uae_sender_id, uae_sender_keypair) = gen_account_in("uae");
-        let (bank_sender_id, bank_sender_keypair) = gen_account_in("bank1");
+        let (bank_sender_id, bank_sender_keypair) = gen_account_in("hbl");
         let (sbp_receiver_id, _) = gen_account_in("sbp");
 
         let policy = LaneRoutingPolicy {
