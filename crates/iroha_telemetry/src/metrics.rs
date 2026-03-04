@@ -7493,6 +7493,10 @@ pub struct Metrics {
     pub torii_request_duration_seconds: HistogramVec,
     /// Torii request failures grouped by connection scheme and status code.
     pub torii_request_failures_total: IntCounterVec,
+    /// Explorer endpoint requests grouped by endpoint and outcome.
+    pub torii_explorer_requests_total: IntCounterVec,
+    /// Explorer endpoint latency in seconds grouped by endpoint and outcome.
+    pub torii_explorer_request_duration_seconds: HistogramVec,
     /// Norito-RPC gate decisions grouped by rollout stage and outcome.
     pub torii_norito_rpc_gate_total: IntCounterVec,
     /// Proof endpoints throttled by rate limiter (labeled by endpoint).
@@ -13019,6 +13023,23 @@ impl Default for Metrics {
             &["scheme", "code"],
         )
         .expect("Infallible");
+        let torii_explorer_requests_total = IntCounterVec::new(
+            Opts::new(
+                "torii_explorer_requests_total",
+                "Explorer endpoint requests grouped by endpoint and outcome",
+            ),
+            &["endpoint", "outcome"],
+        )
+        .expect("Infallible");
+        let torii_explorer_request_duration_seconds = HistogramVec::new(
+            HistogramOpts::new(
+                "torii_explorer_request_duration_seconds",
+                "Explorer endpoint latency (seconds) grouped by endpoint and outcome",
+            )
+            .buckets(prometheus::exponential_buckets(0.001, 2.0, 14).expect("inputs are valid")),
+            &["endpoint", "outcome"],
+        )
+        .expect("Infallible");
         let torii_norito_rpc_gate_total = IntCounterVec::new(
             Opts::new(
                 "torii_norito_rpc_gate_total",
@@ -13088,6 +13109,8 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_proof_cache_hits_total);
         register_guarded(&registry, &torii_request_duration_seconds);
         register_guarded(&registry, &torii_request_failures_total);
+        register_guarded(&registry, &torii_explorer_requests_total);
+        register_guarded(&registry, &torii_explorer_request_duration_seconds);
         register_guarded(&registry, &torii_norito_rpc_gate_total);
         register_guarded(&registry, &torii_address_invalid_total);
         register_guarded(&registry, &torii_address_domain_total);
@@ -14609,6 +14632,8 @@ impl Default for Metrics {
             torii_proof_cache_hits_total,
             torii_request_duration_seconds,
             torii_request_failures_total,
+            torii_explorer_requests_total,
+            torii_explorer_request_duration_seconds,
             torii_norito_rpc_gate_total,
             torii_address_invalid_total,
             torii_address_domain_total,
@@ -16525,6 +16550,16 @@ impl Metrics {
         }
     }
 
+    /// Record explorer endpoint request outcome and latency.
+    pub fn record_torii_explorer_request(&self, endpoint: &str, outcome: &str, duration: Duration) {
+        self.torii_explorer_requests_total
+            .with_label_values(&[endpoint, outcome])
+            .inc();
+        self.torii_explorer_request_duration_seconds
+            .with_label_values(&[endpoint, outcome])
+            .observe(duration.as_secs_f64());
+    }
+
     /// Increment proof endpoint cache hit counter.
     pub fn inc_torii_proof_cache_hit(&self, endpoint: &str) {
         self.torii_proof_cache_hits_total
@@ -17323,6 +17358,54 @@ mod test {
                 .get(),
             1,
             "proof throttle counter increments"
+        );
+    }
+
+    #[test]
+    fn records_torii_explorer_metrics() {
+        let metrics = Metrics::default();
+        metrics.record_torii_explorer_request(
+            "/v1/explorer/transactions",
+            "ok",
+            Duration::from_millis(4),
+        );
+        metrics.record_torii_explorer_request(
+            "/v1/explorer/transactions",
+            "error",
+            Duration::from_millis(7),
+        );
+
+        assert_eq!(
+            metrics
+                .torii_explorer_requests_total
+                .with_label_values(&["/v1/explorer/transactions", "ok"])
+                .get(),
+            1,
+            "explorer request counter increments for ok outcomes"
+        );
+        assert_eq!(
+            metrics
+                .torii_explorer_requests_total
+                .with_label_values(&["/v1/explorer/transactions", "error"])
+                .get(),
+            1,
+            "explorer request counter increments for error outcomes"
+        );
+        assert_eq!(
+            metrics
+                .torii_explorer_request_duration_seconds
+                .with_label_values(&["/v1/explorer/transactions", "ok"])
+                .get_sample_count(),
+            1,
+            "explorer request latency histogram records ok outcomes"
+        );
+        assert_eq!(
+            metrics
+                .torii_explorer_request_duration_seconds
+                .with_label_values(&["/v1/explorer/transactions", "error"])
+                .get_sample_count(),
+            1,
+            "explorer request latency histogram records error outcomes"
         );
     }
 

@@ -24,7 +24,6 @@ default = [
     "json",
     "bls",
     "sumeragi-permissioned",
-    "iroha-core-tests",
     "fast_dsl",
     "zk-halo2",
     "zk-halo2-ipa",

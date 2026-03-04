@@ -14020,6 +14020,10 @@ const ENDPOINT_KAIGI_RELAYS: &str = "/v1/kaigi/relays";
 #[cfg(feature = "app_api")]
 const ENDPOINT_KAIGI_RELAY_DETAIL: &str = "/v1/kaigi/relays/{relay_id}";
 #[cfg(feature = "app_api")]
+const ENDPOINT_EXPLORER_BLOCKS: &str = "/v1/explorer/blocks";
+#[cfg(feature = "app_api")]
+const ENDPOINT_EXPLORER_BLOCK_DETAIL: &str = "/v1/explorer/blocks/{identifier}";
+#[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_TRANSACTIONS: &str = "/v1/explorer/transactions";
 #[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_INSTRUCTIONS: &str = "/v1/explorer/instructions";
@@ -16322,6 +16326,285 @@ mod tx_query_filter_tests {
         assert!(!filter_tx(&expr, &tx_a));
         assert!(filter_tx(&expr, &tx_b));
         assert!(filter_tx(&expr, &tx_c));
+    }
+
+    #[test]
+    fn explorer_pagination_window_matches_paginate_semantics() {
+        assert_eq!(explorer_pagination_window(0, 0), (1, 0, 1));
+        assert_eq!(explorer_pagination_window(1, 5), (5, 0, 5));
+        assert_eq!(explorer_pagination_window(3, 2), (2, 4, 6));
+
+        let (_, start_index, end_index) = explorer_pagination_window(3, 2);
+        let kept: Vec<u64> = (0..8)
+            .filter(|index| *index >= start_index && *index < end_index)
+            .collect();
+        assert_eq!(kept, vec![4, 5]);
+    }
+
+    #[test]
+    fn explorer_pagination_meta_keeps_page_and_counts() {
+        let meta = explorer_pagination_meta(0, 1, 3);
+        assert_eq!(meta.page, 0);
+        assert_eq!(meta.per_page, 1);
+        assert_eq!(meta.total_items, 3);
+        assert_eq!(meta.total_pages, 3);
+
+        let meta = explorer_pagination_meta(2, 5, 12);
+        assert_eq!(meta.page, 2);
+        assert_eq!(meta.per_page, 5);
+        assert_eq!(meta.total_items, 12);
+        assert_eq!(meta.total_pages, 3);
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod explorer_lookup_tests {
+    use std::{borrow::Cow, sync::Arc, time::Duration};
+
+    use iroha_core::{
+        block::{BlockBuilder, ValidBlock},
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+        sumeragi::network_topology::Topology,
+        tx::AcceptedTransaction,
+    };
+    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_data_model::{prelude as dm, transaction::signed::TransactionEntrypoint};
+
+    use super::*;
+
+    fn build_state_with_single_transaction(
+        instructions: Vec<dm::InstructionBox>,
+    ) -> (Arc<State>, HashOf<TransactionEntrypoint>) {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+
+        let chain: dm::ChainId = "test-chain".parse().expect("valid chain id");
+        let domain: dm::DomainId = "wonderland".parse().expect("valid domain id");
+        let authority_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = dm::AccountId::new(domain, authority_key.public_key().clone());
+
+        let mut builder = dm::TransactionBuilder::new(chain, authority);
+        builder.set_creation_time(Duration::from_millis(1_710_000_000_000));
+        let signed = builder
+            .with_instructions(instructions)
+            .sign(authority_key.private_key());
+        let target_hash = signed.hash_as_entrypoint();
+        let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
+
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let unverified = BlockBuilder::new(vec![tx])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified.header());
+        let valid: ValidBlock = unverified
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, state_block, committed);
+
+        (state, target_hash)
+    }
+
+    #[test]
+    fn explorer_instruction_history_collects_requested_page_only() {
+        let instructions = vec![
+            dm::Log::new(dm::Level::INFO, "first".to_owned()).into(),
+            dm::Log::new(dm::Level::INFO, "second".to_owned()).into(),
+            dm::Log::new(dm::Level::INFO, "third".to_owned()).into(),
+        ];
+        let (state, target_hash) = build_state_with_single_transaction(instructions);
+        let filters = ExplorerInstructionFilters {
+            account: None,
+            authority: None,
+            transaction_hash: None,
+            status: None,
+            block: None,
+            kind: None,
+            asset_id: None,
+        };
+
+        let (items, pagination) = collect_instruction_history(
+            state.as_ref(),
+            state.committed_height() as u64,
+            &filters,
+            2,
+            2,
+            AddressFormatPreference::Ih58,
+        )
+        .expect("instruction collection should succeed");
+
+        assert_eq!(pagination.total_items, 3);
+        assert_eq!(pagination.total_pages, 2);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].index, 2);
+        assert_eq!(items[0].transaction_hash, target_hash.to_string());
+    }
+
+    #[test]
+    fn explorer_detail_lookup_returns_transaction_and_instruction() {
+        let instructions = vec![
+            dm::Log::new(dm::Level::INFO, "first".to_owned()).into(),
+            dm::Log::new(dm::Level::INFO, "second".to_owned()).into(),
+        ];
+        let (state, target_hash) = build_state_with_single_transaction(instructions);
+        let max_height = state.committed_height() as u64;
+
+        let tx = find_transaction_detail(
+            state.as_ref(),
+            max_height,
+            target_hash.to_string(),
+            AddressFormatPreference::Ih58,
+        )
+        .expect("transaction detail should resolve");
+        assert_eq!(tx.hash, target_hash.to_string());
+
+        let instruction = find_instruction_detail(
+            state.as_ref(),
+            max_height,
+            target_hash.to_string(),
+            1,
+            AddressFormatPreference::Ih58,
+        )
+        .expect("instruction detail should resolve");
+        assert_eq!(instruction.index, 1);
+
+        let missing = find_instruction_detail(
+            state.as_ref(),
+            max_height,
+            target_hash.to_string(),
+            42,
+            AddressFormatPreference::Ih58,
+        );
+        assert!(
+            missing.is_err(),
+            "invalid instruction index should return not found"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "app_api", feature = "telemetry"))]
+mod explorer_endpoint_telemetry_tests {
+    use std::sync::Arc;
+
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
+
+    use super::*;
+
+    fn blank_state() -> Arc<State> {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        Arc::new(State::new_for_testing(World::default(), kura, query))
+    }
+
+    #[tokio::test]
+    async fn explorer_transactions_record_ok_metrics() {
+        let telemetry = MaybeTelemetry::for_tests();
+        let state = blank_state();
+
+        let before_count = telemetry
+            .metrics()
+            .await
+            .torii_explorer_requests_total
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTIONS, "ok"])
+            .get();
+        let before_samples = telemetry
+            .metrics()
+            .await
+            .torii_explorer_request_duration_seconds
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTIONS, "ok"])
+            .get_sample_count();
+
+        let response = handle_v1_explorer_transactions(
+            state,
+            telemetry.clone(),
+            crate::explorer::ExplorerPaginationQuery {
+                page: 1,
+                per_page: 1,
+                address_format: None,
+            },
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(
+            response.is_ok(),
+            "transactions list should succeed on blank state"
+        );
+
+        let after_count = telemetry
+            .metrics()
+            .await
+            .torii_explorer_requests_total
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTIONS, "ok"])
+            .get();
+        let after_samples = telemetry
+            .metrics()
+            .await
+            .torii_explorer_request_duration_seconds
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTIONS, "ok"])
+            .get_sample_count();
+
+        assert_eq!(after_count, before_count + 1);
+        assert_eq!(after_samples, before_samples + 1);
+    }
+
+    #[tokio::test]
+    async fn explorer_transaction_detail_records_error_metrics() {
+        let telemetry = MaybeTelemetry::for_tests();
+        let state = blank_state();
+
+        let before_count = telemetry
+            .metrics()
+            .await
+            .torii_explorer_requests_total
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTION_DETAIL, "error"])
+            .get();
+        let before_samples = telemetry
+            .metrics()
+            .await
+            .torii_explorer_request_duration_seconds
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTION_DETAIL, "error"])
+            .get_sample_count();
+
+        let response = handle_v1_explorer_transaction_detail(
+            state,
+            telemetry.clone(),
+            "not-a-valid-hash".to_owned(),
+            AddressFormatPreference::Ih58,
+        )
+        .await;
+        assert!(response.is_err(), "invalid hash should return an error");
+
+        let after_count = telemetry
+            .metrics()
+            .await
+            .torii_explorer_requests_total
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTION_DETAIL, "error"])
+            .get();
+        let after_samples = telemetry
+            .metrics()
+            .await
+            .torii_explorer_request_duration_seconds
+            .with_label_values(&[ENDPOINT_EXPLORER_TRANSACTION_DETAIL, "error"])
+            .get_sample_count();
+
+        assert_eq!(after_count, before_count + 1);
+        assert_eq!(after_samples, before_samples + 1);
     }
 }
 
@@ -28523,6 +28806,19 @@ fn record_address_format_selection(
 }
 
 #[cfg(feature = "app_api")]
+fn record_explorer_endpoint_result<T>(
+    telemetry: &MaybeTelemetry,
+    endpoint: &'static str,
+    started: std::time::Instant,
+    result: &Result<T, Error>,
+) {
+    let outcome = if result.is_ok() { "ok" } else { "error" };
+    telemetry.with_metrics(|metrics| {
+        metrics.record_torii_explorer_request(endpoint, outcome, started.elapsed());
+    });
+}
+
+#[cfg(feature = "app_api")]
 fn tx_projections_to_json(
     items: &[TxProjection],
     address_format: AddressFormatPreference,
@@ -32168,42 +32464,48 @@ pub async fn handle_v1_explorer_nfts(
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_blocks(
     state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
     pagination: crate::explorer::ExplorerPaginationQuery,
 ) -> Result<AxResponse, Error> {
-    let total_items = state.committed_height() as u64;
-    let page = pagination.page.max(1);
-    let per_page = pagination.per_page.max(1);
-    let total_pages = total_items.div_ceil(per_page);
-    let start_index = (page.saturating_sub(1)).saturating_mul(per_page);
-    let end_index = (start_index + per_page).min(total_items);
-    let mut items = Vec::new();
-    if total_items > 0 && start_index < total_items {
-        for offset in start_index..end_index {
-            let height = total_items - offset;
-            let height_usize: usize = height
-                .try_into()
-                .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
-            let nonzero_height = NonZeroUsize::new(height_usize)
-                .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-            let block = state.block_by_height(nonzero_height).ok_or_else(|| {
-                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::NotFound,
-                ))
-            })?;
-            items.push(crate::explorer::ExplorerBlockDto::from_block(&block));
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let total_items = state.committed_height() as u64;
+        let page = pagination.page.max(1);
+        let per_page = pagination.per_page.max(1);
+        let total_pages = total_items.div_ceil(per_page);
+        let start_index = (page.saturating_sub(1)).saturating_mul(per_page);
+        let end_index = (start_index + per_page).min(total_items);
+        let mut items = Vec::new();
+        if total_items > 0 && start_index < total_items {
+            for offset in start_index..end_index {
+                let height = total_items - offset;
+                let height_usize: usize = height.try_into().map_err(|_| {
+                    conversion_error("block height exceeds host pointer width".into())
+                })?;
+                let nonzero_height = NonZeroUsize::new(height_usize)
+                    .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
+                let block = state.block_by_height(nonzero_height).ok_or_else(|| {
+                    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                        iroha_data_model::query::error::QueryExecutionFail::NotFound,
+                    ))
+                })?;
+                items.push(crate::explorer::ExplorerBlockDto::from_block(&block));
+            }
         }
-    }
-    let pagination_meta = crate::explorer::ExplorerPaginationMeta {
-        page,
-        per_page,
-        total_pages,
-        total_items,
-    };
-    let body = crate::explorer::ExplorerBlocksPage {
-        pagination: pagination_meta,
-        items,
-    };
-    Ok(JsonBody(body).into_response())
+        let pagination_meta = crate::explorer::ExplorerPaginationMeta {
+            page,
+            per_page,
+            total_pages,
+            total_items,
+        };
+        let body = crate::explorer::ExplorerBlocksPage {
+            pagination: pagination_meta,
+            items,
+        };
+        Ok(JsonBody(body).into_response())
+    })();
+    record_explorer_endpoint_result(&telemetry, ENDPOINT_EXPLORER_BLOCKS, started, &response);
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -32434,38 +32736,52 @@ pub async fn handle_v1_explorer_transactions(
     status: Option<ExplorerTransactionStatusFilter>,
     asset_id: Option<iroha_data_model::asset::AssetId>,
 ) -> Result<AxResponse, Error> {
-    let max_height = state.committed_height() as u64;
-    let address_format = pagination.address_format_pref()?;
-    record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTIONS, address_format);
-    if let Some(block_height) = block {
-        if block_height > max_height {
-            let (items, pagination_meta) = crate::explorer::paginate(
-                Vec::<crate::explorer::ExplorerTransactionDto>::new(),
-                pagination.page,
-                pagination.per_page,
-            );
-            let empty_page = crate::explorer::ExplorerTransactionsPage {
-                pagination: pagination_meta,
-                items,
-            };
-            return Ok(JsonBody(empty_page).into_response());
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let max_height = state.committed_height() as u64;
+        let address_format = pagination.address_format_pref()?;
+        record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTIONS, address_format);
+        if let Some(block_height) = block {
+            if block_height > max_height {
+                let (items, pagination_meta) = crate::explorer::paginate(
+                    Vec::<crate::explorer::ExplorerTransactionDto>::new(),
+                    pagination.page,
+                    pagination.per_page,
+                );
+                let empty_page = crate::explorer::ExplorerTransactionsPage {
+                    pagination: pagination_meta,
+                    items,
+                };
+                return Ok(JsonBody(empty_page).into_response());
+            }
         }
-    }
-    let filters = ExplorerTransactionFilters {
-        authority,
-        status,
-        block,
-        asset_id,
-    };
-    let transactions =
-        collect_transaction_summaries(state.as_ref(), max_height, &filters, address_format)?;
-    let (items, pagination_meta) =
-        crate::explorer::paginate(transactions, pagination.page, pagination.per_page);
-    let page = crate::explorer::ExplorerTransactionsPage {
-        pagination: pagination_meta,
-        items,
-    };
-    Ok(JsonBody(page).into_response())
+        let filters = ExplorerTransactionFilters {
+            authority,
+            status,
+            block,
+            asset_id,
+        };
+        let (items, pagination_meta) = collect_transaction_summaries(
+            state.as_ref(),
+            max_height,
+            &filters,
+            pagination.page,
+            pagination.per_page,
+            address_format,
+        )?;
+        let page = crate::explorer::ExplorerTransactionsPage {
+            pagination: pagination_meta,
+            items,
+        };
+        Ok(JsonBody(page).into_response())
+    })();
+    record_explorer_endpoint_result(
+        &telemetry,
+        ENDPOINT_EXPLORER_TRANSACTIONS,
+        started,
+        &response,
+    );
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -32487,50 +32803,64 @@ pub async fn handle_v1_explorer_instructions(
     pagination: crate::explorer::ExplorerPaginationQuery,
     query: ExplorerInstructionQuery,
 ) -> Result<AxResponse, Error> {
-    let max_height = state.committed_height() as u64;
-    let address_format = pagination.address_format_pref()?;
-    record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTIONS, address_format);
-    let ExplorerInstructionQuery {
-        account,
-        authority,
-        transaction_hash,
-        status,
-        block,
-        kind,
-        asset_id,
-    } = query;
-    if let Some(block_height) = block {
-        if block_height > max_height {
-            let (items, pagination_meta) = crate::explorer::paginate(
-                Vec::<ExplorerInstructionDto>::new(),
-                pagination.page,
-                pagination.per_page,
-            );
-            let empty_page = ExplorerInstructionsPage {
-                pagination: pagination_meta,
-                items,
-            };
-            return Ok(JsonBody(empty_page).into_response());
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let max_height = state.committed_height() as u64;
+        let address_format = pagination.address_format_pref()?;
+        record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTIONS, address_format);
+        let ExplorerInstructionQuery {
+            account,
+            authority,
+            transaction_hash,
+            status,
+            block,
+            kind,
+            asset_id,
+        } = query;
+        if let Some(block_height) = block {
+            if block_height > max_height {
+                let (items, pagination_meta) = crate::explorer::paginate(
+                    Vec::<ExplorerInstructionDto>::new(),
+                    pagination.page,
+                    pagination.per_page,
+                );
+                let empty_page = ExplorerInstructionsPage {
+                    pagination: pagination_meta,
+                    items,
+                };
+                return Ok(JsonBody(empty_page).into_response());
+            }
         }
-    }
-    let filters = ExplorerInstructionFilters {
-        account,
-        authority,
-        transaction_hash,
-        status,
-        block,
-        kind,
-        asset_id,
-    };
-    let instructions =
-        collect_instruction_history(state.as_ref(), max_height, &filters, address_format)?;
-    let (items, pagination_meta) =
-        crate::explorer::paginate(instructions, pagination.page, pagination.per_page);
-    let page = ExplorerInstructionsPage {
-        pagination: pagination_meta,
-        items,
-    };
-    Ok(JsonBody(page).into_response())
+        let filters = ExplorerInstructionFilters {
+            account,
+            authority,
+            transaction_hash,
+            status,
+            block,
+            kind,
+            asset_id,
+        };
+        let (items, pagination_meta) = collect_instruction_history(
+            state.as_ref(),
+            max_height,
+            &filters,
+            pagination.page,
+            pagination.per_page,
+            address_format,
+        )?;
+        let page = ExplorerInstructionsPage {
+            pagination: pagination_meta,
+            items,
+        };
+        Ok(JsonBody(page).into_response())
+    })();
+    record_explorer_endpoint_result(
+        &telemetry,
+        ENDPOINT_EXPLORER_INSTRUCTIONS,
+        started,
+        &response,
+    );
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -32540,14 +32870,24 @@ pub async fn handle_v1_explorer_transaction_detail(
     identifier: String,
     address_format: AddressFormatPreference,
 ) -> Result<AxResponse, Error> {
-    let max_height = state.committed_height() as u64;
-    record_address_format_selection(
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let max_height = state.committed_height() as u64;
+        record_address_format_selection(
+            &telemetry,
+            ENDPOINT_EXPLORER_TRANSACTION_DETAIL,
+            address_format,
+        );
+        let dto = find_transaction_detail(state.as_ref(), max_height, identifier, address_format)?;
+        Ok(JsonBody(dto).into_response())
+    })();
+    record_explorer_endpoint_result(
         &telemetry,
         ENDPOINT_EXPLORER_TRANSACTION_DETAIL,
-        address_format,
+        started,
+        &response,
     );
-    let dto = find_transaction_detail(state.as_ref(), max_height, identifier, address_format)?;
-    Ok(JsonBody(dto).into_response())
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -32558,14 +32898,24 @@ pub async fn handle_v1_explorer_instruction_detail(
     index: u64,
     address_format: AddressFormatPreference,
 ) -> Result<AxResponse, Error> {
-    let max_height = state.committed_height() as u64;
-    record_address_format_selection(
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let max_height = state.committed_height() as u64;
+        record_address_format_selection(
+            &telemetry,
+            ENDPOINT_EXPLORER_INSTRUCTION_DETAIL,
+            address_format,
+        );
+        let dto = find_instruction_detail(state.as_ref(), max_height, hash, index, address_format)?;
+        Ok(JsonBody(dto).into_response())
+    })();
+    record_explorer_endpoint_result(
         &telemetry,
         ENDPOINT_EXPLORER_INSTRUCTION_DETAIL,
-        address_format,
+        started,
+        &response,
     );
-    let dto = find_instruction_detail(state.as_ref(), max_height, hash, index, address_format)?;
-    Ok(JsonBody(dto).into_response())
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -32614,15 +32964,47 @@ fn collect_transaction_summaries_from_kura(
 }
 
 #[cfg(feature = "app_api")]
+fn explorer_pagination_window(page: u64, per_page: u64) -> (u64, u64, u64) {
+    let per_page = per_page.max(1);
+    let start_index = page.saturating_sub(1).saturating_mul(per_page);
+    let end_index = start_index.saturating_add(per_page);
+    (per_page, start_index, end_index)
+}
+
+#[cfg(feature = "app_api")]
+fn explorer_pagination_meta(
+    page: u64,
+    per_page: u64,
+    total_items: u64,
+) -> crate::explorer::ExplorerPaginationMeta {
+    crate::explorer::ExplorerPaginationMeta {
+        page,
+        per_page,
+        total_pages: total_items.div_ceil(per_page),
+        total_items,
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn collect_transaction_summaries(
     state: &CoreState,
     start_height: u64,
     filters: &ExplorerTransactionFilters,
+    page: u64,
+    per_page: u64,
     address_format: AddressFormatPreference,
-) -> Result<Vec<crate::explorer::ExplorerTransactionDto>, Error> {
+) -> Result<
+    (
+        Vec<crate::explorer::ExplorerTransactionDto>,
+        crate::explorer::ExplorerPaginationMeta,
+    ),
+    Error,
+> {
+    let (per_page, start_index, end_index) = explorer_pagination_window(page, per_page);
     let mut out = Vec::new();
+    let mut total_items = 0_u64;
     if start_height == 0 {
-        return Ok(out);
+        return Ok((out, explorer_pagination_meta(page, per_page, total_items)));
     }
     let mut height = filters.block.unwrap_or(start_height);
     let lower_bound = filters.block.unwrap_or(1);
@@ -32642,12 +33024,15 @@ fn collect_transaction_summaries(
             .zip(block_ref.results().take(external_total))
         {
             if filters.matches(tx, height, result) {
-                out.push(crate::explorer::transaction_summary_dto(
-                    tx,
-                    height,
-                    result,
-                    address_format,
-                ));
+                if total_items >= start_index && total_items < end_index {
+                    out.push(crate::explorer::transaction_summary_dto(
+                        tx,
+                        height,
+                        result,
+                        address_format,
+                    ));
+                }
+                total_items = total_items.saturating_add(1);
             }
         }
         if height == lower_bound || height == 1 {
@@ -32655,7 +33040,7 @@ fn collect_transaction_summaries(
         }
         height -= 1;
     }
-    Ok(out)
+    Ok((out, explorer_pagination_meta(page, per_page, total_items)))
 }
 
 #[cfg(feature = "app_api")]
@@ -32732,11 +33117,21 @@ fn collect_instruction_history(
     state: &CoreState,
     start_height: u64,
     filters: &ExplorerInstructionFilters,
+    page: u64,
+    per_page: u64,
     address_format: AddressFormatPreference,
-) -> Result<Vec<ExplorerInstructionDto>, Error> {
+) -> Result<
+    (
+        Vec<ExplorerInstructionDto>,
+        crate::explorer::ExplorerPaginationMeta,
+    ),
+    Error,
+> {
+    let (per_page, start_index, end_index) = explorer_pagination_window(page, per_page);
     let mut out = Vec::new();
+    let mut total_items = 0_u64;
     if start_height == 0 {
-        return Ok(out);
+        return Ok((out, explorer_pagination_meta(page, per_page, total_items)));
     }
     let mut height = filters.block.unwrap_or(start_height);
     let lower_bound = filters.block.unwrap_or(1);
@@ -32776,16 +33171,19 @@ fn collect_instruction_history(
                         continue;
                     }
                 }
-                let index = u32::try_from(idx).unwrap_or(u32::MAX);
-                out.push(crate::explorer::instruction_dto_with_kind(
-                    tx,
-                    height,
-                    result,
-                    instruction,
-                    kind,
-                    index,
-                    address_format,
-                ));
+                if total_items >= start_index && total_items < end_index {
+                    let index = u32::try_from(idx).unwrap_or(u32::MAX);
+                    out.push(crate::explorer::instruction_dto_with_kind(
+                        tx,
+                        height,
+                        result,
+                        instruction,
+                        kind,
+                        index,
+                        address_format,
+                    ));
+                }
+                total_items = total_items.saturating_add(1);
             }
         }
         if height == lower_bound || height == 1 {
@@ -32793,7 +33191,7 @@ fn collect_instruction_history(
         }
         height -= 1;
     }
-    Ok(out)
+    Ok((out, explorer_pagination_meta(page, per_page, total_items)))
 }
 
 #[cfg(feature = "app_api")]
@@ -32810,35 +33208,20 @@ fn find_transaction_detail(
         .trim()
         .parse()
         .map_err(|_| conversion_error("invalid transaction hash".to_owned()))?;
-    let mut height = start_height;
-    loop {
-        let height_usize: usize = height
-            .try_into()
-            .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
-        let nonzero_height = NonZeroUsize::new(height_usize)
-            .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-        let block = state
-            .block_by_height(nonzero_height)
-            .ok_or_else(explorer_not_found)?;
-        let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
-            if tx.hash_as_entrypoint() == target {
-                return Ok(crate::explorer::transaction_detail_dto(
-                    tx,
-                    height,
-                    result,
-                    address_format,
-                ));
-            }
+    let indexed_height = indexed_transaction_height(state, start_height, target);
+    if let Some(height) = indexed_height {
+        if let Some(dto) = transaction_detail_at_height(state, height, target, address_format)? {
+            return Ok(dto);
         }
-        if height == 1 {
-            break;
-        }
-        height -= 1;
+    }
+    if let Some(dto) = find_transaction_detail_by_scan(
+        state,
+        start_height,
+        target,
+        address_format,
+        indexed_height,
+    )? {
+        return Ok(dto);
     }
     Err(explorer_not_found())
 }
@@ -32861,49 +33244,162 @@ fn find_instruction_detail(
     let lookup_index: usize = index
         .try_into()
         .map_err(|_| conversion_error("instruction index exceeds host pointer width".into()))?;
-    let mut height = start_height;
-    loop {
-        let height_usize: usize = height
-            .try_into()
-            .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
-        let nonzero_height = NonZeroUsize::new(height_usize)
-            .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-        let block = state
-            .block_by_height(nonzero_height)
-            .ok_or_else(explorer_not_found)?;
-        let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
+    let indexed_height = indexed_transaction_height(state, start_height, target);
+    if let Some(height) = indexed_height {
+        if let Some(dto) =
+            instruction_detail_at_height(state, height, target, lookup_index, address_format)?
         {
-            if tx.hash_as_entrypoint() != target {
-                continue;
-            }
-            let Executable::Instructions(instructions) = tx.instructions() else {
-                continue;
-            };
-            let instruction = instructions
-                .get(lookup_index)
-                .ok_or_else(explorer_not_found)?;
-            let kind = crate::explorer::instruction_kind(instruction);
-            let index_u32 = u32::try_from(lookup_index).unwrap_or(u32::MAX);
-            return Ok(crate::explorer::instruction_dto_with_kind(
+            return Ok(dto);
+        }
+    }
+    if let Some(dto) = find_instruction_detail_by_scan(
+        state,
+        start_height,
+        target,
+        lookup_index,
+        address_format,
+        indexed_height,
+    )? {
+        return Ok(dto);
+    }
+    Err(explorer_not_found())
+}
+
+#[cfg(feature = "app_api")]
+fn indexed_transaction_height(
+    state: &CoreState,
+    start_height: u64,
+    target: HashOf<TransactionEntrypoint>,
+) -> Option<u64> {
+    let target_as_signed = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(target));
+    let height = state.committed_transaction_height(&target_as_signed)?;
+    let height_u64 = u64::try_from(height.get()).ok()?;
+    (height_u64 <= start_height).then_some(height_u64)
+}
+
+#[cfg(feature = "app_api")]
+fn transaction_detail_at_height(
+    state: &CoreState,
+    height: u64,
+    target: HashOf<TransactionEntrypoint>,
+    address_format: AddressFormatPreference,
+) -> Result<Option<crate::explorer::ExplorerTransactionDetailDto>, Error> {
+    let Some(nonzero_height) = nonzero_height(height) else {
+        return Ok(None);
+    };
+    let Some(block) = state.block_by_height(nonzero_height) else {
+        return Ok(None);
+    };
+    let block_ref = block.as_ref();
+    let external_total = block_ref.external_transactions().len();
+    for (tx, result) in block_ref
+        .external_transactions()
+        .zip(block_ref.results().take(external_total))
+    {
+        if tx.hash_as_entrypoint() == target {
+            return Ok(Some(crate::explorer::transaction_detail_dto(
                 tx,
                 height,
                 result,
-                instruction,
-                kind,
-                index_u32,
                 address_format,
-            ));
+            )));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "app_api")]
+fn find_transaction_detail_by_scan(
+    state: &CoreState,
+    start_height: u64,
+    target: HashOf<TransactionEntrypoint>,
+    address_format: AddressFormatPreference,
+    skip_height: Option<u64>,
+) -> Result<Option<crate::explorer::ExplorerTransactionDetailDto>, Error> {
+    let mut height = start_height;
+    loop {
+        if Some(height) != skip_height {
+            if let Some(dto) = transaction_detail_at_height(state, height, target, address_format)?
+            {
+                return Ok(Some(dto));
+            }
         }
         if height == 1 {
             break;
         }
         height -= 1;
     }
-    Err(explorer_not_found())
+    Ok(None)
+}
+
+#[cfg(feature = "app_api")]
+fn instruction_detail_at_height(
+    state: &CoreState,
+    height: u64,
+    target: HashOf<TransactionEntrypoint>,
+    lookup_index: usize,
+    address_format: AddressFormatPreference,
+) -> Result<Option<ExplorerInstructionDto>, Error> {
+    let Some(nonzero_height) = nonzero_height(height) else {
+        return Ok(None);
+    };
+    let Some(block) = state.block_by_height(nonzero_height) else {
+        return Ok(None);
+    };
+    let block_ref = block.as_ref();
+    let external_total = block_ref.external_transactions().len();
+    for (tx, result) in block_ref
+        .external_transactions()
+        .zip(block_ref.results().take(external_total))
+    {
+        if tx.hash_as_entrypoint() != target {
+            continue;
+        }
+        let Executable::Instructions(instructions) = tx.instructions() else {
+            return Err(explorer_not_found());
+        };
+        let instruction = instructions
+            .get(lookup_index)
+            .ok_or_else(explorer_not_found)?;
+        let kind = crate::explorer::instruction_kind(instruction);
+        let index_u32 = u32::try_from(lookup_index).unwrap_or(u32::MAX);
+        return Ok(Some(crate::explorer::instruction_dto_with_kind(
+            tx,
+            height,
+            result,
+            instruction,
+            kind,
+            index_u32,
+            address_format,
+        )));
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "app_api")]
+fn find_instruction_detail_by_scan(
+    state: &CoreState,
+    start_height: u64,
+    target: HashOf<TransactionEntrypoint>,
+    lookup_index: usize,
+    address_format: AddressFormatPreference,
+    skip_height: Option<u64>,
+) -> Result<Option<ExplorerInstructionDto>, Error> {
+    let mut height = start_height;
+    loop {
+        if Some(height) != skip_height {
+            if let Some(dto) =
+                instruction_detail_at_height(state, height, target, lookup_index, address_format)?
+            {
+                return Ok(Some(dto));
+            }
+        }
+        if height == 1 {
+            break;
+        }
+        height -= 1;
+    }
+    Ok(None)
 }
 
 #[cfg(feature = "app_api")]
@@ -34285,16 +34781,27 @@ fn parse_block_identifier(raw: &str) -> Result<ExplorerBlockIdentifier, Error> {
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_block_detail(
     state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
     identifier: String,
 ) -> Result<AxResponse, Error> {
-    let lookup = parse_block_identifier(&identifier)?;
-    let block = match lookup {
-        ExplorerBlockIdentifier::Height(height) => state.block_by_height(height),
-        ExplorerBlockIdentifier::Hash(hash) => state.block_by_hash(hash),
-    }
-    .ok_or_else(explorer_not_found)?;
-    let dto = crate::explorer::ExplorerBlockDto::from_block(block.as_ref());
-    Ok(JsonBody(dto).into_response())
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let lookup = parse_block_identifier(&identifier)?;
+        let block = match lookup {
+            ExplorerBlockIdentifier::Height(height) => state.block_by_height(height),
+            ExplorerBlockIdentifier::Hash(hash) => state.block_by_hash(hash),
+        }
+        .ok_or_else(explorer_not_found)?;
+        let dto = crate::explorer::ExplorerBlockDto::from_block(block.as_ref());
+        Ok(JsonBody(dto).into_response())
+    })();
+    record_explorer_endpoint_result(
+        &telemetry,
+        ENDPOINT_EXPLORER_BLOCK_DETAIL,
+        started,
+        &response,
+    );
+    response
 }
 
 #[cfg(feature = "app_api")]

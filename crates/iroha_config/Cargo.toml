@@ -22,17 +22,13 @@ iroha_data_model = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_crypto = { workspace = true }
 norito = {workspace = true}
-iroha_schema = { workspace = true }
 error-stack = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "ansi", "env-filter"] }
 log = "0.4.28"
 url.workspace = true
 strum = { workspace = true, features = ["derive", "std"] }
-json5 = { workspace = true }
 thiserror = { workspace = true }
-displaydoc = { workspace = true }
-derive_more = { workspace = true }
 nonzero_ext = { workspace = true }
 hex = { workspace = true, features = ["std"] }
 soranet_pq = { workspace = true }

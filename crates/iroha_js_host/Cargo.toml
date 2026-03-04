@@ -27,7 +27,6 @@ hex = { workspace = true }
 rand_core_06 = { workspace = true }
 sorafs_manifest = { workspace = true }
 sorafs_car = { workspace = true, features = ["manifest"] }
-futures = { workspace = true }
 blake3 = { workspace = true }
 sorafs_chunker = { workspace = true }
 sorafs_orchestrator = { workspace = true }
@@ -36,4 +35,3 @@ iroha = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-httpmock = "0.8.2"
