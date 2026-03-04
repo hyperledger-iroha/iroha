@@ -555,16 +555,25 @@ impl Actor {
         }
 
         let mut actions = Vec::new();
-        let deferred_keys: Vec<_> = self
+        let mut deferred_entries: Vec<_> = self
             .deferred_qcs
-            .keys()
-            .cloned()
-            .take(DEFERRED_MISSING_PAYLOAD_QC_PER_TICK)
+            .iter()
+            .map(|(key, qc)| (*key, qc.clone()))
             .collect();
-        for key in deferred_keys {
-            let Some(qc) = self.deferred_qcs.get(&key).cloned() else {
+        deferred_entries.sort_by(|(_, lhs), (_, rhs)| {
+            lhs.height
+                .cmp(&rhs.height)
+                .then_with(|| lhs.view.cmp(&rhs.view))
+                .then_with(|| lhs.subject_block_hash.cmp(&rhs.subject_block_hash))
+                .then_with(|| lhs.phase.cmp(&rhs.phase))
+        });
+        for (key, qc) in deferred_entries {
+            if actions.len() >= DEFERRED_MISSING_PAYLOAD_QC_PER_TICK {
+                break;
+            }
+            if !self.frontier_catchup_far_ahead_replay_allowed(qc.height, now) {
                 continue;
-            };
+            }
             let stall_window = self
                 .missing_payload_fetch_window_snapshot(qc.height, qc.subject_block_hash, now)
                 .map(|snapshot| snapshot.stall_window);
@@ -711,16 +720,26 @@ impl Actor {
         }
 
         let mut actions = Vec::new();
-        let deferred_keys: Vec<_> = self
+        let mut deferred_entries: Vec<_> = self
             .deferred_missing_payload_qcs
-            .keys()
-            .cloned()
-            .take(DEFERRED_MISSING_PAYLOAD_QC_PER_TICK)
+            .iter()
+            .map(|(key, entry)| (*key, entry.clone()))
             .collect();
-        for key in deferred_keys {
-            let Some(entry) = self.deferred_missing_payload_qcs.get(&key).cloned() else {
+        deferred_entries.sort_by(|(_, lhs), (_, rhs)| {
+            lhs.qc
+                .height
+                .cmp(&rhs.qc.height)
+                .then_with(|| lhs.qc.view.cmp(&rhs.qc.view))
+                .then_with(|| lhs.qc.subject_block_hash.cmp(&rhs.qc.subject_block_hash))
+                .then_with(|| lhs.qc.phase.cmp(&rhs.qc.phase))
+        });
+        for (key, entry) in deferred_entries {
+            if actions.len() >= DEFERRED_MISSING_PAYLOAD_QC_PER_TICK {
+                break;
+            }
+            if !self.frontier_catchup_far_ahead_replay_allowed(entry.qc.height, now) {
                 continue;
-            };
+            }
             let stall_window = self
                 .missing_payload_fetch_window_snapshot(
                     entry.qc.height,
@@ -4054,6 +4073,7 @@ impl Actor {
                 Some(view_change_window),
                 signer_fallback_attempts,
                 fetch_mode,
+                false,
             );
             let dwell = self
                 .pending

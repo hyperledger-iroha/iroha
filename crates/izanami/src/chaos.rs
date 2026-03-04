@@ -230,6 +230,7 @@ struct EndpointHealthState {
     consecutive_failures: u32,
     unhealthy_until: Option<Instant>,
     last_probe_at: Option<Instant>,
+    sticky_unhealthy_until: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -295,12 +296,14 @@ impl EndpointHealthPool {
             attempted = attempted.saturating_add(1);
             match operation(endpoint_idx, label) {
                 Ok(value) => {
-                    self.mark_success(endpoint_idx);
+                    self.mark_success_at(endpoint_idx, now);
                     return Ok(value);
                 }
                 Err(err) => {
-                    let retryable = is_ingress_failover_retryable(&err);
-                    let transitioned_unhealthy = self.mark_failure_at(endpoint_idx, now, retryable);
+                    let failure_class = classify_ingress_failure(&err);
+                    let retryable = failure_class.is_retryable();
+                    let transitioned_unhealthy =
+                        self.mark_failure_at(endpoint_idx, now, failure_class);
                     if transitioned_unhealthy {
                         self.ingress_stats.record_endpoint_unhealthy();
                         warn!(
@@ -308,6 +311,7 @@ impl EndpointHealthPool {
                             operation = op_name,
                             endpoint = label,
                             attempt = attempt_idx + 1,
+                            failure_class = failure_class.as_str(),
                             "marking ingress endpoint unhealthy"
                         );
                     }
@@ -317,6 +321,7 @@ impl EndpointHealthPool {
                         operation = op_name,
                         endpoint = label,
                         attempt = attempt_idx + 1,
+                        failure_class = failure_class.as_str(),
                         retryable,
                         "ingress endpoint request failed"
                     );
@@ -358,6 +363,7 @@ impl EndpointHealthPool {
             let still_unhealthy = state.unhealthy_until.is_some_and(|until| now < until);
             if !still_unhealthy {
                 state.unhealthy_until = None;
+                state.sticky_unhealthy_until = None;
                 healthy.push(idx);
                 continue;
             }
@@ -389,16 +395,28 @@ impl EndpointHealthPool {
         healthy
     }
 
-    fn mark_success(&self, endpoint_idx: usize) {
+    fn mark_success_at(&self, endpoint_idx: usize, now: Instant) {
         if let Ok(mut guard) = self.state.lock() {
             if let Some(state) = guard.get_mut(endpoint_idx) {
                 state.consecutive_failures = 0;
+                if state
+                    .sticky_unhealthy_until
+                    .is_some_and(|until| now < until)
+                {
+                    return;
+                }
                 state.unhealthy_until = None;
+                state.sticky_unhealthy_until = None;
             }
         }
     }
 
-    fn mark_failure_at(&self, endpoint_idx: usize, now: Instant, retryable: bool) -> bool {
+    fn mark_failure_at(
+        &self,
+        endpoint_idx: usize,
+        now: Instant,
+        failure_class: IngressFailureClass,
+    ) -> bool {
         let Ok(mut guard) = self.state.lock() else {
             return false;
         };
@@ -406,14 +424,29 @@ impl EndpointHealthPool {
             return false;
         };
         state.consecutive_failures = state.consecutive_failures.saturating_add(1);
-        if !retryable || state.consecutive_failures < self.config.unhealthy_failure_threshold {
+        if !failure_class.is_retryable() {
             return false;
         }
+        let failure_threshold = if matches!(failure_class, IngressFailureClass::QueuePressure) {
+            1
+        } else {
+            self.config.unhealthy_failure_threshold
+        };
+        if state.consecutive_failures < failure_threshold {
+            return false;
+        }
+        let cooldown = if matches!(failure_class, IngressFailureClass::QueuePressure) {
+            self.config
+                .unhealthy_cooldown
+                .max(Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS))
+        } else {
+            self.config.unhealthy_cooldown
+        };
         let was_unhealthy = state.unhealthy_until.is_some_and(|until| now < until);
-        state.unhealthy_until = Some(
-            now.checked_add(self.config.unhealthy_cooldown)
-                .unwrap_or(now),
-        );
+        let unhealthy_until = now.checked_add(cooldown).unwrap_or(now);
+        state.unhealthy_until = Some(unhealthy_until);
+        state.sticky_unhealthy_until =
+            matches!(failure_class, IngressFailureClass::QueuePressure).then_some(unhealthy_until);
         !was_unhealthy
     }
 
@@ -486,21 +519,61 @@ impl IngressEndpointPool {
     }
 }
 
-fn is_ingress_failover_retryable(error: &color_eyre::Report) -> bool {
-    let message = format!("{error:#}").to_ascii_lowercase();
-    message.contains("timed out")
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IngressFailureClass {
+    NonRetryable,
+    Retryable,
+    QueuePressure,
+}
+
+impl IngressFailureClass {
+    const fn is_retryable(self) -> bool {
+        !matches!(self, Self::NonRetryable)
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::NonRetryable => "non_retryable",
+            Self::Retryable => "retryable",
+            Self::QueuePressure => "queue_pressure",
+        }
+    }
+}
+
+fn ingress_error_message(error: &color_eyre::Report) -> String {
+    format!("{error:#}").to_ascii_lowercase()
+}
+
+fn is_ingress_queue_pressure_message(message: &str) -> bool {
+    message.contains("transaction queued for too long")
+        || message.contains("status_timeout_ms")
+        || message.contains("haven't got tx confirmation within")
+}
+
+fn classify_ingress_failure(error: &color_eyre::Report) -> IngressFailureClass {
+    let message = ingress_error_message(error);
+    if is_ingress_queue_pressure_message(&message) {
+        return IngressFailureClass::QueuePressure;
+    }
+    if message.contains("timed out")
         || message.contains("timeout")
-        || message.contains("transaction queued for too long")
         || message.contains("connection refused")
         || message.contains("connection reset")
         || message.contains("broken pipe")
         || contains_http_5xx_status(&message)
+    {
+        IngressFailureClass::Retryable
+    } else {
+        IngressFailureClass::NonRetryable
+    }
+}
+
+fn is_ingress_failover_retryable(error: &color_eyre::Report) -> bool {
+    classify_ingress_failure(error).is_retryable()
 }
 
 fn is_ingress_queue_timeout_retryable(error: &color_eyre::Report) -> bool {
-    format!("{error:#}")
-        .to_ascii_lowercase()
-        .contains("transaction queued for too long")
+    is_ingress_queue_pressure_message(&ingress_error_message(error))
 }
 
 fn run_with_queue_timeout_retry<F>(plan_label: &'static str, submit: F) -> Result<()>
@@ -3174,6 +3247,119 @@ mod tests {
             attempts_after_reprobe,
             vec![1, 0],
             "reprobe should include the unhealthy endpoint after the interval"
+        );
+    }
+
+    #[test]
+    fn endpoint_pool_queue_timeout_marks_unhealthy_on_first_failure() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec!["http://127.0.0.1:31".to_string()],
+            IngressEndpointPoolConfig {
+                max_attempts: 1,
+                unhealthy_failure_threshold: 3,
+                unhealthy_cooldown: Duration::from_secs(5),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            ingress_stats,
+        );
+        let now = Instant::now();
+        let result: Result<()> = pool.run_with_failover_at("submit", now, |_idx, _| {
+            Err(eyre!("transaction queued for too long"))
+        });
+        assert!(result.is_err(), "queue-timeout failure should bubble up");
+        let state = pool.endpoint_state(0);
+        assert!(
+            state.unhealthy_until.is_some(),
+            "queue-timeout failure should mark endpoint unhealthy immediately"
+        );
+        assert_eq!(
+            state.sticky_unhealthy_until, state.unhealthy_until,
+            "queue-timeout unhealthy state should use sticky cooldown tracking"
+        );
+    }
+
+    #[test]
+    fn endpoint_pool_queue_timeout_sticky_cooldown_not_cleared_by_early_success() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec!["http://127.0.0.1:41".to_string()],
+            IngressEndpointPoolConfig {
+                max_attempts: 1,
+                unhealthy_failure_threshold: 3,
+                unhealthy_cooldown: Duration::from_secs(5),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            ingress_stats,
+        );
+        let start = Instant::now();
+        let first: Result<()> = pool.run_with_failover_at("submit", start, |_idx, _| {
+            Err(eyre!("transaction queued for too long"))
+        });
+        assert!(first.is_err(), "first queue-timeout should fail");
+        let state_after_failure = pool.endpoint_state(0);
+        let cooldown_until = state_after_failure
+            .unhealthy_until
+            .expect("queue-timeout should set cooldown");
+        assert!(
+            cooldown_until > start,
+            "cooldown should extend beyond initial failure timestamp"
+        );
+
+        let early = start + Duration::from_secs(1);
+        let second: Result<&'static str> =
+            pool.run_with_failover_at("submit", early, |_idx, _| Ok("ok"));
+        assert_eq!(
+            second.expect("early probe success should still complete request"),
+            "ok"
+        );
+        let state_after_early_success = pool.endpoint_state(0);
+        assert!(
+            state_after_early_success
+                .unhealthy_until
+                .is_some_and(|until| until == cooldown_until),
+            "sticky queue-timeout cooldown should not clear before expiry"
+        );
+
+        let after_expiry = cooldown_until + Duration::from_millis(1);
+        let third: Result<&'static str> =
+            pool.run_with_failover_at("submit", after_expiry, |_idx, _| Ok("ok"));
+        assert_eq!(
+            third.expect("endpoint should recover after sticky cooldown expiry"),
+            "ok"
+        );
+        assert!(
+            pool.endpoint_state(0).unhealthy_until.is_none(),
+            "sticky queue-timeout cooldown should clear after expiry"
+        );
+    }
+
+    #[test]
+    fn endpoint_pool_queue_timeout_cooldown_uses_status_timeout_floor() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec!["http://127.0.0.1:51".to_string()],
+            IngressEndpointPoolConfig {
+                max_attempts: 1,
+                unhealthy_failure_threshold: 3,
+                unhealthy_cooldown: Duration::from_secs(1),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            ingress_stats,
+        );
+        let start = Instant::now();
+        let result: Result<()> = pool.run_with_failover_at("submit", start, |_idx, _| {
+            Err(eyre!("transaction queued for too long"))
+        });
+        assert!(result.is_err(), "queue-timeout failure should bubble up");
+        let state = pool.endpoint_state(0);
+        let unhealthy_until = state
+            .unhealthy_until
+            .expect("queue-timeout failure should set unhealthy cooldown");
+        assert!(
+            unhealthy_until.saturating_duration_since(start)
+                >= Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS),
+            "queue-timeout cooldown should honor transaction status-timeout floor"
         );
     }
 

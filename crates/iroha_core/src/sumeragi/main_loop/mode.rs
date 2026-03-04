@@ -228,7 +228,10 @@ impl Actor {
         self.qc_missing_payload_range_pull_cooldowns.clear();
         self.block_sync_warning_log.clear();
         self.qc_insufficient_warning_log.clear();
-        self.sidecar_mismatch_action_cooldowns.clear();
+        self.sidecar_mismatch_window_gates.clear();
+        self.sidecar_mismatch_committed_edge_gates.clear();
+        self.frontier_catchup_window_gates.clear();
+        self.frontier_catchup_stall = None;
         self.tick_lag_last_progress_at = now;
         self.tick_lag_last_progress_height = self.state.committed_height();
         self.tick_lag_last_progress_queue_len = self.queue.active_len();

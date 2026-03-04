@@ -1125,14 +1125,30 @@ impl Actor {
                         MissingBlockClearReason::Obsolete,
                     );
                     self.clear_sidecar_mismatch_for_height(highest.height);
+                    let now = Instant::now();
+                    let recovery_allowed = self.allow_committed_edge_conflict_recovery_action(
+                        highest.height,
+                        "highest_qc_committed_conflict",
+                        now,
+                    );
+                    let contiguous_height = committed_height.saturating_add(1);
+                    let recovery_reanchor_requested = recovery_allowed
+                        && self.request_range_pull_from_anchor(
+                            contiguous_height,
+                            "highest_qc_committed_conflict",
+                            now,
+                        );
                     debug!(
                         height = highest.height,
                         view = highest.view,
                         committed_height,
                         committed_hash = %committed_hash,
                         highest_hash = %highest.subject_block_hash,
+                        recovery_allowed,
+                        contiguous_height,
+                        recovery_reanchor_requested,
                         source,
-                        "suppressing highest QC missing-block fetch for committed-height hash conflict"
+                        "suppressing highest QC missing-block fetch for committed-height hash conflict and scheduling bounded contiguous recovery"
                     );
                     return false;
                 }
@@ -1161,7 +1177,7 @@ impl Actor {
                 "highest_qc_missing_block",
             );
         }
-        if payload_available && !force_fetch && local_known {
+        if payload_available && local_known {
             self.clear_missing_block_request(
                 &highest.subject_block_hash,
                 MissingBlockClearReason::PayloadAvailable,
@@ -1293,6 +1309,13 @@ impl Actor {
         );
         let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
         let now = Instant::now();
+        let force_retry_now = force_fetch
+            && self.allow_highest_qc_force_fetch_retry(
+                highest.height,
+                highest.subject_block_hash,
+                source,
+                now,
+            );
         let fetch_mode = if self.sidecar_quarantined_for_height(highest.height) {
             MissingBlockFetchMode::AggressiveTopology
         } else {
@@ -1312,6 +1335,7 @@ impl Actor {
             None,
             signer_fallback_attempts,
             fetch_mode,
+            force_retry_now,
         );
         let dwell = self
             .pending
