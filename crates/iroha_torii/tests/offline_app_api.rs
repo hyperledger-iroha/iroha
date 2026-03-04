@@ -85,6 +85,10 @@ struct AppAttestRealDeviceSettlementReplayFixture {
     expect_non_strict_reject_code: Option<String>,
     expect_strict_ok: bool,
     expect_strict_reject_code: Option<String>,
+    expect_non_strict_final_status: Option<String>,
+    expect_non_strict_final_reject_code: Option<String>,
+    expect_strict_final_status: Option<String>,
+    expect_strict_final_reject_code: Option<String>,
 }
 
 struct ReplaySubmissionOutcome {
@@ -100,6 +104,10 @@ const ANDROID_INTEGRITY_POLICY_KEY: &str = "android.integrity.policy";
 const ANDROID_PACKAGE_NAMES_KEY: &str = "android.attestation.package_names";
 const ANDROID_SIGNATURE_DIGESTS_KEY: &str = "android.attestation.signing_digests_sha256";
 const ANDROID_PROVISIONED_DEVICE_ID_KEY: &str = "android.provisioned.device_id";
+const ANDROID_PROVISIONED_INSPECTOR_KEY: &str = "android.provisioned.inspector_public_key";
+const ANDROID_PROVISIONED_MANIFEST_SCHEMA_KEY: &str = "android.provisioned.manifest_schema";
+const ANDROID_PROVISIONED_MANIFEST_VERSION_KEY: &str = "android.provisioned.manifest_version";
+const ANDROID_PROVISIONED_MAX_AGE_KEY: &str = "android.provisioned.max_manifest_age_ms";
 
 fn build_harness() -> Harness {
     let mut cfg = test_utils::mk_minimal_root_cfg();
@@ -357,6 +365,7 @@ fn build_harness_for_app_attest_fixture(
     let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
     state.settlement.offline.skip_platform_attestation = false;
     state.settlement.offline.apple_app_attest_strict_signature = strict_signature;
+    state.settlement.offline.skip_build_claim_verification = true;
     state.settlement.offline.proof_mode =
         iroha_config::parameters::actual::OfflineProofMode::Optional;
     let state = Arc::new(state);
@@ -455,6 +464,22 @@ fn parse_real_device_replay_fixture(path: &str) -> AppAttestRealDeviceSettlement
         .get("expect_strict_reject_code")
         .and_then(Value::as_str)
         .map(str::to_owned);
+    let expect_non_strict_final_status = object
+        .get("expect_non_strict_final_status")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let expect_non_strict_final_reject_code = object
+        .get("expect_non_strict_final_reject_code")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let expect_strict_final_status = object
+        .get("expect_strict_final_status")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let expect_strict_final_reject_code = object
+        .get("expect_strict_final_reject_code")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
 
     AppAttestRealDeviceSettlementReplayFixture {
         chain_id,
@@ -466,6 +491,10 @@ fn parse_real_device_replay_fixture(path: &str) -> AppAttestRealDeviceSettlement
         expect_non_strict_reject_code,
         expect_strict_ok,
         expect_strict_reject_code,
+        expect_non_strict_final_status,
+        expect_non_strict_final_reject_code,
+        expect_strict_final_status,
+        expect_strict_final_reject_code,
     }
 }
 
@@ -667,26 +696,69 @@ async fn assert_replay_final_settlement_status(
     let bundle_id_hex = hex::encode(fixture.transfer.bundle_id.as_ref());
     materialize_replay_settlement(harness, fixture);
     let item = query_settlement_record_by_bundle(harness, &bundle_id_hex).await;
-    assert_eq!(item["status"].as_str(), Some(expected_status));
+    assert_eq!(
+        item["status"].as_str(),
+        Some(expected_status),
+        "unexpected final settlement item: {:?}",
+        item
+    );
     match expected_reject_code {
         Some(code) => {
-            assert_eq!(item["rejection_reason"].as_str(), Some(code));
-            assert_eq!(item["transfer"]["rejection_reason"].as_str(), Some(code));
+            assert_eq!(
+                item["rejection_reason"].as_str(),
+                Some(code),
+                "unexpected final settlement item: {:?}",
+                item
+            );
+            assert_eq!(
+                item["transfer"]["rejection_reason"].as_str(),
+                Some(code),
+                "unexpected final settlement item: {:?}",
+                item
+            );
         }
         None => {
-            assert!(item["rejection_reason"].is_null());
-            assert!(item["transfer"]["rejection_reason"].is_null());
+            assert!(
+                item["rejection_reason"].is_null(),
+                "unexpected final settlement item: {:?}",
+                item
+            );
+            assert!(
+                item["transfer"]["rejection_reason"].is_null(),
+                "unexpected final settlement item: {:?}",
+                item
+            );
         }
     }
 }
 
 fn world_from_fixtures(fixtures: &Fixtures) -> World {
-    let domain = Domain {
-        id: fixtures.controller.domain().clone(),
-        logo: None,
-        metadata: Metadata::default(),
-        owned_by: fixtures.controller.clone(),
-    };
+    let mut domain_ids = Vec::new();
+    for domain_id in [
+        fixtures.controller.domain().clone(),
+        fixtures.receiver.domain().clone(),
+        fixtures.certificate.operator.domain().clone(),
+        fixtures
+            .certificate
+            .allowance
+            .asset
+            .definition()
+            .domain()
+            .clone(),
+    ] {
+        if !domain_ids.contains(&domain_id) {
+            domain_ids.push(domain_id);
+        }
+    }
+    let domains: Vec<Domain> = domain_ids
+        .into_iter()
+        .map(|id| Domain {
+            id,
+            logo: None,
+            metadata: Metadata::default(),
+            owned_by: fixtures.controller.clone(),
+        })
+        .collect();
 
     let controller = Account {
         id: fixtures.controller.clone(),
@@ -731,7 +803,7 @@ fn world_from_fixtures(fixtures: &Fixtures) -> World {
     };
 
     World::with(
-        [domain],
+        domains,
         [controller, receiver, operator],
         [asset_definition],
     )
@@ -900,13 +972,46 @@ fn build_fixtures() -> Fixtures {
 fn build_android_provisioned_submission(
     fixtures: &Fixtures,
 ) -> (OfflineWalletCertificate, OfflineToOnlineTransfer) {
+    let chain_id = ChainId::from("test-chain");
     let app_id = "com.example.merchants.android";
+    let inspector_keys = KeyPair::from_seed(vec![0x51; 32], Algorithm::Ed25519);
+    let inspector_public_key = inspector_keys.public_key().to_string();
     let mut certificate = fixtures.certificate.clone();
+    certificate.metadata.insert(
+        ANDROID_INTEGRITY_POLICY_KEY
+            .parse::<iroha_data_model::name::Name>()
+            .expect("android policy metadata key"),
+        "provisioned",
+    );
     certificate.metadata.insert(
         ANDROID_PROVISIONED_APP_ID_KEY
             .parse::<iroha_data_model::name::Name>()
             .expect("android app id metadata key"),
         app_id,
+    );
+    certificate.metadata.insert(
+        ANDROID_PROVISIONED_INSPECTOR_KEY
+            .parse::<iroha_data_model::name::Name>()
+            .expect("android inspector key metadata key"),
+        inspector_public_key.as_str(),
+    );
+    certificate.metadata.insert(
+        ANDROID_PROVISIONED_MANIFEST_SCHEMA_KEY
+            .parse::<iroha_data_model::name::Name>()
+            .expect("android manifest schema metadata key"),
+        "offline_provisioning_v1",
+    );
+    certificate.metadata.insert(
+        ANDROID_PROVISIONED_MANIFEST_VERSION_KEY
+            .parse::<iroha_data_model::name::Name>()
+            .expect("android manifest version metadata key"),
+        1u64,
+    );
+    certificate.metadata.insert(
+        ANDROID_PROVISIONED_MAX_AGE_KEY
+            .parse::<iroha_data_model::name::Name>()
+            .expect("android max age metadata key"),
+        60_000u64,
     );
     let operator_keys = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
     certificate.operator_signature = Signature::new(
@@ -924,16 +1029,18 @@ fn build_android_provisioned_submission(
             .expect("device id metadata key"),
         "device-android-01",
     );
+    receipt.sender_certificate_id = certificate.certificate_id();
     receipt.platform_proof = OfflinePlatformProof::Provisioned(AndroidProvisionedProof {
         manifest_schema: "offline_provisioning_v1".to_owned(),
         manifest_version: Some(1),
         manifest_issued_at_ms: receipt.issued_at_ms.saturating_sub(1),
-        challenge_hash: Hash::new(b"android-provisioned-challenge"),
+        challenge_hash: receipt
+            .challenge_hash_with_chain_id(&chain_id)
+            .expect("provisioned challenge hash"),
         counter: 1,
         device_manifest,
         inspector_signature: Signature::from_bytes(&[0; 64]),
     });
-    receipt.sender_certificate_id = certificate.certificate_id();
 
     let mut build_claim = OfflineBuildClaim {
         claim_id: Hash::new(b"claim-android-provisioned"),
@@ -1245,8 +1352,19 @@ async fn offline_settlements_submit_app_attest_real_device_fixture_replay_persis
         "non-strict",
     )
     .await;
-    if fixture.expect_non_strict_ok && non_strict_submit_status == StatusCode::OK {
-        assert_replay_final_settlement_status(&non_strict_harness, &fixture, "settled", None).await;
+    if non_strict_submit_status == StatusCode::OK {
+        if let Some(expected_status) = fixture.expect_non_strict_final_status.as_deref() {
+            assert_replay_final_settlement_status(
+                &non_strict_harness,
+                &fixture,
+                expected_status,
+                fixture.expect_non_strict_final_reject_code.as_deref(),
+            )
+            .await;
+        } else if fixture.expect_non_strict_ok {
+            assert_replay_final_settlement_status(&non_strict_harness, &fixture, "settled", None)
+                .await;
+        }
     }
 
     let (strict_harness, strict) = submit_replay_fixture_with_harness(&fixture, true).await;
@@ -1262,7 +1380,15 @@ async fn offline_settlements_submit_app_attest_real_device_fixture_replay_persis
     if strict_submit_status != StatusCode::OK {
         return;
     }
-    if fixture.expect_strict_ok {
+    if let Some(expected_status) = fixture.expect_strict_final_status.as_deref() {
+        assert_replay_final_settlement_status(
+            &strict_harness,
+            &fixture,
+            expected_status,
+            fixture.expect_strict_final_reject_code.as_deref(),
+        )
+        .await;
+    } else if fixture.expect_strict_ok {
         assert_replay_final_settlement_status(&strict_harness, &fixture, "settled", None).await;
     } else {
         assert_replay_final_settlement_status(
@@ -2624,6 +2750,90 @@ async fn offline_settlements_submit_persists_settled_record_for_android_build_cl
     assert_eq!(item["status"].as_str(), Some("settled"));
     assert!(item["rejection_reason"].is_null());
     assert!(item["transfer"]["rejection_reason"].is_null());
+}
+
+#[tokio::test]
+async fn offline_settlements_submit_persists_rejected_record_for_platform_signature_invalid() {
+    let base = build_fixtures();
+    let (certificate, transfer) = build_android_provisioned_submission(&base);
+    let fixtures = Fixtures {
+        controller: certificate.controller.clone(),
+        controller_keys: KeyPair::from_seed(vec![0x21; 32], Algorithm::Ed25519),
+        receiver: base.receiver.clone(),
+        receiver_keys: KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519),
+        receipt: transfer
+            .receipts
+            .first()
+            .cloned()
+            .expect("provisioned transfer contains one receipt"),
+        transfer: transfer.clone(),
+        certificate,
+    };
+    let harness =
+        build_harness_for_app_attest_fixture(ChainId::from("test-chain"), fixtures, false);
+    seed_allowance(&harness.state, harness.fixtures.certificate.clone());
+
+    let mut map = json::Map::new();
+    map.insert(
+        "authority".into(),
+        json::to_value(&harness.fixtures.receiver).expect("authority value"),
+    );
+    map.insert(
+        "private_key".into(),
+        Value::from(
+            iroha_crypto::ExposedPrivateKey(harness.fixtures.receiver_keys.private_key().clone())
+                .to_string(),
+        ),
+    );
+    map.insert(
+        "transfer".into(),
+        json::to_value(&transfer).expect("transfer value"),
+    );
+    let body = json::to_vec(&Value::Object(map)).expect("serialize request");
+    let submit_resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/settlements")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(submit_resp.status(), StatusCode::OK);
+
+    let block_ts = transfer
+        .receipts
+        .iter()
+        .map(|receipt| receipt.issued_at_ms)
+        .max()
+        .expect("one receipt")
+        .saturating_add(1_000);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, block_ts, 0);
+    let mut block = harness.state.block(header);
+    let mut tx = block.transaction();
+    SubmitOfflineToOnlineTransfer {
+        transfer: transfer.clone(),
+    }
+    .execute(&harness.fixtures.receiver, &mut tx)
+    .expect("materialize rejected settlement row");
+    tx.apply();
+    block.commit().expect("commit rejected settlement row");
+
+    let bundle_id_hex = hex::encode(transfer.bundle_id.as_ref());
+    let item = query_settlement_record_by_bundle(&harness, &bundle_id_hex).await;
+    assert_eq!(item["status"].as_str(), Some("rejected"));
+    assert_eq!(
+        item["rejection_reason"].as_str(),
+        Some("platform_signature_invalid")
+    );
+    assert_eq!(
+        item["transfer"]["rejection_reason"].as_str(),
+        Some("platform_signature_invalid")
+    );
 }
 
 #[tokio::test]

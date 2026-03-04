@@ -46,6 +46,12 @@ const toriiFixtures = JSON.parse(
 const validationFixtures = JSON.parse(
   readFileSync(new URL("./fixtures/validation_errors.json", import.meta.url), "utf8"),
 );
+const txStatusErrorMessageContract = JSON.parse(
+  readFileSync(
+    new URL("../../../fixtures/sdk/tx_status_error_message_contract.json", import.meta.url),
+    "utf8",
+  ),
+);
 const nativeTest = makeNativeTest(test);
 
 function cloneFixture(value) {
@@ -5847,6 +5853,165 @@ test("getTransactionStatus returns null when Torii responds with 404", async () 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getTransactionStatus(hashHex);
   assert.equal(result, null);
+});
+
+test("getTransactionStatus matches shared error-message contract fixture", async () => {
+  const hashHex = "ab".repeat(32);
+  for (const fixtureCase of txStatusErrorMessageContract.cases) {
+    const headers = {};
+    if (typeof fixtureCase.content_type === "string" && fixtureCase.content_type) {
+      headers["content-type"] = fixtureCase.content_type;
+    }
+    if (
+      typeof fixtureCase.reject_code_header === "string" &&
+      fixtureCase.reject_code_header
+    ) {
+      const rejectHeaderName =
+        typeof fixtureCase.reject_code_header_name === "string" &&
+        fixtureCase.reject_code_header_name
+          ? fixtureCase.reject_code_header_name
+          : "x-iroha-reject-code";
+      headers[rejectHeaderName] = fixtureCase.reject_code_header;
+    }
+    const fetchImpl = async () =>
+      createResponse({
+        status: fixtureCase.status_code,
+        jsonData: fixtureCase.body_json ?? {},
+        textBody: fixtureCase.body_text,
+        headers,
+      });
+    const client = new ToriiClient(BASE_URL, { fetchImpl, maxRetries: 0 });
+    await assert.rejects(
+      () => client.getTransactionStatus(hashHex),
+      (error) => {
+        assert(error instanceof ToriiHttpError, `${fixtureCase.id}: expected ToriiHttpError`);
+        assert.equal(error.status, fixtureCase.status_code, `${fixtureCase.id}: status mismatch`);
+        if (fixtureCase.expected_reject_code) {
+          assert.equal(
+            error.rejectCode,
+            fixtureCase.expected_reject_code,
+            `${fixtureCase.id}: reject code mismatch`,
+          );
+        }
+        if (fixtureCase.expected_message) {
+          assert.equal(
+            error.errorMessage,
+            fixtureCase.expected_message,
+            `${fixtureCase.id}: message mismatch`,
+          );
+        }
+        if (fixtureCase.expected_message_length) {
+          assert.equal(
+            error.errorMessage?.length,
+            fixtureCase.expected_message_length,
+            `${fixtureCase.id}: message length mismatch`,
+          );
+        }
+        if (fixtureCase.expected_message_suffix) {
+          assert.equal(
+            error.errorMessage?.endsWith(fixtureCase.expected_message_suffix),
+            true,
+            `${fixtureCase.id}: message suffix mismatch`,
+          );
+        }
+        return true;
+      },
+      `${fixtureCase.id}: getTransactionStatus should reject`,
+    );
+  }
+});
+
+test("getTransactionStatus surfaces nested JSON error message and reject code", async () => {
+  const hashHex = "ab".repeat(32);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 400,
+      jsonData: {
+        error: {
+          detail: "missing build claim for transaction status",
+        },
+      },
+      headers: {
+        "content-type": "application/json",
+        "x-iroha-reject-code": "build_claim_missing",
+      },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.getTransactionStatus(hashHex),
+    (error) => {
+      assert(error instanceof ToriiHttpError);
+      assert.equal(error.status, 400);
+      assert.equal(error.rejectCode, "build_claim_missing");
+      assert.equal(error.code, "build_claim_missing");
+      assert.equal(error.errorMessage, "missing build claim for transaction status");
+      return true;
+    },
+  );
+});
+
+test("getTransactionStatus surfaces errors-array messages", async () => {
+  const hashHex = "cd".repeat(32);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 422,
+      jsonData: {
+        errors: [{ message: "status query validation failed" }, { message: "hash malformed" }],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.getTransactionStatus(hashHex),
+    (error) => {
+      assert(error instanceof ToriiHttpError);
+      assert.equal(error.status, 422);
+      assert.equal(error.errorMessage, "status query validation failed");
+      return true;
+    },
+  );
+});
+
+test("getTransactionStatus falls back to compact JSON for message-less errors", async () => {
+  const hashHex = "ef".repeat(32);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 422,
+      jsonData: { status: "invalid", code: "E123" },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, maxRetries: 0 });
+  await assert.rejects(
+    () => client.getTransactionStatus(hashHex),
+    (error) => {
+      assert(error instanceof ToriiHttpError);
+      assert.equal(error.status, 422);
+      assert.equal(error.errorMessage, '{"code":"E123","status":"invalid"}');
+      return true;
+    },
+  );
+});
+
+test("getTransactionStatus truncates oversized plain-text errors", async () => {
+  const hashHex = "10".repeat(32);
+  const oversized = "x".repeat(700);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 422,
+      textBody: oversized,
+      headers: { "content-type": "text/plain" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, maxRetries: 0 });
+  await assert.rejects(
+    () => client.getTransactionStatus(hashHex),
+    (error) => {
+      assert(error instanceof ToriiHttpError);
+      assert.equal(error.status, 422);
+      assert.equal(error.errorMessage.length, 515);
+      assert.equal(error.errorMessage.endsWith("..."), true);
+      return true;
+    },
+  );
 });
 
 test("getTransactionStatus rejects invalid hashes", async () => {

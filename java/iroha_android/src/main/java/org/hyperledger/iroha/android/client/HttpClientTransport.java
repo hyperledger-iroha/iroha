@@ -640,19 +640,11 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   private static String extractRejectCode(final TransportResponse response) {
-    if (response == null || response.headers() == null) {
+    if (response == null) {
       return null;
     }
-    final List<String> values = response.headers().get("x-iroha-reject-code");
-    if (values == null || values.isEmpty()) {
-      return null;
-    }
-    for (final String value : values) {
-      if (value != null && !value.isBlank()) {
-        return value.trim();
-      }
-    }
-    return null;
+    return HttpErrorMessageExtractor.extractRejectCode(
+        response.headers(), "x-iroha-reject-code");
   }
 
   private static String resolveAuthority(final TransportRequest request) {
@@ -866,27 +858,12 @@ public final class HttpClientTransport implements IrohaClient {
 
   private static TransactionStatusHttpException buildPipelineStatusHttpException(
       final String hashHex, final ClientResponse response) {
-    final String bodyPreview = decodeBodyPreview(response.body());
+    final String bodyPreview = HttpErrorMessageExtractor.extractMessage(response.body());
     return new TransactionStatusHttpException(
         hashHex,
         response.statusCode(),
         response.rejectCode().orElse(null),
         bodyPreview);
-  }
-
-  private static String decodeBodyPreview(final byte[] body) {
-    if (body == null || body.length == 0) {
-      return null;
-    }
-    final String text = new String(body, StandardCharsets.UTF_8).trim();
-    if (text.isEmpty()) {
-      return null;
-    }
-    final int maxLength = 512;
-    if (text.length() <= maxLength) {
-      return text;
-    }
-    return text.substring(0, maxLength) + "...";
   }
 
   private void notifyRequest(final TransportRequest request) {

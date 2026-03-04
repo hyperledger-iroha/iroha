@@ -9203,7 +9203,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       body: body,
                                       headers: ["Content-Type": "application/json"])
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 202)
+        try ensureStatus(response, equals: 202, responseBody: data)
         return try decodeJSON(ToriiAccountOnboardingResponse.self, from: data)
     }
 
@@ -9601,7 +9601,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         if response.statusCode == 404 {
             return nil
         }
-        try ensureStatus(response, equals: 200)
+        try ensureStatus(response, equals: 200, responseBody: data)
         if data.isEmpty {
             throw ToriiClientError.emptyBody
         }
@@ -10120,7 +10120,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         if response.statusCode == 404 {
             return nil
         }
-        try ensureStatus(response, equals: 200)
+        try ensureStatus(response, equals: 200, responseBody: data)
         if data.isEmpty {
             throw ToriiClientError.emptyBody
         }
@@ -10153,11 +10153,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let trimmed = try ToriiConnectJSON.trimmedNonEmpty(sid, field: "sid")
         let encoded = encodePathComponent(trimmed)
         let request = try makeRequest(path: "/v1/connect/session/\(encoded)", method: .delete)
-        let (_, response) = try await send(request)
+        let (data, response) = try await send(request)
         if response.statusCode == 404 {
             return false
         }
-        try ensureStatus(response, equals: 204)
+        try ensureStatus(response, equals: 204, responseBody: data)
         return true
     }
 
@@ -10187,7 +10187,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                         "Accept": "application/json"
                                       ])
         let (data, response) = try await send(request)
-        try ensureStatus(response, in: 200..<203)
+        try ensureStatus(response, in: 200..<203, responseBody: data)
         if data.isEmpty {
             return nil
         }
@@ -10269,7 +10269,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let encodedId = encodePathComponent(normalizedId)
         let request = try makeRequest(path: "/v1/zk/attachments/\(encodedId)")
         let (data, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         let contentType = response.value(forHTTPHeaderField: "Content-Type")
         return (data, contentType)
     }
@@ -10278,8 +10278,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let normalizedId = try ToriiRequestValidation.normalizedNonEmpty(id, field: "id")
         let encodedId = encodePathComponent(normalizedId)
         let request = try makeRequest(path: "/v1/zk/attachments/\(encodedId)", method: .delete)
-        let (_, response) = try await send(request)
-        try ensureStatus(response, equals: 204)
+        let (data, response) = try await send(request)
+        try ensureStatus(response, equals: 204, responseBody: data)
     }
 
     // MARK: Data Availability (Async)
@@ -10574,7 +10574,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             ]
         )
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 202)
+        try ensureStatus(response, equals: 202, responseBody: data)
         let payload = try decodeJSON(ToriiDaIngestSubmitPayload.self, from: data)
         let headerValue = response.value(forHTTPHeaderField: ToriiPdpCommitmentHeader)
         if let artifactDirectory {
@@ -10679,8 +10679,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let normalizedId = try ToriiRequestValidation.normalizedNonEmpty(id, field: "id")
         let encodedId = encodePathComponent(normalizedId)
         let request = try makeRequest(path: "/v1/zk/prover/reports/\(encodedId)", method: .delete)
-        let (_, response) = try await send(request)
-        try ensureStatus(response, equals: 204)
+        let (data, response) = try await send(request)
+        try ensureStatus(response, equals: 204, responseBody: data)
     }
 
     public func countProverReports(filter: ToriiProverReportsFilter? = nil) async throws -> UInt64 {
@@ -10753,8 +10753,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
                                       headers: ["Content-Type": "application/json"])
-        let (_, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300)
+        let (data, response) = try await send(request)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
     }
 
     public func fetchContractManifest(codeHashHex: String) async throws -> ToriiContractManifestRecord {
@@ -10807,7 +10807,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let request = try makeRequest(path: "/v1/health",
                                       headers: ["Accept": "text/plain"])
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 200)
+        try ensureStatus(response, equals: 200, responseBody: data)
         return try decodeUTF8String(from: data, context: "health")
     }
 
@@ -10818,7 +10818,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
         let request = try makeRequest(path: "/v1/metrics", headers: headers)
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 200)
+        try ensureStatus(response, equals: 200, responseBody: data)
         if asText {
             return .text(try decodeUTF8String(from: data, context: "metrics (text)"))
         }
@@ -10898,7 +10898,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       body: body,
                                       headers: ["Content-Type": "application/json"])
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 200)
+        try ensureStatus(response, equals: 200, responseBody: data)
         return try decodeJSON(ToriiRuntimeUpgradeActionResponse.self, from: data)
     }
 
@@ -10910,7 +10910,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       body: Data(),
                                       headers: ["Content-Type": "application/json"])
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 200)
+        try ensureStatus(response, equals: 200, responseBody: data)
         return try decodeJSON(ToriiRuntimeUpgradeActionResponse.self, from: data)
     }
 
@@ -10922,7 +10922,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       body: Data(),
                                       headers: ["Content-Type": "application/json"])
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 200)
+        try ensureStatus(response, equals: 200, responseBody: data)
         return try decodeJSON(ToriiRuntimeUpgradeActionResponse.self, from: data)
     }
 
@@ -10958,8 +10958,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       method: .post,
                                       body: body,
                                       headers: ["Content-Type": "application/json"])
-        let (_, response) = try await send(request)
-        try ensureStatus(response, equals: 202)
+        let (data, response) = try await send(request)
+        try ensureStatus(response, equals: 202, responseBody: data)
     }
 
     public func updateVerifyingKey(_ requestBody: ToriiVerifyingKeyUpdateRequest) async throws {
@@ -10969,8 +10969,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       method: .post,
                                       body: body,
                                       headers: ["Content-Type": "application/json"])
-        let (_, response) = try await send(request)
-        try ensureStatus(response, equals: 202)
+        let (data, response) = try await send(request)
+        try ensureStatus(response, equals: 202, responseBody: data)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -11613,7 +11613,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       body: data,
                                       headers: headers)
         let (responseData, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: responseData)
         guard !responseData.isEmpty else { return nil }
         let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
         if contentType.contains("application/x-norito") {
@@ -11636,7 +11636,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         )
         let (data, response) = try await send(request)
         if response.statusCode == 404 { return nil }
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         guard !data.isEmpty else { return nil }
         return try decodeJSON(ToriiPipelineTransactionStatus.self, from: data)
     }
@@ -11645,7 +11645,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let request = try makeRequest(path: "/v1/pipeline/recovery/\(height)")
         let (data, response) = try await send(request)
         if response.statusCode == 404 { return nil }
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         guard !data.isEmpty else { return nil }
         return try decodeJSON(ToriiPipelineRecovery.self, from: data)
     }
@@ -11653,14 +11653,14 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getTimeNow() async throws -> ToriiTimeSnapshot {
         let request = try makeRequest(path: "/v1/time/now")
         let (data, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         return try decodeJSON(ToriiTimeSnapshot.self, from: data)
     }
 
     public func getTimeStatus() async throws -> ToriiTimeStatusSnapshot {
         let request = try makeRequest(path: "/v1/time/status")
         let (data, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         return try decodeJSON(ToriiTimeStatusSnapshot.self, from: data)
     }
 
@@ -11981,18 +11981,94 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return raw
     }
 
-    private func ensureStatus(_ response: HTTPURLResponse, in range: Range<Int>) throws {
+    private static func trimErrorBodyText(_ text: String, maxLength: Int = 512) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maxLength else { return trimmed }
+        let index = trimmed.index(trimmed.startIndex, offsetBy: maxLength)
+        return "\(trimmed[..<index])..."
+    }
+
+    private static func extractErrorMessage(from jsonObject: Any) -> String? {
+        if let text = jsonObject as? String {
+            let trimmed = trimErrorBodyText(text)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let list = jsonObject as? [Any] {
+            for value in list {
+                if let nested = extractErrorMessage(from: value) {
+                    return nested
+                }
+            }
+            return nil
+        }
+        guard let object = jsonObject as? [String: Any] else { return nil }
+        let candidateKeys = [
+            "message",
+            "error",
+            "errors",
+            "detail",
+            "details",
+            "reason",
+            "rejection_reason",
+            "description"
+        ]
+        var caseInsensitiveValues: [String: Any] = [:]
+        for (key, value) in object {
+            let normalized = key.lowercased()
+            if caseInsensitiveValues[normalized] == nil {
+                caseInsensitiveValues[normalized] = value
+            }
+        }
+        for key in candidateKeys {
+            guard let value = caseInsensitiveValues[key] else { continue }
+            if let nested = extractErrorMessage(from: value) {
+                return nested
+            }
+        }
+        return nil
+    }
+
+    private static func httpStatusMessage(response: HTTPURLResponse, responseBody: Data?) -> String {
+        let fallback = HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
+        guard let responseBody, !responseBody.isEmpty else { return fallback }
+        if let jsonObject = try? JSONSerialization.jsonObject(with: responseBody, options: []) {
+            if let detail = extractErrorMessage(from: jsonObject), !detail.isEmpty {
+                return detail
+            }
+            if JSONSerialization.isValidJSONObject(jsonObject),
+               let compact = try? JSONSerialization.data(withJSONObject: jsonObject, options: [.sortedKeys]),
+               let jsonText = String(data: compact, encoding: .utf8) {
+                let detail = trimErrorBodyText(jsonText)
+                if !detail.isEmpty {
+                    return detail
+                }
+            }
+        }
+        if let text = String(data: responseBody, encoding: .utf8) {
+            let detail = trimErrorBodyText(text)
+            if !detail.isEmpty {
+                return detail
+            }
+        }
+        return fallback
+    }
+
+    private func ensureStatus(_ response: HTTPURLResponse,
+                              in range: Range<Int>,
+                              responseBody: Data? = nil) throws {
         guard range.contains(response.statusCode) else {
             throw ToriiClientError.httpStatus(code: response.statusCode,
-                                              message: HTTPURLResponse.localizedString(forStatusCode: response.statusCode),
+                                              message: Self.httpStatusMessage(response: response, responseBody: responseBody),
                                               rejectCode: rejectCode(from: response))
         }
     }
 
-    private func ensureStatus(_ response: HTTPURLResponse, equals code: Int) throws {
+    private func ensureStatus(_ response: HTTPURLResponse,
+                              equals code: Int,
+                              responseBody: Data? = nil) throws {
         guard response.statusCode == code else {
             throw ToriiClientError.httpStatus(code: response.statusCode,
-                                              message: HTTPURLResponse.localizedString(forStatusCode: response.statusCode),
+                                              message: Self.httpStatusMessage(response: response, responseBody: responseBody),
                                               rejectCode: rejectCode(from: response))
         }
     }
@@ -12001,7 +12077,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                       acceptedStatus: Range<Int> = 200..<300,
                       allowEmptyBody: Bool = false) async throws -> Data {
         let (data, response) = try await send(request)
-        try ensureStatus(response, in: acceptedStatus)
+        try ensureStatus(response, in: acceptedStatus, responseBody: data)
         if data.isEmpty && !allowEmptyBody {
             throw ToriiClientError.emptyBody
         }
@@ -12108,7 +12184,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       body: payload,
                                       headers: ["Content-Type": "application/json"])
         let (data, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         return try decodeJSON(Response.self, from: data)
     }
 
@@ -12117,7 +12193,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                                         responseType: Response.Type) async throws -> Response {
         let request = try makeRequest(path: path, queryItems: queryItems)
         let (data, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         return try decodeJSON(Response.self, from: data)
     }
 
