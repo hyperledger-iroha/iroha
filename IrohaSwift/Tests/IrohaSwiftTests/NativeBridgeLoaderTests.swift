@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import XCTest
 @testable import IrohaSwift
 
@@ -44,6 +45,73 @@ final class NativeBridgeLoaderTests: XCTestCase {
 
         let status = NoritoBridgeLoader.validateForTests(at: target.path, allowUntrustedLocation: false)
         XCTAssertEqual(status, .pathDenied(path: target.path))
+    }
+
+    func testArtifactManifestHashOverridesPinnedHashForLocalBridge() throws {
+        let original = try bundledBridgeBinary()
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let target = tempDir
+            .appendingPathComponent(original.identifier, isDirectory: true)
+            .appendingPathComponent("NoritoBridge.framework", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bridgeURL = target.appendingPathComponent("NoritoBridge")
+        try FileManager.default.copyItem(at: original.url, to: bridgeURL)
+
+        var tamperedData = try Data(contentsOf: bridgeURL)
+        if !tamperedData.isEmpty {
+            tamperedData[0] ^= 0xA5
+        }
+        try tamperedData.write(to: bridgeURL, options: .atomic)
+
+        let hashHex = SHA256.hash(data: tamperedData).map { String(format: "%02x", $0) }.joined()
+        let manifestURL = tempDir.appendingPathComponent("NoritoBridge.artifacts.json")
+        let manifest = """
+        {
+          "version": "\(NoritoBridgeLoader.expectedVersion)",
+          "hashes": {
+            "\(original.identifier)": "\(hashHex)"
+          }
+        }
+        """
+        try manifest.write(to: manifestURL, atomically: true, encoding: .utf8)
+
+        let status = NoritoBridgeLoader.validateForTests(at: bridgeURL.path, allowUntrustedLocation: true)
+        XCTAssertEqual(status, .valid(path: bridgeURL.path, identifier: original.identifier))
+    }
+
+    func testArtifactManifestAtDistRootOverridesPinnedHashForXcframeworkLayout() throws {
+        let original = try bundledBridgeBinary()
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let target = tempDir
+            .appendingPathComponent("NoritoBridge.xcframework", isDirectory: true)
+            .appendingPathComponent(original.identifier, isDirectory: true)
+            .appendingPathComponent("NoritoBridge.framework", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bridgeURL = target.appendingPathComponent("NoritoBridge")
+        try FileManager.default.copyItem(at: original.url, to: bridgeURL)
+
+        var tamperedData = try Data(contentsOf: bridgeURL)
+        if !tamperedData.isEmpty {
+            tamperedData[0] ^= 0x5A
+        }
+        try tamperedData.write(to: bridgeURL, options: .atomic)
+
+        let hashHex = SHA256.hash(data: tamperedData).map { String(format: "%02x", $0) }.joined()
+        let manifestURL = tempDir.appendingPathComponent("NoritoBridge.artifacts.json")
+        let manifest = """
+        {
+          "version": "\(NoritoBridgeLoader.expectedVersion)",
+          "hashes": {
+            "\(original.identifier)": "\(hashHex)"
+          }
+        }
+        """
+        try manifest.write(to: manifestURL, atomically: true, encoding: .utf8)
+
+        let status = NoritoBridgeLoader.validateForTests(at: bridgeURL.path, allowUntrustedLocation: true)
+        XCTAssertEqual(status, .valid(path: bridgeURL.path, identifier: original.identifier))
     }
 
     private func bundledBridgeBinary() throws -> (url: URL, identifier: String) {
