@@ -62,6 +62,8 @@ javascript/iroha_js/native/*.node
 javascript/iroha_js/scripts/release_matrix.targets.json
 build/*
 dist/*
+# Keep the dist directory itself tracked via marker file when tooling needs it.
+!dist/.gitkeep
 fastpq.trace/*
 cargo_err.txt
 cargo_out.txt
