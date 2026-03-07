@@ -47,14 +47,7 @@ function normalizeAuthority(authority) {
   if (!raw) {
     return normalizeAccountId(authority, "authority");
   }
-  const canonical = normalizeAccountId(raw, "authority");
-  // Keep validated `<signatory>@<domain>` authority literals in raw form when
-  // canonical normalization collapses them into IH58. Some runtimes still
-  // require the signatory literal for transaction-authority parsing.
-  if (raw.includes("@") && !canonical.includes("@")) {
-    return raw;
-  }
-  return canonical;
+  return normalizeAccountId(raw, "authority");
 }
 
 function resolveNativeBinding() {
@@ -141,7 +134,7 @@ export function resignSignedTransaction(signedTransaction, privateKey) {
 }
 
 /**
- * Convert a versioned signed transaction payload into Norito bytes for legacy Torii `/transaction` submit routes.
+ * Convert a versioned signed transaction payload into Norito bytes for Torii `/transaction` submit routes.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @returns {Buffer}
  */
@@ -637,7 +630,7 @@ function resolveAssetIdForMint(assetDefinitionId, mint) {
   if (!mint.accountId) {
     throw new TypeError("mint.accountId is required when mint.assetId is not provided");
   }
-  return `${assetDefinitionId}#${mint.accountId}`;
+  return `${assetDefinitionId}##${mint.accountId}`;
 }
 
 function normalizeDomainMintSpec(value, context) {
@@ -679,10 +672,10 @@ function normalizeAssetDefinitionMintSpec(assetDefinitionId, value, context) {
     if (
       assetIdValue !== undefined &&
       assetIdValue !== null &&
-      assetIdValue !== `${assetDefinitionId}#${accountIdValue}`
+      assetIdValue !== `${assetDefinitionId}##${accountIdValue}`
     ) {
       throw new TypeError(
-        `${context}.assetId must match ${assetDefinitionId}#${accountIdValue} when accountId is provided`,
+        `${context}.assetId must match ${assetDefinitionId}##${accountIdValue} when accountId is provided`,
       );
     }
   }

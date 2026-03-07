@@ -1,12 +1,14 @@
 import Foundation
 
-/// Account literal kinds that require resolution before offline Norito encoding.
+/// Legacy account literal kinds retained for compatibility with existing resolver APIs.
+/// Strict account-id parsing no longer accepts these literal forms at runtime.
 public enum OfflineAccountResolutionKind: String {
     case uaid
     case opaque
 }
 
-/// Resolver hook for mapping UAID/opaque account literals to canonical account IDs.
+/// Legacy resolver hook retained for source compatibility.
+/// Strict offline account-id encoding no longer consults this resolver.
 public typealias OfflineAccountResolver = (OfflineAccountResolutionKind, String) throws -> String?
 
 /// Global registry for offline account ID resolution.
@@ -15,9 +17,8 @@ public enum OfflineAccountResolvers {
     /// Access is synchronized through `resolverQueue`.
     private static nonisolated(unsafe) var resolver: OfflineAccountResolver?
 
-    /// Register a resolver (or clear by passing `nil`) used by offline Norito encoding.
-    /// The resolver should return an IH58 account address (preferred) or a valid
-    /// `<public_key>@<domain>` string; UAID/opaque literals are rejected.
+    /// Register a resolver (or clear by passing `nil`) for compatibility with older call sites.
+    /// Strict offline account-id encoding does not consult this resolver.
     public static func setAccountResolver(_ newResolver: OfflineAccountResolver?) {
         resolverQueue.sync {
             resolver = newResolver
@@ -299,13 +300,7 @@ enum OfflineNorito {
     }
 
     static func encodeAssetId(_ assetId: String) throws -> Data {
-        let parts = try OfflineAssetIdParts.parse(assetId)
-        var writer = OfflineNoritoWriter()
-        let accountPayload = try encodeAccountId(parts.accountId)
-        writer.writeField(accountPayload)
-        let definitionPayload = try encodeAssetDefinitionId(name: parts.definitionName, domain: parts.definitionDomain)
-        writer.writeField(definitionPayload)
-        return writer.data
+        try decodeNoritoAssetIdLiteral(assetId)
     }
 
     static func encodeAssetDefinitionId(name: String, domain: String) throws -> Data {
@@ -341,62 +336,12 @@ enum OfflineNorito {
         if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
             throw OfflineNoritoError.invalidAccountId(trimmed)
         }
-        if trimmed.contains("#") || trimmed.contains("$") {
+        if trimmed.contains("@") || trimmed.contains("#") || trimmed.contains("$") {
             throw OfflineNoritoError.invalidAccountId(trimmed)
-        }
-        let lowered = trimmed.lowercased()
-        if lowered.hasPrefix("uaid:") || lowered.hasPrefix("opaque:") {
-            let kind: OfflineAccountResolutionKind = lowered.hasPrefix("uaid:") ? .uaid : .opaque
-            let canonical = try canonicalizeAccountLiteral(trimmed, kind: kind)
-            if let resolved = try OfflineAccountResolvers.resolve(kind, value: canonical) {
-                let resolvedLowered = resolved.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                if resolvedLowered.hasPrefix("uaid:") || resolvedLowered.hasPrefix("opaque:") {
-                    throw OfflineNoritoError.invalidAccountId(trimmed)
-                }
-                return try resolveAccountId(resolved)
-            }
-            throw OfflineNoritoError.invalidAccountId(trimmed)
-        }
-        if trimmed.contains("@") {
-            let (addressPart, domainPart) = try parseAccountId(trimmed)
-            let canonicalDomain: String
-            do {
-                canonicalDomain = try AccountAddress.canonicalizeDomainLabel(domainPart)
-            } catch {
-                throw OfflineNoritoError.invalidAccountId(trimmed)
-            }
-            if let (address, _) = try? AccountAddress.parseAny(addressPart,
-                                                               expectedPrefix: defaultNetworkPrefix) {
-                if address.matchesDomainLabel(canonicalDomain) {
-                    return ResolvedAccountId(address: address, domainLabel: canonicalDomain)
-                }
-
-                // Some deployments provide a bare IH58 address encoded with the default-domain selector
-                // and pair it with an explicit FI domain (`IH58@hbl`). Rebase default-domain IH58
-                // addresses to the requested domain instead of rejecting them.
-                if let rebased = try? address.rebasedFromDefaultDomain(to: canonicalDomain),
-                   rebased.matchesDomainLabel(canonicalDomain) {
-                    return ResolvedAccountId(address: rebased, domainLabel: canonicalDomain)
-                }
-
-                throw OfflineNoritoError.invalidAccountId(trimmed)
-            }
-            guard let parsed = try parsePublicKeyMultihash(addressPart, raw: trimmed) else {
-                throw OfflineNoritoError.invalidAccountId(trimmed)
-            }
-            let address: AccountAddress
-            do {
-                address = try AccountAddress.fromAccount(domain: canonicalDomain,
-                                                         publicKey: parsed.publicKey,
-                                                         algorithm: algorithmLabel(parsed.algorithm))
-            } catch {
-                throw OfflineNoritoError.invalidAccountId(trimmed)
-            }
-            return ResolvedAccountId(address: address, domainLabel: canonicalDomain)
         }
         let address: AccountAddress
         do {
-            (address, _) = try AccountAddress.parseAny(trimmed, expectedPrefix: defaultNetworkPrefix)
+            (address, _) = try AccountAddress.parseEncoded(trimmed, expectedPrefix: defaultNetworkPrefix)
         } catch {
             throw OfflineNoritoError.invalidAccountId(trimmed)
         }
@@ -404,6 +349,27 @@ enum OfflineNorito {
             throw OfflineNoritoError.invalidAccountId(trimmed)
         }
         return ResolvedAccountId(address: address, domainLabel: domain)
+    }
+
+    private static func decodeNoritoAssetIdLiteral(_ raw: String) throws -> Data {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw OfflineNoritoError.invalidAssetId(raw)
+        }
+        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            throw OfflineNoritoError.invalidAssetId(raw)
+        }
+        let lower = trimmed.lowercased()
+        guard lower.hasPrefix("norito:") else {
+            throw OfflineNoritoError.invalidAssetId(raw)
+        }
+        let hex = String(trimmed.dropFirst("norito:".count))
+        guard !hex.isEmpty,
+              hex.count.isMultiple(of: 2),
+              let decoded = Data(hexString: hex) else {
+            throw OfflineNoritoError.invalidAssetId(raw)
+        }
+        return decoded
     }
 
     private static func parseAccountId(_ value: String) throws -> (String, String) {
@@ -747,110 +713,6 @@ enum OfflineNorito {
         let digits = "0123456789ABCDEF"
         let idx = digits.index(digits.startIndex, offsetBy: Int(value))
         return String(digits[idx])
-    }
-}
-
-struct OfflineAssetIdParts: Equatable {
-    let accountId: String
-    let definitionName: String
-    let definitionDomain: String
-
-    // Allow resolving common domain labels when asset IDs omit the definition domain (`asset##account`).
-    private static let fallbackDomainCandidates = [
-        "sora",
-        "wonderland",
-    ]
-
-    private static func containsReservedIdCharacters(_ value: String) -> Bool {
-        value.contains("@") || value.contains("#") || value.contains("$")
-    }
-
-    static func parse(_ raw: String) throws -> OfflineAssetIdParts {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let hashIndex = trimmed.lastIndex(of: "#") else {
-            throw OfflineNoritoError.invalidAssetId(raw)
-        }
-        let definitionCandidate = String(trimmed[..<hashIndex])
-        let accountId = String(trimmed[trimmed.index(after: hashIndex)...])
-        guard !definitionCandidate.isEmpty, !accountId.isEmpty else {
-            throw OfflineNoritoError.invalidAssetId(raw)
-        }
-        if definitionCandidate.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-            throw OfflineNoritoError.invalidAssetId(raw)
-        }
-        if accountId.rangeOfCharacter(from: .whitespacesAndNewlines) != nil
-            || accountId.contains("#")
-            || accountId.contains("$") {
-            throw OfflineNoritoError.invalidAccountId(accountId)
-        }
-        if accountId.contains("@") {
-            let parts = accountId.split(separator: "@", omittingEmptySubsequences: false)
-            guard parts.count == 2,
-                  !parts[0].isEmpty,
-                  !parts[1].isEmpty else {
-                throw OfflineNoritoError.invalidAccountId(accountId)
-            }
-        }
-        let parts = definitionCandidate.split(separator: "#", omittingEmptySubsequences: false)
-        guard parts.count == 2 else {
-            throw OfflineNoritoError.invalidAssetId(raw)
-        }
-        let name = String(parts[0])
-        let domainCandidate = String(parts[1])
-        guard !name.isEmpty,
-              !containsReservedIdCharacters(name) else {
-            throw OfflineNoritoError.invalidAssetId(raw)
-        }
-        let domain: String
-        if domainCandidate.isEmpty {
-            guard let derived = try deriveDomainFromAccount(accountId) else {
-                throw OfflineNoritoError.invalidAssetId(raw)
-            }
-            domain = derived
-        } else {
-            guard !containsReservedIdCharacters(domainCandidate) else {
-                throw OfflineNoritoError.invalidAssetId(raw)
-            }
-            do {
-                domain = try AccountAddress.canonicalizeDomainLabel(domainCandidate)
-            } catch {
-                throw OfflineNoritoError.invalidAssetId(raw)
-            }
-        }
-        return OfflineAssetIdParts(accountId: accountId, definitionName: name, definitionDomain: domain)
-    }
-
-    private static func deriveDomainFromAccount(_ accountId: String) throws -> String? {
-        if accountId.contains("@") {
-            let parts = accountId.split(separator: "@", omittingEmptySubsequences: false)
-            guard parts.count == 2,
-                  !parts[0].isEmpty,
-                  !parts[1].isEmpty else {
-                throw OfflineNoritoError.invalidAccountId(accountId)
-            }
-            let domainPart = String(parts[1])
-            do {
-                return try AccountAddress.canonicalizeDomainLabel(domainPart)
-            } catch {
-                throw OfflineNoritoError.invalidAccountId(accountId)
-            }
-        }
-        let lowered = accountId.lowercased()
-        if lowered.hasPrefix("uaid:") || lowered.hasPrefix("opaque:") {
-            return nil
-        }
-        if let parsed = try? AccountAddress.parseAny(accountId,
-                                                     expectedPrefix: AccountId.defaultNetworkPrefix) {
-            if parsed.0.matchesDomainLabel(AccountAddress.defaultDomainName) {
-                return AccountAddress.defaultDomainName
-            }
-            for candidate in fallbackDomainCandidates {
-                if parsed.0.matchesDomainLabel(candidate) {
-                    return candidate
-                }
-            }
-        }
-        return nil
     }
 }
 

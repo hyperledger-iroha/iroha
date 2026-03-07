@@ -35,9 +35,9 @@ Bu sənəd `iroha_data_model` qutusunda həyata keçirilən və iş sahəsində 
 - `IdBox`: Dəstəklənən hər hansı ID (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `AssetId`, Kotodama, Kotodama, Kotodama, `DomainId`, `DomainId`, Kotodama) üçün cəmi tipli zərf `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Ümumi axınlar və tək bir növ kimi Norito kodlaşdırması üçün faydalıdır.
 - `ChainId`: Əməliyyatlarda təkrar qorunma üçün istifadə edilən qeyri-şəffaf zəncir identifikatoru.İdentifikatorların sətir formaları (`Display`/`FromStr` ilə gediş-gəliş):
 - `DomainId`: `name` (məsələn, `wonderland`).
-- `AccountId`: IH58, Sora sıxılmış (`sora…`) və kanonik hex kodekləri (`AccountAddress::to_ih58`, I100080X, I1008030) ifşa edən `AccountAddress` vasitəsilə kodlanmış kanonik identifikator `canonical_hex`, `parse_any`). IH58 üstünlük verilən hesab formatıdır; `sora…` forması yalnız Sora üçün UX üçün ikinci ən yaxşısıdır. İnsanlara uyğun marşrutlaşdırma ləqəbi `alias@domain` UX üçün qorunur, lakin artıq səlahiyyətli identifikator kimi qəbul edilmir. Torii `AccountAddress::parse_any` vasitəsilə daxil olan sətirləri normallaşdırır. Hesab identifikatorları həm tək açarlı, həm də multisig nəzarətçiləri dəstəkləyir.
+- `AccountId`: IH58, Sora sıxılmış (`sora…`) və kanonik hex kodekləri (`AccountAddress::to_ih58`, I100080X, I1008030) ifşa edən `AccountAddress` vasitəsilə kodlanmış kanonik identifikator `canonical_hex`, `parse_encoded`). IH58 üstünlük verilən hesab formatıdır; `sora…` forması yalnız Sora üçün UX üçün ikinci ən yaxşısıdır. İnsanlara uyğun marşrutlaşdırma ləqəbi `alias@domain` UX üçün qorunur, lakin artıq səlahiyyətli identifikator kimi qəbul edilmir. Torii `AccountAddress::parse_encoded` vasitəsilə daxil olan sətirləri normallaşdırır. Hesab identifikatorları həm tək açarlı, həm də multisig nəzarətçiləri dəstəkləyir.
 - `AssetDefinitionId`: `asset#domain` (məsələn, `xor#soramitsu`).
-- `AssetId`: `asset#domain#account` və ya tərif domeni hesab domeninə bərabərdirsə `asset##account` stenoqrafiyası, burada `account` kanonik `AccountId` sətiridir (IH58 üstünlük verilir).
+- `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`: `nft$domain` (məsələn, `rose$garden`).
 - `PeerId`: `public_key` (peer bərabərliyi açıq açarladır).
 

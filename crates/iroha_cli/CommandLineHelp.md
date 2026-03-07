@@ -1299,7 +1299,7 @@ Retrieve details of a specific asset
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in the format `asset#domain#account` or `asset##account`
+* `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
 
 
 
@@ -1373,7 +1373,7 @@ Increase the quantity of an asset
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in the format `asset#domain#account` or `asset##account`
+* `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
 * `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
 
@@ -1386,7 +1386,7 @@ Decrease the quantity of an asset
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in the format `asset#domain#account` or `asset##account`
+* `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
 * `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
 
@@ -1399,7 +1399,7 @@ Transfer an asset between accounts
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in the format `asset#domain#account` or `asset##account`
+* `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
 * `-t`, `--to <TO>` — Destination account identifier (IH58 (preferred) or sora compressed literal)
 * `-q`, `--quantity <QUANTITY>` — Transfer amount (integer or decimal)
 * `--ensure-destination` — Attempt to register the destination when implicit receive is disabled

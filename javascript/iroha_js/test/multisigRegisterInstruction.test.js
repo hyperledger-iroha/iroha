@@ -71,7 +71,7 @@ test("multisig register builder rejects controller domain drift", () => {
       }),
     (error) =>
       error instanceof ValidationError &&
-      error.code === ValidationErrorCode.INVALID_STRING &&
-      /domain other-domain/.test(error.message),
+      error.code === ValidationErrorCode.INVALID_ACCOUNT_ID &&
+      /must not include '@domain'/i.test(error.message),
   );
 });

@@ -620,7 +620,7 @@ pub struct UaidPortfolioTotals {
 /// Asset position grouped under a UAID-backed account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UaidPortfolioAsset {
-    /// Fully-qualified asset identifier (`asset#domain#account`, or `asset##account` when domains match).
+    /// Canonical encoded asset identifier (`norito:<hex>`).
     pub asset_id: String,
     /// Asset definition identifier.
     pub asset_definition_id: String,
@@ -15702,7 +15702,7 @@ mod tests {
         let ticket_id = RepairTicketId("REP-401".to_string());
         let manifest_digest = [0x11; 32];
         let provider_id = [0x22; 32];
-        let worker_id = "worker@wonderland".to_string();
+        let worker_id = ALICE_ID.to_string();
         let idempotency_key = "claim-401".to_string();
         let claimed_at_unix = 1_700_000_001;
         let payload = RepairWorkerSignaturePayloadV1 {
@@ -15749,7 +15749,7 @@ mod tests {
         let ticket_id = RepairTicketId("REP-402".to_string());
         let manifest_digest = [0x33; 32];
         let provider_id = [0x44; 32];
-        let worker_id = "worker@wonderland".to_string();
+        let worker_id = ALICE_ID.to_string();
         let idempotency_key = "complete-402".to_string();
         let completed_at_unix = 1_700_000_002;
         let resolution_notes = Some("repaired".to_string());
@@ -15801,7 +15801,7 @@ mod tests {
         let ticket_id = RepairTicketId("REP-403".to_string());
         let manifest_digest = [0x55; 32];
         let provider_id = [0x66; 32];
-        let worker_id = "worker@wonderland".to_string();
+        let worker_id = ALICE_ID.to_string();
         let idempotency_key = "fail-403".to_string();
         let failed_at_unix = 1_700_000_003;
         let reason = "checksum_mismatch".to_string();
@@ -15854,7 +15854,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-404".to_string()),
             provider_id: [0x77; 32],
             manifest_digest: [0x88; 32],
-            auditor_account: "auditor@wonderland".to_string(),
+            auditor_account: ALICE_ID.to_string(),
             proposed_penalty_nano: 500,
             submitted_at_unix: 1_700_000_004,
             rationale: "sla_missed".to_string(),

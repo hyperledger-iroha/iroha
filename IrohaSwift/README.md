@@ -188,11 +188,11 @@ App-facing Torii endpoints accept optional `X-Iroha-Account` /
 `X-Iroha-Signature` headers. Use `ToriiCanonicalRequest` to build them:
 
 ```swift
-let url = URL(string: "https://torii.example/v1/accounts/alice@wonderland/assets?limit=5")!
+let url = URL(string: "https://torii.example/v1/accounts/<account_ih58>/assets?limit=5")!
 let headers = try ToriiCanonicalRequest.buildHeaders(
     method: "get",
     url: url,
-    accountId: "alice@wonderland",
+    accountId: "<account_ih58>",
     privateKey: Data(repeating: 7, count: 32)
 )
 var request = URLRequest(url: url)
@@ -213,9 +213,9 @@ if #available(iOS 15.0, macOS 12.0, *) {
     let params = ToriiExplorerInstructionsParams(page: 1,
                                                  perPage: 50,
                                                  kind: "Transfer",
-                                                 assetId: "rose#wonderland#alice@wonderland")
+                                                 assetId: "rose#wonderland#<account_ih58>")
     let transfers = try await torii.getExplorerTransfers(params: params,
-                                                         matchingAccount: "alice@wonderland")
+                                                         matchingAccount: "<account_ih58>")
     for record in transfers {
         switch record.details {
         case .asset(let asset):
@@ -241,7 +241,7 @@ If you prefer a flattened, UI-ready shape, ask for transfer summaries:
 if #available(iOS 15.0, macOS 12.0, *) {
     let summaries = try await torii.getExplorerTransferSummaries(
         params: ToriiExplorerInstructionsParams(page: 1, perPage: 50, kind: "Transfer"),
-        matchingAccount: "alice@wonderland"
+        matchingAccount: "<account_ih58>"
     )
     for summary in summaries {
         print(summary.direction, summary.amount, summary.assetDefinitionId)
@@ -268,7 +268,7 @@ For a one-shot transaction history helper, use `getTransactionHistory` (alias of
 
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
-    let history = try await torii.getTransactionHistory(accountId: "alice@wonderland",
+    let history = try await torii.getTransactionHistory(accountId: "<account_ih58>",
                                                         page: 1,
                                                         perPage: 50)
     for item in history {
@@ -286,7 +286,7 @@ To stream multiple pages, use `iterateAccountTransferHistory`:
 
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
-    for try await item in torii.iterateAccountTransferHistory(accountId: "alice@wonderland",
+    for try await item in torii.iterateAccountTransferHistory(accountId: "<account_ih58>",
                                                               perPage: 25) {
         print(item.direction, item.amount, item.assetDefinitionId)
     }
@@ -748,7 +748,7 @@ let request = try ShieldRequest(
     chainId: chainId,
     authority: AccountId.make(publicKey: keypair.publicKey, domain: "wonderland"),
     assetDefinitionId: "rose#wonderland",
-    fromAccountId: "alice@wonderland",
+    fromAccountId: "<account_ih58>",
     amount: "42",
     noteCommitment: noteCommitmentBytes, // 32 bytes
     payload: payload,
@@ -801,7 +801,7 @@ exporting the exact JSON layout Torii expects:
 let specBuilder = MultisigSpecBuilder()
     .setQuorum(3)
     .setTransactionTtl(milliseconds: 86_400_000) // 1 day
-    .addSignatory(accountId: "alice@wonderland", weight: 2)
+    .addSignatory(accountId: "<account_ih58>", weight: 2)
     .addSignatory(accountId: "bob@wonderland", weight: 1)
     .addSignatory(accountId: "carol@wonderland", weight: 1)
 
@@ -882,7 +882,7 @@ Register, update, and list verifying keys via the Torii helpers:
 if #available(iOS 15, macOS 12, *) {
     let vkBytes = Data(repeating: 0xAA, count: 32)
     var request = ToriiVerifyingKeyRegisterRequest(
-        authority: "alice@wonderland",
+        authority: "<account_ih58>",
         privateKey: "ed25519:...",
         backend: "halo2/ipa",
         name: "payments_v1",
@@ -974,7 +974,7 @@ if #available(iOS 15, macOS 12, *) {
     guard let vkBytes = Data(base64Encoded: "AQID") else { return }
 
     var register = ToriiVerifyingKeyRegisterRequest(
-        authority: "alice@wonderland",
+        authority: "<account_ih58>",
         privateKey: "ed0120...",
         backend: "halo2/ipa",
         name: "vk_main",

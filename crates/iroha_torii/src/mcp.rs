@@ -12893,7 +12893,7 @@ mod tests {
     use super::*;
 
     const TEST_ACCOUNT_IH58: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
-    const TEST_ASSET_ID: &str = "rose##6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const TEST_ASSET_ID: &str = "norito:deadbeef";
 
     #[test]
     fn tool_registry_skips_ws_and_sse_routes() {

@@ -78,7 +78,7 @@ Parse accepts:
   optional `@<domain>` suffixes for explicit routing hints.
 - `<label>@<domain>` aliases resolved through the account-alias resolver
   (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<public_key>@<domain>` where `public_key` is the canonical multihash string.
+- `<alias>@<domain>` for domain-scoped alias routing; account IDs themselves are canonical encoded literals (IH58 or compressed).
 - `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
@@ -156,9 +156,9 @@ Rust 数据模型公开了单个规范的有效负载表示
 - **规范十六进制** – 规范字节的易于调试的 `0x…` 编码
   信封。
 
-`AccountAddress::parse_any` 自动检测 IH58（首选）、压缩（`sora`，第二好）或规范十六进制
+`AccountAddress::parse_encoded` 自动检测 IH58（首选）、压缩（`sora`，第二好）或规范十六进制
 （仅限 `0x...`；裸十六进制被拒绝）输入并返回解码的有效负载和检测到的负载
-`AccountAddressFormat`。 Torii 现在调用 `parse_any` 作为 ISO 20022 补充
+`AccountAddressFormat`。 Torii 现在调用 `parse_encoded` 作为 ISO 20022 补充
 寻址并存储规范的十六进制形式，因此元数据保持确定性
 无论原始表示如何。
 
@@ -330,7 +330,7 @@ tag-specific payload, then move on to the controller bytes.
   细分：`0x02` 标头、`0x00` 选择器（隐式默认值）、`0x00` 控制器标签、`0x01` 曲线 id (Ed25519)、`0x20` 密钥长度，后跟 32 字节密钥负载。
 - **本地域摘要（`treasury`，种子字节 `0x01`）**  
   规范十六进制：`0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`。  
-  细分：`0x02` 标头、选择器标签 `0x01` 加上摘要 `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`，后跟单密钥有效负载（`0x00` 标签、`0x01` 曲线 id、`0x20` 长度、32 字节 Ed25519键）。单元测试 (`account::address::tests::parse_any_accepts_all_formats`) 通过 `AccountAddress::parse_any` 断言下面的 V1 向量，保证工具可以依赖十六进制、IH58（首选）和压缩（`sora`，第二佳）形式的规范有效负载。使用 `cargo run -p iroha_data_model --example address_vectors` 重新生成扩展夹具组。
+  细分：`0x02` 标头、选择器标签 `0x01` 加上摘要 `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`，后跟单密钥有效负载（`0x00` 标签、`0x01` 曲线 id、`0x20` 长度、32 字节 Ed25519键）。单元测试 (`account::address::tests::parse_encoded_accepts_all_formats`) 通过 `AccountAddress::parse_encoded` 断言下面的 V1 向量，保证工具可以依赖十六进制、IH58（首选）和压缩（`sora`，第二佳）形式的规范有效负载。使用 `cargo run -p iroha_data_model --example address_vectors` 重新生成扩展夹具组。
 
 |域名 |种子字节 |规范六角 |压缩 (`sora`) |
 |------------------------|----------|--------------------------------------------------------------------------------------------------------|------------|
@@ -378,7 +378,7 @@ Sora Nexus 网络默认为 `chain_discriminant = 0x02F1`
   工具链。
 - **机器助手：** 发布 Rust、TypeScript/JavaScript、Python 的编解码器
   和 Kotlin 涵盖 IH58 和压缩格式（`AccountAddress::to_ih58`，
-  `AccountAddress::parse_any` 及其 SDK 等效项）。 CAIP-10 助手是
+  `AccountAddress::parse_encoded` 及其 SDK 等效项）。 CAIP-10 助手是
   未来的工作。
 
 #### 2.7 确定性 IH58 别名
@@ -397,7 +397,7 @@ Sora Nexus 网络默认为 `chain_discriminant = 0x02F1`
 - **编码：** `encode_ih58()` 将前缀字节与规范连接起来
   有效负载并附加从 Blake2b-512 派生的 16 位校验和，其中固定
   前缀 `IH58PRE` (`b"IH58PRE" || prefix || payload`)。结果通过 `bs58` 进行 Base58 编码。
-  CLI/SDK 帮助程序公开相同的过程，并且 `AccountAddress::parse_any`
+  CLI/SDK 帮助程序公开相同的过程，并且 `AccountAddress::parse_encoded`
   通过 `decode_ih58` 反转它。
 
 #### 2.8 规范文本测试向量
@@ -623,7 +623,7 @@ HTTP 端点，以便审核员可以逐字重播验证步骤。
   明确标记为可能更改的描述性元数据，而 IH58 是
   稳定的地址。
 - **输入规范化：** Torii 和 SDK 接受 IH58（首选）/sora（次佳）/0x
-  地址加上 `alias@domain`、`public_key@domain`、`uaid:…` 和
+  地址加上 `alias@domain`、`uaid:…` 和
   `opaque:…` 形式，然后规范化为 IH58 进行输出。没有
   严格模式切换；原始电话/电子邮件标识符必须保留在账本之外
   通过 UAID/不透明映射。
@@ -780,7 +780,7 @@ SDK、钱包和 Torii 表面应与人类可读的表面一起显示
 ## 后续步骤
 
 1、IH58编码登陆`iroha_data_model`（`AccountAddress::to_ih58`，
-   `parse_any`);继续将固定装置/测试移植到每个 SDK 并清除任何
+   `parse_encoded`);继续将固定装置/测试移植到每个 SDK 并清除任何
    Bech32m 占位符。
 2. 使用 `chain_discriminant` 扩展配置模式并导出合理的
   现有测试/开发设置的默认值。 **（完成：`common.chain_discriminant`

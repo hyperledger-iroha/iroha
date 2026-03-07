@@ -43,9 +43,9 @@ build is unavailable), run tests with `npm run test:js`, which sets
 binding when present.
 
 In JS-only mode `noritoEncodeInstruction`/`noritoDecodeInstruction` operate on
-canonicalised JSON strings (UTF-8 bytes) instead of the binary Norito codec so
-tooling can keep running without the Rust bridge. For canonical Norito payloads
-build the native module first.
+plain JSON strings (UTF-8 bytes) instead of the binary Norito codec so tooling
+can keep running without the Rust bridge. For canonical Norito payloads build
+the native module first.
 
 > **ESM-only:** The package ships as pure ESM. Use dynamic `import()` from
 > CommonJS (`const { ToriiClient } = await import("@iroha/iroha-js/torii");`)
@@ -1484,7 +1484,7 @@ Each helper normalises/validates the response payloads:
   sorted dataspace/account tree.
 - `getUaidBindings` mirrors the Space Directory bindings map so tooling can
   confirm which Torii account IDs are active per dataspace. Pass
-  `addressFormat: "compressed"` to retrieve `sora…@domain` literals when you
+  `addressFormat: "compressed"` to retrieve `sora…` literals when you
   need QR-friendly output; IH58 strings remain the default.
 - `getUaidManifests` validates lifecycle metadata, manifest hashes, allow/deny
   entries, and optional dataspace filters (set `dataspaceId` to restrict the

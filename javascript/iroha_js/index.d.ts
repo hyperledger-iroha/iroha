@@ -31,7 +31,7 @@ export interface SignedTransactionResult {
   hash: Buffer;
 }
 
-export type AccountAddressFormat = "ih58" | "compressed" | "canonical_hex";
+export type AccountAddressFormat = "ih58" | "compressed";
 
 export const AccountAddressErrorCode: {
   readonly UNSUPPORTED_ALGORITHM: "ERR_UNSUPPORTED_ALGORITHM";
@@ -142,13 +142,12 @@ export class AccountAddress {
   static fromCanonicalBytes(
     bytes: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
   ): AccountAddress;
-  static fromCanonicalHex(encoded: string): AccountAddress;
   static fromIH58(
     encoded: string,
     expectedPrefix?: number | string | bigint,
   ): AccountAddress;
   static fromCompressedSora(encoded: string): AccountAddress;
-  static parseAny(
+  static parseEncoded(
     input: string,
     expectedPrefix?: number | string | bigint,
     expectedDomain?: string,
@@ -449,8 +448,10 @@ export interface ProofAttachmentInput {
 }
 
 /**
- * Canonicalise an account identifier (`multihash@domain`) into uppercase
- * multihash form (leaves non-multihash identifiers unchanged).
+ * Canonicalise an account identifier to IH58.
+ *
+ * Accepts IH58/sora encoded account IDs plus alias forms (`<alias>@domain`).
+ * Canonical hex account literals are rejected.
  */
 export function normalizeAccountId(value: string, name?: string): string;
 

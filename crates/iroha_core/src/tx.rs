@@ -7532,7 +7532,7 @@ pub mod tests {
     }
 
     fn format_asset_id_for_snapshot(asset_id: &AssetId) -> String {
-        format!("{}#{}", asset_id.definition(), asset_id.account())
+        asset_id.canonical_encoded()
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]

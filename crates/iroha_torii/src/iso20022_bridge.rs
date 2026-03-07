@@ -160,13 +160,6 @@ fn parse_account_address_literal(input: &str) -> (Option<String>, AddressParseOb
                 AddressParseObservation::from_success(input, format, &address),
             )
         }
-        Ok((_, AccountAddressFormat::CanonicalHex)) => {
-            let code = AccountAddressError::UnsupportedAddressFormat.code_str();
-            (
-                Some(input.to_owned()),
-                AddressParseObservation::from_error(input, code),
-            )
-        }
         Err(err) => {
             let code = err.code_str();
             (

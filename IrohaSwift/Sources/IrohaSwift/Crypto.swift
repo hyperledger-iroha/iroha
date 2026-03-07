@@ -384,13 +384,16 @@ public enum AccountId {
     /// Default network prefix for IH58 encoding (Iroha mainnet).
     public static let defaultNetworkPrefix: UInt16 = 0x02F1
 
-    /// Build a raw public-key account literal: `ed0120<HEX>@<domain>`.
+    /// Build an encoded account id literal (IH58).
     ///
-    /// Note: This is not the canonical IH58 rendering; it is a raw multihash-hex account literal. The multihash hex
-    /// follows Iroha canonical casing (varint bytes lower, payload bytes upper).
+    /// The `domain` argument is retained for source compatibility and domain-label validation only.
+    /// Account ids are domainless subject identifiers in the current model.
     public static func make(publicKey: Data, domain: String) -> String {
-        let hex = publicKey.map { String(format: "%02X", $0) }.joined()
-        return "ed0120" + hex + "@" + domain
+        do {
+            return try makeIH58(publicKey: publicKey, domain: domain)
+        } catch {
+            preconditionFailure("Invalid account id inputs: \(error)")
+        }
     }
 
     /// Build IH58 format account ID string required by Torii API.
@@ -416,12 +419,10 @@ public enum AccountId {
         return ih58
     }
 
-    /// Normalizes account id literals for equality checks across systems that sometimes append `@domain` to IH58
-    /// addresses.
+    /// Normalizes account id literals for equality checks.
     ///
     /// Semantics:
-    /// - If the literal is an `AccountAddress` (IH58/compressed/canonical hex), returns the canonical IH58 rendering
-    ///   of the address and ignores any `@domain` suffix.
+    /// - If the literal is an encoded `AccountAddress` (IH58/compressed), returns the canonical IH58 rendering.
     /// - Otherwise, trims outer whitespace and (when possible) canonicalizes the domain label casing in `addr@domain`
     ///   forms.
     public static func normalizeForComparison(
@@ -431,13 +432,7 @@ public enum AccountId {
         let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
 
-        let addressCandidate: String
-        if let at = trimmed.firstIndex(of: "@") {
-            addressCandidate = String(trimmed[..<at])
-        } else {
-            addressCandidate = trimmed
-        }
-        if let (address, _) = try? AccountAddress.parseAny(addressCandidate, expectedPrefix: expectedPrefix),
+        if let (address, _) = try? AccountAddress.parseEncoded(trimmed, expectedPrefix: expectedPrefix),
            let ih58 = try? address.toIH58(networkPrefix: expectedPrefix) {
             return ih58
         }

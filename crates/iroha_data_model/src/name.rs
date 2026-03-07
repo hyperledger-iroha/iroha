@@ -66,7 +66,7 @@ impl Name {
         if candidate.chars().any(|ch| FORBIDDEN_CHARS.contains(&ch)) {
             #[allow(clippy::non_ascii_literal)]
             return Err(ParseError {
-                reason: "The `@` character is reserved for `account@domain` constructs, \
+                reason: "The `@` character is reserved for scoped alias/public-key constructs, \
                         `#` for `asset#domain`, and `$` — for `nft$domain`.",
             });
         }

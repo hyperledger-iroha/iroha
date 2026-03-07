@@ -580,8 +580,7 @@ fn parse_metadata_target(kind: u8, object: String) -> BridgeResult<MetadataTarge
             .map_err(|_| BridgeError::MetadataTarget),
         1 => parse_account_id(object).map(MetadataTarget::Account),
         2 => parse_asset_definition(object).map(MetadataTarget::AssetDefinition),
-        3 => object
-            .parse::<AssetId>()
+        3 => AssetId::parse_encoded(&object)
             .map(MetadataTarget::Asset)
             .map_err(|_| BridgeError::MetadataTarget),
         _ => Err(BridgeError::MetadataTarget),
@@ -944,7 +943,7 @@ fn compute_offline_receipt_challenge(
     let receiver = AccountId::parse_encoded(&receiver_raw)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|_| BridgeError::OfflineReceiver)?;
-    let asset = AssetId::from_str(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
+    let asset = AssetId::parse_encoded(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
     let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
     let sender_certificate_id =
         Hash::from_str(&sender_certificate_id_raw).map_err(|_| BridgeError::OfflineNonce)?;
@@ -985,7 +984,7 @@ fn encode_offline_spend_receipt_payload(
     let to = AccountId::parse_encoded(&to_raw)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|_| BridgeError::Destination)?;
-    let asset = AssetId::from_str(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
+    let asset = AssetId::parse_encoded(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
     let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
     let platform_proof: OfflinePlatformProof =
         norito::json::from_str(&platform_proof_json).map_err(|_| BridgeError::OfflineSerialize)?;
@@ -1539,7 +1538,6 @@ pub unsafe extern "C" fn connect_norito_account_address_parse(
             (ACCOUNT_ADDRESS_FORMAT_IH58, network_prefix)
         }
         AccountAddressFormat::Compressed => (ACCOUNT_ADDRESS_FORMAT_COMPRESSED, 0),
-        AccountAddressFormat::CanonicalHex => unreachable!("canonical-hex rejected above"),
     };
     unsafe {
         *out_format = format_code;
@@ -8266,7 +8264,7 @@ mod offline_challenge_tests {
     }
 
     fn asset_literal(asset: &AssetId) -> String {
-        format!("{}#{}", asset.definition, account_literal(&asset.account))
+        asset.canonical_encoded()
     }
 
     fn account_with_cstring(domain: &str, seed: u8) -> (AccountId, CString) {
@@ -8291,7 +8289,10 @@ mod offline_challenge_tests {
         let (_, receiver_cstr) = account_with_cstring("bank", 99);
         let asset_definition: AssetDefinitionId = "usd#bank".parse().expect("asset definition");
         let asset_id = AssetId::new(asset_definition, controller_account.clone());
-        let asset_cstr = CString::new(asset_literal(&asset_id)).expect("asset identifier string");
+        let asset_literal = asset_literal(&asset_id);
+        let reparsed_asset = AssetId::parse_encoded(&asset_literal).expect("asset literal parse");
+        assert_eq!(reparsed_asset, asset_id);
+        let asset_cstr = CString::new(asset_literal).expect("asset identifier string");
         let amount = CString::new("500").expect("amount");
         let issued_at_ms: u64 = 1_700_000_000_000;
         let sender_certificate_id = Hash::new(b"sender-certificate");
@@ -10055,7 +10056,7 @@ mod offline_receipt_challenge_tests {
     }
 
     fn asset_literal(asset: &AssetId) -> String {
-        format!("{}#{}", asset.definition, account_literal(&asset.account))
+        asset.canonical_encoded()
     }
 
     #[test]
@@ -10063,13 +10064,16 @@ mod offline_receipt_challenge_tests {
         let _guard = super::test_support::chain_discriminant_guard();
         let receiver = sample_account_id();
         let asset = sample_asset_id(&receiver);
+        let asset_literal = asset_literal(&asset);
+        let reparsed_asset = AssetId::parse_encoded(&asset_literal).expect("asset literal parse");
+        assert_eq!(reparsed_asset, asset);
         let sender_certificate_id = Hash::new(b"receipt-certificate").to_string();
         let nonce = Hash::new(b"receipt-nonce").to_string();
         let result = compute_offline_receipt_challenge(
             "".to_string(),
             "inv-1".to_string(),
             account_literal(&receiver),
-            asset_literal(&asset),
+            asset_literal,
             "1".to_string(),
             0,
             sender_certificate_id,
@@ -10083,13 +10087,16 @@ mod offline_receipt_challenge_tests {
         let _guard = super::test_support::chain_discriminant_guard();
         let receiver = sample_account_id();
         let asset = sample_asset_id(&receiver);
+        let asset_literal = asset_literal(&asset);
+        let reparsed_asset = AssetId::parse_encoded(&asset_literal).expect("asset literal parse");
+        assert_eq!(reparsed_asset, asset);
         let sender_certificate_id = Hash::new(b"receipt-certificate").to_string();
         let nonce = Hash::new(b"receipt-nonce").to_string();
         let result = compute_offline_receipt_challenge(
             "test-chain".to_string(),
             "inv-1".to_string(),
             account_literal(&receiver),
-            asset_literal(&asset),
+            asset_literal,
             "1.5".to_string(),
             0,
             sender_certificate_id,
@@ -12558,12 +12565,15 @@ mod sorafs_tests {
         let platform_proof_json =
             norito::json::to_json(&platform_proof).expect("platform proof json");
         let certificate_id_hex = hex::encode(certificate.certificate_id().as_ref());
+        let asset_literal = asset.canonical_encoded();
+        let reparsed_asset = AssetId::parse_encoded(&asset_literal).expect("asset literal parse");
+        assert_eq!(reparsed_asset, asset);
 
         let jni_bytes = encode_offline_spend_receipt_payload(
             hex::encode(tx_id.as_ref()),
             sender.to_string(),
             receiver.to_string(),
-            asset.to_string(),
+            asset_literal,
             "75".to_string(),
             1_700_000_500_000,
             "INV-42".to_string(),

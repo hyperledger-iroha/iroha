@@ -5804,7 +5804,7 @@ mod pointer_abi_tests {
     fn tlv_decode_valid_account_id() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000_000);
-        // Prepare a valid TLV for AccountId("alice@wonderland") at INPUT_START
+        // Prepare a valid TLV for a canonical encoded AccountId at INPUT_START.
         let acc: AccountId = fixture_account("alice");
         let payload = norito::to_bytes(&acc).expect("encode account id");
         let tlv = make_tlv(1u16, &payload);

@@ -35,9 +35,9 @@ Este documento explica las estructuras, identificadores, rasgos y protocolos que
 - `IdBox`: Un sobre tipo suma para cualquier ID admitido (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Útil para flujos genéricos y codificación Norito como un solo tipo.
 - `ChainId`: Identificador de cadena opaco utilizado para protección de reproducción en transacciones.Formas de cadena de ID (ida y vuelta con `Display`/`FromStr`):
 - `DomainId`: `name` (por ejemplo, `wonderland`).
-- `AccountId`: identificador canónico codificado a través de `AccountAddress`, que expone IH58, Sora comprimido (`sora…`) y códecs hexadecimales canónicos (`AccountAddress::to_ih58`, `to_compressed_sora`, `canonical_hex`, `parse_any`). IH58 es el formato de cuenta preferido; el formulario `sora…` es el segundo mejor para UX exclusivo de Sora. El alias de enrutamiento amigable para los humanos `alias@domain` se conserva para UX, pero ya no se trata como el identificador autorizado. Torii normaliza las cadenas entrantes a través de `AccountAddress::parse_any`. Los ID de cuenta admiten controladores de clave única y multifirma.
+- `AccountId`: identificador canónico codificado a través de `AccountAddress`, que expone IH58, Sora comprimido (`sora…`) y códecs hexadecimales canónicos (`AccountAddress::to_ih58`, `to_compressed_sora`, `canonical_hex`, `parse_encoded`). IH58 es el formato de cuenta preferido; el formulario `sora…` es el segundo mejor para UX exclusivo de Sora. El alias de enrutamiento amigable para los humanos `alias@domain` se conserva para UX, pero ya no se trata como el identificador autorizado. Torii normaliza las cadenas entrantes a través de `AccountAddress::parse_encoded`. Los ID de cuenta admiten controladores de clave única y multifirma.
 - `AssetDefinitionId`: `asset#domain` (por ejemplo, `xor#soramitsu`).
-- `AssetId`: `asset#domain#account` o abreviatura `asset##account` si el dominio de definición es igual al dominio de la cuenta, donde `account` es la cadena canónica `AccountId` (se prefiere IH58).
+- `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`: `nft$domain` (por ejemplo, `rose$garden`).
 - `PeerId`: `public_key` (la igualdad entre pares es por clave pública).
 

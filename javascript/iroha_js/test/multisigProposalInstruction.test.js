@@ -3,7 +3,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildProposeMultisigInstruction, ValidationError } from "../src/index.js";
+import {
+  buildProposeMultisigInstruction,
+  ValidationError,
+  ValidationErrorCode,
+} from "../src/index.js";
 import { MultisigSpecBuilder } from "../src/multisig.js";
 import { AccountAddress } from "../src/address.js";
 
@@ -98,6 +102,9 @@ test("multisig propose builder propagates domain drift", () => {
         instructions: [{ Log: { Level: "INFO", message: "hello" } }],
         spec,
       }),
-    (error) => error instanceof ValidationError && /domain other-domain/.test(error.message),
+    (error) =>
+      error instanceof ValidationError &&
+      error.code === ValidationErrorCode.INVALID_ACCOUNT_ID &&
+      /must not include '@domain'/i.test(error.message),
   );
 });

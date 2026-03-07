@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 
 /**
  * Representation of a transaction payload prior to Norito encoding.
@@ -78,8 +80,9 @@ public final class TransactionPayload {
   }
 
   public static final class Builder {
+    private static final String DEFAULT_AUTHORITY = defaultAuthority();
     private String chainId = "00000000";
-    private String authority = "anonymous@wonderland";
+    private String authority = DEFAULT_AUTHORITY;
     private long creationTimeMs = System.currentTimeMillis();
     private Executable executable = Executable.ivm(new byte[0]);
     private Optional<Long> timeToLiveMs = Optional.empty();
@@ -92,7 +95,7 @@ public final class TransactionPayload {
     }
 
     public Builder setAuthority(final String authority) {
-      this.authority = normalize(authority, "authority");
+      this.authority = AccountIdLiteral.extractIh58Address(normalize(authority, "authority"));
       return this;
     }
 
@@ -161,6 +164,17 @@ public final class TransactionPayload {
         throw new IllegalArgumentException(field + " must not be blank");
       }
       return value;
+    }
+
+    private static String defaultAuthority() {
+      final byte[] publicKey = new byte[32];
+      try {
+        return AccountAddress.fromAccount(
+                AccountAddress.DEFAULT_DOMAIN_NAME, publicKey, "ed25519")
+            .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+      } catch (final AccountAddress.AccountAddressException ex) {
+        throw new IllegalStateException("Failed to construct default encoded authority", ex);
+      }
     }
   }
 }

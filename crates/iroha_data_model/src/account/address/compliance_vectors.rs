@@ -400,10 +400,10 @@ pub fn compliance_vectors_json() -> Value {
         AccountAddress::from_compressed_sora(&compressed_bad_checksum).unwrap_err();
 
     let canonical_invalid = canonical_invalid_hex(&single_default.encodings);
-    let err_invalid_hex = AccountAddress::parse_any(&canonical_invalid, None).unwrap_err();
+    let err_invalid_hex = AccountAddress::parse_encoded(&canonical_invalid, None).unwrap_err();
 
     let canonical_trailing = canonical_with_trailing_zero(&single_default.encodings);
-    let err_trailing = AccountAddress::parse_any(&canonical_trailing, None).unwrap_err();
+    let err_trailing = AccountAddress::parse_encoded(&canonical_trailing, None).unwrap_err();
 
     let primary_multisig = multisig_cases
         .first()
@@ -412,7 +412,7 @@ pub fn compliance_vectors_json() -> Value {
     multisig_truncated.truncate(multisig_truncated.len().saturating_sub(4));
     let multisig_truncated_hex = format!("0x{}", encode_upper(&multisig_truncated));
     let err_multisig_truncated =
-        AccountAddress::parse_any(&multisig_truncated_hex, None).unwrap_err();
+        AccountAddress::parse_encoded(&multisig_truncated_hex, None).unwrap_err();
 
     let negative_cases = vec![
         json_obj!({

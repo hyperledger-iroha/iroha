@@ -85,7 +85,7 @@ public final class SignedTransactionHasherTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", seed))
-            .setAuthority("alice@wonderland")
+            .setAuthority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
             .setCreationTimeMs(1_700_000_000_000L + seed)
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)

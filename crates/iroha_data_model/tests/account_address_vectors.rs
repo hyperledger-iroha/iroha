@@ -5,10 +5,7 @@ use std::{path::Path, str::FromStr};
 use hex::{FromHex, encode_upper};
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
-    account::{
-        AccountAddress, AccountAddressError, AccountAddressFormat, AccountId, MultisigMember,
-        MultisigPolicy,
-    },
+    account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
     domain::DomainId,
     name::Name,
 };
@@ -221,18 +218,12 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         case.case_id
     );
 
-    // Canonical parse via parse_any
-    let (parsed_any, format_any) = AccountAddress::parse_any(&case.encodings.canonical_hex, None)
-        .expect("parse canonical hex");
-    assert_eq!(
-        format_any,
-        AccountAddressFormat::CanonicalHex,
-        "{} parse_any should detect canonical hex",
-        case.case_id
-    );
-    assert_eq!(
-        parsed_any, canonical_address,
-        "{} canonical hex mismatch",
+    // Strict parser must reject canonical hex literals.
+    let err = AccountAddress::parse_encoded(&case.encodings.canonical_hex, None)
+        .expect_err("canonical hex must be rejected by strict parser");
+    assert!(
+        matches!(err, AccountAddressError::UnsupportedAddressFormat),
+        "{} canonical hex should be unsupported",
         case.case_id
     );
 
@@ -390,7 +381,7 @@ fn validate_negative_case(case: &NegativeCase, default_prefix: u16) {
             assert_error(&err, &case.expected_error, &case.case_id);
         }
         "canonical_hex" => {
-            let err = AccountAddress::parse_any(&case.input, None)
+            let err = AccountAddress::parse_encoded(&case.input, None)
                 .expect_err("canonical case should fail");
             assert_error(&err, &case.expected_error, &case.case_id);
         }

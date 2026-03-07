@@ -10,9 +10,10 @@ TLV Layout (INPUT region)
 Examples (hex, spaces added for readability)
 
 - AccountId (type_id=0x0001, version=1)
-  - Payload (UTF‑8): `"alice@wonderland"` → `616c69636540776f6e6465726c616e64`
+  - Payload (UTF‑8): canonical encoded account literal (IH58 or compressed), for example:
+    - `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`
   - TLV (no hash filled):
-    - `00 01` | `01` | `00 00 00 12` | `61 6c 69 63 65 40 77 6f 6e 64 65 72 6c 61 6e 64` | `00..00 (32 bytes)`
+    - `00 01` | `01` | `<len:be u32>` | `<utf8 bytes of encoded literal>` | `00..00 (32 bytes)`
 
 - AssetDefinitionId (0x0002, v1)
   - Payload: `"rose#wonderland"` → `726f736523776f6e6465726c616e64`
@@ -31,7 +32,8 @@ Examples (hex, spaces added for readability)
   - TLV: `00 05 01 00 00 00 19 72 6f 73 65 3a 75 75 69 64 3a 30 31 32 33 24 77 6f 6e 64 65 72 6c 61 6e 64 00..00`
 
 - AssetId (0x0007, v1)
-  - Payload (Norito of `AssetId { definition, account }`): e.g., `rose#wonderland@alice@wonderland` encoded per data model
+  - Payload: Norito-encoded `AssetId { definition, account }` bytes.
+  - Textual API representation is canonical encoded form: `norito:<hex>`.
   - TLV: `00 07 01 <len:be u32> <payload bytes> <hash:32>`
 
 - DomainId (0x0008, v1)

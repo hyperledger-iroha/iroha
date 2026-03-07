@@ -854,8 +854,8 @@ mod tests {
     fn parses_basic_comparisons() {
         let alice_account = sample_account(0x11);
         let bob_account = sample_account(0x22);
-        let alice_id = format!("{}@{}", alice_account, alice_account.domain());
-        let bob_id = format!("{}@{}", bob_account, bob_account.domain());
+        let alice_id = alice_account.to_string();
+        let bob_id = bob_account.to_string();
         let entry_eq_literal = sample_hash_literal(0x33);
         let entry_in_literal = sample_hash_literal(0x44);
         let entry_eq_hash: EntryHash = entry_eq_literal.parse().unwrap();

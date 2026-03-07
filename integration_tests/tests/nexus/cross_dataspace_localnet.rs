@@ -119,7 +119,12 @@ fn soak_iterations() -> usize {
 }
 
 fn localnet_builder() -> NetworkBuilder {
-    let gas_account_str = format!("{}@ivm", SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key());
+    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain should parse");
+    let gas_account_str = AccountId::new(
+        ivm_domain,
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+    )
+    .to_string();
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
         .without_npos_genesis_bootstrap()

@@ -517,7 +517,7 @@ To add assets to the account, you must first register an Asset Definition. Speci
 
 ```bash
 iroha ledger asset register --id "XOR#Soramitsu" --type Numeric
-iroha ledger asset mint --id "XOR##6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn" --quantity 1010
+iroha ledger asset mint --id "norito:<asset-id-hex>" --quantity 1010
 ```
 
 With this, you created `XOR#Soramitsu`, an asset of type `Numeric`, and then gave `1010` units of this asset to the account `6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn`.
@@ -527,7 +527,7 @@ With this, you created `XOR#Soramitsu`, an asset of type `Numeric`, and then gav
 You can use Query API to check that your instructions were applied and the _world_ is in the desired state. For example, to know how many units of a particular asset an account has, use `asset get` with the specified account and asset:
 
 ```bash
-iroha ledger asset get --id "XOR##6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+iroha ledger asset get --id "norito:<asset-id-hex>"
 ```
 
 This query returns the quantity of `XOR#Soramitsu` asset for the `6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn` account.

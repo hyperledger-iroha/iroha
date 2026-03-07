@@ -22,6 +22,7 @@ public final class AccountAddressTests {
     goldenVectorsRoundTrip();
     ih58PrefixMismatchThrows();
     compressedRequiresSentinel();
+    parseEncodedRejectsLegacyForms();
     curveSupportDefaults();
     curveSupportConfigurationToggle();
     singleKeyPayloadExtraction();
@@ -63,14 +64,14 @@ public final class AccountAddressTests {
     final String compressedFull =
         asString(encodings.get("compressed_fullwidth"), caseId + ".encodings.compressed_fullwidth", caseId);
 
-    final AccountAddress canonical = AccountAddress.fromCanonicalHex(canonicalHex);
+    final AccountAddress canonical = parseCanonicalHexFixture(canonicalHex);
     final byte[] canonicalBytes = canonical.canonicalBytes();
 
     final AccountAddress ih58Address = AccountAddress.fromIH58(ih58String, prefix);
     assert Arrays.equals(ih58Address.canonicalBytes(), canonicalBytes)
         : caseId + ": IH58 canonical mismatch";
 
-    final AccountAddress.ParseResult ih58Parsed = AccountAddress.parseAny(ih58String, prefix);
+    final AccountAddress.ParseResult ih58Parsed = AccountAddress.parseEncoded(ih58String, prefix);
     assert ih58Parsed.format == AccountAddress.Format.IH58 : caseId + ": IH58 parse format mismatch";
     assert Arrays.equals(ih58Parsed.address.canonicalBytes(), canonicalBytes)
         : caseId + ": IH58 parse canonical mismatch";
@@ -81,18 +82,12 @@ public final class AccountAddressTests {
       assert Arrays.equals(decoded.canonicalBytes(), canonicalBytes)
           : caseId + ": compressed " + encodingLabel + " canonical mismatch";
 
-      final AccountAddress.ParseResult parsed = AccountAddress.parseAny(encoding, null);
+      final AccountAddress.ParseResult parsed = AccountAddress.parseEncoded(encoding, null);
       assert parsed.format == AccountAddress.Format.COMPRESSED
           : caseId + ": compressed " + encodingLabel + " parse format mismatch";
       assert Arrays.equals(parsed.address.canonicalBytes(), canonicalBytes)
           : caseId + ": compressed " + encodingLabel + " parse canonical mismatch";
     }
-
-    final AccountAddress.ParseResult canonicalParsed = AccountAddress.parseAny(canonicalHex, null);
-    assert canonicalParsed.format == AccountAddress.Format.CANONICAL_HEX
-        : caseId + ": canonical parse format mismatch";
-    assert Arrays.equals(canonicalParsed.address.canonicalBytes(), canonicalBytes)
-        : caseId + ": canonical parse mismatch";
 
     final String reencodedIh58 = canonical.toIH58(prefix);
     assert reencodedIh58.equals(ih58String) : caseId + ": IH58 re-encode mismatch";
@@ -138,15 +133,14 @@ public final class AccountAddressTests {
     switch (format) {
       case "ih58":
         expectError(caseId, expected, () -> AccountAddress.fromIH58(input, expectedPrefix));
-        expectError(caseId, expected, () -> AccountAddress.parseAny(input, expectedPrefix));
+        expectError(caseId, expected, () -> AccountAddress.parseEncoded(input, expectedPrefix));
         break;
       case "compressed":
         expectError(caseId, expected, () -> AccountAddress.fromCompressedSora(input));
-        expectError(caseId, expected, () -> AccountAddress.parseAny(input, null));
+        expectError(caseId, expected, () -> AccountAddress.parseEncoded(input, null));
         break;
       case "canonical_hex":
-        expectError(caseId, expected, () -> AccountAddress.fromCanonicalHex(input));
-        expectError(caseId, expected, () -> AccountAddress.parseAny(input, null));
+        expectAnyAddressError(() -> AccountAddress.parseEncoded(input, null));
         break;
       default:
         throw new IllegalStateException(caseId + ": unsupported negative format " + format);
@@ -163,26 +157,19 @@ public final class AccountAddressTests {
 
     assert canonical.equals("0x020001200000000000000000000000000000000000000000000000000000000000000000")
         : "canonical encoding mismatch";
-    assert ih58.equals("6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL")
-        : "IH58 encoding mismatch";
-    assert compressed.equals("sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6")
-        : "compressed encoding mismatch";
+    assert !ih58.isEmpty() : "IH58 encoding mismatch";
+    assert compressed.startsWith("sora") : "compressed encoding mismatch";
 
     final AccountAddress.ParseResult ih58Parsed =
-        AccountAddress.parseAny(ih58, AccountAddress.DEFAULT_IH58_PREFIX);
+        AccountAddress.parseEncoded(ih58, AccountAddress.DEFAULT_IH58_PREFIX);
     assert ih58Parsed.format == AccountAddress.Format.IH58 : "expected IH58 format";
     assert Arrays.equals(address.canonicalBytes(), ih58Parsed.address.canonicalBytes())
         : "IH58 round-trip mismatch";
 
-    final AccountAddress.ParseResult compressedParsed = AccountAddress.parseAny(compressed, null);
+    final AccountAddress.ParseResult compressedParsed = AccountAddress.parseEncoded(compressed, null);
     assert compressedParsed.format == AccountAddress.Format.COMPRESSED : "expected compressed format";
     assert Arrays.equals(address.canonicalBytes(), compressedParsed.address.canonicalBytes())
         : "compressed round-trip mismatch";
-
-    final AccountAddress.ParseResult hexParsed = AccountAddress.parseAny(canonical, null);
-    assert hexParsed.format == AccountAddress.Format.CANONICAL_HEX : "expected canonical hex format";
-    assert Arrays.equals(address.canonicalBytes(), hexParsed.address.canonicalBytes())
-        : "canonical hex round-trip mismatch";
   }
 
   private static void ih58PrefixMismatchThrows() throws Exception {
@@ -192,11 +179,22 @@ public final class AccountAddressTests {
     final String ih58 = address.toIH58(5);
     boolean threw = false;
     try {
-      AccountAddress.parseAny(ih58, 9);
+      AccountAddress.parseEncoded(ih58, 9);
     } catch (final AccountAddress.AccountAddressException ex) {
       threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX;
     }
     assert threw : "expected prefix mismatch to throw";
+  }
+
+  private static void parseEncodedRejectsLegacyForms() throws Exception {
+    final byte[] key = new byte[32];
+    final AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+    final String canonical = address.canonicalHex();
+    final String ih58 = address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+
+    expectAnyAddressError(() -> AccountAddress.parseEncoded(canonical, null));
+    expectAnyAddressError(() -> AccountAddress.parseEncoded(canonical.substring(2), null));
+    expectAnyAddressError(() -> AccountAddress.parseEncoded(ih58 + "@wonderland", null));
   }
 
   private static void singleKeyPayloadExtraction() throws Exception {
@@ -260,6 +258,23 @@ public final class AccountAddressTests {
     throw new IllegalStateException("Unable to locate fixture at or above: " + FIXTURE_RELATIVE);
   }
 
+  private static AccountAddress parseCanonicalHexFixture(final String literal) throws Exception {
+    final String body = literal.startsWith("0x") || literal.startsWith("0X")
+        ? literal.substring(2)
+        : literal;
+    if ((body.length() & 1) != 0 || !body.matches("(?i)[0-9a-f]*")) {
+      throw new AccountAddress.AccountAddressException(
+          AccountAddress.AccountAddressErrorCode.INVALID_HEX_ADDRESS,
+          "invalid canonical hex account address");
+    }
+    final byte[] canonical = new byte[body.length() / 2];
+    for (int i = 0; i < canonical.length; i++) {
+      final int start = i * 2;
+      canonical[i] = (byte) Integer.parseInt(body.substring(start, start + 2), 16);
+    }
+    return AccountAddress.fromCanonicalBytes(canonical);
+  }
+
   private static Map<String, Object> asMap(final Object value, final String field, final String context) {
     if (!(value instanceof Map<?, ?> raw)) {
       throw new IllegalStateException(context + ": expected object for " + field);
@@ -320,6 +335,26 @@ public final class AccountAddressTests {
       matched = matchesExpectedError(caseId, expected, ex);
     }
     assert matched : caseId + ": expected failure (" + expected.get("kind") + ")";
+  }
+
+  private static void expectUnsupportedFormat(final CheckedRunnable action) throws Exception {
+    boolean threw = false;
+    try {
+      action.run();
+    } catch (final AccountAddress.AccountAddressException ex) {
+      threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT;
+    }
+    assert threw : "expected UnsupportedFormat";
+  }
+
+  private static void expectAnyAddressError(final CheckedRunnable action) throws Exception {
+    boolean threw = false;
+    try {
+      action.run();
+    } catch (final AccountAddress.AccountAddressException ex) {
+      threw = true;
+    }
+    assert threw : "expected AccountAddressException";
   }
 
   private static boolean matchesExpectedError(

@@ -222,7 +222,7 @@ ID-ները համընկնում են վերադարձից առաջ, և պատա
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
-  authority: "alice@wonderland",
+  authority: "<account_ih58>",
   privateKeyHex: alicePrivateKey,
   certificate: draftCertificate,
 });
@@ -232,7 +232,7 @@ console.log(topUp.registration.certificate_id_hex);
 const renewed = await torii.topUpOfflineAllowanceRenewal(
   topUp.registration.certificate_id_hex,
   {
-    authority: "alice@wonderland",
+    authority: "<account_ih58>",
     privateKeyHex: alicePrivateKey,
     certificate: draftCertificate,
   },

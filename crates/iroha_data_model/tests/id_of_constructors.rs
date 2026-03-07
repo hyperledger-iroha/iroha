@@ -29,9 +29,9 @@ fn asset_id_of_matches_parse() {
     let kp = KeyPair::random();
     let account = AccountId::of(domain.clone(), kp.public_key().clone());
     let def = AssetDefinitionId::of(domain, "rose".parse().unwrap());
-
-    let parsed: AssetId = format!("{def}#{account}").parse().unwrap();
     let via_of = AssetId::of(def.clone(), account);
+
+    let parsed = AssetId::parse_encoded(&via_of.to_string()).unwrap();
 
     assert_eq!(parsed, via_of);
     assert_eq!(format!("{parsed}"), format!("{via_of}"));

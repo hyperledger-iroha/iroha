@@ -73,7 +73,7 @@ Serde derives, visitors, JSON DOM helpers, and config loaders.
 > migration paths.
 >
 > **Status (Jan 25, 2026):** `AccountId`/`AssetId` JSON now includes an explicit
-> `@domain` suffix (e.g., `IH58@domain`, `asset##IH58@domain`) so decoding does
+> `@domain`canonical encoded literals (e.g., `IH58`, `asset##IH58`) so decoding does
 > not rely on a domain-selector resolver. Alias inputs such as `label@domain`
 > remain parseable via resolvers where configured.
 

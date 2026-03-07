@@ -874,10 +874,7 @@ fn build_registry(
 
 fn write_manifest(dir: &Path, alias: &str, include_privacy: bool) -> Result<()> {
     fs::create_dir_all(dir)?;
-    let validators = vec![
-        format!("{}@{}", ALICE_ID.signatory(), ALICE_ID.domain()),
-        format!("{}@{}", BOB_ID.signatory(), BOB_ID.domain()),
-    ];
+    let validators = vec![ALICE_ID.to_string(), BOB_ID.to_string()];
     let mut manifest = norito::json::native::Map::new();
     manifest.insert("lane".into(), norito::json!(alias));
     manifest.insert("governance".into(), norito::json!("council"));

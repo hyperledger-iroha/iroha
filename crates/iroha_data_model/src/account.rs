@@ -672,9 +672,6 @@ impl AccountId {
                     AccountAddressSource::Encoded(format),
                 ))
             }
-            Ok((_, AccountAddressFormat::CanonicalHex)) => {
-                Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT))
-            }
             Err(AccountAddressError::UnsupportedAddressFormat) => {
                 Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT))
             }
@@ -937,7 +934,7 @@ mod account_id_parsing_tests {
     #[test]
     fn from_str_rejects_base58_like_alias() {
         let alias_label = "primary";
-        let err = AccountAddress::parse_any(alias_label, Some(address::chain_discriminant()))
+        let err = AccountAddress::parse_encoded(alias_label, Some(address::chain_discriminant()))
             .expect_err("alias label should not parse as a valid address");
         assert_eq!(err.code_str(), "ERR_CHECKSUM_MISMATCH");
 
@@ -1326,7 +1323,7 @@ mod account_id_parsing_tests {
         let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
         let rendered = account.to_string();
         let (parsed, format) =
-            AccountAddress::parse_any(&rendered, None).expect("display should parse as IH58");
+            AccountAddress::parse_encoded(&rendered, None).expect("display should parse as IH58");
         match format {
             AccountAddressFormat::IH58 { network_prefix } => assert_eq!(network_prefix, 73),
             other => panic!("expected IH58 display, got {other:?}"),

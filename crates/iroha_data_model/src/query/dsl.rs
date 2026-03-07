@@ -1037,7 +1037,7 @@ mod committed_tx_predicate_tests {
         }
 
         fn id_str(&self) -> String {
-            format!("{}@{}", self.id, self.id.domain())
+            self.id.to_string()
         }
     }
 

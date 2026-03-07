@@ -66,7 +66,7 @@ Parse accepts:
   optional `@<domain>` suffixes for explicit routing hints.
 - `<label>@<domain>` aliases resolved through the account-alias resolver
   (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<public_key>@<domain>` where `public_key` is the canonical multihash string.
+- `<alias>@<domain>` for domain-scoped alias routing; account IDs themselves are canonical encoded literals (IH58 or compressed).
 - `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
@@ -144,9 +144,9 @@ agrega valor. El hexadecimal canónico sigue siendo una ayuda para la depuració
 - **Canonical hexadecimal**: una codificación `0x…` fácil de depurar del byte canónico
   sobre.
 
-`AccountAddress::parse_any` detecta automáticamente IH58 (preferido), comprimido (`sora`, segundo mejor) o hexadecimal canónico
+`AccountAddress::parse_encoded` detecta automáticamente IH58 (preferido), comprimido (`sora`, segundo mejor) o hexadecimal canónico
 (`0x...` únicamente; se rechaza el hexadecimal básico) ingresa y devuelve tanto la carga útil decodificada como la detectada.
-`AccountAddressFormat`. Torii ahora llama `parse_any` para ISO 20022 suplementario
+`AccountAddressFormat`. Torii ahora llama `parse_encoded` para ISO 20022 suplementario
 aborda y almacena la forma hexadecimal canónica para que los metadatos sigan siendo deterministas
 independientemente de la representación original.
 
@@ -322,7 +322,7 @@ Detalles clave de implementación:
   Hexadecimal canónico: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
   Desglose: encabezado `0x02`, etiqueta de selector `0x01` más resumen `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, seguido de la carga útil de una sola clave (`0x00` etiqueta, `0x01` ID de curva, `0x20` longitud, clave Ed25519 de 32 bytes).
 
-Las pruebas unitarias (`account::address::tests::parse_any_accepts_all_formats`) afirman los vectores V1 a continuación a través de `AccountAddress::parse_any`, lo que garantiza que las herramientas puedan confiar en la carga útil canónica en formas hexadecimales, IH58 (preferida) y comprimidas (`sora`, segunda mejor). Regenere el conjunto de accesorios extendido con `cargo run -p iroha_data_model --example address_vectors`.
+Las pruebas unitarias (`account::address::tests::parse_encoded_accepts_all_formats`) afirman los vectores V1 a continuación a través de `AccountAddress::parse_encoded`, lo que garantiza que las herramientas puedan confiar en la carga útil canónica en formas hexadecimales, IH58 (preferida) y comprimidas (`sora`, segunda mejor). Regenere el conjunto de accesorios extendido con `cargo run -p iroha_data_model --example address_vectors`.
 
 | Dominio | Byte semilla | Hexágono canónico | Comprimido (`sora`) |
 |-------------|-----------|-------------------------------------------------------------------------------|------------|
@@ -370,7 +370,7 @@ Los flujos pueden confiar en ellos palabra por palabra. Agregue `<address>@<doma
   cadenas de herramientas.
 - **Ayudantes de máquina:** Publicar códecs para Rust, TypeScript/JavaScript, Python,
   y Kotlin que cubre IH58 y formatos comprimidos (`AccountAddress::to_ih58`,
-  `AccountAddress::parse_any` y sus equivalentes de SDK). Los ayudantes del CAIP-10 son
+  `AccountAddress::parse_encoded` y sus equivalentes de SDK). Los ayudantes del CAIP-10 son
   trabajo futuro.
 
 #### 2.7 Alias ​​determinista IH58
@@ -389,7 +389,7 @@ Los flujos pueden confiar en ellos palabra por palabra. Agregue `<address>@<doma
 - **Codificación:** `encode_ih58()` concatena los bytes del prefijo con el canónico
   carga útil y agrega una suma de verificación de 16 bits derivada de Blake2b-512 con el valor fijo
   prefijo `IH58PRE` (`b"IH58PRE" || prefix || payload`). El resultado está codificado en Base58 mediante `bs58`.
-  Los ayudantes de CLI/SDK exponen el mismo procedimiento y `AccountAddress::parse_any`
+  Los ayudantes de CLI/SDK exponen el mismo procedimiento y `AccountAddress::parse_encoded`
   lo invierte a través de `decode_ih58`.
 
 #### 2.8 Vectores de prueba textuales normativos
@@ -617,7 +617,7 @@ sus billetes de cambio.
   claramente marcados como metadatos descriptivos que pueden cambiar, mientras que IH58 es el
   dirección estable.
 - **Canonicalización de entrada:** Torii y SDK aceptan IH58 (preferido)/sora (segundo mejor)/0x
-  direcciones más `alias@domain`, `public_key@domain`, `uaid:…`, y
+  direcciones más `alias@domain`, `uaid:…`, y
   `opaque:…` formularios, luego canonicalizarlos a IH58 para su salida. no hay
   alternancia de modo estricto; Los identificadores de teléfono/correo electrónico sin procesar deben mantenerse fuera del libro mayor.
   a través de UAID/mapeos opacos.
@@ -778,7 +778,7 @@ mensajes, además de orientación de solución recomendada.
 ## Próximos pasos
 
 1. La codificación IH58 llegó a `iroha_data_model` (`AccountAddress::to_ih58`,
-   `parse_any`); continuar transfiriendo accesorios/pruebas a cada SDK y purgando cualquier
+   `parse_encoded`); continuar transfiriendo accesorios/pruebas a cada SDK y purgando cualquier
    Marcadores de posición Bech32m.
 2. Amplíe el esquema de configuración con `chain_discriminant` y derive sensato
   valores predeterminados para configuraciones de prueba/desarrollo existentes. **(Hecho: `common.chain_discriminant`

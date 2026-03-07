@@ -692,26 +692,11 @@ mod tests {
     }
 
     fn fixture_asset(value: &str) -> AssetId {
-        if let Ok(asset) = AssetId::from_str(value) {
-            return asset;
-        }
-
-        let (definition_part, account_part) = value.rsplit_once('#').unwrap_or_else(|| {
-            panic!("fixture asset `{value}` must contain at least one `#` separator")
-        });
-        let account = fixture_account(account_part);
-        let domain_suffix = if definition_part.ends_with('#') {
-            account.domain().name().as_ref()
-        } else {
-            ""
-        };
-        let definition_literal = format!("{definition_part}{domain_suffix}");
-        let definition = AssetDefinitionId::from_str(&definition_literal).unwrap_or_else(|err| {
+        AssetId::parse_encoded(value).unwrap_or_else(|err| {
             panic!(
-                "fixture asset `{value}` has invalid definition literal `{definition_literal}`: {err}"
+                "fixture asset `{value}` must be an encoded asset literal (`norito:<hex>`): {err}"
             )
-        });
-        AssetId::new(definition, account)
+        })
     }
 
     fn fixture_receipt(

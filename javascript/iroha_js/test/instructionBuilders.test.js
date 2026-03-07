@@ -284,6 +284,13 @@ test("normalizeAssetId exported canonicalizes embedded account identifiers", () 
   assert.equal(canonical, ASSET_ID_CANONICAL);
 });
 
+test("normalizeAssetId rejects unsupported asset#domain#account literals", () => {
+  assert.throws(
+    () => exportedNormalizeAssetId(`rose#wonderland#${ACCOUNT_ID}`),
+    /must not use 'asset#domain#account'/,
+  );
+});
+
 test("buildMintAssetInstruction produces Norito-compatible payload", () => {
   const instruction = buildMintAssetInstruction({ assetId: ASSET_ID, quantity: 42 });
   assert.deepEqual(instruction, {

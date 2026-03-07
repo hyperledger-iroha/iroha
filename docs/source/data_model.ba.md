@@ -35,9 +35,9 @@ translator: machine-google-reviewed
 - `IdBox`: теләһә ниндәй ярҙам идентификаторы өсөн сумма-тип конверт (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Дөйөм ағымдар һәм Norito өсөн файҙалы кодлау бер типтағы.
 - `ChainId`: транзакцияларҙа реплей һаҡлау өсөн ҡулланылған асыҡ булмаған сылбырлы идентификатор.ИД-лар струнный формалары (`Display`/`FromStr` менән түңәрәкләп йөрөү):
 - `DomainId`: `name` (мәҫәлән, `wonderland`).
-- `AccountId`: IH58, Сора ҡыҫылған (`sora…`) һәм канонлы гекс кодектары (`AccountAddress::to_ih58`, `to_compressed_sora`, `sora…`) аша кодланған канонлы идентификатор. `canonical_hex`, `parse_any`). IH58 - өҫтөнлөклө иҫәп форматында; `sora…` формаһы Сора-тик UX өсөн икенсе иң яҡшы. Кешегә уңайлы маршрутлаштырыу псевдонимы `alias@domain` UX өсөн һаҡлана, әммә хәҙер абруйлы идентификатор булараҡ ҡаралмай. Torii `AccountAddress::parse_any` аша килгән ептәрҙе нормалләштерә. Иҫәп идентификаторҙары ярҙам итә, ике бер асҡыс һәм мультисиг контроллерҙар.
+- `AccountId`: IH58, Сора ҡыҫылған (`sora…`) һәм канонлы гекс кодектары (`AccountAddress::to_ih58`, `to_compressed_sora`, `sora…`) аша кодланған канонлы идентификатор. `canonical_hex`, `parse_encoded`). IH58 - өҫтөнлөклө иҫәп форматында; `sora…` формаһы Сора-тик UX өсөн икенсе иң яҡшы. Кешегә уңайлы маршрутлаштырыу псевдонимы `alias@domain` UX өсөн һаҡлана, әммә хәҙер абруйлы идентификатор булараҡ ҡаралмай. Torii `AccountAddress::parse_encoded` аша килгән ептәрҙе нормалләштерә. Иҫәп идентификаторҙары ярҙам итә, ике бер асҡыс һәм мультисиг контроллерҙар.
 - `AssetDefinitionId`: `asset#domain` (мәҫәлән, `xor#soramitsu`).
-- `AssetId`: `asset#domain#account` йәки стенография `asset##account`, әгәр билдәләмә домен иҫәп доменына тиң, унда `account` канонлы Norito еп (IH58 өҫтөнлөк бирә).
+- `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`: `nft$domain` (мәҫәлән, `rose$garden`X).
 - `PeerId`: `public_key` (тиңдәш тигеҙлеге асыҡ асҡыс буйынса).
 

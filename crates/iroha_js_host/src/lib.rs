@@ -277,7 +277,7 @@ pub struct JsAliasEvaluation {
 pub struct JsAccountAddressParse {
     /// Canonical bytes for the parsed account address.
     pub canonical_bytes: Buffer,
-    /// Detected textual format (`ih58`, `compressed`, or `canonical_hex`).
+    /// Detected textual format (`ih58` or `compressed`).
     pub detected_format: String,
     /// Network prefix when the source was IH58.
     pub network_prefix: Option<u16>,
@@ -431,15 +431,16 @@ pub fn soradns_derive_gateway_hosts(fqdn: String) -> napi::Result<JsGatewayHosts
     })
 }
 
-/// Parse an account address string (IH58 (preferred), compressed (`sora`, second-best), or canonical hex).
+/// Parse an account address string in strict encoded form
+/// (IH58 (preferred) or compressed (`sora`, second-best)).
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for bindings
-pub fn account_address_parse_any(
+pub fn account_address_parse_encoded(
     input: String,
     expected_prefix: Option<u16>,
 ) -> napi::Result<JsAccountAddressParse> {
     let (address, format) =
-        AccountAddress::parse_any(&input, expected_prefix).map_err(account_address_err)?;
+        AccountAddress::parse_encoded(&input, expected_prefix).map_err(account_address_err)?;
     let canonical_hex = address.canonical_hex().map_err(account_address_err)?;
     let hex_body = canonical_hex
         .strip_prefix("0x")
@@ -449,7 +450,6 @@ pub fn account_address_parse_any(
     let (detected_format, network_prefix) = match format {
         AccountAddressFormat::IH58 { network_prefix } => ("ih58".to_owned(), Some(network_prefix)),
         AccountAddressFormat::Compressed => ("compressed".to_owned(), None),
-        AccountAddressFormat::CanonicalHex => ("canonical_hex".to_owned(), None),
     };
     Ok(JsAccountAddressParse {
         canonical_bytes: Buffer::from(canonical),
@@ -6089,7 +6089,7 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         if let MintBox::Asset(mint) = mint_box {
             let mut asset_fields = json::Map::new();
             let object = json::to_value(mint.object()).map_err(norito_to_napi)?;
-            let destination = json::to_value(mint.destination()).map_err(norito_to_napi)?;
+            let destination = json::Value::String(mint.destination().canonical_encoded());
             asset_fields.insert("object".to_owned(), object);
             asset_fields.insert("destination".to_owned(), destination);
             mint_map.insert("Asset".to_owned(), json::Value::Object(asset_fields));
@@ -6116,7 +6116,7 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         let mut transfer_map = json::Map::new();
         if let TransferBox::Asset(transfer) = transfer_box {
             let mut asset_fields = json::Map::new();
-            let source = json::to_value(transfer.source()).map_err(norito_to_napi)?;
+            let source = json::Value::String(transfer.source().canonical_encoded());
             let quantity = json::to_value(transfer.object()).map_err(norito_to_napi)?;
             let destination = json::to_value(transfer.destination()).map_err(norito_to_napi)?;
             asset_fields.insert("source".to_owned(), source);
@@ -6169,7 +6169,7 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         if let BurnBox::Asset(burn) = burn_box {
             let mut asset_fields = json::Map::new();
             let object = json::to_value(burn.object()).map_err(norito_to_napi)?;
-            let destination = json::to_value(burn.destination()).map_err(norito_to_napi)?;
+            let destination = json::Value::String(burn.destination().canonical_encoded());
             asset_fields.insert("object".to_owned(), object);
             asset_fields.insert("destination".to_owned(), destination);
             burn_map.insert("Asset".to_owned(), json::Value::Object(asset_fields));
@@ -9428,45 +9428,47 @@ mod tests {
     #[test]
     fn js_builder_create_kaigi_payload_matches() {
         // Mirrors the payload assembled by the JavaScript builders/tests.
-        let json_payload = r#"{
-            "Kaigi": {
-                "CreateKaigi": {
-                    "call": {
-                        "id": {
+        let host = account_json_literal(&sample_account("wonderland"));
+        let billing_account = account_json_literal(&sample_account("wonderland"));
+        let relay_id = account_json_literal(&sample_account("wonderland"));
+        let payload = norito_json!({
+            "Kaigi": norito_json!({
+                "CreateKaigi": norito_json!({
+                    "call": norito_json!({
+                        "id": norito_json!({
                             "domain_id": "wonderland",
                             "call_name": "weekly-sync"
-                        },
-                        "host": "ed0120BC35289D74AF3796470409268AFD7ADDA7BB2A4627B10C24BE17864D1116DA31@wonderland",
+                        }),
+                        "host": host,
                         "title": "Weekly Sync",
                         "description": "Roadmap alignment",
                         "max_participants": 16,
                         "gas_rate_per_minute": 120,
-                        "metadata": {
+                        "metadata": norito_json!({
                             "topic": "status"
-                        },
-                        "scheduled_start_ms": 1700000000000,
-                        "billing_account": "ed0120BC35289D74AF3796470409268AFD7ADDA7BB2A4627B10C24BE17864D1116DA31@wonderland",
-                        "privacy_mode": {
+                        }),
+                        "scheduled_start_ms": 1700000000000_u64,
+                        "billing_account": billing_account,
+                        "privacy_mode": norito_json!({
                             "mode": "ZkRosterV1",
-                            "state": null
-                        },
-                        "relay_manifest": {
-                            "hops": [
-                                {
-                                    "relay_id": "ed012004F0B5D18313224ACA936EEAD1D08610F26C0F2727AD36C0425DB3415C84F4CF@wonderland",
-                                    "hpke_public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
-                                    "weight": 5
-                                }
-                            ],
-                            "expiry_ms": 1700111000000
-                        }
-                    }
-                }
-            }
-        }"#;
+                            "state": json::Value::Null
+                        }),
+                        "relay_manifest": norito_json!({
+                            "hops": vec![norito_json!({
+                                "relay_id": relay_id,
+                                "hpke_public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+                                "weight": 5
+                            })],
+                            "expiry_ms": 1700111000000_u64
+                        })
+                    })
+                })
+            })
+        });
+        let json_payload = json::to_json(&payload).expect("serialize payload to json");
 
         let value: json::Value =
-            norito::json::from_json(json_payload).expect("parse builder json into Value");
+            norito::json::from_json(&json_payload).expect("parse builder json into Value");
         if let Some(host) = value
             .get("Kaigi")
             .and_then(|v| v.get("CreateKaigi"))
@@ -9504,7 +9506,7 @@ mod tests {
                 .expect("relay account id");
         }
 
-        instruction_from_json(json_payload).expect("JS builder payload must be parsable");
+        instruction_from_json(&json_payload).expect("JS builder payload must be parsable");
     }
 
     #[test]

@@ -194,7 +194,7 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
 
     // Define the instances of an Asset and Account
     // #region mint_asset_define_asset_account
-    let roses = "rose#wonderland".parse()
+    let roses: iroha::data_model::prelude::AssetDefinitionId = "rose#wonderland".parse()
         .expect("Valid, because the string contains no whitespace, has a single '#' character and is not empty after");
     let alice = AccountId::new(
         "wonderland".parse()?,
@@ -206,7 +206,7 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
 
     // Mint the Asset instance
     // #region mint_asset_mint
-    let mint_roses = Mint::asset_numeric(42u32, AssetId::new(roses, alice.clone()));
+    let mint_roses = Mint::asset_numeric(42u32, AssetId::new(roses.clone(), alice.clone()));
     // #endregion mint_asset_mint
 
     // #region mint_asset_submit_tx
@@ -217,11 +217,9 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
 
     // #region mint_asset_mint_alt
     // Mint the Asset instance (alternate syntax).
-    // The syntax is `asset_name#asset_domain#<account_ih58>`,
-    // or `roses.to_string() + "#" + alice.to_string()`.
-    // The `##` short-hand means the asset and account share the same domain.
-    let alice_ih58 = alice.canonical_ih58().expect("ih58 account literal");
-    let alice_roses: AssetId = format!("rose##{alice_ih58}").parse()?;
+    // Use canonical encoded `norito:<hex>` asset identifiers.
+    let alice_roses = AssetId::new(roses.clone(), alice.clone());
+    let alice_roses: AssetId = alice_roses.canonical_encoded().parse()?;
     let mint_roses_alt = Mint::asset_numeric(10u32, alice_roses);
     // #endregion mint_asset_mint_alt
 
@@ -248,7 +246,7 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
 
     // #region burn_asset_define_asset_account
     // Define the instances of an Asset and Account
-    let roses = "rose#wonderland".parse()
+    let roses: iroha::data_model::prelude::AssetDefinitionId = "rose#wonderland".parse()
         .expect("Valid, because the string contains no whitespace, has a single '#' character and is not empty after");
     let alice = AccountId::new(
         "wonderland".parse()?,
@@ -260,7 +258,7 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
 
     // #region burn_asset_burn
     // Burn the Asset instance
-    let burn_roses = Burn::asset_numeric(10u32, AssetId::new(roses, alice.clone()));
+    let burn_roses = Burn::asset_numeric(10u32, AssetId::new(roses.clone(), alice.clone()));
     // #endregion burn_asset_burn
 
     // #region burn_asset_submit_tx
@@ -271,11 +269,9 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
 
     // #region burn_asset_burn_alt
     // Burn the Asset instance (alternate syntax).
-    // The syntax is `asset_name#asset_domain#<account_ih58>`,
-    // or `roses.to_string() + "#" + alice.to_string()`.
-    // The `##` short-hand means the asset and account share the same domain.
-    let alice_ih58 = alice.canonical_ih58().expect("ih58 account literal");
-    let alice_roses: AssetId = format!("rose##{alice_ih58}").parse()?;
+    // Use canonical encoded `norito:<hex>` asset identifiers.
+    let alice_roses = AssetId::new(roses.clone(), alice.clone());
+    let alice_roses: AssetId = alice_roses.canonical_encoded().parse()?;
     let burn_roses_alt = Burn::asset_numeric(10u32, alice_roses);
     // #endregion burn_asset_burn_alt
 

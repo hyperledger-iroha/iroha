@@ -43,8 +43,12 @@ test("inspectAccountId reports selector-free domain summary", () => {
   assert.equal(summary.detectedFormat.kind, "ih58");
   assert.equal(summary.inputDomain, null);
 
-  const canonicalSummary = inspectAccountId(canonicalHex);
-  assert.equal(canonicalSummary.detectedFormat.kind, "canonical-hex");
+  assert.throws(
+    () => inspectAccountId(canonicalHex),
+    (error) =>
+      error instanceof AccountAddressError &&
+      error.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+  );
 });
 
 test("inspectAccountId handles default-domain addresses without warnings", () => {
@@ -75,7 +79,7 @@ test("inspectAccountId warns when a compressed literal is provided", () => {
 
 test("inspectAccountId rejects malformed literals", () => {
   assert.throws(
-    () => inspectAccountId("@legacy-domain"),
+    () => inspectAccountId("@invalid-domain"),
     (error) => error instanceof TypeError && error.message.includes("must not include '@domain'"),
   );
   assert.throws(
