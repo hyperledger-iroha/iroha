@@ -3,13 +3,17 @@ import XCTest
 @testable import IrohaSwift
 
 final class OfflineAuditLoggerTests: XCTestCase {
+    private let fixtureAccountA = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+    private let fixtureAccountB = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+    private let fixtureAccountC = "6cmzPVPX8j6hZ4dceSGxHX65vr3iK4RG3em7w24HeJ9BbQXmKFVrykC"
 
     func testRecordsEntriesWhenEnabled() throws {
         let logger = try OfflineAuditLogger(storageURL: temporaryLogURL(), isEnabled: true)
+        let assetId = try makeNoritoAssetId(name: "xor", domain: "sora", accountId: fixtureAccountA)
         let entry = OfflineAuditEntry(txId: "bundle",
-                                      senderId: "sender@test",
-                                      receiverId: "receiver@test",
-                                      assetId: "xor#sora",
+                                      senderId: fixtureAccountA,
+                                      receiverId: fixtureAccountB,
+                                      assetId: assetId,
                                       amount: "10",
                                       timestampMs: 123)
 
@@ -26,8 +30,8 @@ final class OfflineAuditLoggerTests: XCTestCase {
     func testClearRemovesPersistedEntries() throws {
         let logger = try OfflineAuditLogger(storageURL: temporaryLogURL(), isEnabled: true)
         logger.record(entry: OfflineAuditEntry(txId: "bundle",
-                                               senderId: "sender@test",
-                                               receiverId: "receiver@test",
+                                               senderId: fixtureAccountA,
+                                               receiverId: fixtureAccountB,
                                                assetId: "",
                                                amount: "1",
                                                timestampMs: 1))
@@ -40,20 +44,21 @@ final class OfflineAuditLoggerTests: XCTestCase {
     func testRecordTransferAuditUsesReceiptSummary() throws {
         let logger = try OfflineAuditLogger(storageURL: temporaryLogURL(), isEnabled: true)
         let wallet = try makeWallet(logger: logger, auditLoggingEnabled: true)
+        let assetId = try makeNoritoAssetId(name: "xor", domain: "sora", accountId: fixtureAccountA)
 
         let transfer = makeTransferItem(
-            transfer: makeReceiptPayload(sender: "merchant@test",
-                                         receiver: "treasury@test",
-                                         asset: "xor#sora",
+            transfer: makeReceiptPayload(sender: fixtureAccountA,
+                                         receiver: fixtureAccountB,
+                                         asset: assetId,
                                          amount: "42.5")
         )
 
         wallet.recordTransferAudit(transfer)
 
         let entry = try XCTUnwrap(wallet.exportAuditEntries().first)
-        XCTAssertEqual(entry.senderId, "merchant@test")
-        XCTAssertEqual(entry.receiverId, "treasury@test")
-        XCTAssertEqual(entry.assetId, "xor#sora")
+        XCTAssertEqual(entry.senderId, fixtureAccountA)
+        XCTAssertEqual(entry.receiverId, fixtureAccountB)
+        XCTAssertEqual(entry.assetId, assetId)
         XCTAssertEqual(entry.amount, "42.5")
         XCTAssertEqual(entry.txId, transfer.bundleIdHex)
     }
@@ -61,7 +66,7 @@ final class OfflineAuditLoggerTests: XCTestCase {
     func testRecordReceiptAuditCapturesReceiptFields() throws {
         let logger = try OfflineAuditLogger(storageURL: temporaryLogURL(), isEnabled: true)
         let wallet = try makeWallet(logger: logger, auditLoggingEnabled: true)
-        let certificate = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
+        let certificate = try normalizedCertificate(OfflineWalletCertificate.load(from: fixtureURL("certificate.json")))
         let txId = IrohaHash.hash(Data("receipt-audit".utf8))
         let proof = OfflinePlatformProof.appleAppAttest(
             AppleAppAttestProof(keyId: Data("swift-tests".utf8).base64EncodedString(),
@@ -69,11 +74,12 @@ final class OfflineAuditLoggerTests: XCTestCase {
                                 assertion: Data([0xAA]),
                                 challengeHash: IrohaHash.hash(Data("challenge".utf8)))
         )
+        let assetId = try makeNoritoAssetId(name: "xor", domain: "sora", accountId: certificate.controller)
         let receipt = OfflineSpendReceipt(
             txId: txId,
             from: certificate.controller,
             to: certificate.controller,
-            assetId: certificate.allowance.assetId,
+            assetId: assetId,
             amount: "25",
             issuedAtMs: certificate.issuedAtMs + 1000,
             invoiceId: "inv-audit",
@@ -89,7 +95,7 @@ final class OfflineAuditLoggerTests: XCTestCase {
         XCTAssertEqual(entry.txId, txId.hexUppercased())
         XCTAssertEqual(entry.senderId, certificate.controller)
         XCTAssertEqual(entry.receiverId, certificate.controller)
-        XCTAssertEqual(entry.assetId, certificate.allowance.assetId)
+        XCTAssertEqual(entry.assetId, assetId)
         XCTAssertEqual(entry.amount, "25")
         XCTAssertEqual(entry.timestampMs, 42)
     }
@@ -99,8 +105,8 @@ final class OfflineAuditLoggerTests: XCTestCase {
         let wallet = try makeWallet(logger: logger, auditLoggingEnabled: true)
 
         let transfer = makeTransferItem(
-            receiverId: "receiver@test",
-            depositAccountId: "deposit@test",
+            receiverId: fixtureAccountB,
+            depositAccountId: fixtureAccountC,
             assetId: nil,
             totalAmount: "100",
             claimedDelta: "  ",
@@ -110,8 +116,8 @@ final class OfflineAuditLoggerTests: XCTestCase {
         wallet.recordTransferAudit(transfer)
 
         let entry = try XCTUnwrap(wallet.exportAuditEntries().first)
-        XCTAssertEqual(entry.senderId, "receiver@test")
-        XCTAssertEqual(entry.receiverId, "deposit@test")
+        XCTAssertEqual(entry.senderId, fixtureAccountB)
+        XCTAssertEqual(entry.receiverId, fixtureAccountC)
         XCTAssertEqual(entry.assetId, "")
         XCTAssertEqual(entry.amount, "100")
     }
@@ -146,13 +152,13 @@ final class OfflineAuditLoggerTests: XCTestCase {
     }
 
     private func makeTransferItem(bundleId: String = UUID().uuidString,
-                                  controllerId: String = "merchant@test",
+                                  controllerId: String = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                                   controllerDisplay: String = "Merchant",
-                                  receiverId: String = "receiver@test",
+                                  receiverId: String = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                                   receiverDisplay: String = "Receiver",
-                                  depositAccountId: String = "deposit@test",
+                                  depositAccountId: String = "6cmzPVPX8j6hZ4dceSGxHX65vr3iK4RG3em7w24HeJ9BbQXmKFVrykC",
                                   depositAccountDisplay: String = "Deposit",
-                                  assetId: String? = "xor#sora",
+                                  assetId: String? = nil,
                                   receiptCount: UInt64 = 1,
                                   totalAmount: String = "10",
                                   claimedDelta: String = "5",
@@ -212,6 +218,38 @@ final class OfflineAuditLoggerTests: XCTestCase {
         return .object([
             "receipts": .array([.object(receipt)])
         ])
+    }
+
+    private func makeNoritoAssetId(name: String,
+                                   domain: String,
+                                   accountId: String) throws -> String {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(try OfflineNorito.encodeAssetDefinitionId(name: name, domain: domain))
+        writer.writeField(try OfflineNorito.encodeAccountId(accountId))
+        return "norito:\(writer.data.hexLowercased())"
+    }
+
+    private func normalizedCertificate(_ certificate: OfflineWalletCertificate) throws -> OfflineWalletCertificate {
+        let allowance = OfflineAllowanceCommitment(
+            assetId: try makeNoritoAssetId(name: "xor", domain: "sora", accountId: certificate.controller),
+            amount: certificate.allowance.amount,
+            commitment: certificate.allowance.commitment
+        )
+        return OfflineWalletCertificate(
+            controller: certificate.controller,
+            operatorId: certificate.operatorId,
+            allowance: allowance,
+            spendPublicKey: certificate.spendPublicKey,
+            attestationReport: certificate.attestationReport,
+            issuedAtMs: certificate.issuedAtMs,
+            expiresAtMs: certificate.expiresAtMs,
+            policy: certificate.policy,
+            operatorSignature: certificate.operatorSignature,
+            metadata: certificate.metadata,
+            verdictId: certificate.verdictId,
+            attestationNonce: certificate.attestationNonce,
+            refreshAtMs: certificate.refreshAtMs
+        )
     }
 
     private func temporaryLogURL() -> URL {

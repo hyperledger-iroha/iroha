@@ -14251,6 +14251,34 @@ fn resolve_parsed_account_against_world(
 }
 
 #[cfg(feature = "app_api")]
+fn resolve_account_alias_literal_with_state(state: &CoreState, literal: &str) -> Option<AccountId> {
+    let (identity_raw, domain_raw) = literal.rsplit_once('@')?;
+    let identity = identity_raw.trim();
+    if identity.is_empty() {
+        return None;
+    }
+
+    // Keep strict parsing policy for mixed literals such as `<ih58>@<domain>`
+    // and never allow legacy `public_key@domain` forms.
+    if AccountId::parse_encoded(identity).is_ok() || PublicKey::from_str(identity).is_ok() {
+        return None;
+    }
+
+    let domain = DomainId::from_str(domain_raw.trim()).ok()?;
+    let label = Name::from_str(identity).ok()?;
+    let account_label = iroha_data_model::account::rekey::AccountLabel::new(domain.clone(), label);
+    let world = state.world_view();
+    if let Some(account_id) = world.account_aliases().get(&account_label) {
+        return Some(account_id.clone());
+    }
+
+    world
+        .account_rekey_records()
+        .get(&account_label)
+        .map(|record| AccountId::new(domain, record.active_signatory.clone()))
+}
+
+#[cfg(feature = "app_api")]
 fn parse_account_literal_with_state(
     state: &CoreState,
     literal: &str,
@@ -14267,6 +14295,10 @@ fn parse_account_literal_with_state(
             Ok((resolved.clone(), resolved.to_string()))
         }
         Err(base_err) => {
+            if let Some(resolved) = resolve_account_alias_literal_with_state(state, trimmed) {
+                record_account_literal_accept(telemetry, context, &resolved);
+                return Ok((resolved.clone(), resolved.to_string()));
+            }
             record_account_literal_reject(telemetry, context, literal, base_err.reason());
             Err(base_err)
         }
@@ -32435,6 +32467,111 @@ mod accounts_query_tests {
         let doc: norito::json::Value = norito::json::from_slice(&body).unwrap();
         assert_eq!(doc["items"].as_array().unwrap().len(), 2);
         assert_eq!(doc["total"].as_u64(), Some(4));
+    }
+
+    #[tokio::test]
+    async fn accounts_query_filter_accepts_alias_and_compressed_literals() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let unverified = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut st_block = state.block(unverified.header());
+        let mut stx = st_block.transaction();
+        let domain_id: dm::DomainId = "aliases".parse().expect("valid domain");
+        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let exec_id = dm::AccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        dm::Register::domain(dm::Domain::new(domain_id.clone()))
+            .execute(&exec_id, &mut stx)
+            .expect("register domain");
+        dm::Register::account(dm::Account::new(exec_id.clone()))
+            .execute(&exec_id, &mut stx)
+            .expect("register executor account");
+
+        let account_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let account_id = dm::AccountId::new(domain_id.clone(), account_keypair.public_key().clone());
+        let label = dm::AccountLabel::new(
+            domain_id.clone(),
+            "primary".parse().expect("valid label name"),
+        );
+        let account = dm::Account::new(account_id.clone()).with_label(Some(label.clone()));
+        dm::Register::account(account)
+            .execute(&exec_id, &mut stx)
+            .expect("register labelled account");
+
+        stx.apply();
+        let valid: ValidBlock = unverified
+            .clone()
+            .validate_and_record_transactions(&mut st_block)
+            .unpack(|_| {});
+        let committed = valid.clone().commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block, committed);
+
+        let expected = account_id.to_string();
+        let alias_literal = format!("{}@{}", label.label, domain_id);
+        let compressed_literal = account_id
+            .to_account_address()
+            .expect("account address")
+            .to_compressed_sora()
+            .expect("compressed encoding");
+
+        for literal in [alias_literal, compressed_literal] {
+            let env = crate::filter::QueryEnvelope {
+                query: None,
+                filter: Some(crate::filter::FilterExpr::Eq(
+                    crate::filter::FieldPath("id".to_string()),
+                    Value::String(literal.clone()),
+                )),
+                select: None,
+                sort: Vec::new(),
+                pagination: crate::filter::Pagination {
+                    limit: Some(8),
+                    offset: 0,
+                },
+                fetch_size: None,
+                address_format: None,
+            };
+            let resp = handle_v1_accounts_query(
+                state.clone(),
+                crate::utils::extractors::NoritoJson(env),
+                crate::routing::MaybeTelemetry::for_tests(),
+            )
+            .await
+            .expect("handler ok")
+            .into_response();
+            assert_eq!(resp.status(), StatusCode::OK, "literal `{literal}` should be accepted");
+            let body = resp.into_body().collect().await.expect("body bytes").to_bytes();
+            let doc: norito::json::Value = norito::json::from_slice(&body).expect("valid JSON");
+            let items = doc
+                .get("items")
+                .and_then(norito::json::Value::as_array)
+                .expect("items array");
+            let ids: Vec<String> = items
+                .iter()
+                .filter_map(|item| {
+                    item.get("id")
+                        .and_then(norito::json::Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect();
+            assert!(
+                ids.iter().any(|id| id == &expected),
+                "literal `{literal}` should resolve to `{expected}`, got {ids:?}"
+            );
+            assert!(
+                ids.iter().all(|id| !id.contains('@')),
+                "response should expose canonical ids, got {ids:?}"
+            );
+        }
     }
 }
 

@@ -11,7 +11,11 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let domain = "wonderland"
         let chainId = "00000000-0000-0000-0000-000000000000"
         let assetDefinitionId = "xor#\(domain)"
-        let authority = try "\(sm2Keypair.publicKeyPrefixed())@\(domain)"
+        guard let authority = try? AccountId.makeIH58(publicKey: sm2Keypair.publicKey,
+                                                      domain: domain,
+                                                      algorithm: "sm2") else {
+            throw XCTSkip("SM2 account-id encoding is unavailable in this build.")
+        }
         let request = TransferRequest(chainId: chainId,
                                       authority: authority,
                                       assetDefinitionId: assetDefinitionId,
@@ -35,7 +39,11 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let domain = "wonderland"
         let chainId = "00000000-0000-0000-0000-000000000000"
         let assetDefinitionId = "xor#\(domain)"
-        let authority = try "\(sm2Keypair.publicKeyPrefixed())@\(domain)"
+        guard let authority = try? AccountId.makeIH58(publicKey: sm2Keypair.publicKey,
+                                                      domain: domain,
+                                                      algorithm: "sm2") else {
+            throw XCTSkip("SM2 account-id encoding is unavailable in this build.")
+        }
         let request = MintRequest(chainId: chainId,
                                   authority: authority,
                                   assetDefinitionId: assetDefinitionId,
@@ -58,8 +66,9 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let domain = "wonderland"
         let chainId = "00000000-0000-0000-0000-000000000000"
         let assetDefinitionId = "xor#\(domain)"
-        let multihash = OfflineNorito.publicKeyMultihash(algorithm: .secp256k1, payload: keypair.publicKey)
-        let authority = "secp256k1:\(multihash)@\(domain)"
+        let authority = try AccountId.makeIH58(publicKey: keypair.publicKey,
+                                               domain: domain,
+                                               algorithm: "secp256k1")
         let request = TransferRequest(chainId: chainId,
                                       authority: authority,
                                       assetDefinitionId: assetDefinitionId,

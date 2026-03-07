@@ -4,6 +4,8 @@ import XCTest
 @testable import IrohaSwift
 
 final class OfflineCounterJournalTests: XCTestCase {
+    private let encodedControllerId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+
     func testSummaryHashMatchesAndPersists() throws {
         let appleCounters: [String: UInt64] = ["key-1": 2, "key-2": 5]
         let androidCounters: [String: UInt64] = ["series-1": 7]
@@ -16,7 +18,7 @@ final class OfflineCounterJournalTests: XCTestCase {
             "items": [
                 [
                     "certificate_id_hex": "DEADBEEF",
-                    "controller_id": "alice@sora",
+                    "controller_id": encodedControllerId,
                     "controller_display": "Alice",
                     "summary_hash_hex": summaryHash,
                     "apple_key_counters": appleCounters,
@@ -39,7 +41,7 @@ final class OfflineCounterJournalTests: XCTestCase {
         let journal = try OfflineCounterJournal(storageURL: temporaryURL())
         _ = try journal.updateCounter(
             certificateIdHex: "deadbeef",
-            controllerId: "alice@sora",
+            controllerId: encodedControllerId,
             controllerDisplay: nil,
             platform: .appleKey,
             scope: "key-1",
@@ -50,7 +52,7 @@ final class OfflineCounterJournalTests: XCTestCase {
         XCTAssertThrowsError(
             try journal.updateCounter(
                 certificateIdHex: "deadbeef",
-                controllerId: "alice@sora",
+                controllerId: encodedControllerId,
                 controllerDisplay: nil,
                 platform: .appleKey,
                 scope: "key-1",
@@ -68,7 +70,7 @@ final class OfflineCounterJournalTests: XCTestCase {
         let journal = try OfflineCounterJournal(storageURL: temporaryURL())
         _ = try journal.updateCounter(
             certificateIdHex: "deadbeef",
-            controllerId: "alice@sora",
+            controllerId: encodedControllerId,
             controllerDisplay: nil,
             platform: .appleKey,
             scope: "key-1",
@@ -79,7 +81,7 @@ final class OfflineCounterJournalTests: XCTestCase {
         XCTAssertThrowsError(
             try journal.updateCounter(
                 certificateIdHex: "deadbeef",
-                controllerId: "alice@sora",
+                controllerId: encodedControllerId,
                 controllerDisplay: nil,
                 platform: .appleKey,
                 scope: "key-1",
@@ -98,7 +100,7 @@ final class OfflineCounterJournalTests: XCTestCase {
             "items": [
                 [
                     "certificate_id_hex": "DEADBEEF",
-                    "controller_id": "alice@sora",
+                    "controller_id": encodedControllerId,
                     "controller_display": "Alice",
                     "summary_hash_hex": String(repeating: "00", count: 32),
                     "apple_key_counters": ["key-1": 1],

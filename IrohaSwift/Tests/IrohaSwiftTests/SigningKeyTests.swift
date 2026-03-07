@@ -91,24 +91,13 @@ final class SigningKeyTests: XCTestCase {
         XCTAssertEqual(signingKey.algorithm, .ed25519)
 
         let publicKey = try signingKey.publicKey()
-        if authorityId.contains("@") {
-            let parts = authorityId.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
-            XCTAssertEqual(parts.count, 2, "authority_id must contain domain")
-            let domain = String(parts[1])
-            let address = try AccountAddress.fromAccount(domain: domain,
-                                                         publicKey: publicKey,
-                                                         algorithm: "ed25519")
-            let ih58 = try address.toIH58(networkPrefix: 753)
-            XCTAssertEqual("\(ih58)@\(domain)", authorityId)
-        } else {
-            let (address, format) = try AccountAddress.parseEncoded(authorityId, expectedPrefix: 753)
-            XCTAssertEqual(format, .ih58)
-            guard let controller = address.singleControllerInfo() else {
-                return XCTFail("expected single-key controller in authority_id")
-            }
-            XCTAssertEqual(controller.algorithm, .ed25519)
-            XCTAssertEqual(controller.publicKey, publicKey)
+        let (address, format) = try AccountAddress.parseEncoded(authorityId, expectedPrefix: 753)
+        XCTAssertEqual(format, .ih58)
+        guard let controller = address.singleControllerInfo() else {
+            return XCTFail("expected single-key controller in authority_id")
         }
+        XCTAssertEqual(controller.algorithm, .ed25519)
+        XCTAssertEqual(controller.publicKey, publicKey)
     }
 
     private func loadWalletFixtureAuthority() throws -> String {
