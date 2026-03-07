@@ -2,9 +2,11 @@ import XCTest
 @testable import IrohaSwift
 
 final class ConnectEventsTests: XCTestCase {
+    private let encodedUsdAssetID = "norito:757364"
+
     func testBalanceAssetRejectsFractionalPrecision() {
         let json: [String: Any] = [
-            "asset_id": "usd#bank",
+            "asset_id": encodedUsdAssetID,
             "quantity": "1",
             "precision": 1.5
         ]
@@ -19,11 +21,11 @@ final class ConnectEventsTests: XCTestCase {
 
     func testBalanceSnapshotRejectsFractionalLastUpdated() {
         let asset: [String: Any] = [
-            "asset_id": "usd#bank",
+            "asset_id": encodedUsdAssetID,
             "quantity": "1"
         ]
         let json: [String: Any] = [
-            "account_id": "alice@wonderland",
+            "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
             "assets": [asset],
             "last_updated_ms": 1.25
         ]

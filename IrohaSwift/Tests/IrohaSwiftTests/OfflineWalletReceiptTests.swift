@@ -170,11 +170,16 @@ final class OfflineWalletReceiptTests: XCTestCase {
 
     private func makeCertificate(signingKey: SigningKey) throws -> OfflineWalletCertificate {
         let base = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
+        let allowance = OfflineAllowanceCommitment(
+            assetId: try makeNoritoAssetId(name: "xor", domain: "sora", accountId: base.controller),
+            amount: base.allowance.amount,
+            commitment: base.allowance.commitment
+        )
         let spendKey = "ed0120" + (try signingKey.publicKey()).hexUppercased()
         return OfflineWalletCertificate(
             controller: base.controller,
             operatorId: base.operatorId,
-            allowance: base.allowance,
+            allowance: allowance,
             spendPublicKey: spendKey,
             attestationReport: base.attestationReport,
             issuedAtMs: base.issuedAtMs,
@@ -233,5 +238,14 @@ final class OfflineWalletReceiptTests: XCTestCase {
 
     private func journalKey() -> OfflineJournalKey {
         OfflineJournalKey.derive(from: Data("wallet-receipt-key".utf8))
+    }
+
+    private func makeNoritoAssetId(name: String,
+                                   domain: String,
+                                   accountId: String) throws -> String {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(try OfflineNorito.encodeAssetDefinitionId(name: name, domain: domain))
+        writer.writeField(try OfflineNorito.encodeAccountId(accountId))
+        return "norito:\(writer.data.hexLowercased())"
     }
 }

@@ -387,13 +387,13 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
         direction == .selfTransfer
     }
 
-    /// Construct the source asset id from the asset definition and sender account when possible.
+    /// Construct the source asset id when possible.
     public var sourceAssetId: String? {
         ToriiExplorerTransferSummary.assetId(assetDefinitionId: assetDefinitionId,
                                              accountId: senderAccountId)
     }
 
-    /// Construct the destination asset id from the asset definition and receiver account when possible.
+    /// Construct the destination asset id when possible.
     public var destinationAssetId: String? {
         ToriiExplorerTransferSummary.assetId(assetDefinitionId: assetDefinitionId,
                                              accountId: receiverAccountId)
@@ -525,15 +525,15 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
 
 /// Parsed transfer details derived from explorer instruction payloads.
 public struct ToriiExplorerTransferAsset: Sendable, Equatable {
-    /// Full asset identifier literal (includes the source account).
+    /// Full asset identifier literal (encoded `norito:<hex>`).
     public let sourceAssetId: String
     /// Destination account literal.
     public let destinationAccountId: String
     /// Amount transferred (string numeric).
     public let amount: String
-    /// Source account literal (derived from the asset id when possible).
+    /// Source account literal when explicitly recoverable from payload.
     public let senderAccountId: String?
-    /// Asset definition literal (derived from the asset id when possible).
+    /// Asset descriptor captured from payload.
     public let assetDefinitionId: String?
 }
 
@@ -673,20 +673,20 @@ extension ToriiExplorerTransferSummary {
         return .unknown
     }
 
-    fileprivate static func assetId(assetDefinitionId: String, accountId: String) -> String? {
+    fileprivate static func assetId(assetDefinitionId: String, accountId _: String) -> String? {
         let trimmedDefinition = assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedAccount = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedDefinition.isEmpty, !trimmedAccount.isEmpty else {
+        guard !trimmedDefinition.isEmpty else {
             return nil
         }
-        guard let hashIndex = trimmedDefinition.firstIndex(of: "#") else {
+        let lower = trimmedDefinition.lowercased()
+        guard lower.hasPrefix("norito:") else {
             return nil
         }
-        let name = String(trimmedDefinition[..<hashIndex])
-        guard !name.isEmpty else {
+        let hex = String(trimmedDefinition.dropFirst("norito:".count))
+        guard !hex.isEmpty else {
             return nil
         }
-        return "\(name)##\(trimmedAccount)"
+        return "norito:\(hex.lowercased())"
     }
 }
 
@@ -697,8 +697,14 @@ public extension ToriiExplorerTransferRecord {
         let relativeAccount = (relative?.isEmpty ?? true) ? nil : relative
         switch details {
         case .asset(let asset):
-            guard let sender = asset.senderAccountId,
-                  let assetDefinition = asset.assetDefinitionId else {
+            let fallbackSender = instruction.authority.trimmingCharacters(in: .whitespacesAndNewlines)
+            let sender = asset.senderAccountId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? asset.senderAccountId!
+                : fallbackSender
+            guard !sender.isEmpty else {
+                return []
+            }
+            guard let assetDefinition = asset.assetDefinitionId ?? (!asset.sourceAssetId.isEmpty ? asset.sourceAssetId : nil) else {
                 return []
             }
             let receiver = asset.destinationAccountId
@@ -1042,27 +1048,16 @@ extension ToriiExplorerTransferDetails {
         guard !trimmed.isEmpty else {
             return (nil, nil)
         }
-        let account = trimmed.split(separator: "#").last.map(String.init)
-        if let range = trimmed.range(of: "##") {
-            let name = String(trimmed[..<range.lowerBound])
-            let accountLiteral = String(trimmed[range.upperBound...])
-            if let atIndex = accountLiteral.lastIndex(of: "@") {
-                let domain = String(accountLiteral[accountLiteral.index(after: atIndex)...])
-                if !name.isEmpty, !domain.isEmpty {
-                    return ("\(name)#\(domain)", account)
-                }
-            }
-            return (nil, account)
+        // Hard cut: parse encoded asset identifiers only.
+        guard (try? OfflineNorito.encodeAssetId(trimmed)) != nil else {
+            return (nil, nil)
         }
-        let parts = trimmed.split(separator: "#")
-        if parts.count >= 3 {
-            let name = String(parts[0])
-            let domain = String(parts[1])
-            if !name.isEmpty, !domain.isEmpty {
-                return ("\(name)#\(domain)", account)
-            }
+        let lower = trimmed.lowercased()
+        guard lower.hasPrefix("norito:") else {
+            return (trimmed, nil)
         }
-        return (nil, account)
+        let hex = String(trimmed.dropFirst("norito:".count)).lowercased()
+        return ("norito:\(hex)", nil)
     }
 }
 

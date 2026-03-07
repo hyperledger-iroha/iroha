@@ -367,7 +367,7 @@ final class OfflineWalletTopUpTests: XCTestCase {
     private func makeCertificate() throws -> OfflineWalletCertificate {
         let publicKey = Data(repeating: 0xAB, count: 32)
         let controller = try AccountId.makeIH58(publicKey: publicKey, domain: "wonderland")
-        let assetId = "rose#wonderland#\(controller)"
+        let assetId = try makeNoritoAssetId(name: "rose", domain: "wonderland", accountId: controller)
         let allowance = OfflineAllowanceCommitment(assetId: assetId,
                                                    amount: "42",
                                                    commitment: Data(repeating: 0x11, count: 32))
@@ -387,6 +387,15 @@ final class OfflineWalletTopUpTests: XCTestCase {
             attestationNonce: Data(repeating: 0x33, count: 32),
             refreshAtMs: 333
         )
+    }
+
+    private func makeNoritoAssetId(name: String,
+                                   domain: String,
+                                   accountId: String) throws -> String {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(try OfflineNorito.encodeAssetDefinitionId(name: name, domain: domain))
+        writer.writeField(try OfflineNorito.encodeAccountId(accountId))
+        return "norito:\(writer.data.hexLowercased())"
     }
 
     private func makeDraft(from certificate: OfflineWalletCertificate) -> OfflineWalletCertificateDraft {

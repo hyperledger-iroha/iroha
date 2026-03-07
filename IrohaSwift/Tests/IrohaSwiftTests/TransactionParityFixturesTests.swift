@@ -13,11 +13,19 @@ final class TransactionParityFixturesTests: XCTestCase {
             let destination = try instruction.argument(named: "destination")
             let quantity = try instruction.argument(named: "quantity")
             let components = try TransactionParityFixturesTests.parseAssetLiteral(assetLiteral)
+            let authority = try TransactionParityFixturesTests.canonicalAccountId(
+                fixture.payload.authority,
+                field: "payload.authority"
+            )
+            let canonicalDestination = try TransactionParityFixturesTests.canonicalAccountId(
+                destination,
+                field: "Transfer.TransferAsset.destination"
+            )
             let request = TransferRequest(chainId: fixture.payload.chain,
-                                          authority: fixture.payload.authority,
+                                          authority: authority,
                                           assetDefinitionId: components.definitionId,
                                           quantity: quantity,
-                                          destination: destination,
+                                          destination: canonicalDestination,
                                           description: fixture.payload.metadata["memo"],
                                           ttlMs: fixture.payload.timeToLiveMs,
                                           nonce: fixture.payload.nonce)
@@ -34,8 +42,12 @@ final class TransactionParityFixturesTests: XCTestCase {
             let assetLiteral = try instruction.argument(named: "asset")
             let quantity = try instruction.argument(named: "quantity")
             let components = try TransactionParityFixturesTests.parseAssetLiteral(assetLiteral)
+            let authority = try TransactionParityFixturesTests.canonicalAccountId(
+                fixture.payload.authority,
+                field: "payload.authority"
+            )
             let request = MintRequest(chainId: fixture.payload.chain,
-                                      authority: fixture.payload.authority,
+                                      authority: authority,
                                       assetDefinitionId: components.definitionId,
                                       quantity: quantity,
                                       destination: components.accountId,
@@ -54,8 +66,12 @@ final class TransactionParityFixturesTests: XCTestCase {
             let assetLiteral = try instruction.argument(named: "asset")
             let quantity = try instruction.argument(named: "quantity")
             let components = try TransactionParityFixturesTests.parseAssetLiteral(assetLiteral)
+            let authority = try TransactionParityFixturesTests.canonicalAccountId(
+                fixture.payload.authority,
+                field: "payload.authority"
+            )
             let request = BurnRequest(chainId: fixture.payload.chain,
-                                      authority: fixture.payload.authority,
+                                      authority: authority,
                                       assetDefinitionId: components.definitionId,
                                       quantity: quantity,
                                       destination: components.accountId,
@@ -105,8 +121,14 @@ final class TransactionParityFixturesTests: XCTestCase {
     }
 
     private func ensureBridgeAvailable() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
+        guard NoritoNativeBridge.shared.supportsTransactions(using: .ed25519) else {
+            throw XCTSkip("NoritoBridge ed25519 transaction encoder unavailable")
+        }
+        guard let seed = Data(hexString: FixtureConstants.signingSeedHex) else {
+            throw FixtureError.invalidSigningSeed
+        }
+        guard NoritoNativeBridge.shared.keypairFromSeed(algorithm: .ed25519, seed: seed) != nil else {
+            throw XCTSkip("NoritoBridge ed25519 seed derivation unavailable")
         }
     }
 
@@ -140,7 +162,23 @@ final class TransactionParityFixturesTests: XCTestCase {
         guard !definitionId.isEmpty, !accountId.isEmpty else {
             throw FixtureError.invalidAssetLiteral(literal)
         }
-        return AssetLiteral(definitionId: String(definitionId), accountId: String(accountId))
+        return AssetLiteral(
+            definitionId: String(definitionId),
+            accountId: try canonicalAccountId(String(accountId), field: "asset.accountId")
+        )
+    }
+
+    private static func canonicalAccountId(_ value: String, field: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw FixtureError.invalidAccountId(field: field, value: value)
+        }
+        do {
+            _ = try AccountAddress.parseEncoded(trimmed)
+            return trimmed
+        } catch {
+            throw FixtureError.invalidAccountId(field: field, value: value)
+        }
     }
 }
 
@@ -308,6 +346,7 @@ private enum FixtureError: Error, LocalizedError {
     case missingInstruction(String)
     case missingArgument(String, instruction: String)
     case invalidAssetLiteral(String)
+    case invalidAccountId(field: String, value: String)
     case invalidSigningSeed
     case bridgeKeypairUnavailable
 
@@ -323,6 +362,8 @@ private enum FixtureError: Error, LocalizedError {
             return "instruction \(instruction) missing argument '\(arg)'"
         case let .invalidAssetLiteral(literal):
             return "asset literal '\(literal)' is invalid"
+        case let .invalidAccountId(field, value):
+            return "account id for \(field) must be encoded-only (received '\(value)')"
         case .invalidSigningSeed:
             return "fixture signing seed could not be decoded"
         case .bridgeKeypairUnavailable:

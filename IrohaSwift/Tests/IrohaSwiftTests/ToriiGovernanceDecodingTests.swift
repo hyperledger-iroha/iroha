@@ -4,7 +4,7 @@ import XCTest
 final class ToriiGovernanceDecodingTests: XCTestCase {
     func testGovernanceLockRecordAcceptsStringAmount() throws {
         let json = """
-        {"owner":"alice@wonderland","amount":"123","expiry_height":10,"direction":1,"duration_blocks":5}
+        {"owner":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","amount":"123","expiry_height":10,"direction":1,"duration_blocks":5}
         """.data(using: .utf8)!
         let record = try JSONDecoder().decode(ToriiGovernanceLockRecord.self, from: json)
         XCTAssertEqual(record.amount, "123")
@@ -12,7 +12,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
 
     func testGovernanceLockRecordRejectsFloatAmount() {
         let json = """
-        {"owner":"alice@wonderland","amount":1.5,"expiry_height":10,"direction":1,"duration_blocks":5}
+        {"owner":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","amount":1.5,"expiry_height":10,"direction":1,"duration_blocks":5}
         """.data(using: .utf8)!
 
         XCTAssertThrowsError(try JSONDecoder().decode(ToriiGovernanceLockRecord.self, from: json))

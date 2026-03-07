@@ -22,14 +22,14 @@ final class CanonicalRequestTests: XCTestCase {
         let signingKey = try SigningKey.ed25519(privateKey: seed)
         let message = CanonicalRequest.canonicalMessage(
             method: "get",
-            path: "/v1/accounts/alice@wonderland/assets",
+            path: "/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/assets",
             query: "limit=1",
             body: Data("{\"foo\":1}".utf8)
         )
         let headers = try CanonicalRequest.signingHeaders(
-            accountId: "alice@wonderland",
+            accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
             method: "get",
-            path: "/v1/accounts/alice@wonderland/assets",
+            path: "/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/assets",
             query: "limit=1",
             body: Data("{\"foo\":1}".utf8),
             signer: signingKey

@@ -423,8 +423,7 @@ public enum AccountId {
     ///
     /// Semantics:
     /// - If the literal is an encoded `AccountAddress` (IH58/compressed), returns the canonical IH58 rendering.
-    /// - Otherwise, trims outer whitespace and (when possible) canonicalizes the domain label casing in `addr@domain`
-    ///   forms.
+    /// - Otherwise, returns the trimmed literal unchanged.
     public static func normalizeForComparison(
         _ literal: String,
         expectedPrefix: UInt16 = defaultNetworkPrefix
@@ -437,14 +436,6 @@ public enum AccountId {
             return ih58
         }
 
-        if let at = trimmed.firstIndex(of: "@") {
-            let addressPart = String(trimmed[..<at])
-            let domainPart = String(trimmed[trimmed.index(after: at)...])
-            if !addressPart.isEmpty, !domainPart.isEmpty,
-               let canonicalDomain = try? AccountAddress.canonicalizeDomainLabel(domainPart) {
-                return "\(addressPart)@\(canonicalDomain)"
-            }
-        }
         return trimmed
     }
 

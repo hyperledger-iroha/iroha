@@ -5,7 +5,7 @@ import XCTest
 
 final class OfflineToriiEncodingTests: XCTestCase {
     func testSpendReceiptToriiJSONEncoding() throws {
-        let certificate = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
+        let certificate = try normalizedCertificate(OfflineWalletCertificate.load(from: fixtureURL("certificate.json")))
         let txId = IrohaHash.hash(Data("tx-id".utf8))
         let challengeHash = IrohaHash.hash(Data("challenge".utf8))
         let proof = OfflinePlatformProof.appleAppAttest(
@@ -63,7 +63,7 @@ final class OfflineToriiEncodingTests: XCTestCase {
     }
 
     func testTransferToriiJSONEncoding() throws {
-        let certificate = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
+        let certificate = try normalizedCertificate(OfflineWalletCertificate.load(from: fixtureURL("certificate.json")))
         let receipt = try makeReceipt(certificate: certificate)
         let resultingCommitment = Data(repeating: 0x22, count: 32)
         let balanceProof = OfflineBalanceProof(
@@ -188,7 +188,7 @@ final class OfflineToriiEncodingTests: XCTestCase {
     }
 
     func testTransferToriiJSONIncludesPerCertificateBalanceProofs() throws {
-        let certificate = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
+        let certificate = try normalizedCertificate(OfflineWalletCertificate.load(from: fixtureURL("certificate.json")))
         let receiptA = try makeReceipt(certificate: certificate)
         let challengeHashB = IrohaHash.hash(Data("challenge-b".utf8))
         let receiptB = OfflineSpendReceipt(
@@ -247,7 +247,7 @@ final class OfflineToriiEncodingTests: XCTestCase {
     }
 
     func testSubmitRequestsFromModels() throws {
-        let certificate = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
+        let certificate = try normalizedCertificate(OfflineWalletCertificate.load(from: fixtureURL("certificate.json")))
         let receipt = try makeReceipt(certificate: certificate)
         let balanceProof = OfflineBalanceProof(
             initialCommitment: certificate.allowance,
@@ -274,7 +274,7 @@ final class OfflineToriiEncodingTests: XCTestCase {
             expiresAtMs: 1_700_000_100_000
         )
         let settlementRequest = try ToriiOfflineSettlementSubmitRequest(
-            authority: "alice@wonderland",
+            authority: certificate.controller,
             privateKey: "ed0120deadbeef",
             transfer: transfer,
             buildClaimOverrides: [claimOverride],
@@ -318,7 +318,7 @@ final class OfflineToriiEncodingTests: XCTestCase {
         XCTAssertEqual((buildClaimIssueObject["expires_at_ms"] as? NSNumber)?.uint64Value, 1_700_000_100_000)
 
         let registerRequest = try ToriiOfflineAllowanceRegisterRequest(
-            authority: "alice@wonderland",
+            authority: certificate.controller,
             privateKey: "ed0120deadbeef",
             certificate: certificate
         )
@@ -366,6 +366,38 @@ final class OfflineToriiEncodingTests: XCTestCase {
         var proof = Data(repeating: 0, count: OfflineBalanceProofBuilder.proofLength)
         proof[0] = version
         return proof
+    }
+
+    private func normalizedCertificate(_ certificate: OfflineWalletCertificate) throws -> OfflineWalletCertificate {
+        let allowance = OfflineAllowanceCommitment(
+            assetId: try makeNoritoAssetId(name: "xor", domain: "sora", accountId: certificate.controller),
+            amount: certificate.allowance.amount,
+            commitment: certificate.allowance.commitment
+        )
+        return OfflineWalletCertificate(
+            controller: certificate.controller,
+            operatorId: certificate.operatorId,
+            allowance: allowance,
+            spendPublicKey: certificate.spendPublicKey,
+            attestationReport: certificate.attestationReport,
+            issuedAtMs: certificate.issuedAtMs,
+            expiresAtMs: certificate.expiresAtMs,
+            policy: certificate.policy,
+            operatorSignature: certificate.operatorSignature,
+            metadata: certificate.metadata,
+            verdictId: certificate.verdictId,
+            attestationNonce: certificate.attestationNonce,
+            refreshAtMs: certificate.refreshAtMs
+        )
+    }
+
+    private func makeNoritoAssetId(name: String,
+                                   domain: String,
+                                   accountId: String) throws -> String {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(try OfflineNorito.encodeAssetDefinitionId(name: name, domain: domain))
+        writer.writeField(try OfflineNorito.encodeAccountId(accountId))
+        return "norito:\(writer.data.hexLowercased())"
     }
 
     private func hashLiteral(_ bytes: Data) -> String {

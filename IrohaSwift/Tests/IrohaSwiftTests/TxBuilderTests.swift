@@ -216,6 +216,10 @@ final class TxBuilderTests: XCTestCase {
     private static let fixturePrivateKeyHex = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
     private static let fixtureChainId = "00000000-0000-0000-0000-000000000000"
     private static let fixtureDomain = "wonderland"
+    private static let fixtureExplorerAccountId = AccountId.make(
+        publicKey: Data(repeating: 0x2A, count: 32),
+        domain: fixtureDomain
+    )
     private static let fixtureAssetDefinition = "rose#wonderland"
     private static let fixtureCreationTimeMs: UInt64 = 1_700_000_000_000
     private enum FixtureError: Error { case invalidKey }
@@ -332,9 +336,7 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testCreationTimeProviderProducesDeterministicHash() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
@@ -370,7 +372,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         let expectation = expectation(description: "rest unavailable")
-        sdk.getAssets(accountId: "alice@wonderland") { result in
+        sdk.getAssets(accountId: Self.fixtureExplorerAccountId) { result in
             switch result {
             case .success:
                 XCTFail("expected failure when REST client is missing")
@@ -637,7 +639,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         let expectation = expectation(description: "rest unavailable")
-        sdk.getAccountTransferHistory(accountId: "alice@wonderland") { result in
+        sdk.getAccountTransferHistory(accountId: Self.fixtureExplorerAccountId) { result in
             switch result {
             case .success:
                 XCTFail("expected failure when REST client is missing")
@@ -654,7 +656,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         do {
-            _ = try await sdk.getAccountTransferHistory(accountId: "alice@wonderland")
+            _ = try await sdk.getAccountTransferHistory(accountId: Self.fixtureExplorerAccountId)
             XCTFail("expected failure when REST client is missing")
         } catch {
             XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
@@ -666,7 +668,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         let expectation = expectation(description: "rest unavailable")
-        sdk.getTransactionHistory(accountId: "alice@wonderland") { result in
+        sdk.getTransactionHistory(accountId: Self.fixtureExplorerAccountId) { result in
             switch result {
             case .success:
                 XCTFail("expected failure when REST client is missing")
@@ -683,7 +685,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         do {
-            _ = try await sdk.getTransactionHistory(accountId: "alice@wonderland")
+            _ = try await sdk.getTransactionHistory(accountId: Self.fixtureExplorerAccountId)
             XCTFail("expected failure when REST client is missing")
         } catch {
             XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
@@ -695,7 +697,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         do {
-            for try await _ in sdk.iterateAccountTransferHistory(accountId: "alice@wonderland") {
+            for try await _ in sdk.iterateAccountTransferHistory(accountId: Self.fixtureExplorerAccountId) {
                 XCTFail("expected no items when REST client is missing")
             }
             XCTFail("expected failure when REST client is missing")
@@ -765,7 +767,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         do {
-            for try await _ in sdk.streamAccountTransferHistory(accountId: "alice@wonderland") {
+            for try await _ in sdk.streamAccountTransferHistory(accountId: Self.fixtureExplorerAccountId) {
                 XCTFail("expected no items when REST client is missing")
             }
             XCTFail("expected failure when REST client is missing")
@@ -932,9 +934,7 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testFallbackTransferMatchesNativeBridge() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
@@ -969,9 +969,7 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testSigningKeyTransferMatchesKeypairEncoding() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
         let keypair = try makeFixtureKeypair()
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
@@ -993,9 +991,7 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testFallbackMintMatchesNativeBridge() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
@@ -1029,9 +1025,7 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testFallbackBurnMatchesNativeBridge() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
@@ -1067,9 +1061,6 @@ final class TxBuilderTests: XCTestCase {
     func testSetMetadataMatchesNativeBridge() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Native transaction encoder unavailable")
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
@@ -1109,9 +1100,6 @@ final class TxBuilderTests: XCTestCase {
     func testGovernanceProposeDeployMatchesNativeBridge() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Native transaction encoder unavailable")
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
@@ -1160,9 +1148,6 @@ final class TxBuilderTests: XCTestCase {
     func testPersistCouncilMatchesNativeBridge() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Native transaction encoder unavailable")
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
@@ -1201,9 +1186,7 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testNativeBridgeTransferWhenAvailable() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
 
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
@@ -1256,9 +1239,7 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testMintNativeBridgeWhenAvailable() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
 
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
@@ -1283,9 +1264,6 @@ final class TxBuilderTests: XCTestCase {
     func testSetMetadataNativeBridgeWhenAvailable() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Native transaction encoder unavailable")
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
 
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
@@ -1306,9 +1284,6 @@ final class TxBuilderTests: XCTestCase {
     func testProposeDeployNativeBridgeWhenAvailable() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Native transaction encoder unavailable")
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
 
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
@@ -1418,9 +1393,7 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testShieldEncodingMatchesNativeBridge() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
@@ -1513,9 +1486,7 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testUnshieldEncodingMatchesNativeBridge() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
         let request = try makeUnshieldRequest(authority: authority)

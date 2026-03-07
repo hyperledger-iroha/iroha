@@ -4,7 +4,8 @@ import XCTest
 
 final class OfflineSpendReceiptTests: XCTestCase {
     func testSigningBytesIgnoreSignatureAndSnapshot() throws {
-        let certificate = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
+        let certificate = try normalizedCertificate(OfflineWalletCertificate.load(from: fixtureURL("certificate.json")))
+        let assetId = try makeNoritoAssetId(name: "xor", domain: "sora", accountId: certificate.controller)
         let txId = IrohaHash.hash(Data("tx-id".utf8))
         let challengeHash = IrohaHash.hash(Data("challenge".utf8))
         let keyId = Data("swift-tests".utf8).base64EncodedString()
@@ -19,7 +20,7 @@ final class OfflineSpendReceiptTests: XCTestCase {
             txId: txId,
             from: certificate.controller,
             to: certificate.controller,
-            assetId: certificate.allowance.assetId,
+            assetId: assetId,
             amount: certificate.allowance.amount,
             issuedAtMs: issuedAtMs,
             invoiceId: "inv-001",
@@ -32,7 +33,7 @@ final class OfflineSpendReceiptTests: XCTestCase {
             txId: txId,
             from: certificate.controller,
             to: certificate.controller,
-            assetId: certificate.allowance.assetId,
+            assetId: assetId,
             amount: certificate.allowance.amount,
             issuedAtMs: issuedAtMs,
             invoiceId: "inv-001",
@@ -47,7 +48,7 @@ final class OfflineSpendReceiptTests: XCTestCase {
             txId: txId,
             from: certificate.controller,
             to: certificate.controller,
-            assetId: certificate.allowance.assetId,
+            assetId: assetId,
             amount: certificate.allowance.amount,
             issuedAtMs: issuedAtMs,
             invoiceId: "inv-001",
@@ -65,12 +66,11 @@ final class OfflineSpendReceiptTests: XCTestCase {
     func testSigningBytesCanonicalizeAccountIds() throws {
         let publicKey = Data(repeating: 0x11, count: 32)
         let domain = "wonderland"
-        let rawAccountId = AccountId.make(publicKey: publicKey, domain: domain)
         let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey, algorithm: "ed25519")
-        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-        let canonicalAccountId = ih58
-        let rawAssetId = "xor#\(domain)#\(rawAccountId)"
-        let canonicalAssetId = "xor#\(domain)#\(canonicalAccountId)"
+        let rawAccountId = try address.toCompressedSora()
+        let canonicalAccountId = try address.toIH58(networkPrefix: 0x02F1)
+        let rawAssetId = try makeNoritoAssetId(name: "xor", domain: domain, accountId: rawAccountId)
+        let canonicalAssetId = try makeNoritoAssetId(name: "xor", domain: domain, accountId: canonicalAccountId)
 
         let allowanceRaw = OfflineAllowanceCommitment(
             assetId: rawAssetId,
@@ -159,5 +159,37 @@ final class OfflineSpendReceiptTests: XCTestCase {
             url.deleteLastPathComponent()
         }
         return url.appendingPathComponent("fixtures/offline_allowance/ios-demo/\(name)")
+    }
+
+    private func makeNoritoAssetId(name: String,
+                                   domain: String,
+                                   accountId: String) throws -> String {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(try OfflineNorito.encodeAssetDefinitionId(name: name, domain: domain))
+        writer.writeField(try OfflineNorito.encodeAccountId(accountId))
+        return "norito:\(writer.data.hexLowercased())"
+    }
+
+    private func normalizedCertificate(_ certificate: OfflineWalletCertificate) throws -> OfflineWalletCertificate {
+        let allowance = OfflineAllowanceCommitment(
+            assetId: try makeNoritoAssetId(name: "xor", domain: "sora", accountId: certificate.controller),
+            amount: certificate.allowance.amount,
+            commitment: certificate.allowance.commitment
+        )
+        return OfflineWalletCertificate(
+            controller: certificate.controller,
+            operatorId: certificate.operatorId,
+            allowance: allowance,
+            spendPublicKey: certificate.spendPublicKey,
+            attestationReport: certificate.attestationReport,
+            issuedAtMs: certificate.issuedAtMs,
+            expiresAtMs: certificate.expiresAtMs,
+            policy: certificate.policy,
+            operatorSignature: certificate.operatorSignature,
+            metadata: certificate.metadata,
+            verdictId: certificate.verdictId,
+            attestationNonce: certificate.attestationNonce,
+            refreshAtMs: certificate.refreshAtMs
+        )
     }
 }
