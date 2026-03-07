@@ -136,9 +136,8 @@ Notes:
 
 - `Hash` values (e.g., `code_hash`, `abi_hash`) are encoded as 64‑char lowercase hex strings (32 bytes).
 - `AccountId` strings use canonical IH58 literals (no `@domain` suffix).
-  Optional `@<domain>` suffixes are accepted as routing hints, and aliases
-  (`<label>@<domain>`) / `<public_key>@<domain>` are accepted via the resolver
-  (`/v1/accounts/resolve`).
+  Encoded account literals are accepted (`IH58` preferred; `sora…` compressed
+  accepted) and normalized to canonical IH58.
 - `ExposedPrivateKey` accepts either a bare multihash hex string or its algorithm-prefixed variant (e.g., `ed25519:…`). Responses normalise to bare multihash hex. Multihash hex is canonical: varint bytes are lowercase, payload bytes are uppercase, and `0x` prefixes are rejected.
 
 ### GET response: ContractCodeRecordDto

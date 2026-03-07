@@ -18,9 +18,10 @@
    (صرف `0x...`؛ بغیر prefix کے hex کو مسترد کریں) قبول کرنا چاہیے۔ ان پٹس میں
    routing hints کے لیے `@<domain>` لاحقہ ہو سکتا ہے؛ `<label>@<domain>` aliases
    کے لیے resolver درکار ہے۔ `public_key@domain` (multihash hex) بدستور سپورٹڈ ہے۔
-3. **Resolvers:** ڈومین کے بغیر IH58/sora parsing کے لیے domain‑selector resolver چاہیے
-   سوائے اس کے کہ selector implicit default ہو (configured default domain label استعمال کریں)۔
-   UAID (`uaid:...`) اور opaque (`opaque:...`) literals کے لیے بھی resolvers درکار ہیں۔
+3. **Resolvers:** selector-free domainless IH58/sora parsing configured default domain
+   label پر direct bind کرتی ہے؛ domain-selector resolver canonical flows میں required نہیں۔
+   Legacy selector-bearing literals کے لیے resolver/fallback اب بھی useful ہے، جبکہ
+   UAID (`uaid:...`) اور opaque (`opaque:...`) literals کے لیے resolvers بدستور درکار ہیں۔
 4. **IH58 checksum:** `IH58PRE || prefix || payload` پر Blake2b‑512 استعمال کریں اور
    پہلے 2 بائٹس لیں۔ compressed alphabet base **105** ہے۔
 5. **Curve gating:** SDKs کا ڈیفالٹ صرف Ed25519 ہے۔ ML‑DSA/GOST/SM کے لیے واضح opt‑in دیں

@@ -90,7 +90,25 @@ fn ensure_lock_hints_complete(map: &json::Map) -> Result<()> {
     Ok(())
 }
 
-fn ensure_public_input_owner_canonical(map: &json::Map) -> Result<()> {
+fn canonicalize_account_literal(value: &str, field: &str) -> Result<String> {
+    let owner = value.trim();
+    if owner.is_empty() {
+        return Err(eyre!(
+            "{field} must be an IH58 or sora compressed account id"
+        ));
+    }
+    if owner.contains('@') {
+        return Err(eyre!(
+            "{field} must not include '@domain'; use IH58 or sora compressed only"
+        ));
+    }
+
+    let parsed = AccountId::parse_encoded(owner)
+        .map_err(|err| eyre!("{field} must be an IH58 or sora compressed account id: {err}"))?;
+    Ok(parsed.canonical().to_owned())
+}
+
+fn normalize_public_input_owner(map: &mut json::Map) -> Result<()> {
     let Some(value) = map.get("owner") else {
         return Ok(());
     };
@@ -99,18 +117,11 @@ fn ensure_public_input_owner_canonical(map: &json::Map) -> Result<()> {
     }
     let owner = value
         .as_str()
-        .ok_or_else(|| eyre!("owner must be a canonical account id"))?;
-    let owner = owner.trim();
-    if owner.is_empty() {
-        return Err(eyre!("owner must be a canonical account id"));
-    }
-
-    match AccountId::parse(owner) {
-        Ok(parsed) if parsed.canonical() == owner => Ok(()),
-        Ok(_) => Err(eyre!("owner must use canonical account id form")),
-        Err(err) if err.reason() == "ERR_DOMAIN_SELECTOR_UNRESOLVED" => Ok(()),
-        Err(_) => Err(eyre!("owner must be a canonical account id")),
-    }
+        .ok_or_else(|| eyre!("owner must be an IH58 or sora compressed account id"))?
+        .to_owned();
+    let canonical = canonicalize_account_literal(&owner, "owner")?;
+    map.insert("owner".to_owned(), json::Value::String(canonical));
+    Ok(())
 }
 
 fn normalize_public_inputs(map: &mut json::Map) -> Result<()> {
@@ -162,7 +173,7 @@ pub struct VoteArgs {
     /// Optional JSON file containing public inputs for ZK voting mode.
     #[arg(long, value_name = "PATH")]
     pub public: Option<std::path::PathBuf>,
-    /// Owner account id for plain voting mode (must equal transaction authority).
+    /// Owner account id for plain voting mode (IH58 (preferred) or sora compressed; must equal transaction authority).
     #[arg(long)]
     pub owner: Option<String>,
     /// Locked amount for plain voting mode (string to preserve large integers).
@@ -256,7 +267,7 @@ pub struct VoteZkArgs {
     /// Path to a JSON file with additional public inputs (optional)
     #[arg(long)]
     pub public: Option<std::path::PathBuf>,
-    /// Optional owner hint mirrored into public inputs.
+    /// Optional owner hint mirrored into public inputs (IH58 (preferred) or sora compressed).
     #[arg(long)]
     pub owner: Option<String>,
     /// Optional lock amount hint mirrored into public inputs.
@@ -287,6 +298,7 @@ impl Run for VoteZkArgs {
             .ok_or_else(|| eyre!("public inputs JSON must be an object"))?;
         normalize_public_inputs(public_obj)?;
         if let Some(owner) = self.owner {
+            let owner = canonicalize_account_literal(&owner, "--owner")?;
             public_obj.insert("owner".to_owned(), json_value(&owner)?);
         }
         if let Some(amount) = self.amount {
@@ -303,7 +315,7 @@ impl Run for VoteZkArgs {
             public_obj.insert("nullifier".to_owned(), json_value(&canonical)?);
         }
         ensure_lock_hints_complete(public_obj)?;
-        ensure_public_input_owner_canonical(public_obj)?;
+        normalize_public_input_owner(public_obj)?;
         let body = json_object(vec![
             ("election_id", json_value(&self.election_id)?),
             ("proof_b64", json_value(&self.proof_b64)?),
@@ -355,9 +367,10 @@ pub struct VotePlainArgs {
 impl Run for VotePlainArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
+        let owner = canonicalize_account_literal(&self.owner, "--owner")?;
         let body = json_object(vec![
             ("referendum_id", json_value(&self.referendum_id)?),
-            ("owner", json_value(&self.owner)?),
+            ("owner", json_value(&owner)?),
             ("amount", json_value(&self.amount)?),
             ("duration_blocks", json_value(&self.duration_blocks)?),
             ("direction", json_value(&self.direction)?),
@@ -648,8 +661,8 @@ mod tests {
         let noncanonical = format!("{address_hex}@{}", owner.domain());
         let mut map = json::Map::new();
         map.insert("owner".to_string(), json::Value::String(noncanonical));
-        let err = ensure_public_input_owner_canonical(&map).expect_err("noncanonical owner");
-        assert!(err.to_string().contains("canonical account id form"));
+        let err = normalize_public_input_owner(&mut map).expect_err("noncanonical owner");
+        assert!(err.to_string().contains("must not include '@domain'"));
     }
 
     #[test]
@@ -665,8 +678,26 @@ mod tests {
         let mut map = json::Map::new();
         map.insert("owner".to_string(), json::Value::String(owner));
         assert!(
-            ensure_public_input_owner_canonical(&map).is_ok(),
+            normalize_public_input_owner(&mut map).is_ok(),
             "implicit owner should be accepted when selector resolution is unavailable"
+        );
+    }
+
+    #[test]
+    fn public_inputs_accept_compressed_owner_and_canonicalize() {
+        let owner = ALICE_ID.clone();
+        let compressed = owner
+            .to_account_address()
+            .expect("address")
+            .to_compressed_sora()
+            .expect("compressed");
+        let canonical = owner.to_string();
+        let mut map = json::Map::new();
+        map.insert("owner".to_string(), json::Value::String(compressed));
+        normalize_public_input_owner(&mut map).expect("owner normalize");
+        assert_eq!(
+            map.get("owner").and_then(json::Value::as_str),
+            Some(canonical.as_str())
         );
     }
 }

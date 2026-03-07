@@ -151,12 +151,20 @@ fn parse_account_address_literal(input: &str) -> (Option<String>, AddressParseOb
     if input.is_empty() {
         return (None, AddressParseObservation::default());
     }
-    match AccountAddress::parse_any(input, None) {
-        Ok((address, format)) => {
+    match AccountAddress::parse_encoded(input, None) {
+        Ok((address, format @ AccountAddressFormat::IH58 { .. }))
+        | Ok((address, format @ AccountAddressFormat::Compressed)) => {
             let canonical = address.canonical_hex().unwrap_or_else(|_| input.to_owned());
             (
                 Some(canonical),
                 AddressParseObservation::from_success(input, format, &address),
+            )
+        }
+        Ok((_, AccountAddressFormat::CanonicalHex)) => {
+            let code = AccountAddressError::UnsupportedAddressFormat.code_str();
+            (
+                Some(input.to_owned()),
+                AddressParseObservation::from_error(input, code),
             )
         }
         Err(err) => {
@@ -428,10 +436,7 @@ const ISO_PACS008_CONTEXT: &str = "/v1/iso20022/pacs008";
 const ISO_PACS009_CONTEXT: &str = "/v1/iso20022/pacs009";
 
 fn parse_config_account_id(literal: &str, field: &str) -> eyre::Result<AccountId> {
-    #[cfg(test)]
-    crate::ensure_test_domain_selector_resolver();
-
-    AccountId::parse(literal)
+    AccountId::parse_encoded(literal)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .wrap_err_with(|| format!("{field} must parse as an account identifier"))
 }
@@ -1358,8 +1363,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_account_address_literal_detects_local_selector() {
-        let domain: DomainId = "treasury".parse().expect("domain");
+    fn parse_account_address_literal_captures_domain_kind() {
+        let default_domain = iroha_data_model::account::address::default_domain_name();
+        let domain_label = if default_domain.as_ref() == "treasury" {
+            "ledger"
+        } else {
+            "treasury"
+        };
+        let domain: DomainId = domain_label.parse().expect("domain");
         let key_pair =
             iroha_crypto::KeyPair::from_seed(vec![0xAB; 32], iroha_crypto::Algorithm::Ed25519);
         let account = AccountId::new(domain, key_pair.public_key().clone());
@@ -1368,7 +1379,25 @@ mod tests {
         let (value, observation) = super::parse_account_address_literal(&ih58);
         assert!(value.is_some());
         assert_eq!(observation.error_code(), None);
-        assert_eq!(observation.domain_label(), Some("local12"));
+        assert_eq!(observation.domain_label(), Some("default"));
+    }
+
+    #[test]
+    fn parse_account_address_literal_rejects_canonical_hex() {
+        let domain: DomainId = "treasury".parse().expect("domain");
+        let key_pair =
+            iroha_crypto::KeyPair::from_seed(vec![0xAC; 32], iroha_crypto::Algorithm::Ed25519);
+        let account = AccountId::new(domain, key_pair.public_key().clone());
+        let address = AccountAddress::from_account_id(&account).expect("address");
+        let canonical = address.canonical_hex().expect("canonical hex");
+
+        let (value, observation) = super::parse_account_address_literal(&canonical);
+        assert_eq!(value.as_deref(), Some(canonical.as_str()));
+        assert_eq!(
+            observation.error_code(),
+            Some(AccountAddressError::UnsupportedAddressFormat.code_str())
+        );
+        assert_eq!(observation.domain_label(), None);
     }
 
     #[test]

@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
+    mock_wsv::{AccountSubjectId, DomainId, MockWorldStateView, ScopedAccountId, WsvHost},
     syscalls,
 };
+use norito::to_bytes;
 
 mod common;
 use common::assemble_syscalls;
@@ -24,23 +25,40 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn test_account(domain: DomainId, public_key: PublicKey) -> ScopedAccountId {
+    ScopedAccountId::new(domain, public_key)
+}
+
+fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
+    let buf = to_bytes(account).expect("encode account into Norito");
+    make_tlv(PointerType::AccountId as u16, &buf)
+}
+
 #[test]
 fn nft_burn_asset_then_unregister_account_succeeds() {
     // Caller starts as alice; later we switch caller to bob for the burn.
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
+    let alice_domain: DomainId = "domain".parse().unwrap();
+    let bob_domain: DomainId = "wonder".parse().unwrap();
+    let alice_pk: PublicKey =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
             .unwrap();
-    let bob: AccountId =
-        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4@wonder"
+    let bob_pk: PublicKey =
+        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
             .parse()
             .unwrap();
+    let alice = test_account(alice_domain, alice_pk);
+    let bob = test_account(bob_domain, bob_pk);
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     // Alice can register domain/account
     wsv.grant_permission(&alice, ivm::mock_wsv::PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, ivm::mock_wsv::PermissionToken::RegisterAccount);
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -52,8 +70,8 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    // Register bob@wonder
-    let acc = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    // Register the recipient account
+    let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -63,7 +81,7 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     // Mint NFT owned by bob
     let nft_id = b"rose:uuid:ok$wonder";
     let tlv_nft = make_tlv(PointerType::NftId as u16, nft_id);
-    let tlv_owner = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let tlv_owner = make_account_tlv(&bob);
     vm.memory.preload_input(0, &tlv_nft).expect("preload input");
     vm.memory
         .preload_input(tlv_nft.len() as u64 + 8, &tlv_owner)
@@ -75,7 +93,7 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     vm.run().expect("mint nft");
 
     // Attempt to unregister bob: fails because NFT exists
-    let acc = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_uacc = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ACCOUNT as u8]);
@@ -85,7 +103,7 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     // Switch caller to bob to burn NFT
     if let Some(any) = vm.host_mut_any() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");
-        host.caller = bob.clone();
+        host.set_caller_subject(AccountSubjectId::from(&bob));
     }
 
     // Burn NFT (owner=bob)
@@ -99,9 +117,9 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     // Switch back to alice and unregister bob: should now succeed
     if let Some(any) = vm.host_mut_any() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");
-        host.caller = alice.clone();
+        host.set_caller_subject(AccountSubjectId::from(&alice));
     }
-    let acc = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.load_program(&prog_uacc).unwrap();

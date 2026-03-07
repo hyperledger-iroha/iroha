@@ -405,7 +405,10 @@ mod tests {
         "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016";
 
     fn account(signatory: &str, domain: &str) -> AccountId {
-        format!("{signatory}@{domain}").parse().expect("account id")
+        AccountId::new(
+            domain.parse().expect("domain id"),
+            signatory.parse().expect("public key"),
+        )
     }
 
     fn asset(id: &str) -> AssetDefinitionId {

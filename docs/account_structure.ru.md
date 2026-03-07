@@ -152,7 +152,7 @@ pub struct Common {
 
 #### 2.1 Расположение байтов заголовка (ADDR-1a)
 
-Каждая каноническая полезная нагрузка имеет вид `header · domain selector · controller`.
+Каждая каноническая полезная нагрузка имеет вид `header · controller`.
 `header` — это одиночный байт, который сообщает, какие правила синтаксического анализатора применяются к байтам, которые
 следовать:
 
@@ -176,43 +176,43 @@ payload bit: │version  │ class  │  norm  │ext │
 норма v1, флаг расширения снят) и `0x0A` для мультиподписных контроллеров (версия 0,
 класс 1, норма v1, флаг расширения снят).
 
-#### 2.2 Кодировки селектора домена (ADDR-1a)
+#### 2.2 Legacy selector compatibility (decode-only)
 
-Селектор домена следует сразу за заголовком и представляет собой объединение тегов:
+Newly encoded canonical payloads do not include a domain-selector segment. For
+backward compatibility, decoders still accept pre-cutover payloads where a
+selector segment appears between header and controller as a tagged union:
 
-| Тег | Значение | Полезная нагрузка | Заметки |
+| Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | Неявный домен по умолчанию | нет | Соответствует настроенному `default_domain_name()`. |
-| `0x01` | Дайджест местного домена | 12 байт | Дайджест = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
-| `0x02` | Запись в глобальном реестре | 4 байта | Прямой порядок байтов `registry_id`; зарезервировано до тех пор, пока не будет отправлен глобальный реестр. |
+| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
+| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
-Метки доменов канонизируются (UTS-46 + STD3 + NFC) перед хешированием. Неизвестные теги вызывают `AccountAddressError::UnknownDomainTag`. При проверке адреса на соответствие домену несовпадающие селекторы вызывают `AccountAddressError::DomainMismatch`.
+Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
 
 ```
-domain selector
+legacy selector segment
 ┌──────────┬──────────────────────────────────────────────┐
 │ tag (u8) │ payload (depends on selector kind, see table)│
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-Селектор находится непосредственно рядом с полезной нагрузкой контроллера, поэтому декодер может перемещаться
-формат провода по порядку: прочитайте байт тега, прочтите полезную нагрузку, специфичную для тега, затем двигайтесь дальше
-в байты контроллера.
+When present, the selector is immediately adjacent to the controller payload, so
+a decoder can walk the wire format in order: read the tag byte, read the
+tag-specific payload, then move on to the controller bytes.
 
-**Примеры выбора**
+**Legacy selector examples**
 
-- *Неявное значение по умолчанию* (`tag = 0x00`). Никакой полезной нагрузки. Пример канонического шестнадцатеричного кода по умолчанию
-  домена с использованием детерминированного тестового ключа:
-  `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
-- *Локальный дайджест* (`tag = 0x01`). Полезная нагрузка — это 12-байтовый дайджест. Пример семени (`treasury`
+- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
+  domain using the deterministic test key:
+  `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
+- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
   `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
-- *Глобальный реестр* (`tag = 0x02`). Полезная нагрузка имеет обратный порядок байтов `registry_id:u32`. Байты
-  которые следуют за полезной нагрузкой, идентичны случаю неявного значения по умолчанию; селектор просто
-  заменяет нормализованную строку домена указателем реестра. Пример использования
-  `registry_id = 0x0000_002A` (decimal42) и детерминированный контроллер по умолчанию:
-  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.  
-  Разбивка: заголовок `0x02`, тег селектора `0x02`, идентификатор реестра `00 00 00 2A`, `0x00`
-  тег контроллера, `0x01` идентификатор кривой, `0x20` длина ключа, 32-байтовая полезная нагрузка ключа Ed25519.
+- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
+  that follow the payload are identical to the implicit-default case; the selector simply
+  replaces the normalised domain string with a registry pointer. Example using
+  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
+  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
 
 #### 2.3 Кодировки полезной нагрузки контроллера (ADDR-1a)
 
@@ -311,12 +311,12 @@ domain selector
 - Преобразования IME/NFKC: сора-кана половинной ширины можно нормализовать до их полноширинных форм без нарушения декодирования, но сигнальный индикатор ASCII `sora` и цифры/буквы IH58 ДОЛЖНЫ оставаться ASCII. Полноэкранные индикаторы или свернутые в регистр символы отображают `ERR_MISSING_COMPRESSED_SENTINEL`, полезные данные ASCII во всю ширину поднимают `ERR_INVALID_COMPRESSED_CHAR`, а несовпадения контрольных сумм появляются как `ERR_CHECKSUM_MISMATCH`. Тесты свойств в `crates/iroha_data_model/src/account/address.rs` охватывают эти пути, поэтому SDK и кошельки могут полагаться на детерминированные сбои.
 - При анализе псевдонимов `address@domain` Torii и SDK теперь выдаются одни и те же коды `ERR_*`, когда входные данные IH58 (предпочтительный)/sora (второй лучший) терпят неудачу перед откатом псевдонима (например, несовпадение контрольной суммы, несоответствие дайджеста домена), поэтому клиенты могут передавать структурированные причины, не догадываясь из прозаических строк.
 - Полезные данные локального селектора длиной менее 12 байт отображаются `ERR_LOCAL8_DEPRECATED`, сохраняя жесткое переключение по сравнению с устаревшими дайджестами Local‑8.
-- Бездоменные литералы IH58 (предпочтительный)/sora (второй лучший) разрешают встроенный селектор через преобразователь селектора домена; если ничего не установлено (или селектор не может быть разрешен), синтаксический анализ завершается с ошибкой `ERR_DOMAIN_SELECTOR_UNRESOLVED`. Неявный селектор по умолчанию разрешает настроенную метку домена по умолчанию, не требуя преобразователя.
+- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
 
 #### 2.5 Нормативные бинарные векторы
 
 - **Неявный домен по умолчанию (`default`, начальный байт `0x00`)**  
-  Канонический шестнадцатеричный код: `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
+  Канонический шестнадцатеричный код: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
   Разбивка: заголовок `0x02`, селектор `0x00` (неявное значение по умолчанию), тег контроллера `0x00`, идентификатор кривой `0x01` (Ed25519), длина ключа `0x20`, за которой следует 32-байтовая полезная нагрузка ключа.
 - **Дайджест локального домена (`treasury`, начальный байт `0x01`)**  
   Канонический шестнадцатеричный код: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
@@ -326,7 +326,7 @@ domain selector
 
 | Домен | Начальный байт | Канонический шестнадцатеричный | Сжатый (`sora`) |
 |-------------|-----------|---------------------------------------------------------------------------------------------|------------|
-| по умолчанию | `0x00` | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` |
+| по умолчанию | `0x00` | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
 | казначейство | `0x01` | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | страна чудес | `0x02` | `0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394` | `sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS` |
 | ироха | `0x03` | `0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1` | `sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L` |
@@ -352,7 +352,7 @@ domain selector
 
 | Аккаунт/селектор | Литерал IH58 (префикс `0x02F1`) | Сора сжата (`sora`) литерал |
 |----|--------------------------------|-------------------------|
-| `default` домен (неявный селектор, начальное значение `0x00`) | `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` (необязательный суффикс `@default` при предоставлении явных подсказок по маршрутизации) |
+| `default` домен (неявный селектор, начальное значение `0x00`) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (необязательный суффикс `@default` при предоставлении явных подсказок по маршрутизации) |
 | `treasury` (селектор локального дайджеста, начальное значение `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | Указатель глобального реестра (`registry_id = 0x0000_002A`, эквивалент `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
@@ -398,7 +398,7 @@ domain selector
 литералы для каждой канонической полезной нагрузки. Основные моменты:
 
 - **`addr-single-default-ed25519` (Сора Нексус, префикс `0x02F1`).**  
-  IH58 `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`, сжатый (`sora`)
+  IH58 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, сжатый (`sora`)
   `sora2QG…U4N5E5`. Тории генерирует именно эти строки из `AccountId`
   реализация `Display` (канонический IH58) и `AccountAddress::to_compressed_sora`.
 - **`addr-global-registry-002a` (селектор реестра → казначейство).**  
@@ -586,10 +586,10 @@ Nexus публикует **манифест, предназначенный то
    CLI принимает IH58, `sora…` и канонические литералы `0x…`; добавить
    `@<domain>` только тогда, когда вам нужно сохранить метку для манифестов.
    В сводке JSON этот домен отображается через поле `input_domain`, и
-   `--append-domain` воспроизводит преобразованную кодировку как `<address>@<domain>` для
+   `legacy  suffix` воспроизводит преобразованную кодировку как `<address>@<domain>` для
    различия манифеста (этот суффикс является метаданными, а не каноническим идентификатором учетной записи).
    Для экспорта, ориентированного на новую строку, используйте
-   `iroha tools address normalize --input <file> --only-local` для массового преобразования локальных
+   `iroha tools address normalize --input <file> legacy-selector input mode` для массового преобразования локальных
    селекторы в каноническую форму IH58 (предпочтительно), сжатую (`sora`, вторую лучшую), шестнадцатеричную или JSON-форму с пропуском
    нелокальные строки. Когда аудиторам нужны доказательства в виде электронных таблиц, запустите
    `iroha tools address audit --input <file> --format csv` для вывода сводки в формате CSV.
@@ -658,16 +658,15 @@ Nexus публикует **манифест, предназначенный то
   дополнительные метки `<address>@<domain>`, по умолчанию выводится IH58 с использованием префикса Sora Nexus (`753`),
   и выдает сжатый алфавит только для Sora только тогда, когда операторы явно запрашивают его с помощью
   `--format compressed` или режим сводки JSON. Команда применяет ожидания префикса для
-  анализирует, записывает предоставленный домен (`input_domain` в JSON) и флаг `--append-domain`
+  анализирует, записывает предоставленный домен (`input_domain` в JSON) и флаг `legacy  suffix`
   воспроизводит преобразованную кодировку как `<address>@<domain>`, поэтому различия манифеста остаются эргономичными.
 - **Удобство кошелька/проводника:** Следуйте [правилам отображения адреса](source/sns/address_display_guidelines.md).
   поставляется с ADDR-6 — предлагает кнопки двойного копирования, сохраняет IH58 в качестве полезной нагрузки QR и предупреждает
   Пользователи отмечают, что сжатая форма `sora…` предназначена только для Sora и допускает перезапись IME.
 - **Интеграция Тори:** Кэшируйте манифесты Nexus с соблюдением TTL,
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` детерминированно, и
-  выставьте `POST /v1/accounts/resolve` для канонизации `alias@domain`,
-  `public_key@domain`, `uaid:`/`opaque:` литералы или закодированные адреса в
-  IH58 при возврате разрешенного домена и источника.
+  keep account-literal parsing encoded-only (`IH58` preferred, `sora…`
+  compressed accepted) with canonical IH58 output.
 
 ### Форматы ответов Тории
 
@@ -675,7 +674,7 @@ Nexus публикует **манифест, предназначенный то
   `POST /v1/accounts/query` принимает то же поле внутри конверта JSON.
   Поддерживаемые значения:
   - `ih58` (по умолчанию) — ответы выдают канонические полезные данные IH58 Base58 (например,
-    `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`).
+    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
   - `compressed` — ответы выдают сжатое представление `sora…` только для Sora, пока
     сохранение канонических параметров фильтров/путей.
 - Неверные значения возвращают `400` (`QueryExecutionFail::Conversion`). Это позволяет

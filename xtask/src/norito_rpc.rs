@@ -625,7 +625,7 @@ impl RawPayloadFixture {
             signed_bytes,
             summary: PayloadSummary {
                 chain: self.payload.chain.clone(),
-                authority: self.payload.authority.clone(),
+                authority: payload_value.authority.to_string(),
                 creation_time_ms: self.payload.creation_time_ms,
                 ttl_ms: self.payload.ttl_ms,
                 nonce: self.payload.nonce,
@@ -974,6 +974,12 @@ fn build_payload_fixtures_json(
         );
 
         let mut payload = raw.payload_json.clone();
+        if let Some(payload_obj) = payload.as_object_mut() {
+            payload_obj.insert(
+                "authority".to_owned(),
+                Value::String(fixture.summary.authority.clone()),
+            );
+        }
         let wire_payloads = wire_payloads_from_encoded(&fixture.payload_bytes)?;
         if !wire_payloads.is_empty() {
             apply_wire_payloads_to_payload_json(&mut payload, &wire_payloads)?;
@@ -1411,7 +1417,7 @@ mod tests {
     fn fixture(name: &str) -> FixtureEntry {
         FixtureEntry {
             name: name.to_string(),
-            authority: "alice@wonderland".into(),
+            authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
             chain: "00000001".into(),
             creation_time_ms: 1_735_000_000_000,
             encoded_file: format!("{name}.norito"),

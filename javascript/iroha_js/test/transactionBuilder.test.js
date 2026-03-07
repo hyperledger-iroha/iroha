@@ -41,25 +41,27 @@ import { AccountAddress } from "../src/address.js";
 import { makeNativeTest } from "./helpers/native.js";
 
 const AUTHORITY_ID_RAW =
-  "ED0120BC35289D74AF3796470409268AFD7ADDA7BB2A4627B10C24BE17864D1116DA31@wonderland";
+  "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W";
 const AUTHORITY_ID = ih58FromEd25519AccountId(AUTHORITY_ID_RAW);
-const AUTHORITY_ID_INPUT = AUTHORITY_ID_RAW.toLowerCase();
+const AUTHORITY_ID_INPUT = ih58FromEd25519AccountId(AUTHORITY_ID_RAW);
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
 const RELAY_ACCOUNT_ID_RAW =
-  "ED012004F0B5D18313224ACA936EEAD1D08610F26C0F2727AD36C0425DB3415C84F4CF@wonderland";
+  "6cmzPVPX4Vnjpp7MFrUdgoZ9scoVXwFPcp4U6r6yELFetMDx2taw8et";
 const RELAY_ACCOUNT_ID = ih58FromEd25519AccountId(RELAY_ACCOUNT_ID_RAW);
-const RELAY_ACCOUNT_ID_INPUT = RELAY_ACCOUNT_ID_RAW.toLowerCase();
+const RELAY_ACCOUNT_ID_INPUT = ih58FromEd25519AccountId(RELAY_ACCOUNT_ID_RAW);
 const ASSET_ID = `rose##${AUTHORITY_ID}`;
 const ASSET_ID_INPUT = `rose##${AUTHORITY_ID_INPUT}`;
 const test = makeNativeTest(baseTest);
 
 function ih58FromEd25519AccountId(raw) {
-  const atIndex = raw.lastIndexOf("@");
+  const trimmed = raw.trim();
+  const atIndex = trimmed.lastIndexOf("@");
   if (atIndex === -1) {
-    throw new Error("expected <signatory>@<domain> format");
+    const { address } = AccountAddress.parseAny(trimmed);
+    return address.toIH58();
   }
-  const signatory = raw.slice(0, atIndex).trim().toUpperCase();
-  const domain = raw.slice(atIndex + 1).trim();
+  const signatory = trimmed.slice(0, atIndex).trim().toUpperCase();
+  const domain = trimmed.slice(atIndex + 1).trim();
   if (!signatory.startsWith("ED0120")) {
     throw new Error("expected ed25519 multihash signatory");
   }
@@ -336,9 +338,9 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
 test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer arrays", () => {
   const captures = [];
   const secondAccountIdRaw =
-    "ED0120935DC855E1977DB7CF24E7C4E0015CBAC9D4A2DDB814C3F23A4A032B11D8EBFD@wonderland";
+    "6cmzPVPX7iXwUZwgBeaKv96unyGNU1Z5xSmzKApk6TUXv7bTs4t4wZm";
   const secondAccountId = ih58FromEd25519AccountId(secondAccountIdRaw);
-  const secondAccountIdInput = secondAccountIdRaw.toLowerCase();
+  const secondAccountIdInput = ih58FromEd25519AccountId(secondAccountIdRaw);
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {

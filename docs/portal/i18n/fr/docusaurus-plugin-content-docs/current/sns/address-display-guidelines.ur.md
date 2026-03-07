@@ -139,7 +139,7 @@ Les interfaces utilisateur et les SDK et le sélecteur sont des outils de sélec
 
 کینونیکل hex مثالیں جنہیں والٹ ٹولنگ docs/tests میں لنک یا embed کر سکتی ہے:| Sélecteur | Hex canonique |
 |--------------------|---------------|
-| ضمنی ڈیفالٹ | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| ضمنی ڈیفالٹ | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | لوکل résumé (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | گلوبل رجسٹری (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -156,7 +156,7 @@ Voici comment ADDR-5 fonctionne avec le flux de travail CLI :
    کرتا ہے۔ `kind` `local12` et CLI stderr sont disponibles en JSON
    résumé et détails des pipelines CI et des SDK en surface
    Vous devez convertir le codage en `<ih58>@<domain>` et utiliser la relecture.
-   Il s'agit de `--append-domain` دیں۔
+   Il s'agit de `legacy  suffix` دیں۔
 2. SDK pour l'assistance/résumé et l'assistant JavaScript pour la description :
 
    ```js
@@ -182,17 +182,17 @@ Voici comment ADDR-5 fonctionne avec le flux de travail CLI :
    Il s'agit d'un `--input -` qui correspond à la norme STDIN) ، ہر
    Voici les résumés canoniques/IH58 (ترجیحی)/compressés (`sora`) (`sora`, deuxième meilleur) pour les résumés JSON رپورٹ بناتی
    rangées comme `--allow-errors` pour les sélecteurs locaux et les sélecteurs locaux
-   CI میں بلاک کرنے کے لئے تیار ہوں تو `--fail-on-warning` آٹومیشن گیٹ کریں۔
+   CI میں بلاک کرنے کے لئے تیار ہوں تو `strict CI post-check` آٹومیشن گیٹ کریں۔
 6. Comment réécrire une nouvelle ligne à une nouvelle ligne
   Feuilles de calcul de correction du sélecteur local
   Il s'agit d'un fichier CSV `input,status,format,...` pour les encodages canoniques.
   avertissements et échecs d'analyse assistant ڈیفالٹ طور پر
   les lignes non locales contiennent des entrées et des entrées encodées (IH58 ترجیحی/compressé (`sora`) deuxième meilleur/hex/JSON)
-  میں بدلتا ہے، اور `--append-domain` پر اصل ڈومین محفوظ رکھتا ہے۔ `--allow-errors`کے ساتھ جوڑیں تاکہ خراب littéraux et dumps پر بھی scan جاری رہے۔
+  میں بدلتا ہے، اور `legacy  suffix` پر اصل ڈومین محفوظ رکھتا ہے۔ `--allow-errors`کے ساتھ جوڑیں تاکہ خراب littéraux et dumps پر بھی scan جاری رہے۔
 7. Automatisation CI/lint `ci/check_address_normalize.sh` pour plus de détails
    `fixtures/account/address_vectors.json` سے Sélecteurs locaux نکال کر
    `iroha tools address normalize` pour le paiement en ligne
-   `iroha tools address audit --fail-on-warning` دوبارہ چلاتی ہے تاکہ ثابت ہو کہ
+   `iroha tools address audit` دوبارہ چلاتی ہے تاکہ ثابت ہو کہ
    publie اب Résumés locaux نہیں نکالتے۔
 
 `torii_address_local8_total{endpoint}` en cours
@@ -224,7 +224,7 @@ sélecteurs et désactiver Pack Gestionnaire d'alertes
 
 cutover کے وقت والٹ/ایکسپلورر ریلیز نوٹس میں درج ذیل bullet شامل کریں:
 
-> **Adresses :** `iroha tools address normalize --only-local --append-domain` helper شامل
+> **Adresses :** `iroha tools address normalize` helper شامل
 > کیا گیا اور اسے CI (`ci/check_address_normalize.sh`) میں وائر کیا گیا تاکہ
 > Un réseau principal local-8/Local-12 est disponible sur le réseau principal Local-8/Local-12. کسی بھی
 > exportations personnalisées comme une liste normalisée

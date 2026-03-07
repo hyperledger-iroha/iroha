@@ -2995,10 +2995,12 @@ mod model {
 
         #[test]
         fn revocation_bundle_signing_roundtrip() {
-            let operator = AccountId::from_str(
-                "ed0120F00DBABE0EDFACE0000000000000000000000000000000000000000000000000@wonderland",
-            )
-            .expect("operator id");
+            let operator = AccountId::new(
+                "wonderland".parse().expect("domain id"),
+                "ed0120F00DBABE0EDFACE0000000000000000000000000000000000000000000000000"
+                    .parse()
+                    .expect("public key"),
+            );
             let revocation = OfflineVerdictRevocation {
                 verdict_id: Hash::new(b"revocation-bundle"),
                 issuer: operator.clone(),

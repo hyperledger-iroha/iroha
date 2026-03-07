@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
+    mock_wsv::{
+        AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost,
+    },
     syscalls,
 };
+use norito::to_bytes;
 
 mod common;
 use common::assemble_syscalls;
@@ -24,22 +27,37 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn account(domain: &str, public_key: &str) -> ScopedAccountId {
+    let domain: DomainId = domain.parse().unwrap();
+    let public_key: PublicKey = public_key.parse().unwrap();
+    ScopedAccountId::new(domain, public_key)
+}
+
+fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
+    let buf = to_bytes(account).expect("encode account into Norito");
+    make_tlv(PointerType::AccountId as u16, &buf)
+}
+
 #[test]
 fn unregister_account_with_existing_nft_fails() {
     // Setup WSV and host with permissions to register domain/account and create NFT
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
-    let bob: AccountId =
-        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4@wonder"
-            .parse()
-            .unwrap();
+    let alice = account(
+        "domain",
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+    );
+    let bob = account(
+        "wonder",
+        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -51,8 +69,8 @@ fn unregister_account_with_existing_nft_fails() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    // Register bob@wonder
-    let acc = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    // Register the recipient account
+    let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -62,7 +80,7 @@ fn unregister_account_with_existing_nft_fails() {
     // Mint NFT owned by bob
     let nft_id = b"rose:uuid:dead$wonder";
     let tlv_nft = make_tlv(PointerType::NftId as u16, nft_id);
-    let tlv_owner = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let tlv_owner = make_account_tlv(&bob);
     vm.memory.preload_input(0, &tlv_nft).expect("preload input");
     vm.memory
         .preload_input(tlv_nft.len() as u64 + 8, &tlv_owner)
@@ -74,7 +92,7 @@ fn unregister_account_with_existing_nft_fails() {
     vm.run().expect("mint nft");
 
     // Attempt to unregister bob -> should fail because bob owns an NFT
-    let acc = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_uacc = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ACCOUNT as u8]);
@@ -84,19 +102,23 @@ fn unregister_account_with_existing_nft_fails() {
 
 #[test]
 fn unregister_domain_with_only_accounts_fails() {
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
-    let bob: AccountId =
-        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4@wonder"
-            .parse()
-            .unwrap();
+    let alice = account(
+        "domain",
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+    );
+    let bob = account(
+        "wonder",
+        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -108,7 +130,7 @@ fn unregister_domain_with_only_accounts_fails() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    let acc = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -126,15 +148,19 @@ fn unregister_domain_with_only_accounts_fails() {
 
 #[test]
 fn unregister_domain_with_only_assets_fails() {
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
+    let alice = account(
+        "domain",
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 

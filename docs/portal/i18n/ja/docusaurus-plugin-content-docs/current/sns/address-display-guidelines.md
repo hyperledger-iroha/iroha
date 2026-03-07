@@ -152,7 +152,7 @@ UIとSDKはセレクタ種別の表示に備えるべきです:
 
 | セレクタ種別 | 正規hex |
 |---------------|---------------|
-| 暗黙のデフォルト | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| 暗黙のデフォルト | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | ローカルdigest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | グローバルレジストリ (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -170,7 +170,7 @@ UIとSDKはセレクタ種別の表示に備えるべきです:
    反映されます。`kind` が `local12` の場合、CLIはstderrに警告を出し、
    JSONサマリも同じ注意を反映してCIパイプラインやSDKが表示できるよう
    にします。変換されたエンコードを `<ih58>@<domain>` として再現したい
-   場合は `--append-domain` を付けます。
+   場合は `legacy  suffix` を付けます。
 2. SDKはJavaScriptヘルパーで同じ警告/サマリを表示できます:
 
    ```js
@@ -198,19 +198,19 @@ UIとSDKはセレクタ種別の表示に備えるべきです:
    サマリを含むJSONレポートを生成し、パースエラーとLocalドメイン警告を
    カウントします。ゴミ行を含むレガシーdumpを監査する場合は
    `--allow-errors` を使い、CIでLocalセレクタをブロックできる段階になったら
-   `--fail-on-warning` で自動化をゲートします。
+   `strict CI post-check` で自動化をゲートします。
 6. 行単位の書き換えが必要な場合は
   を使用します。Localセレクタの是正スプレッドシートには
   を使い、`input,status,format,...` CSVを出力して正規エンコード、警告、
   パース失敗を一度に可視化します。ヘルパーはデフォルトで非Local行を
   スキップし、残りのエントリを要求エンコード(IH58/圧縮/hex/JSON)へ
-  変換し、`--append-domain` 指定時は元のドメインを保持します。
+  変換し、`legacy  suffix` 指定時は元のドメインを保持します。
   `--allow-errors` と併用して、不正リテラルを含むdumpでもスキャンを
   続行してください。
 7. CI/lint自動化は `ci/check_address_normalize.sh` を実行できます。これは
    `fixtures/account/address_vectors.json` からLocalセレクタを抽出し、
    `iroha tools address normalize` で変換し、
-   `iroha tools address audit --fail-on-warning` を再実行して、リリースがLocal
+   `iroha tools address audit` を再実行して、リリースがLocal
    digestを出さなくなったことを証明します。
 
 `torii_address_local8_total{endpoint}` に加えて
@@ -246,7 +246,7 @@ Alertmanagerパック(`dashboards/alerts/address_ingest_rules.yml`)は3つの
 cutover時のウォレット/エクスプローラリリースノートに次の箇条書きを
 含めてください:
 
-> **Addresses:** `iroha tools address normalize --only-local --append-domain` ヘルパーを
+> **Addresses:** `iroha tools address normalize` ヘルパーを
 > 追加し、CI (`ci/check_address_normalize.sh`) に接続しました。これにより、
 > ウォレット/エクスプローラのパイプラインがLocal-8/Local-12がmainnetで
 > ブロックされる前に、レガシーLocalセレクタを正規IH58/圧縮形式へ

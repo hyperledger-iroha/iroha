@@ -2106,8 +2106,7 @@ mod tests {
             seq: 1,
             kind: proto::FrameKind::Control(proto::ConnectControlV1::Approve {
                 wallet_pk: [1u8; 32],
-                account_id: "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
+                account_id: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into(),
                 permissions: None,
                 proof: None,
                 sig_wallet: proto::WalletSignatureV1::new(

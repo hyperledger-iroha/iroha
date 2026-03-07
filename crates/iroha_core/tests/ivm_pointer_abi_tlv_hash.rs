@@ -6,6 +6,12 @@ use iroha_data_model::prelude::*;
 use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use norito::to_bytes;
 
+fn fixture_account(hex_public_key: &str) -> AccountId {
+    let domain: DomainId = "wonderland".parse().expect("domain id");
+    let public_key = hex_public_key.parse().expect("public key");
+    AccountId::new(domain, public_key)
+}
+
 fn build_program() -> Vec<u8> {
     // Program: SCALL SET_ACCOUNT_DETAIL; HALT
     let mut code = Vec::new();
@@ -50,10 +56,8 @@ fn tlv_zero_hash_rejected() {
     let program = build_program();
     let mut vm = IVM::new(u64::MAX);
     // Build host with authority (used as fallback in tests only)
-    let authority: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-            .parse()
-            .unwrap();
+    let authority =
+        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
     vm.set_host(CoreHost::new(authority.clone()));
 
     // Prepare TLV envelopes for (AccountId, Name, Json)
@@ -109,10 +113,8 @@ fn tlv_valid_hash_accepted() {
     let program = build_program();
     let mut vm = IVM::new(u64::MAX);
 
-    let authority: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-            .parse()
-            .unwrap();
+    let authority =
+        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
     vm.set_host(CoreHost::new(authority.clone()));
 
     // TLVs with valid hashes

@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 אפשרויות:
 
 - `--format compressed (`sora`)` para salida `sora...` en lugar de IH58.
-- `--no-append-domain` para emitir literales sin dominio.
+- `domainless output (default)` para emitir literales sin dominio.
 - `--audit-only` להסרת המרה.
 - `--allow-errors` para seguir escaneando cuando aparezcan filas malformadas (בהתאמה ל-el comportamiento de la CLI).
 
@@ -48,7 +48,7 @@ detecciones Local-8 y cero colisiones Local-12 por >=30 dias.
 2. Bloquea ממזג את cuando `audit.json` reporte selectores Local (`domain.kind = local12`).
    en su valor por defecto `true` (החלפת יחידה של `false` en clusters dev/test al
    diagnosticar regresiones) y agrega
-   `iroha tools address normalize --fail-on-warning --only-local` a CI para que intentos de
+   `iroha tools address normalize` a CI para que intentos de
    רגרסיה נפל antes de llegar a produccion.
 
 Consulta el documento fuente para mas detalles, checklists de evidencia y el snippet de

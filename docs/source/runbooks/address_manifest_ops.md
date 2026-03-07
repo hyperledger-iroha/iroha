@@ -90,7 +90,7 @@ address-manifest-<REVISION>/
    - `local_alias` entries MUST embed the 12-byte digest produced by Norm v1
      (use `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
      to confirm; the JSON summary echoes the provided domain via `input_domain` and
-     `--append-domain` replays the converted encoding as `<ih58>@<domain>` for manifests).
+     `legacy  suffix` replays the converted encoding as `<ih58>@<domain>` for manifests).
    - `tombstone` entries MUST reference the exact selector being retired,
      include a `reason_code`, `ticket`, and `replaces_sequence` field.
 

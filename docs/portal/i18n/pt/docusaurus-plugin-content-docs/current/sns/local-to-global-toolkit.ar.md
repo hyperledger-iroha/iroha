@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Nomes:
 
 - `--format compressed (`sora`)` para `sora...` é baseado em IH58.
-- `--no-append-domain` literais não são válidos.
+- `domainless output (default)` literais não são válidos.
 - `--audit-only` لتخطي خطوة التحويل.
 - `--allow-errors` é uma opção de gerenciamento de software que não pode ser usada (como CLI).
 
@@ -48,7 +48,7 @@ Local-8 é definido como Local-12 como >=30 dias.
 2. Selecione `audit.json` em Seletores locais (`domain.kind = local12`).
    على القيمة الافتراضية `true` (قم بالتحويل الى `false` فقط على بيئات dev/test عند
    تشخيص التراجعات) e
-   `iroha tools address normalize --fail-on-warning --only-local` CI é um problema
+   `iroha tools address normalize` CI é um problema
    A maior parte da produção.
 
 راجع المستند المصدر لمزيد من التفاصيل وقوائم الادلة e trecho de nota de lançamento

@@ -147,7 +147,7 @@ payload bit: │version  │ class  │  norm  │ext │
 
 | Селектор قسم | Канонический шестнадцатеричный |
 |---------------|---------------|
-| ضمنی ڈیفالٹ | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| ضمنی ڈیفالٹ | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | Дайджест (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | گلوبل رجسٹری (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |Селектор/состояние مکمل کے لئے `docs/source/references/address_norm_v1.md` اور
 Байтовая диаграмма `docs/account_structure.md` دیکھیں۔
@@ -162,7 +162,7 @@ payload bit: │version  │ class  │  norm  │ext │
    کرتا ہے۔ `kind` `local12` поддерживает стандартный интерфейс командной строки и поддерживает JSON.
    Краткое описание Конвейеры CI Конвейеры SDK и поверхность کر سکیں۔
    Вы можете конвертировать или кодировать `<ih58>@<domain>` или воспроизводить повтор.
-   چاہیں تو `--append-domain` دیں۔
+   چاہیں تو `legacy  suffix` دیں۔
 2. SDK и краткое описание помощника по JavaScript для использования:
 
    ```js
@@ -190,18 +190,18 @@ payload bit: │version  │ class  │  norm  │ext │
    Если вы используете `--input -`, вы можете использовать стандартный стандартный ввод (STDIN) или
    Используйте канонические/IH58 (ترجیحی)/сжатые (`sora`) (`sora`, второй лучший) сводные данные JSON رپورٹ بناتی
    rows ہوں تو `--allow-errors` استعمال کریں، اور جب آپریٹرز Local selectors کو
-   CI может быть использован для `--fail-on-warning`, если вы хотите использовать его.
+   CI может быть использован для `strict CI post-check`, если вы хотите использовать его.
 6. Перезапись новой строки на новую строку
   Таблицы исправлений локального выбора
   Используйте `input,status,format,...` CSV для поддержки канонических кодировок.
   предупреждения и сбои синтаксического анализа. помощник ڈیفالٹ طور پر
   нелокальные строки, а также записи и кодировка (IH58 ترجیحی/compressed (`sora`) второй лучший/шестнадцатеричный/JSON)
-  Если вы хотите использовать `--append-domain`, вы можете использовать его в качестве примера. `--allow-errors`
+  Если вы хотите использовать `legacy  suffix`, вы можете использовать его в качестве примера. `--allow-errors`
   Скачивание литералов и дампов, сканирование и сканирование.
 7. Автоматизация CI/lint `ci/check_address_normalize.sh`.
    `fixtures/account/address_vectors.json` سے Локальные селекторы
    `iroha tools address normalize` سے تبدیل کرتی ہے، اور
-   `iroha tools address audit --fail-on-warning` دوبارہ چلاتی ہے تاکہ ثابت ہو کہ
+   `iroha tools address audit` دوبارہ چلاتی ہے تاکہ ثابت ہو کہ
    релизы اب Местные дайджесты نہیں نکالتے۔`torii_address_local8_total{endpoint}` کے ساتھ
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
 `torii_address_collision_domain_total{endpoint,domain}`, плата Grafana
@@ -233,7 +233,7 @@ payload bit: │version  │ class  │  norm  │ext │
 
 Обрезка, в которой можно найти/переключить пулю, можно увидеть:
 
-> **Адреса:** `iroha tools address normalize --only-local --append-domain` помощник شامل
+> **Адреса:** `iroha tools address normalize` помощник شامل
 > Установите флажок CI (`ci/check_address_normalize.sh`)
 > Доступ к основной сети Local-8/Local-12 или локальной сети Local-12. کسی بھی
 > Пользовательский экспорт или стандартизированный список, или нормализованный список.

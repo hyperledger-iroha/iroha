@@ -24,7 +24,6 @@ macro_rules! json_obj {
 }
 
 const NETWORK_PREFIX: u16 = 753;
-const GLOBAL_REGISTRY_ID: u32 = 0x002A;
 
 struct PositiveEncodings {
     canonical_hex: String,
@@ -36,7 +35,6 @@ struct PositiveEncodings {
 
 struct SingleCase {
     value: Value,
-    account: AccountId,
     address: AccountAddress,
     encodings: PositiveEncodings,
 }
@@ -99,41 +97,9 @@ fn canonical_bytes(hex_value: &str) -> Vec<u8> {
     hex::decode(body).expect("canonical hex should decode")
 }
 
-fn selector_value(bytes: &[u8], equivalences: &[&str]) -> Value {
-    match bytes
-        .get(1)
-        .copied()
-        .expect("canonical bytes must contain selector tag")
-    {
-        0x00 => json_obj!({ "kind": "default" }),
-        0x01 => {
-            let digest = &bytes[2..14];
-            json_obj!({
-                "kind": "local12",
-                "digest_hex": encode_upper(digest),
-            })
-        }
-        0x02 => {
-            let registry_bytes = &bytes[2..6];
-            let registry_id = u32::from_be_bytes(registry_bytes.try_into().unwrap());
-            let mut selector = json_obj!({
-                "kind": "global",
-                "registry_id": registry_id,
-            });
-            if !equivalences.is_empty() {
-                let domain_equivalents = equivalences
-                    .iter()
-                    .map(|domain| Value::from((*domain).to_owned()))
-                    .collect();
-                selector.as_object_mut().unwrap().insert(
-                    "domain_equivalents".into(),
-                    Value::Array(domain_equivalents),
-                );
-            }
-            selector
-        }
-        other => panic!("unexpected selector tag {other:#x}"),
-    }
+fn selector_value() -> Value {
+    // Canonical IH58 payloads are globally scoped and no longer embed domain selectors.
+    json_obj!({ "kind": "default" })
 }
 
 fn controller_single_value(public_key: &PublicKey) -> Value {
@@ -202,7 +168,7 @@ fn build_single_case(case_id: &str, seed: u8, raw_domain: &str, note: &str) -> S
     let account = AccountId::new(domain(raw_domain), public_key.clone());
     let address = AccountAddress::from_account_id(&account).expect("address encoding");
     let encodings = encodings(&address);
-    let selector = selector_value(&encodings.canonical_bytes, &[]);
+    let selector = selector_value();
 
     let value = json_obj!({
         "case_id": case_id,
@@ -228,46 +194,9 @@ fn build_single_case(case_id: &str, seed: u8, raw_domain: &str, note: &str) -> S
 
     SingleCase {
         value,
-        account,
         address,
         encodings,
     }
-}
-
-fn build_global_case(local: &SingleCase) -> Value {
-    let mut bytes = local.encodings.canonical_bytes.clone();
-    bytes[1] = 0x02;
-    bytes.splice(2..14, GLOBAL_REGISTRY_ID.to_be_bytes());
-
-    let address =
-        AccountAddress::from_canonical_bytes(&bytes).expect("global canonical decode succeeds");
-
-    let encodings = encodings(&address);
-    let selector = selector_value(
-        &encodings.canonical_bytes,
-        &[local.account.domain().name().as_ref()],
-    );
-
-    json_obj!({
-        "case_id": "addr-global-registry-002a",
-        "category": "single",
-        "input": json_obj!({
-            "equivalent_domain": local.account.domain().name().as_ref(),
-            "registry_id": GLOBAL_REGISTRY_ID,
-        }),
-        "note": "Global selector variant referencing registry id 0x002A; equivalent to the treasury local digest.",
-        "selector": selector,
-        "controller": controller_single_value(local.account.signatory()),
-        "encodings": json_obj!({
-            "canonical_hex": encodings.canonical_hex.clone(),
-            "ih58": json_obj!({
-                "prefix": NETWORK_PREFIX,
-                "string": encodings.ih58.clone(),
-            }),
-            "compressed": encodings.compressed.clone(),
-            "compressed_fullwidth": encodings.compressed_fullwidth.clone(),
-        })
-    })
 }
 
 fn build_multisig_cases() -> Vec<MultisigCase> {
@@ -288,7 +217,7 @@ fn build_multisig_cases() -> Vec<MultisigCase> {
             let address =
                 AccountAddress::from_account_id(&account).expect("multisig encoding succeeds");
             let encodings = encodings(&address);
-            let selector = selector_value(&encodings.canonical_bytes, &[]);
+            let selector = selector_value();
 
             let member_keys_hex: Vec<String> = policy
                 .members()
@@ -404,6 +333,14 @@ fn mutate_last_char(input: &str, replacement: char) -> String {
     chars.into_iter().collect()
 }
 
+fn replace_nth_char(input: &str, index: usize, replacement: char) -> String {
+    let mut chars: Vec<char> = input.chars().collect();
+    if let Some(slot) = chars.get_mut(index) {
+        *slot = replacement;
+    }
+    chars.into_iter().collect()
+}
+
 fn canonical_with_trailing_zero(encodings: &PositiveEncodings) -> String {
     format!("{}00", encodings.canonical_hex)
 }
@@ -432,14 +369,9 @@ pub fn compliance_vectors_json() -> Value {
         "treasury",
         "Non-default domain address (treasury) using deterministic Ed25519 key derived from seed byte 0x01.",
     );
-    let global_case = build_global_case(&single_treasury);
     let multisig_cases = build_multisig_cases();
 
-    let mut positive_cases = vec![
-        single_default.value.clone(),
-        single_treasury.value.clone(),
-        global_case.clone(),
-    ];
+    let mut positive_cases = vec![single_default.value.clone(), single_treasury.value.clone()];
     positive_cases.extend(multisig_cases.iter().map(|case| case.value.clone()));
 
     let ih58_checksum = mutate_last_char(&single_default.encodings.ih58, 'z');
@@ -460,8 +392,7 @@ pub fn compliance_vectors_json() -> Value {
         .to_string();
     let err_missing = AccountAddress::from_compressed_sora(&compressed_missing).unwrap_err();
 
-    let mut compressed_bad_char = single_default.encodings.compressed.clone();
-    compressed_bad_char.replace_range(6..7, "A");
+    let compressed_bad_char = replace_nth_char(&single_default.encodings.compressed, 6, 'A');
     let err_bad_char = AccountAddress::from_compressed_sora(&compressed_bad_char).unwrap_err();
 
     let compressed_bad_checksum = mutate_last_char(&single_default.encodings.compressed, 'ﾇ');

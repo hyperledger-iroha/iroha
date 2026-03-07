@@ -124,16 +124,9 @@ impl Hash for AssetDefinitionId {
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for AssetId {
     fn write_json(&self, out: &mut String) {
-        let ih58 = self
-            .account
-            .canonical_ih58()
-            .expect("AssetId account should encode to IH58 for JSON");
-        let account_literal = format!("{ih58}@{}", self.account.domain());
-        let literal = if self.definition.domain == self.account.domain {
-            format!("{}##{account_literal}", self.definition.name)
-        } else {
-            format!("{}#{account_literal}", self.definition)
-        };
+        // Emit the fully-qualified asset definition to avoid relying on implicit
+        // domain inference from account literals (accounts are encoded-only/domainless).
+        let literal = format!("{}#{}", self.definition, self.account);
         norito::json::JsonSerialize::json_serialize(&literal, out);
     }
 }
@@ -224,9 +217,12 @@ impl FromStr for AssetId {
             s.rsplit_once('#').ok_or(ParseError {
             reason: "Asset ID should have format `asset#domain#account`, or `asset##account` for the same domains",
         })?;
-        let account_id = account_id_candidate.parse::<AccountId>().map_err(|_| ParseError {
-            reason: "Failed to parse `account` part in `asset#domain#account` or `asset##account`",
-        })?;
+        let account_id = AccountId::parse_encoded(account_id_candidate)
+            .map(crate::account::ParsedAccountId::into_account_id)
+            .map_err(|_| ParseError {
+                reason:
+                    "Failed to parse `account` part in `asset#domain#account` or `asset##account`",
+            })?;
         let domain_complement = if definition_id_candidate.ends_with('#') {
             account_id.domain.name.as_ref()
         } else {

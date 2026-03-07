@@ -307,8 +307,8 @@ fn prelude_macros_compile() {
     let src = r#"
         seiyaku MacroDemo {
             kotoage fn run() permission(Admin) {
-                let alice = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
-                let bob = account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland");
+                let alice = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+                let bob = account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU");
                 let asset = asset_definition!("rose#wonderland");
                 set_account_detail(authority(), name!("cursor"), json!{ query: "sc_dummy", cursor: 1 });
                 transfer_asset(alice, bob, asset, 1);
@@ -326,8 +326,8 @@ fn public_function_without_permission_rejected() {
         seiyaku PermissionDemo {
             kotoage fn run() {
                 transfer_asset(
-                    account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
-                    account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
+                    account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+                    account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
                     asset_definition!("rose#wonderland"),
                     1
                 );
@@ -366,7 +366,7 @@ fn register_account_requires_permission() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn add() {
-                register_account(account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"));
+                register_account(account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"));
             }
         }
     "#;
@@ -404,8 +404,8 @@ fn public_function_with_permission_is_allowed() {
         seiyaku PermissionDemo {
             kotoage fn run() permission(Admin) {
                 transfer_asset(
-                    account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
-                    account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
+                    account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+                    account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
                     asset_definition!("rose#wonderland"),
                     1
                 );
@@ -768,7 +768,7 @@ fn pointer_constructors_accept_string_variables() {
     let src = r#"
         fn main() {
             let did = "wonderland";
-            let aid = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+            let aid = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
             let key = "cursor";
             let val = "{\"query\":\"sc_dummy\",\"cursor\":1}";
             set_account_detail(account_id(aid), name(key), json(val));
@@ -802,7 +802,7 @@ fn json_constructor_accepts_norito_bytes_pointer() {
             let j = json(jb);
             // Use j to ensure it flows through as Json pointer
             let did = "wonderland";
-            let aid = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+            let aid = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
             set_account_detail(account_id(aid), name("cursor"), j);
         }
     "#;
@@ -827,7 +827,7 @@ fn json_constructor_accepts_norito_bytes_pointer() {
 fn method_sugar_name_on_variable() {
     let src = r#"
         fn main() {
-            let aid = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+            let aid = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
             let key = "cursor";
             let val = "{\"x\":1}";
             set_account_detail(aid.account_id(), key.name(), val.json());
@@ -853,7 +853,7 @@ fn method_sugar_json_on_norito_bytes_variable() {
         fn main() {
             let nb = "{\"k\":1}".norito_bytes();
             let j = nb.json();
-            let aid = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+            let aid = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
             set_account_detail(aid.account_id(), "cursor".name(), j);
         }
     "#;
@@ -880,7 +880,7 @@ fn name_constructor_accepts_norito_bytes_pointer() {
         fn main() {
             let nb = norito_bytes("domain_name");
             let nm = name(nb);
-            let aid = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+            let aid = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
             transfer_domain(authority(), nm, aid.account_id());
         }
     "#;
@@ -907,7 +907,7 @@ fn method_sugar_name_on_norito_bytes_variable() {
         fn main() {
             let nb = "wonderland".norito_bytes();
             let nm = nb.name();
-            let aid = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+            let aid = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
             transfer_domain(authority(), nm, aid.account_id());
         }
     "#;
@@ -996,7 +996,7 @@ fn name_pass_through_from_name_pointer() {
         fn main() {
             let nm = name("wonderland");
             let nm2 = name(nm);
-            let aid = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+            let aid = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
             transfer_domain(authority(), nm2, aid.account_id());
         }
     "#;
@@ -1484,7 +1484,7 @@ fn semantic_type_enforcement_for_typed_syscalls() {
         parse("fn f() { mint_asset(name(\"x\"), asset_definition(\"rose#wonderland\"), 1); }")
             .unwrap();
     assert!(analyze(&bad).is_err());
-    let bad2 = parse("fn f() { set_account_detail(account_id(\"ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland\"), json(\"1\"), name(\"k\")); }").unwrap();
+    let bad2 = parse("fn f() { set_account_detail(account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"), json(\"1\"), name(\"k\")); }").unwrap();
     assert!(analyze(&bad2).is_err());
 }
 
@@ -1567,7 +1567,7 @@ fn dynamic_range_start1_end2_executes_second_only() {
 
 #[test]
 fn compile_typed_nft_syscalls() {
-    let src = "fn main() { nft_mint_asset(nft_id(\"n0$wonderland\"), account_id(\"ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland\")); nft_transfer_asset(account_id(\"ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland\"), nft_id(\"n0$wonderland\"), account_id(\"ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland\")); }";
+    let src = "fn main() { nft_mint_asset(nft_id(\"n0$wonderland\"), account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\")); nft_transfer_asset(account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"), nft_id(\"n0$wonderland\"), account_id(\"6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU\")); }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("compile typed NFT");
@@ -1962,7 +1962,7 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
 
     let src = r#"
         fn main() {
-            let acc = account_id("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+            let acc = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
             let asset = asset_definition("rose#wonderland");
             mint_asset(acc, asset, 1);
             burn_asset(acc, asset, 1);
@@ -1975,9 +1975,9 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
         .access_set_hints
         .expect("access_set_hints must be present");
     let account: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-            .parse()
-            .unwrap();
+        AccountId::parse_encoded("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("parse encoded account literal");
     let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
     let asset_id = AssetId::of(asset_def.clone(), account.clone());
 
@@ -2013,7 +2013,7 @@ fn manifest_emits_wildcard_hints_when_isi_targets_are_opaque() {
     let src = r#"
         fn main() {
             transfer_domain(
-                account_id("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
+                account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
                 domain("wonderland"),
                 authority()
             );
@@ -2087,8 +2087,8 @@ fn namespaced_host_calls_and_std_map_new_parse_and_type() {
     let src = r#"
         fn f() {
             host::transfer_asset(
-              account_id("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
-              account_id("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
+              account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+              account_id("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
               asset_definition("coin#wonder"),
               1
             );
@@ -2108,8 +2108,8 @@ fn indirect_sensitive_calls_require_permission() {
     let src = r#"
         fn helper() {
             transfer_asset(
-              account_id("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
-              account_id("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
+              account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+              account_id("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
               asset_definition("coin#wonder"),
               1
             );
@@ -2918,7 +2918,7 @@ fn ir_lower_get_or_insert_default_pointer_variants_use_pointer_syscalls() {
         ("Name", r#"name("alias")"#),
         (
             "AccountId",
-            r#"account_id("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland")"#,
+            r#"account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")"#,
         ),
         (
             "AssetDefinitionId",
@@ -3071,7 +3071,7 @@ fn runtime_durable_get_or_insert_default_state_map() {
     use ivm::{
         IVM, PointerType,
         kotodama::compiler::Compiler,
-        mock_wsv::{AccountId, MockWorldStateView, WsvHost},
+        mock_wsv::{MockWorldStateView, ScopedAccountId, WsvHost},
         validate_tlv_bytes,
     };
     let src = r#"
@@ -3091,11 +3091,17 @@ fn runtime_durable_get_or_insert_default_state_map() {
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&code).expect("load");
     let wsv = MockWorldStateView::new();
-    let alice: AccountId =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+    let alice: ScopedAccountId = ScopedAccountId::new(
+        "wonderland".parse().expect("domain id"),
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
-            .unwrap();
-    let host = WsvHost::new(wsv, alice, HashMap::new(), HashMap::new());
+            .expect("public key"),
+    );
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice),
+        HashMap::new(),
+    );
     vm.set_host(host);
     // Run hajimari
     vm.run().expect("exec");
@@ -3168,7 +3174,7 @@ fn axt_intrinsics_lower_to_syscalls() {
     let handle = axt::AssetHandle {
         scope: vec!["transfer".to_string()],
         subject: axt::HandleSubject {
-            account: "alice@wonderland".to_string(),
+            account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_string(),
             origin_dsid: Some(dsid),
         },
         budget: axt::HandleBudget {

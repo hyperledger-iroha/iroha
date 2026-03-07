@@ -84,8 +84,9 @@ fn sanitize_account_id(id: &AccountId) -> AccountId {
         // Avoid reparsing IH58 addresses unless we actually sanitize.
         return id.clone();
     }
-    sanitize_account_id_str(&raw)
-        .parse()
+    let sanitized = sanitize_account_id_str(&raw);
+    AccountId::parse_encoded(&sanitized)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .expect("sanitized AccountId should parse")
 }
 
@@ -1088,8 +1089,13 @@ mod tests {
 
     #[test]
     fn genesis_executes_offline_allowance_instruction() {
-        use std::{fs, path::PathBuf, sync::Arc};
+        use std::{
+            fs,
+            path::{Path, PathBuf},
+            str::FromStr,
+        };
 
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
         use iroha_core::{
             block::ValidBlock,
             kura::Kura,
@@ -1099,16 +1105,283 @@ mod tests {
             sumeragi::network_topology::Topology as CoreTopology,
             telemetry::StateTelemetry,
         };
+        use iroha_crypto::{Hash, Signature};
         use iroha_data_model::{
-            account::{
-                Account, AccountDomainSelector, clear_account_domain_selector_resolver,
-                set_account_domain_selector_resolver,
-            },
+            account::Account,
             isi::InstructionBox,
             metadata::Metadata,
-            offline::OfflineWalletCertificate,
+            offline::{
+                OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineAllowanceCommitment,
+                OfflineWalletCertificate, OfflineWalletPolicy,
+            },
             query::{dsl::CompoundPredicate, offline::prelude::FindOfflineAllowances},
         };
+        use iroha_primitives::json::Json;
+
+        fn parse_optional_hash(
+            value: Option<&norito::json::Value>,
+            path: &Path,
+            field: &'static str,
+        ) -> Option<Hash> {
+            match value {
+                None => None,
+                Some(value) if value.is_null() => None,
+                Some(value) => {
+                    let hex = value.as_str().unwrap_or_else(|| {
+                        panic!(
+                            "offline allowance fixture `{}` `{field}` must be hex string or null",
+                            path.display()
+                        )
+                    });
+                    Some(Hash::from_str(hex).unwrap_or_else(|err| {
+                        panic!(
+                            "offline allowance fixture `{}` `{field}`: {err}",
+                            path.display()
+                        )
+                    }))
+                }
+            }
+        }
+
+        fn parse_offline_certificate_fixture(
+            value: &norito::json::Value,
+            path: &Path,
+        ) -> OfflineWalletCertificate {
+            fn decode_hex_bytes(hex_literal: &str) -> Result<Vec<u8>, String> {
+                if hex_literal.len() % 2 != 0 {
+                    return Err("hex input has odd length".to_owned());
+                }
+                let mut bytes = Vec::with_capacity(hex_literal.len() / 2);
+                for index in (0..hex_literal.len()).step_by(2) {
+                    let byte = u8::from_str_radix(&hex_literal[index..index + 2], 16)
+                        .map_err(|err| format!("invalid hex at index {index}: {err}"))?;
+                    bytes.push(byte);
+                }
+                Ok(bytes)
+            }
+
+            let object = value.as_object().unwrap_or_else(|| {
+                panic!(
+                    "offline allowance fixture `{}` certificate must be a JSON object",
+                    path.display()
+                )
+            });
+
+            let controller_literal = object
+                .get("controller")
+                .and_then(norito::json::Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing certificate controller",
+                        path.display()
+                    )
+                });
+            let controller = AccountId::parse_encoded(controller_literal)
+                .map(|parsed| parsed.into_account_id())
+                .unwrap_or_else(|err| {
+                    panic!("failed to parse controller `{controller_literal}`: {err}")
+                });
+
+            let operator_literal = object
+                .get("operator")
+                .and_then(norito::json::Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing certificate operator",
+                        path.display()
+                    )
+                });
+            let operator = AccountId::parse_encoded(operator_literal)
+                .map(|parsed| parsed.into_account_id())
+                .unwrap_or_else(|err| {
+                    panic!("failed to parse operator `{operator_literal}`: {err}")
+                });
+
+            let allowance = object
+                .get("allowance")
+                .and_then(norito::json::Value::as_object)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing allowance block",
+                        path.display()
+                    )
+                });
+            let asset_literal = allowance
+                .get("asset")
+                .and_then(norito::json::Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing allowance asset",
+                        path.display()
+                    )
+                });
+            let asset = asset_literal.parse().unwrap_or_else(|err| {
+                panic!("failed to parse allowance asset `{asset_literal}`: {err}")
+            });
+            let amount_literal = allowance
+                .get("amount")
+                .and_then(norito::json::Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing allowance amount",
+                        path.display()
+                    )
+                });
+            let amount = amount_literal.parse().unwrap_or_else(|err| {
+                panic!("failed to parse allowance amount `{amount_literal}`: {err}")
+            });
+            let commitment_hex = allowance
+                .get("commitment_hex")
+                .and_then(norito::json::Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing allowance commitment_hex",
+                        path.display()
+                    )
+                });
+            let commitment = decode_hex_bytes(commitment_hex)
+                .unwrap_or_else(|err| panic!("commitment_hex decode: {err}"));
+
+            let spend_key_literal = object
+                .get("spend_public_key")
+                .and_then(norito::json::Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing spend_public_key",
+                        path.display()
+                    )
+                });
+            let spend_public_key = spend_key_literal.parse().unwrap_or_else(|err| {
+                panic!("failed to parse spend_public_key `{spend_key_literal}`: {err}")
+            });
+
+            let attestation_b64 = object
+                .get("attestation_report_b64")
+                .and_then(norito::json::Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing attestation_report_b64",
+                        path.display()
+                    )
+                });
+            let attestation_report = BASE64
+                .decode(attestation_b64)
+                .unwrap_or_else(|err| panic!("attestation_report_b64 decode: {err}"));
+
+            let issued_at_ms = object
+                .get("issued_at_ms")
+                .and_then(norito::json::Value::as_u64)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing issued_at_ms",
+                        path.display()
+                    )
+                });
+            let expires_at_ms = object
+                .get("expires_at_ms")
+                .and_then(norito::json::Value::as_u64)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing expires_at_ms",
+                        path.display()
+                    )
+                });
+
+            let policy = object
+                .get("policy")
+                .and_then(norito::json::Value::as_object)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing policy block",
+                        path.display()
+                    )
+                });
+            let policy_max_balance = policy
+                .get("max_balance")
+                .and_then(norito::json::Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing policy max_balance",
+                        path.display()
+                    )
+                });
+            let policy_max_tx_value = policy
+                .get("max_tx_value")
+                .and_then(norito::json::Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing policy max_tx_value",
+                        path.display()
+                    )
+                });
+            let policy_expires_at_ms = policy
+                .get("expires_at_ms")
+                .and_then(norito::json::Value::as_u64)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing policy expires_at_ms",
+                        path.display()
+                    )
+                });
+
+            let operator_signature_hex = object
+                .get("operator_signature_hex")
+                .and_then(norito::json::Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "offline allowance fixture `{}` missing operator_signature_hex",
+                        path.display()
+                    )
+                });
+            let operator_signature = Signature::from_hex(operator_signature_hex)
+                .unwrap_or_else(|err| panic!("operator_signature_hex decode: {err}"));
+
+            let metadata_value = object
+                .get("metadata")
+                .cloned()
+                .unwrap_or_else(|| norito::json::Value::Object(Default::default()));
+            let metadata: Metadata = norito::json::from_value(metadata_value)
+                .unwrap_or_else(|err| panic!("metadata parse: {err}"));
+
+            let verdict_id =
+                parse_optional_hash(object.get("verdict_id_hex"), path, "verdict_id_hex");
+            let attestation_nonce = parse_optional_hash(
+                object.get("attestation_nonce_hex"),
+                path,
+                "attestation_nonce_hex",
+            );
+            let refresh_at_ms = object
+                .get("refresh_at_ms")
+                .and_then(norito::json::Value::as_u64);
+
+            OfflineWalletCertificate {
+                controller,
+                operator,
+                allowance: OfflineAllowanceCommitment {
+                    asset,
+                    amount,
+                    commitment,
+                },
+                spend_public_key,
+                attestation_report,
+                issued_at_ms,
+                expires_at_ms,
+                policy: OfflineWalletPolicy {
+                    max_balance: policy_max_balance
+                        .parse()
+                        .unwrap_or_else(|err| panic!("policy max_balance parse: {err}")),
+                    max_tx_value: policy_max_tx_value
+                        .parse()
+                        .unwrap_or_else(|err| panic!("policy max_tx_value parse: {err}")),
+                    expires_at_ms: policy_expires_at_ms,
+                },
+                operator_signature,
+                metadata,
+                verdict_id,
+                attestation_nonce,
+                refresh_at_ms,
+            }
+        }
 
         init_instruction_registry();
         let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1121,37 +1394,12 @@ mod tests {
             .get("certificate")
             .cloned()
             .expect("fixture must contain `certificate` field");
-        let domains: Vec<iroha_data_model::domain::DomainId> = ["wonderland", "treasury"]
-            .into_iter()
-            .map(|label| label.parse())
-            .collect::<Result<_, _>>()
-            .expect("fixture domain labels should parse");
-        let mut selectors = Vec::with_capacity(domains.len());
-        for domain in &domains {
-            let selector =
-                AccountDomainSelector::from_domain(domain).expect("domain selector should derive");
-            selectors.push((selector, domain.clone()));
-        }
-        set_account_domain_selector_resolver(Arc::new(move |candidate| {
-            selectors.iter().find_map(|(selector, domain)| {
-                if candidate == selector {
-                    Some(domain.clone())
-                } else {
-                    None
-                }
-            })
-        }));
-        struct DomainSelectorResolverGuard;
-        impl Drop for DomainSelectorResolverGuard {
-            fn drop(&mut self) {
-                clear_account_domain_selector_resolver();
-            }
-        }
-        let _resolver_guard = DomainSelectorResolverGuard;
-        let certificate: OfflineWalletCertificate =
-            norito::json::from_value(certificate_value).expect("fixture certificate should decode");
-        let asset_definition_id = certificate.allowance.asset.definition().clone();
-        let asset_scale = certificate.allowance.amount.scale();
+        let certificate = parse_offline_certificate_fixture(&certificate_value, &fixture_path);
+        let controller = certificate.controller.clone();
+        let controller_asset_id = certificate.allowance.asset.clone();
+        let controller_asset_amount = certificate.allowance.amount.clone();
+        let asset_definition_id = controller_asset_id.definition().clone();
+        let asset_scale = controller_asset_amount.scale();
         let instruction = InstructionBox::from(RegisterOfflineAllowance { certificate });
 
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -1175,17 +1423,38 @@ mod tests {
             uaid: None,
             opaque_ids: Vec::new(),
         };
+        let controller_account_entry = Account {
+            id: controller.clone(),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+        };
         let asset_domain = asset_definition_id.domain().clone();
-        let domain = Domain::new(asset_domain).build(&genesis_account);
-        let asset_definition =
+        let controller_domain = controller.domain().clone();
+        let mut domains = vec![Domain::new(asset_domain.clone()).build(&genesis_account)];
+        if controller_domain != asset_domain {
+            domains.push(Domain::new(controller_domain).build(&genesis_account));
+        }
+        let mut asset_definition =
             AssetDefinition::new(asset_definition_id, NumericSpec::fractional(asset_scale))
                 .build(&genesis_account);
+        asset_definition.metadata_mut().insert(
+            OFFLINE_ASSET_ENABLED_METADATA_KEY
+                .parse()
+                .expect("offline.enabled metadata key should parse"),
+            Json::new(true),
+        );
+        let controller_asset_entry =
+            iroha_data_model::asset::Asset::new(controller_asset_id, controller_asset_amount);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let world = World::with(
-            vec![domain],
-            vec![genesis_account_entry],
+        let world = World::with_assets(
+            domains,
+            vec![genesis_account_entry, controller_account_entry],
             vec![asset_definition],
+            vec![controller_asset_entry],
+            [],
         );
         let state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
         let chain = block

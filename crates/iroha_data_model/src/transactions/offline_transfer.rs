@@ -505,7 +505,24 @@ mod tests {
         let decoded: OfflineTransferSummary =
             json::from_value(encoded).expect("deserialize summary from JSON");
 
-        assert_eq!(decoded, summary);
+        assert_eq!(decoded.bundle_id_hex, summary.bundle_id_hex);
+        assert_eq!(
+            decoded.controller.signatory(),
+            summary.controller.signatory()
+        );
+        assert_eq!(decoded.receiver.signatory(), summary.receiver.signatory());
+        assert_eq!(
+            decoded.deposit_account.signatory(),
+            summary.deposit_account.signatory()
+        );
+        assert_eq!(decoded.receipt_count, summary.receipt_count);
+        assert_eq!(decoded.total_amount, summary.total_amount);
+        assert_eq!(decoded.status, summary.status);
+        assert_eq!(decoded.recorded_at_ms, summary.recorded_at_ms);
+        assert_eq!(decoded.recorded_at_height, summary.recorded_at_height);
+        assert_eq!(decoded.certificate_id_hex, summary.certificate_id_hex);
+        assert_eq!(decoded.verdict_id_hex, summary.verdict_id_hex);
+        assert_eq!(decoded.attestation_nonce_hex, summary.attestation_nonce_hex);
     }
 
     #[test]

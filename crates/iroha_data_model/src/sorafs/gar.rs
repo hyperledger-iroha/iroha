@@ -273,8 +273,6 @@ pub struct GarEnforcementReceiptV1 {
 
 #[cfg(test)]
 mod tests {
-    use core::str::FromStr;
-
     use super::*;
 
     #[test]
@@ -288,9 +286,10 @@ mod tests {
             expires_at_unix: Some(1_747_569_600),
             policy_version: Some("2026-q2".to_string()),
             policy_digest: Some([0xAB; 32]),
-            operator: AccountId::from_str(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+            operator: AccountId::parse_encoded(
+                "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
             )
+            .map(crate::account::ParsedAccountId::into_account_id)
             .expect("account id"),
             reason: "Guardian freeze window".to_string(),
             notes: Some("Escalated during SNNet-15 drill".to_string()),
@@ -318,10 +317,11 @@ mod tests {
             expires_at_unix: None,
             policy_version: None,
             policy_digest: None,
-            operator: AccountId::from_str(
-                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland",
+            operator: AccountId::parse_encoded(
+                "6cmzPVPX8gQ65j3aqa3YHGbjs9CfKCxx1zJP4n2P7stQ4CwadqpmGED",
             )
-            .expect("account id"),
+            .expect("account id")
+            .into_account_id(),
             reason: "Taikai stream purge drill".to_string(),
             notes: None,
             evidence_uris: vec!["sora://gar/receipts/taikai/purge-l7".to_string()],

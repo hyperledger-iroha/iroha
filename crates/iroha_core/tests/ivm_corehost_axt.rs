@@ -53,23 +53,22 @@ use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
 fn ensure_alias_resolver() {
-    use std::sync::{Arc as StdArc, OnceLock};
+    // No-op by design.
+}
 
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::{
-        account::{AccountId, set_account_alias_resolver},
-        domain::DomainId,
-    };
+const FIXTURE_AUTHORITY_PUBLIC_KEY: &str =
+    "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774";
+const FIXTURE_MERCHANT_ACCOUNT_LITERAL: &str =
+    "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH";
+const FIXTURE_VENDOR_ACCOUNT_LITERAL: &str =
+    "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV";
 
-    static INSTALL: OnceLock<()> = OnceLock::new();
-    INSTALL.get_or_init(|| {
-        set_account_alias_resolver(StdArc::new(|label, domain: &DomainId| {
-            let material = format!("{label}@{domain}");
-            let seed_bytes: [u8; Hash::LENGTH] = Hash::new(material).into();
-            let kp = KeyPair::from_seed(seed_bytes.to_vec(), Algorithm::default());
-            Some(AccountId::new(domain.clone(), kp.public_key().clone()))
-        }));
-    });
+fn fixture_authority() -> AccountId {
+    let domain: DomainId = "wonder".parse().expect("authority domain");
+    let public_key = FIXTURE_AUTHORITY_PUBLIC_KEY
+        .parse()
+        .expect("authority public key");
+    AccountId::new(domain, public_key)
 }
 
 fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -227,10 +226,7 @@ fn axt_policy_snapshot_refreshes_current_slot() {
 
 #[test]
 fn core_host_handles_axt_flow() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
 
     let dsid = DataSpaceId::new(7);
     let manifest_root = [0x21; 32];
@@ -307,7 +303,7 @@ fn core_host_handles_axt_flow() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@wonder".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "200".into(),
         },
     };
@@ -337,10 +333,7 @@ fn core_host_handles_axt_flow() {
 
 #[test]
 fn axt_policy_reject_exposes_context() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let dsid = DataSpaceId::new(13);
     let lane = LaneId::new(0);
     let manifest_root = [0x33; 32];
@@ -435,10 +428,7 @@ fn axt_policy_reject_exposes_context() {
 
 #[test]
 fn axt_handle_allows_configured_clock_skew_window() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
 
     let dsid = DataSpaceId::new(31);
     let manifest_root = [0x66; 32];
@@ -520,7 +510,7 @@ fn axt_handle_allows_configured_clock_skew_window() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "vendor@wonder".into(),
+            to: FIXTURE_VENDOR_ACCOUNT_LITERAL.into(),
             amount: "25".into(),
         },
     };
@@ -536,10 +526,7 @@ fn axt_handle_allows_configured_clock_skew_window() {
 
 #[test]
 fn axt_handle_rejects_clock_skew_above_config() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
 
     let dsid = DataSpaceId::new(32);
     let manifest_root = [0x67; 32];
@@ -612,7 +599,7 @@ fn axt_handle_rejects_clock_skew_above_config() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "vendor@wonder".into(),
+            to: FIXTURE_VENDOR_ACCOUNT_LITERAL.into(),
             amount: "25".into(),
         },
     };
@@ -649,10 +636,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
 
     ensure_alias_resolver();
 
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let dsid = DataSpaceId::new(99);
     let lane = LaneId::new(0);
     let manifest_root = [0x58; 32];
@@ -767,7 +751,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
                 op: ModelSpendOp {
                     kind: "transfer".into(),
                     from: authority.to_string(),
-                    to: "merchant@wonder".into(),
+                    to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
                     amount: "10".into(),
                 },
             },
@@ -879,7 +863,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@wonder".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "5".into(),
         },
     };
@@ -1005,7 +989,7 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
                     op: ModelSpendOp {
                         kind: "transfer".into(),
                         from: authority.to_string(),
-                        to: "vendor@wonderland".into(),
+                        to: FIXTURE_VENDOR_ACCOUNT_LITERAL.into(),
                         amount: "5".into(),
                     },
                 },
@@ -1090,7 +1074,7 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "vendor@wonderland".into(),
+            to: FIXTURE_VENDOR_ACCOUNT_LITERAL.into(),
             amount: "5".into(),
         },
     };
@@ -1188,7 +1172,7 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
                     op: ModelSpendOp {
                         kind: "transfer".into(),
                         from: authority.to_string(),
-                        to: "vendor@wonderland".into(),
+                        to: FIXTURE_VENDOR_ACCOUNT_LITERAL.into(),
                         amount: "5".into(),
                     },
                 },
@@ -1226,10 +1210,7 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
 #[test]
 fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     ensure_alias_resolver();
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
 
     let dsid = DataSpaceId::new(17);
     let target_lane = LaneId::new(0);
@@ -1314,7 +1295,7 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
                     op: ModelSpendOp {
                         kind: "transfer".into(),
                         from: authority.to_string(),
-                        to: "merchant@wonder".into(),
+                        to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
                         amount: "5".into(),
                     },
                 },
@@ -1365,7 +1346,7 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         op: iroha_data_model::nexus::SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@wonder".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "5".into(),
         },
     };
@@ -1488,10 +1469,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         TouchManifest as ModelTouchManifest,
     };
 
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let dsid = DataSpaceId::new(45);
     let lane = LaneId::new(0);
     let manifest_root = [0x33; 32];
@@ -1583,7 +1561,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
             op: ModelSpendOp {
                 kind: "transfer".into(),
                 from: authority.to_string(),
-                to: "merchant@wonder".into(),
+                to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
                 amount: "10".into(),
             },
         },
@@ -1656,7 +1634,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@wonder".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "5".into(),
         },
     };
@@ -1686,10 +1664,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         SpendOp as ModelSpendOp, TouchManifest as ModelTouchManifest,
     };
 
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let dsid = DataSpaceId::new(58);
     let lane = LaneId::new(1);
     let manifest_root = [0x44; 32];
@@ -1781,7 +1756,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             op: ModelSpendOp {
                 kind: "transfer".into(),
                 from: authority.to_string(),
-                to: "merchant@wonder".into(),
+                to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
                 amount: "10".into(),
             },
         },
@@ -1877,7 +1852,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@wonder".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "10".into(),
         },
     };
@@ -1909,10 +1884,7 @@ fn axt_replay_entries_expire_after_retention_window() {
         HandleSubject as ModelHandleSubject,
     };
 
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let dsid = DataSpaceId::new(46);
     let lane = LaneId::new(0);
     let manifest_root = [0x55; 32];
@@ -2050,7 +2022,7 @@ fn axt_replay_entries_expire_after_retention_window() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@wonder".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "5".into(),
         },
     };
@@ -2070,10 +2042,7 @@ fn axt_replay_entries_expire_after_retention_window() {
 
 #[test]
 fn axt_commit_enforces_amx_budget() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
 
     let dsid = DataSpaceId::new(11);
     let manifest_root = [0x31; 32];
@@ -2160,7 +2129,7 @@ fn axt_commit_enforces_amx_budget() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@wonder".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "5".into(),
         },
     };
@@ -2183,10 +2152,7 @@ fn axt_commit_enforces_amx_budget() {
 
 #[test]
 fn core_host_requires_proof_for_all_dataspaces() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
 
     let ds_a = DataSpaceId::new(101);
     let ds_b = DataSpaceId::new(102);
@@ -2311,7 +2277,7 @@ fn core_host_requires_proof_for_all_dataspaces() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@wonder".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "1".into(),
         },
     };
@@ -2320,7 +2286,7 @@ fn core_host_requires_proof_for_all_dataspaces() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@wonder".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "1".into(),
         },
     };
@@ -2397,10 +2363,7 @@ fn core_host_requires_proof_for_all_dataspaces() {
 #[test]
 fn core_host_rejects_invalid_descriptor() {
     ensure_alias_resolver();
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::new(authority);
 
@@ -2526,10 +2489,7 @@ impl axt::AxtPolicy for DenyHandlePolicy {
 
 #[test]
 fn core_host_policy_rejects_touch() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::new(authority).with_axt_policy(Arc::new(DenyTouchPolicy {
         denied: DataSpaceId::new(50),
@@ -2561,10 +2521,7 @@ fn core_host_policy_rejects_touch() {
 
 #[test]
 fn core_host_policy_rejects_handle() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::new(authority.clone()).with_axt_policy(Arc::new(DenyHandlePolicy));
 
@@ -2621,7 +2578,7 @@ fn core_host_policy_rejects_handle() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@wonder".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "1".into(),
         },
     };
@@ -2669,7 +2626,7 @@ fn use_handle_with_snapshot(
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@wonder".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "10".into(),
         },
     };
@@ -2682,10 +2639,7 @@ fn use_handle_with_snapshot(
 
 #[test]
 fn axt_snapshot_policy_enforces_lanes_and_counters() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let dsid = DataSpaceId::new(9);
     let manifest_root = [0xAAu8; 32];
     let entries = vec![AxtPolicyBinding {
@@ -2769,10 +2723,12 @@ fn axt_snapshot_policy_enforces_lanes_and_counters() {
 
 #[test]
 fn core_host_reports_amx_budget_timeout() {
-    let authority: AccountId =
-        "ed0120B0D324376E617A1B5CB024B3BAC4BC4F6F2C9B70F0E1CE64E2B3F0859FEB347B@budget"
+    let authority = AccountId::new(
+        "budget".parse().expect("budget domain"),
+        "ed0120B0D324376E617A1B5CB024B3BAC4BC4F6F2C9B70F0E1CE64E2B3F0859FEB347B"
             .parse()
-            .unwrap();
+            .expect("budget authority key"),
+    );
 
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::new(authority);
@@ -2879,7 +2835,7 @@ fn use_handle_with_state_policy(
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@wonder".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "5".into(),
         },
     };
@@ -2893,10 +2849,7 @@ fn use_handle_with_state_policy(
 #[cfg(feature = "app_api")]
 #[test]
 fn core_host_from_state_enforces_space_directory_policy() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let dsid = DataSpaceId::new(77);
     let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"uaid-corehost-state"));
 
@@ -3012,10 +2965,7 @@ fn core_host_from_state_enforces_space_directory_policy() {
 #[cfg(feature = "app_api")]
 #[test]
 fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let dsid = DataSpaceId::new(88);
     let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"uaid-corehost-placeholder"));
 
@@ -3106,10 +3056,7 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
 #[cfg(feature = "app_api")]
 #[test]
 fn core_host_binds_proof_to_manifest_root() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let dsid = DataSpaceId::new(77);
     let manifest_root = [0xAB; 32];
     let entries = vec![AxtPolicyBinding {
@@ -3190,10 +3137,7 @@ fn core_host_binds_proof_to_manifest_root() {
 #[cfg(feature = "app_api")]
 #[test]
 fn core_host_exports_axt_envelopes_to_state_block() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let lane = LaneId::new(3);
     let dsid = DataSpaceId::new(21);
     let manifest_root = [0xCC; 32];
@@ -3261,7 +3205,7 @@ fn core_host_exports_axt_envelopes_to_state_block() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@wonder".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "5".into(),
         },
     };
@@ -3306,10 +3250,7 @@ fn core_host_exports_axt_envelopes_to_state_block() {
 
 #[test]
 fn core_host_rejects_cached_proof_after_manifest_rotation() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let dsid = DataSpaceId::new(55);
 
     let entries_v1 = vec![AxtPolicyBinding {
@@ -3402,10 +3343,7 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
 #[cfg(feature = "app_api")]
 #[test]
 fn core_host_records_multi_dataspace_envelope() {
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let dsid_a = DataSpaceId::new(31);
     let dsid_b = DataSpaceId::new(32);
 
@@ -3549,7 +3487,7 @@ fn core_host_records_multi_dataspace_envelope() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@a".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "10".into(),
         },
     };
@@ -3558,7 +3496,7 @@ fn core_host_records_multi_dataspace_envelope() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@b".into(),
+            to: FIXTURE_VENDOR_ACCOUNT_LITERAL.into(),
             amount: "15".into(),
         },
     };
@@ -3617,10 +3555,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         SpendOp as ModelSpendOp, TouchManifest as ModelTouchManifest,
     };
 
-    let authority: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
-            .parse()
-            .unwrap();
+    let authority = fixture_authority();
     let dsid = DataSpaceId::new(44);
 
     let world = World::new();
@@ -3735,7 +3670,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
                 op: ModelSpendOp {
                     kind: "transfer".into(),
                     from: authority.to_string(),
-                    to: "merchant@wonder".into(),
+                    to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
                     amount: "10".into(),
                 },
             },
@@ -3809,7 +3744,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         op: SpendOp {
             kind: "transfer".into(),
             from: authority.to_string(),
-            to: "merchant@wonder".into(),
+            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
             amount: "5".into(),
         },
     };

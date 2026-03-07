@@ -6,8 +6,7 @@ use std::{fs, path::PathBuf, str::FromStr};
 use iroha_data_model::prelude::{AssetId, Burn, InstructionBox, Mint, Numeric, TriggerId};
 use norito::codec::{Decode, Encode};
 
-const FIXTURE_ASSET_ID: &str =
-    "rose##ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland";
+const FIXTURE_ASSET_ID: &str = "rose##6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
 
 #[derive(Debug)]
 struct InstructionFixture {

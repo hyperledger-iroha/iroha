@@ -154,7 +154,7 @@ documentos/pruebas auxiliares:
 
 | Tipo de selector | Canonique hexagonal |
 |---------------|---------------|
-| Implícito por defecto | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Implícito por defecto | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | Resumen local (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | Registro global (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -170,7 +170,7 @@ Cualquier cadena comprimida debe seguir el flujo de trabajo CLI documentado en A
    `domain` con los campeones `kind`/`warning` y refleja todos los dominios disponibles a través de
    el campeón `input_domain`. Cuando `kind` va a `local12`, la CLI imprime un
    Anuncio en stderr y el currículum JSON reflejan el meme consignado para que
-   Los pipelines CI y el SDK pueden mostrarse. Paso `--append-domain`
+   Los pipelines CI y el SDK pueden mostrarse. Paso `legacy  suffix`
    Cuando vuelva a activar la codificación convertida bajo la forma `<ih58>@<domain>`.
 2. El SDK puede mostrar el aviso de meme/reanudar a través del asistente
    JavaScript:
@@ -199,20 +199,20 @@ Cualquier cadena comprimida debe seguir el flujo de trabajo CLI documentado en A
    JSON con currículums canónicos/IH58/compresse pour cada entrada y cuenta
    Los errores de análisis y los anuncios de dominio local. utilizar
    `--allow-errors` Lors de l'audit de dumps herites contenant des lignes
-   parásitos, y bloquear la automatización vía `--fail-on-warning` cuando les
+   parásitos, y bloquear la automatización vía `strict CI post-check` cuando les
    Los operadores están bloqueando los selectores locales en CI.
 6. Quand vous avez besoin d'une reecriture ligne a ligne, utilisez
   Pour les feuilles de calcul de remediation des selecteurs Local, utilisez
   para exportar un CSV `input,status,format,...` que se encuentra antes de las codificaciones
   canonices, avertissements et echecs de parse en une seule passe.
    El ayudante ignora las líneas no locales por defecto, convierte cada entradarestante en la codificación solicitada (IH58/compresse/hex/JSON), y conserve el
-   dominio original cuando `--append-domain` está activo. Associaz-le a
+   dominio original cuando `legacy  suffix` está activo. Associaz-le a
    `--allow-errors` para continuar con el análisis de memes cuando un dump contiene contenido
    Literaux mal formes.
 7. Automatización CI/lint puede ejecutar `ci/check_address_normalize.sh`, aquí
    Extraiga los selectores locales de `fixtures/account/address_vectors.json`, les
    conviértalo vía `iroha tools address normalize` y rejoue
-   `iroha tools address audit --fail-on-warning` para comprobar que los lanzamientos
+   `iroha tools address audit` para comprobar que los lanzamientos
    n'emetent plus de digests Local.`torii_address_local8_total{endpoint}` más
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
 `torii_address_collision_domain_total{endpoint,domain}` y el cuadro Grafana
@@ -247,7 +247,7 @@ barreras:- `AddressLocal8Resurgence` page chaque fois qu'un contexte signale une
 ### Extrait de note de release (portefeuille et explorateur)
 
 Incluez le bullet suivant dans les notes de release portefeuille/explorateur
-lors du cutover:> **Direcciones:** Ajoute le helper `iroha tools address normalize --only-local --append-domain`
+lors du cutover:> **Direcciones:** Ajoute le helper `iroha tools address normalize`
 > y la rama en CI (`ci/check_address_normalize.sh`) para las tuberías
 > portefeuille/explorateur puissent convertir les selecteurs Local herites vers
 > des formes canoniques IH58/compressées avant que Local-8/Local-12 soient

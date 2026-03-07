@@ -3,9 +3,9 @@
   "governance": "council",
   "version": 1,
   "validators": [
-    "dana@wonderland",
-    "erin@wonderland",
-    "frank@wonderland"
+    "6cmzPVPX8gQ65j3aqa3YHGbjs9CfKCxx1zJP4n2P7stQ4CwadqpmGED",
+    "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+    "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV"
   ],
   "quorum": 2,
   "protected_namespaces": [

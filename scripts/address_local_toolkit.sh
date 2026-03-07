@@ -17,8 +17,6 @@ Options:
   --output-dir PATH     Directory for generated artefacts (default: artifacts/address_toolkit).
   --network-prefix NUM  IH58 network prefix for Sora (default: 42).
   --format FORMAT       Conversion format: ih58 or compressed (default: ih58).
-  --append-domain       Preserve the original domain when emitting converted literals (default).
-  --no-append-domain    Do not append the domain suffix to converted literals.
   --audit-only          Emit the JSON audit report without running the converter.
   --iroha-cli PATH      Override the iroha CLI binary (default: iroha).
   --allow-errors        Continue when audit/normalize hits parse errors (default: false).
@@ -30,7 +28,6 @@ IROHA_CLI_BIN=${IROHA_CLI_BIN:-iroha}
 OUTPUT_DIR="artifacts/address_toolkit"
 NETWORK_PREFIX=42
 FORMAT="ih58"
-APPEND_DOMAIN=1
 AUDIT_ONLY=0
 ALLOW_ERRORS=0
 INPUT_PATH=""
@@ -52,14 +49,6 @@ while (($#)); do
         --format)
             FORMAT=${2:?--format requires a value}
             shift 2
-            ;;
-        --append-domain)
-            APPEND_DOMAIN=1
-            shift
-            ;;
-        --no-append-domain)
-            APPEND_DOMAIN=0
-            shift
             ;;
         --audit-only)
             AUDIT_ONLY=1
@@ -124,13 +113,9 @@ NORMALIZE_CMD=(
     --input "$INPUT_PATH"
     --network-prefix "$NETWORK_PREFIX"
     --format "$FORMAT"
-    --only-local
 )
 if [[ $ALLOW_ERRORS -eq 1 ]]; then
     NORMALIZE_CMD+=(--allow-errors)
-fi
-if [[ $APPEND_DOMAIN -eq 1 ]]; then
-    NORMALIZE_CMD+=(--append-domain)
 fi
 "${NORMALIZE_CMD[@]}" >"$CONVERT_PATH"
 

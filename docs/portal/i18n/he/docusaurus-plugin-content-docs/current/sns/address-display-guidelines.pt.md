@@ -155,7 +155,7 @@ UIs e SDKs devem estar prontas para exibir or tipo deseltor:
 
 | טיפו דה סלטור | Hex canonico |
 |--------------|--------------|
-| Implicito padrao | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Implicito padrao | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | תקציר מקומי (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | Registro global (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -172,7 +172,7 @@ Operadores que convertem codificacoes חלופות מקומיות עבור IH58 
    `domain` com campos `kind`/`warning` e ecoa qualquer dominio fornecido via o
    campo `input_domain`. Quando `kind` e `local12`, CLI imprime um aviso em
    stderr e o resumo JSON ecoa a mesma orientacao para que pipelines CI e SDKs
-   possam exibi-la. Passe `--append-domain` semper que quiser reproduzir a
+   possam exibi-la. Passe `legacy  suffix` semper que quiser reproduzir a
    codificacao convertida como `<ih58>@<domain>`.
 2. SDKs podem exibir o mesmo aviso/resumo באמצעות o Helper JavaScript:
 
@@ -199,7 +199,7 @@ Operadores que convertem codificacoes חלופות מקומיות עבור IH58 
    ignorados, e `--input -` ou nenhum flag usa STDIN), emite um relatorio JSON
    com resumos canonicos/IH58/comprimidos para cada entrada e conta erros de
    לנתח e avisos de dominio מקומי. השתמש ב-`--allow-errors` ובנוסף אלטרנטיבות של אודיטר dumps
-   com linhas lixo, e trave a automacao com `--fail-on-warning` quando os
+   com linhas lixo, e trave a automacao com `strict CI post-check` quando os
    operadores estiverem prontos para bloquear seletores Local no CI.
 6. Quando precisar de reescrita linha a linha, השתמש
   Para planilhas de remediacao de seletores מקומי, השתמש
@@ -207,12 +207,12 @@ Operadores que convertem codificacoes חלופות מקומיות עבור IH58 
   canonicas, avisos e falhas de parse ema unica passada.
    O helper ignora linhas nao Local por padrao, converte cada entrada restante
    para a codificacao solicitada (IH58/comprimido/hex/JSON), eserva o dominio
-   quando מקורי `--append-domain` e definido. Combine com `--allow-errors`
+   quando מקורי `legacy  suffix` e definido. Combine com `--allow-errors`
    para continuar a varredura mesmo quando um dump contem literais malformados.
 7. מפעל CI/lint pode automacao `ci/check_address_normalize.sh`, que extrai
    seletores Local de `fixtures/account/address_vectors.json`, המרה באמצעות
    `iroha tools address normalize`, וביצוע מחדש
-   `iroha tools address audit --fail-on-warning` למען הוכחה משחררת נאו emitem
+   `iroha tools address audit` למען הוכחה משחררת נאו emitem
    mais digests מקומי.
 
 `torii_address_local8_total{endpoint}` junto com
@@ -248,7 +248,7 @@ clusters dev/test או רגרסיות אבחנתיות. המשך espelhando
 כולל o seguinte bullet nas notas de release de carteira/explorador ao enviar o
 חתך:
 
-> **Enderecos:** Adicionado o helper `iroha tools address normalize --only-local --append-domain`
+> **Enderecos:** Adicionado o helper `iroha tools address normalize`
 > e conectado no CI (`ci/check_address_normalize.sh`) para que pipelines de
 > ממיר carteira/explorador possam מבחר חלופות מקומיות לפורמטים
 > canonicas IH58/comprimidas antes de Local-8/Local-12 serem bloqueados na

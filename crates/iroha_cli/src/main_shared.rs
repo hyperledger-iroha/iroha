@@ -2,8 +2,8 @@ mod address;
 mod audit;
 #[cfg(feature = "bridge")]
 mod bridge;
-mod commands;
 mod cli_output;
+mod commands;
 mod compute;
 mod confidential;
 #[cfg(test)]
@@ -21,9 +21,9 @@ mod nexus;
 mod offline;
 mod runtime;
 mod soracloud;
+mod space_directory;
 mod staking;
 mod subscriptions;
-mod space_directory;
 mod sumeragi;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
@@ -43,9 +43,8 @@ use eyre::{Result, WrapErr, eyre};
 use futures::{TryStreamExt, stream::TryStream};
 use iroha::{
     client::Client,
-    config::{BasicAuth, Config, LoadPath},
+    config::{Config, LoadPath},
     data_model::{prelude::*, transaction::IvmBytecode},
-    secrecy::SecretString,
 };
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_crypto::{Algorithm, KeyPair};
@@ -781,7 +780,10 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
     let build_line_value = build_line.to_string();
     eprintln!(
         "{}",
-        i18n.t_with("info.build_line", &[("build_line", build_line_value.as_str())])
+        i18n.t_with(
+            "info.build_line",
+            &[("build_line", build_line_value.as_str())]
+        )
     );
 
     if let Command::Tools(tools::Command::MarkdownHelp(_md)) = args.command {
@@ -795,7 +797,6 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
         || (LoadPath::Default(PathBuf::from("client.toml")), false),
         |path| (LoadPath::Explicit(resolve_config_path(path)), true),
     );
-    let explicit_path = args.config.as_ref().map(|p| resolve_config_path(p));
     let config_path = match &load_path {
         LoadPath::Explicit(path) | LoadPath::Default(path) => Some(path.clone()),
     };
@@ -804,27 +805,9 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
         Ok(cfg) => cfg,
         Err(report) => {
             if config_was_explicit {
-                if let Some(path) = explicit_path {
-                    if let Some(cfg) = load_client_toml_fallback(&path) {
-                        let path_display = path.display().to_string();
-                        eprintln!(
-                            "{}",
-                            i18n.t_with(
-                                "warning.config_parse_fallback",
-                                &[("path", path_display.as_str())]
-                            )
-                        );
-                        cfg
-                    } else {
-                        return Err(report
-                            .change_context(MainError::Config)
-                            .attach(i18n.t("error.config_path")));
-                    }
-                } else {
-                    return Err(report
-                        .change_context(MainError::Config)
-                        .attach(i18n.t("error.config_path")));
-                }
+                return Err(report
+                    .change_context(MainError::Config)
+                    .attach(i18n.t("error.config_path")));
             } else {
                 eprintln!("{}", i18n.t("warning.config_missing_offline"));
                 fallback_config()
@@ -915,7 +898,9 @@ where
                     return Some(value.to_string());
                 }
             }
-        } else if let Some(value) = arg.strip_prefix("--language=") && !value.is_empty() {
+        } else if let Some(value) = arg.strip_prefix("--language=")
+            && !value.is_empty()
+        {
             return Some(value.to_string());
         }
     }
@@ -995,9 +980,7 @@ fn resolve_config_path(path: &Path) -> PathBuf {
 
 fn parse_duration_value(raw: &toml::Value) -> Option<Duration> {
     match raw {
-        toml::Value::Integer(ms) if *ms >= 0 => {
-            u64::try_from(*ms).ok().map(Duration::from_millis)
-        }
+        toml::Value::Integer(ms) if *ms >= 0 => u64::try_from(*ms).ok().map(Duration::from_millis),
         toml::Value::String(s) => humantime::parse_duration(s).ok(),
         _ => None,
     }
@@ -1018,92 +1001,6 @@ fn apply_transaction_overrides(config: &mut Config, raw: &toml::Value) {
             config.transaction_status_timeout = status;
         }
     }
-    if let Some(ttl) = raw.get("transaction_ttl").and_then(parse_duration_value) {
-        config.transaction_ttl = ttl;
-    }
-    if let Some(status) = raw
-        .get("transaction_status_timeout")
-        .and_then(parse_duration_value)
-    {
-        config.transaction_status_timeout = status;
-    }
-}
-
-/// Fallback loader for simple client `toml` configs (`chain/torii/account/basic_auth`).
-fn load_client_toml_fallback(path: &Path) -> Option<Config> {
-    let raw = fs::read_to_string(path).ok()?;
-    let value: toml::Value = toml::from_str(&raw).ok()?;
-
-    let chain = value.get("chain")?.as_str()?.to_string();
-    let torii_url = value.get("torii_url")?.as_str()?.to_string();
-
-    let transaction_ttl = value
-        .get("transaction_ttl")
-        .and_then(|raw| raw.as_str())
-        .and_then(|s| humantime::parse_duration(s).ok())
-        .unwrap_or(iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE);
-
-    let transaction_status_timeout = value
-        .get("transaction_status_timeout")
-        .and_then(|raw| raw.as_str())
-        .and_then(|s| humantime::parse_duration(s).ok())
-        .unwrap_or(iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT);
-    let torii_request_timeout = value
-        .get("torii_request_timeout_ms")
-        .and_then(parse_duration_value)
-        .or_else(|| value.get("torii_request_timeout").and_then(parse_duration_value))
-        .unwrap_or(iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT);
-
-    let account_table = value.get("account")?.as_table()?;
-    let domain: DomainId = account_table.get("domain")?.as_str()?.parse().ok()?;
-    let public_key: PublicKey = account_table.get("public_key")?.as_str()?.parse().ok()?;
-    let private_key: ExposedPrivateKey =
-        account_table.get("private_key")?.as_str()?.parse().ok()?;
-    let key_pair = KeyPair::new(public_key.clone(), private_key.0.clone()).ok()?;
-    let account = AccountId::new(domain, public_key);
-
-    let basic_auth = value.get("basic_auth").and_then(|table| {
-        table.as_table().and_then(|t| {
-            let login = t.get("web_login")?.as_str()?.parse().ok()?;
-            let password = t
-                .get("password")?
-                .as_str()
-                .map(|s| SecretString::new(s.to_owned()))?;
-            Some(BasicAuth {
-                web_login: login,
-                password,
-            })
-        })
-    });
-
-    let alias_cache = AliasCachePolicy::new(
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
-    );
-
-    Some(Config {
-        chain: ChainId::from(chain),
-        account,
-        key_pair,
-        basic_auth,
-        torii_api_url: Url::parse(&torii_url).ok()?,
-        torii_api_version: iroha::config::default_torii_api_version(),
-        torii_api_min_proof_version: iroha::config::DEFAULT_TORII_API_MIN_PROOF_VERSION.to_string(),
-        torii_request_timeout,
-        transaction_ttl,
-        transaction_status_timeout,
-        transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
-        connect_queue_root: iroha::config::default_connect_queue_root(),
-        sorafs_alias_cache: alias_cache,
-        sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
-        sorafs_rollout_phase: SorafsRolloutPhase::Default,
-    })
 }
 
 pub(crate) fn fallback_config() -> Config {
@@ -1615,8 +1512,7 @@ mod domain {
                         .wrap_err("failed to resolve --from account")?;
                     let to = resolve_account_id(context, &args.to)
                         .wrap_err("failed to resolve --to account")?;
-                    let instruction =
-                        iroha::data_model::isi::Transfer::domain(from, args.id, to);
+                    let instruction = iroha::data_model::isi::Transfer::domain(from, args.id, to);
                     context
                         .finish([instruction])
                         .wrap_err("Failed to transfer domain")
@@ -1631,10 +1527,10 @@ mod domain {
         /// Domain name
         #[arg(short, long)]
         pub id: DomainId,
-        /// Source account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Source account identifier (IH58 (preferred) or sora compressed literal)
         #[arg(short, long)]
         pub from: String,
-        /// Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Destination account identifier (IH58 (preferred) or sora compressed literal)
         #[arg(short, long)]
         pub to: String,
     }
@@ -1897,21 +1793,21 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Account identifier (IH58 (preferred) or sora compressed literal)
         #[arg(short, long)]
         id: String,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct RegisterId {
-        /// Account identifier for registration (`<public_key>@domain`)
+        /// Account identifier for registration (IH58 (preferred) or sora compressed literal)
         #[arg(short, long)]
         id: String,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct RoleList {
-        /// Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Account identifier (IH58 (preferred) or sora compressed literal)
         #[arg(short, long)]
         id: String,
         /// Maximum number of items to return (server-side limit)
@@ -1927,7 +1823,7 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct PermissionList {
-        /// Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Account identifier (IH58 (preferred) or sora compressed literal)
         #[arg(short, long)]
         id: String,
         /// Maximum number of items to return (server-side limit)
@@ -1943,7 +1839,7 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct IdRole {
-        /// Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Account identifier (IH58 (preferred) or sora compressed literal)
         #[arg(short, long)]
         pub id: String,
         /// Role name
@@ -2256,9 +2152,8 @@ mod asset {
                             .wrap_err("failed to resolve --from account")?;
                         let to = resolve_account_id(context, &args.to)
                             .wrap_err("failed to resolve --to account")?;
-                        let instruction = iroha::data_model::isi::Transfer::asset_definition(
-                            from, args.id, to,
-                        );
+                        let instruction =
+                            iroha::data_model::isi::Transfer::asset_definition(from, args.id, to);
                         context
                             .finish([instruction])
                             .wrap_err("Failed to transfer asset definition")
@@ -2302,10 +2197,10 @@ mod asset {
             /// Asset definition in the format "asset#domain"
             #[arg(short, long)]
             pub id: AssetDefinitionId,
-            /// Source account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+            /// Source account identifier (IH58 (preferred) or sora compressed literal)
             #[arg(short, long)]
             pub from: String,
-            /// Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+            /// Destination account identifier (IH58 (preferred) or sora compressed literal)
             #[arg(short, long)]
             pub to: String,
         }
@@ -2486,7 +2381,7 @@ mod asset {
         /// Asset in the format `asset#domain#account` or `asset##account`
         #[arg(short, long)]
         pub id: AssetId,
-        /// Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Destination account identifier (IH58 (preferred) or sora compressed literal)
         #[arg(short, long)]
         pub to: String,
         /// Transfer amount (integer or decimal)
@@ -2724,8 +2619,7 @@ mod nft {
                         .wrap_err("failed to resolve --from account")?;
                     let to = resolve_account_id(context, &args.to)
                         .wrap_err("failed to resolve --to account")?;
-                    let instruction =
-                        iroha::data_model::isi::Transfer::nft(from, args.id, to);
+                    let instruction = iroha::data_model::isi::Transfer::nft(from, args.id, to);
                     context
                         .finish([instruction])
                         .wrap_err("Failed to transfer NFT")
@@ -2740,10 +2634,10 @@ mod nft {
         /// NFT in the format "name$domain"
         #[arg(short, long)]
         pub id: NftId,
-        /// Source account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Source account identifier (IH58 (preferred) or sora compressed literal)
         #[arg(short, long)]
         pub from: String,
-        /// Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Destination account identifier (IH58 (preferred) or sora compressed literal)
         #[arg(short, long)]
         pub to: String,
     }
@@ -2917,7 +2811,8 @@ mod peer {
     fn apply_common_args<'a>(
         builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindPeers, PeerId>,
         common: &'a crate::list_support::CommonArgs,
-    ) -> Result<iroha::data_model::query::builder::QueryBuilder<'a, Client, FindPeers, PeerId>> {
+    ) -> Result<iroha::data_model::query::builder::QueryBuilder<'a, Client, FindPeers, PeerId>>
+    {
         use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
         use std::num::NonZeroU64;
 
@@ -2965,7 +2860,7 @@ mod peer {
 mod multisig {
     use core::convert::TryFrom;
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         num::{NonZeroU16, NonZeroU64},
         time::{Duration, SystemTime},
     };
@@ -3005,7 +2900,7 @@ mod multisig {
     }
     #[derive(clap::Args, Debug)]
     pub struct Register {
-        /// List of signatories for the multisig account (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// List of signatories for the multisig account (IH58 (preferred) or sora compressed literal)
         #[arg(short, long, num_args(2..))]
         pub signatories: Vec<String>,
         /// Relative weights of signatories' responsibilities
@@ -3015,8 +2910,8 @@ mod multisig {
         #[arg(short, long)]
         pub quorum: u16,
         /// Account id to use for the multisig controller. If omitted, a new
-        /// random account is generated in the signatory domain and the private
-        /// key is discarded locally.
+        /// random account is generated in the configured default domain and
+        /// the private key is discarded locally.
         #[arg(long)]
         pub account: Option<String>,
         /// Time-to-live for multisig transactions.
@@ -3041,28 +2936,16 @@ mod multisig {
                     .wrap_err_with(|| format!("failed to resolve signatory `{literal}`"))?;
                 signatories.push(account);
             }
-            let domain = signatories
-                .first()
-                .expect("clap enforces non-empty signatories")
-                .domain()
-                .clone();
-            if !signatories.iter().all(|id| id.domain() == &domain) {
-                return Err(eyre!(
-                    "all signatories must belong to domain `{domain}` to register a multisig account"
-                ));
-            }
             let account = if let Some(literal) = self.account {
-                let account = resolve_account_id(context, &literal)
-                    .wrap_err("failed to resolve --account")?;
-                if account.domain() != &domain {
-                    return Err(eyre!(
-                        "multisig account `{account}` must belong to the signatory domain `{domain}`"
-                    ));
-                }
-                account
+                resolve_account_id(context, &literal).wrap_err("failed to resolve --account")?
             } else {
+                let default_domain: iroha::data_model::domain::DomainId =
+                    iroha::data_model::account::address::default_domain_name()
+                        .as_ref()
+                        .parse()
+                        .map_err(|_| eyre!("configured default domain label is invalid"))?;
                 let generated = KeyPair::random();
-                AccountId::new(domain.clone(), generated.public_key().clone())
+                AccountId::new(default_domain, generated.public_key().clone())
             };
             let spec = MultisigSpec::new(
                 signatories.into_iter().zip(self.weights).collect(),
@@ -3084,7 +2967,6 @@ mod multisig {
                 .wrap_err("Failed to register multisig account")
         }
     }
-
 
     #[derive(clap::Args, Debug)]
     pub struct Propose {
@@ -3180,10 +3062,11 @@ mod multisig {
                 .find(|entry| entry.id() == &account_id)
                 .ok_or_else(|| eyre!("account `{}` not found", account_id))?;
 
-            let controller =
-                account.id().controller().multisig_policy().ok_or_else(|| {
-                    eyre!("account `{}` is not multisig-controlled", account_id)
-                })?;
+            let controller = account
+                .id()
+                .controller()
+                .multisig_policy()
+                .ok_or_else(|| eyre!("account `{}` is not multisig-controlled", account_id))?;
 
             let ctap2 = controller.encode_ctap2();
             let digest = controller.digest_blake2b256();
@@ -3351,7 +3234,9 @@ mod multisig {
                 }
             }
             Err(err) => {
-                context.println(format!("Unable to fetch multisig policy for {multisig_account}: {err}"))?;
+                context.println(format!(
+                    "Unable to fetch multisig policy for {multisig_account}: {err}"
+                ))?;
                 return Ok(());
             }
         };
@@ -3371,7 +3256,12 @@ mod multisig {
 
         if let Some(ttl_ms) = override_ttl_ms {
             validate_ttl_override(ttl_ms, policy.transaction_ttl_ms)?;
-            emit_ttl_hint(context, ttl_ms, policy.transaction_ttl_ms, Some(multisig_account))?;
+            emit_ttl_hint(
+                context,
+                ttl_ms,
+                policy.transaction_ttl_ms,
+                Some(multisig_account),
+            )?;
         } else {
             emit_ttl_hint(
                 context,
@@ -3413,8 +3303,7 @@ mod multisig {
                 |value| value.to_string(),
             );
 
-        let account_note = account
-            .map_or_else(String::new, |id| format!(" on {id}"));
+        let account_note = account.map_or_else(String::new, |id| format!(" on {id}"));
         context.println(format!(
             "Multisig TTL{account_note}: using {effective_ttl_ms} ms (policy cap {policy_ttl_ms} ms), expires approximately {expiry}"
         ))
@@ -3434,9 +3323,12 @@ mod multisig {
             .strip_prefix(MULTISIG_SIGNATORY)?
             .rsplit_once(DELIMITER)
             .and_then(|(init, last)| {
-                format!("{last}@{}", init.trim_matches(DELIMITER))
-                    .parse()
-                    .ok()
+                let domain = init.trim_matches(DELIMITER).parse().ok()?;
+                let parsed = AccountId::parse_encoded(last).ok()?;
+                Some(AccountId {
+                    domain,
+                    controller: parsed.account_id().controller().clone(),
+                })
             })
     }
 
@@ -3564,15 +3456,13 @@ mod multisig {
         }
 
         let proposal_status = proposals.entry(root_key).or_default();
+        let child_weight = signatory_weight_by_subject(spec, &context.child)
+            .expect("context child must be a signatory subject");
 
         let edge = ApprovalEdge::new(
-            *spec.signatories.get(&context.child).unwrap(),
-            proposal_value.approvals.contains(&context.child),
-            spec.signatories
-                .iter()
-                .filter(|(id, _)| proposal_value.approvals.contains::<ivm::AccountId>(id))
-                .map(|(_, weight)| u16::from(*weight))
-                .sum(),
+            child_weight,
+            approval_contains_subject(&proposal_value.approvals, &context.child),
+            approval_weight_by_subject(spec, &proposal_value.approvals),
             spec.quorum.into(),
             context.this.clone(),
         );
@@ -3607,6 +3497,29 @@ mod multisig {
         MultisigInstructionBox::try_from(&custom.payload).ok()
     }
 
+    fn signatory_weight_by_subject(spec: &MultisigSpec, account: &AccountId) -> Option<u8> {
+        let subject = account.subject_id();
+        spec.signatories
+            .iter()
+            .find_map(|(signatory, weight)| (signatory.subject_id() == subject).then_some(*weight))
+    }
+
+    fn approval_contains_subject(approvals: &BTreeSet<AccountId>, account: &AccountId) -> bool {
+        let subject = account.subject_id();
+        approvals
+            .iter()
+            .any(|approved| approved.subject_id() == subject)
+    }
+
+    fn approval_weight_by_subject(spec: &MultisigSpec, approvals: &BTreeSet<AccountId>) -> u16 {
+        let approved_subjects: BTreeSet<_> = approvals.iter().map(AccountId::subject_id).collect();
+        spec.signatories
+            .iter()
+            .filter(|(signatory, _)| approved_subjects.contains(&signatory.subject_id()))
+            .map(|(_, weight)| u16::from(*weight))
+            .sum()
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -3629,6 +3542,30 @@ mod multisig {
         }
 
         #[test]
+        fn approval_weight_by_subject_deduplicates_cross_domain_subjects() {
+            let home: DomainId = "home".parse().unwrap();
+            let alt: DomainId = "alt".parse().unwrap();
+            let shared = account_from_seed(1, &home);
+            let shared_alt = AccountId::new(alt, shared.signatory().clone());
+            let peer = account_from_seed(2, &home);
+            let spec = MultisigSpec::new(
+                BTreeMap::from([(shared.clone(), 1), (peer.clone(), 1)]),
+                NonZeroU16::new(2).unwrap(),
+                NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+            );
+            let approvals = BTreeSet::from([shared.clone(), shared_alt, peer.clone()]);
+            assert_eq!(
+                approval_weight_by_subject(&spec, &approvals),
+                2,
+                "the same subject approving from two domains must be counted once"
+            );
+            assert!(
+                approval_contains_subject(&approvals, &shared),
+                "subject approval lookup should ignore domain scope"
+            );
+        }
+
+        #[test]
         fn fold_proposals_skips_accounts_without_spec_metadata() {
             let domain: DomainId = "wonderland".parse().unwrap();
             let account_id = account_from_seed(9, &domain);
@@ -3646,8 +3583,7 @@ mod multisig {
                     .ok_or_else(|| eyre!("Account not found in test map"))
             };
 
-            fold_proposals_with(&mut proposals, &mut stack, &mut fetch)
-                .expect("fold proposals");
+            fold_proposals_with(&mut proposals, &mut stack, &mut fetch).expect("fold proposals");
             assert!(proposals.is_empty());
         }
 
@@ -3903,8 +3839,7 @@ mod transaction {
     use iroha::data_model::{Level as LogLevel, isi::Log, metadata::Metadata, name::Name};
     use std::{
         sync::{
-            LazyLock,
-            Mutex,
+            LazyLock, Mutex,
             atomic::{AtomicUsize, Ordering},
         },
         thread,
@@ -4156,10 +4091,9 @@ mod transaction {
                 }
                 if result.failed > 0 {
                     if let Some(err) = result.first_error {
-                        return Err(err.wrap_err(format!(
-                            "{} ping submissions failed",
-                            result.failed
-                        )));
+                        return Err(
+                            err.wrap_err(format!("{} ping submissions failed", result.failed))
+                        );
                     }
                     eyre::bail!("{} ping submissions failed", result.failed);
                 }
@@ -4650,7 +4584,7 @@ mod trigger {
         /// Number of permitted executions (default: indefinitely)
         #[arg(short, long)]
         pub repeats: Option<u32>,
-        /// Account executing the trigger (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Account executing the trigger (IH58 (preferred) or sora compressed literal)
         #[arg(long)]
         pub authority: Option<String>,
         /// Filter type for the trigger
@@ -4668,7 +4602,7 @@ mod trigger {
         /// Data filter preset: events within a domain
         #[arg(long)]
         pub data_domain: Option<DomainId>,
-        /// Data filter preset: events for an account (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Data filter preset: events for an account (IH58 (preferred) or sora compressed literal)
         #[arg(long)]
         pub data_account: Option<String>,
         /// Data filter preset: events for an asset
@@ -4990,7 +4924,10 @@ mod trigger {
             Executable::IvmProved(proved) => {
                 let mut inner = BTreeMap::<String, Value>::new();
                 inner.insert("hash".into(), to_value(&HashOf::new(&proved.bytecode))?);
-                inner.insert("size_bytes".into(), to_value(&proved.bytecode.size_bytes())?);
+                inner.insert(
+                    "size_bytes".into(),
+                    to_value(&proved.bytecode.size_bytes())?,
+                );
                 inner.insert("overlay_len".into(), to_value(&proved.overlay.len())?);
                 let mut outer = BTreeMap::<String, Value>::new();
                 outer.insert("IvmProved".into(), Value::Object(inner));
@@ -5150,22 +5087,20 @@ mod metadata {
                     }
                     Set(args) => {
                         let value: Json = parse_json_stdin(context)?;
-                        let instruction =
-                            iroha::data_model::isi::SetKeyValue::account(
-                                resolve_account_id(context, &args.id)
-                                    .wrap_err("failed to resolve --id account")?,
-                                args.key,
-                                value,
-                            );
+                        let instruction = iroha::data_model::isi::SetKeyValue::account(
+                            resolve_account_id(context, &args.id)
+                                .wrap_err("failed to resolve --id account")?,
+                            args.key,
+                            value,
+                        );
                         context.finish([instruction])
                     }
                     Remove(args) => {
-                        let instruction =
-                            iroha::data_model::isi::RemoveKeyValue::account(
-                                resolve_account_id(context, &args.id)
-                                    .wrap_err("failed to resolve --id account")?,
-                                args.key,
-                            );
+                        let instruction = iroha::data_model::isi::RemoveKeyValue::account(
+                            resolve_account_id(context, &args.id)
+                                .wrap_err("failed to resolve --id account")?,
+                            args.key,
+                        );
                         context.finish([instruction])
                     }
                 }
@@ -6249,7 +6184,6 @@ mod settlement {
                 country.push('X');
             }
             let mut location: String = account
-                .signatory()
                 .to_string()
                 .chars()
                 .filter(char::is_ascii_alphanumeric)
@@ -6567,96 +6501,54 @@ where
     norito::json::from_json(s).map_err(|err| eyre!("failed to parse JSON: {err}"))
 }
 
-#[derive(norito::json::JsonDeserialize)]
-struct AccountResolveResponse {
-    account_id: String,
-    domain: String,
-    #[norito(default)]
-    source: Option<String>,
-    #[norito(default)]
-    format: Option<String>,
-}
-
-fn resolve_account_id_with<F>(client: &Client, literal: &str, call: F) -> Result<AccountId>
-where
-    F: FnOnce(&Client, &str) -> Result<iroha::http::Response<Vec<u8>>>,
-{
+fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
         eyre::bail!("account literal must not be empty");
     }
 
-    if let Some((identifier, domain_literal)) = trimmed.rsplit_once('@') {
-        if identifier.is_empty() {
-            eyre::bail!("account literal must include characters before '@'");
-        }
-        if domain_literal.is_empty() {
-            eyre::bail!("account literal must include a domain after '@'");
-        }
-        if iroha::account_address::AccountAddress::parse_any(identifier, None).is_ok() {
-            eyre::bail!("encoded addresses must not append '@domain'");
-        }
-        if let Ok(public_key) = identifier.parse::<iroha_crypto::PublicKey>() {
-            let domain: DomainId = domain_literal
-                .parse()
-                .wrap_err("failed to parse account domain")?;
-            return Ok(AccountId::new(domain, public_key));
-        }
+    if trimmed.contains('@') {
+        eyre::bail!("account literal must not include '@domain'; use IH58 or sora compressed only");
     }
-
-    let response = call(client, trimmed)?;
-    let status = response.status();
-    let body = response.into_body();
-    if status != iroha::http::StatusCode::OK {
-        return Err(eyre!(
-            "account resolve failed with status {status}: {}",
-            String::from_utf8_lossy(&body)
-        ));
+    if trimmed
+        .get(..2)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
+    {
+        eyre::bail!(
+            "account literal must be IH58 or sora compressed; canonical hex is not accepted"
+        );
     }
-
-    let dto: AccountResolveResponse = norito::json::from_slice(&body)
-        .wrap_err("failed to parse account resolve response")?;
-    let _ = (&dto.source, &dto.format);
-    let domain: DomainId = dto
-        .domain
-        .parse()
-        .wrap_err("failed to parse resolved account domain")?;
-    let (address, _) = iroha::account_address::AccountAddress::parse_any(&dto.account_id, None)
-        .map_err(|err| eyre!("resolved account id is invalid: {err}"))?;
-    address
-        .to_account_id(&domain)
-        .map_err(|err| eyre!("resolved account id does not match domain: {err}"))
+    let parsed = AccountId::parse_encoded(trimmed)
+        .map_err(|err| eyre!("account literal must be IH58 or sora compressed: {err}"))?;
+    Ok(parsed.into_account_id())
 }
 
-pub(crate) fn resolve_account_id<C: RunContext>(context: &C, literal: &str) -> Result<AccountId> {
-    let client = context.client_from_config();
-    resolve_account_id_with(&client, literal, Client::post_account_resolve)
+pub(crate) fn resolve_account_id<C: RunContext>(_context: &C, literal: &str) -> Result<AccountId> {
+    resolve_account_id_with(literal)
 }
 
 fn parse_register_account_id(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
-        eyre::bail!("`ledger account register --id` must be `<public_key>@<domain>`");
+        eyre::bail!("`ledger account register --id` must be an IH58 or sora compressed account id");
     }
-
-    let Some((identifier, domain_literal)) = trimmed.rsplit_once('@') else {
-        eyre::bail!("`ledger account register --id` must be `<public_key>@<domain>`");
-    };
-    if identifier.is_empty() || domain_literal.is_empty() {
-        eyre::bail!("`ledger account register --id` must be `<public_key>@<domain>`");
-    }
-    if iroha::account_address::AccountAddress::parse_any(identifier, None).is_ok() {
+    if trimmed.contains('@') {
         eyre::bail!(
-            "`ledger account register --id` must be `<public_key>@<domain>`; encoded addresses and aliases are not accepted"
+            "`ledger account register --id` must not include '@domain'; use IH58 or sora compressed only"
         );
     }
-    let public_key = identifier
-        .parse::<iroha_crypto::PublicKey>()
-        .map_err(|_| eyre!("`ledger account register --id` must be `<public_key>@<domain>`"))?;
-    let domain: DomainId = domain_literal
-        .parse()
-        .wrap_err("failed to parse account domain")?;
-    Ok(AccountId::new(domain, public_key))
+    if trimmed
+        .get(..2)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
+    {
+        eyre::bail!(
+            "`ledger account register --id` must be IH58 or sora compressed; canonical hex is not accepted"
+        );
+    }
+    let parsed = AccountId::parse_encoded(trimmed).map_err(|err| {
+        eyre!("`ledger account register --id` must be an IH58 or sora compressed account id: {err}")
+    })?;
+    Ok(parsed.into_account_id())
 }
 
 fn string_from_stdin() -> Result<String> {
@@ -6713,33 +6605,33 @@ struct CliRenderedError {
     output: String,
 }
 
-fn render_cli_error(report: &Report<MainError>, output_format: CliOutputFormat) -> CliRenderedError {
+fn render_cli_error(
+    report: &Report<MainError>,
+    output_format: CliOutputFormat,
+) -> CliRenderedError {
     let kind = error_kind_for_report(&report);
     let message = report.to_string();
     let output = match output_format {
         CliOutputFormat::Text => format!("error: {message}\n"),
         CliOutputFormat::Json => {
-            let rendered = json_utils::json_object(vec![
-                (
-                    "error",
-                    json_utils::json_object(vec![
-                        (
-                            "kind",
-                            json_utils::json_value(&kind.label()).unwrap_or(json::Value::Null),
-                        ),
-                        (
-                            "message",
-                            json_utils::json_value(&message).unwrap_or(json::Value::Null),
-                        ),
-                        (
-                            "exit_code",
-                            json_utils::json_value(&kind.exit_code())
-                                .unwrap_or(json::Value::Null),
-                        ),
-                    ])
-                    .unwrap_or(json::Value::Null),
-                ),
-            ])
+            let rendered = json_utils::json_object(vec![(
+                "error",
+                json_utils::json_object(vec![
+                    (
+                        "kind",
+                        json_utils::json_value(&kind.label()).unwrap_or(json::Value::Null),
+                    ),
+                    (
+                        "message",
+                        json_utils::json_value(&message).unwrap_or(json::Value::Null),
+                    ),
+                    (
+                        "exit_code",
+                        json_utils::json_value(&kind.exit_code()).unwrap_or(json::Value::Null),
+                    ),
+                ])
+                .unwrap_or(json::Value::Null),
+            )])
             .and_then(|value| {
                 norito::json::to_json_pretty(&value)
                     .map_err(|err| eyre!("failed to render error JSON: {err}"))
@@ -6751,9 +6643,9 @@ fn render_cli_error(report: &Report<MainError>, output_format: CliOutputFormat) 
                     }
                     payload
                 }
-                Err(err) => format!(
-                    "error: {message}\nerror: failed to render JSON payload: {err}\n"
-                ),
+                Err(err) => {
+                    format!("error: {message}\nerror: failed to render JSON payload: {err}\n")
+                }
             }
         }
     };
@@ -6769,9 +6661,10 @@ mod tests {
     use futures::stream;
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
-        ChainId,
-        Level,
-        events::{data::DataEventFilter, execute_trigger::ExecuteTriggerEventFilter, EventFilterBox},
+        ChainId, Level,
+        events::{
+            EventFilterBox, data::DataEventFilter, execute_trigger::ExecuteTriggerEventFilter,
+        },
         isi::Log,
         metadata::Metadata,
         transaction::Executable,
@@ -6799,6 +6692,12 @@ mod tests {
             output_format,
             i18n: Localizer::new(Bundle::Cli, Language::English),
         }
+    }
+
+    fn account_with_seed(domain_literal: &str, seed: u8) -> AccountId {
+        let domain: iroha::data_model::domain::DomainId = domain_literal.parse().expect("domain");
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(domain, key_pair.public_key().clone())
     }
 
     #[test]
@@ -6893,34 +6792,42 @@ mod tests {
     }
 
     #[test]
-    fn resolve_account_id_with_prefers_public_key_domain() {
-        let client = Client::new(fallback_config());
+    fn resolve_account_id_with_rejects_public_key_domain() {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![7_u8; 32], Algorithm::Ed25519);
         let literal = format!("{}@{}", key_pair.public_key(), domain);
 
-        let resolved = resolve_account_id_with(&client, &literal, |_client, _literal| {
-            Err(eyre!("unexpected remote resolve"))
-        })
-        .expect("local resolve should succeed");
+        let err =
+            resolve_account_id_with(&literal).expect_err("public_key@domain should be rejected");
 
-        assert_eq!(resolved, AccountId::new(domain, key_pair.public_key().clone()));
+        assert!(
+            err.to_string().contains("must not include '@domain'"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
-    fn parse_register_account_id_accepts_public_key_domain() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
+    fn parse_register_account_id_accepts_ih58() {
+        let domain: DomainId = iroha::account_address::default_domain_name()
+            .as_ref()
+            .parse()
+            .expect("default domain");
         let key_pair = KeyPair::from_seed(vec![11_u8; 32], Algorithm::Ed25519);
-        let literal = format!("{}@{}", key_pair.public_key(), domain);
+        let literal = AccountId::new(domain.clone(), key_pair.public_key().clone())
+            .canonical_ih58()
+            .expect("canonical ih58");
         let resolved = parse_register_account_id(&literal).expect("register account id");
-        assert_eq!(resolved, AccountId::new(domain, key_pair.public_key().clone()));
+        assert_eq!(
+            resolved,
+            AccountId::new(domain, key_pair.public_key().clone())
+        );
     }
 
     #[test]
     fn parse_register_account_id_rejects_alias_like_literal() {
-        let err = parse_register_account_id("inori@wonderland").expect_err("alias should fail");
+        let err = parse_register_account_id("inori@invalid-domain").expect_err("alias should fail");
         assert!(
-            err.to_string().contains("must be `<public_key>@<domain>`"),
+            err.to_string().contains("must not include '@domain'"),
             "unexpected error: {err}"
         );
     }
@@ -6930,44 +6837,37 @@ mod tests {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![13_u8; 32], Algorithm::Ed25519);
         let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
-        let literal = format!(
-            "{}@{}",
-            account.canonical_ih58().expect("ih58"),
-            domain
-        );
+        let literal = format!("{}@{}", account.canonical_ih58().expect("ih58"), domain);
         let err = parse_register_account_id(&literal).expect_err("encoded address should fail");
         assert!(
-            err.to_string().contains("encoded addresses and aliases are not accepted"),
+            err.to_string().contains("must not include '@domain'"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn resolve_account_id_with_uses_remote_response() {
-        let client = Client::new(fallback_config());
+    fn parse_register_account_id_rejects_canonical_hex() {
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let key_pair = KeyPair::from_seed(vec![14_u8; 32], Algorithm::Ed25519);
+        let literal = AccountId::new(domain, key_pair.public_key().clone())
+            .to_canonical_hex()
+            .expect("canonical hex");
+        let err = parse_register_account_id(&literal).expect_err("canonical hex should fail");
+        assert!(
+            err.to_string().contains("canonical hex is not accepted"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_account_id_with_resolves_encoded_literal() {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![9_u8; 32], Algorithm::Ed25519);
         let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
         let canonical = account.canonical_ih58().expect("canonical ih58");
-        let domain_literal = domain.to_string();
-        let body = norito::json::to_vec(&norito::json!({
-            "account_id": canonical,
-            "domain": domain_literal,
-            "source": "alias",
-        }))
-        .expect("response body");
-        let response = iroha::http::Response::builder()
-            .status(iroha::http::StatusCode::OK)
-            .header("content-type", "application/json")
-            .body(body)
-            .expect("response");
+        let resolved = resolve_account_id_with(&canonical).expect("local resolve");
 
-        let resolved = resolve_account_id_with(&client, "uaid:abcd", |_client, _literal| {
-            Ok(response)
-        })
-        .expect("remote resolve");
-
-        assert_eq!(resolved, account);
+        assert_eq!(resolved.to_string(), account.to_string());
     }
 
     #[test]
@@ -7088,9 +6988,8 @@ mod tests {
         let filter = EventFilterBox::Data(DataEventFilter::Any);
         let timeout = Duration::from_secs(1);
         let message = listen_events_message(&filter, Some(timeout), &i18n);
-        let expected = format!(
-            "Listening to events with filter: {filter:?} and timeout: {timeout:?}"
-        );
+        let expected =
+            format!("Listening to events with filter: {filter:?} and timeout: {timeout:?}");
         assert_eq!(message, expected);
 
         let message = listen_events_message(&filter, None, &i18n);
@@ -7125,16 +7024,48 @@ mod tests {
     #[test]
     fn language_override_from_args_parses_flags() {
         let args = vec!["--language".to_string(), "ja".to_string()];
-        assert_eq!(
-            language_override_from_args(args),
-            Some("ja".to_string())
-        );
+        assert_eq!(language_override_from_args(args), Some("ja".to_string()));
 
         let args = vec!["--language=fr".to_string()];
+        assert_eq!(language_override_from_args(args), Some("fr".to_string()));
+    }
+
+    #[test]
+    fn apply_transaction_overrides_uses_transaction_block_only() {
+        let mut config = fallback_config();
+        let raw: toml::Value = toml::from_str(
+            r#"
+transaction_ttl = "99s"
+transaction_status_timeout = "77s"
+[transaction]
+time_to_live_ms = 1200
+status_timeout_ms = 3400
+"#,
+        )
+        .expect("valid toml");
+        apply_transaction_overrides(&mut config, &raw);
+        assert_eq!(config.transaction_ttl, Duration::from_millis(1200));
         assert_eq!(
-            language_override_from_args(args),
-            Some("fr".to_string())
+            config.transaction_status_timeout,
+            Duration::from_millis(3400)
         );
+    }
+
+    #[test]
+    fn apply_transaction_overrides_ignores_legacy_top_level_keys() {
+        let mut config = fallback_config();
+        let original_ttl = config.transaction_ttl;
+        let original_status = config.transaction_status_timeout;
+        let raw: toml::Value = toml::from_str(
+            r#"
+transaction_ttl = "99s"
+transaction_status_timeout = "77s"
+"#,
+        )
+        .expect("valid toml");
+        apply_transaction_overrides(&mut config, &raw);
+        assert_eq!(config.transaction_ttl, original_ttl);
+        assert_eq!(config.transaction_status_timeout, original_status);
     }
 
     struct CaptureContext {
@@ -7222,10 +7153,7 @@ mod tests {
 
     #[test]
     fn ping_rejects_zero_count() {
-        let account: AccountId =
-            "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland"
-                .parse()
-                .expect("account");
+        let account = account_with_seed("wonderland", 0x42);
         let mut ctx = CaptureContext::new(account);
         let cmd = transaction::Ping {
             log_level: Level::INFO,
@@ -7237,15 +7165,15 @@ mod tests {
             no_index: false,
         };
         let err = cmd.run(&mut ctx).expect_err("count must be rejected");
-        assert!(err.to_string().contains("`--count` must be greater than zero"));
+        assert!(
+            err.to_string()
+                .contains("`--count` must be greater than zero")
+        );
     }
 
     #[test]
     fn ping_submits_single_log_instruction() {
-        let account: AccountId =
-            "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland"
-                .parse()
-                .expect("account");
+        let account = account_with_seed("wonderland", 0x42);
         let mut ctx = CaptureContext::new(account);
         let cmd = transaction::Ping {
             log_level: Level::WARN,
@@ -7277,14 +7205,18 @@ mod tests {
         use iroha::data_model::isi::error::AccountAdmissionError;
 
         let domain: DomainId = "wonderland".parse().expect("domain");
-        let err =
-            eyre::Report::from(AccountAdmissionError::ImplicitAccountCreationDisabled(domain));
+        let err = eyre::Report::from(AccountAdmissionError::ImplicitAccountCreationDisabled(
+            domain,
+        ));
         let hint = account_admission_hint(err.as_ref()).expect("hint should be present");
         assert!(
             hint.contains("Implicit account creation is disabled"),
             "unexpected hint: {hint}"
         );
-        assert!(hint.contains("wonderland"), "hint must reference domain: {hint}");
+        assert!(
+            hint.contains("wonderland"),
+            "hint must reference domain: {hint}"
+        );
     }
 
     #[test]
@@ -7316,7 +7248,10 @@ mod tests {
             message.contains("Account admission rejected"),
             "unexpected message: {message}"
         );
-        assert!(message.contains("hint text"), "unexpected message: {message}");
+        assert!(
+            message.contains("hint text"),
+            "unexpected message: {message}"
+        );
     }
 
     #[test]
@@ -7352,10 +7287,7 @@ mod tests {
         f.write_all(&[1, 2, 3, 4]).unwrap();
 
         // Use a deterministic account for authority
-        let account: AccountId =
-            "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland"
-                .parse()
-                .unwrap();
+        let account = account_with_seed("wonderland", 0x42);
         let mut ctx = CaptureContext::new(account.clone());
 
         let args = trigger::Register {
@@ -7433,10 +7365,7 @@ mod tests {
         f.write_all(&[0xAA, 0xBB]).unwrap();
 
         // Deterministic account
-        let account: AccountId =
-            "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland"
-                .parse()
-                .unwrap();
+        let account = account_with_seed("wonderland", 0x42);
         let mut ctx = CaptureContext::new(account.clone());
 
         let start_ms = 1_700_000_000_000u64;
@@ -7504,10 +7433,7 @@ mod tests {
         let mut f = fs::File::create(&path).unwrap();
         f.write_all(&[0x01]).unwrap();
 
-        let account: AccountId =
-            "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland"
-                .parse()
-                .unwrap();
+        let account = account_with_seed("wonderland", 0x42);
         let mut ctx = CaptureContext::new(account);
 
         let args = trigger::Register {
@@ -7560,21 +7486,27 @@ mod tests {
 #[cfg(test)]
 mod multisig_json_tests {
     use super::*;
+    use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
         account::AccountId,
+        domain::DomainId,
         isi::{CustomInstruction, InstructionBox},
     };
     use iroha::executor_data_model::isi::multisig::{
-        MultisigRegister, MultisigSpec, DEFAULT_MULTISIG_TTL_MS,
+        DEFAULT_MULTISIG_TTL_MS, MultisigRegister, MultisigSpec,
     };
     use std::collections::BTreeMap;
     use std::num::{NonZeroU16, NonZeroU64};
 
+    fn multisig_account() -> AccountId {
+        let domain: DomainId = "acme".parse().expect("domain");
+        let key_pair = KeyPair::from_seed(vec![0xD6; 32], Algorithm::Ed25519);
+        AccountId::new(domain, key_pair.public_key().clone())
+    }
+
     #[test]
     fn multisig_register_payload_contains_account() {
-        let account: AccountId = "ed0120D6BBC55AD6CF0081E7EF561A6EC9F61CECC2A9920D0A542EA18D3FA4C9E6D176@acme"
-            .parse()
-            .expect("valid account id");
+        let account = multisig_account();
         let mut signatories = BTreeMap::new();
         signatories.insert(account.clone(), 1);
         let spec = MultisigSpec::new(
@@ -7596,7 +7528,6 @@ mod multisig_json_tests {
             "serialized payload missing account field: {payload}"
         );
     }
-
 }
 
 #[cfg(test)]
@@ -7606,8 +7537,8 @@ mod cli_command_tests {
 
     #[test]
     fn top_level_offline_parses() {
-        let args = Args::try_parse_from(["iroha_cli", "offline", "allowance", "list"])
-            .expect("parse");
+        let args =
+            Args::try_parse_from(["iroha_cli", "offline", "allowance", "list"]).expect("parse");
         assert!(matches!(args.command, Command::Offline(_)));
     }
 }
@@ -7624,7 +7555,10 @@ mod tests {
         parameters::{FetchSize, Pagination, QueryParams, Sorting},
     };
     use iroha::data_model::smart_contract::manifest::ContractManifest;
-    use iroha::data_model::{domain::{Domain, DomainId}, prelude::FindDomains};
+    use iroha::data_model::{
+        domain::{Domain, DomainId},
+        prelude::FindDomains,
+    };
     use iroha_crypto::{Algorithm, Hash};
     use std::cmp::Ordering as CmpOrdering;
     use std::num::NonZeroU64;
@@ -7674,9 +7608,7 @@ mod tests {
         use iroha::data_model::query::dsl::CompoundPredicate;
 
         let owner = sample_account_id("wonderland", 1);
-        let raw = format!(
-            r#"{{"op":"eq","args":[{{"FieldPath":"authority"}},"{owner}"]}}"#
-        );
+        let raw = format!(r#"{{"op":"eq","args":[{{"FieldPath":"authority"}},"{owner}"]}}"#);
         let predicate = super::parse_json::<CompoundPredicate<Domain>>(raw)
             .expect("predicate JSON should parse");
 
@@ -10720,8 +10652,7 @@ mod cli_integration_harness {
         let owner_w = sample_account_id("w", 1);
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
-            AssetDefinition::new("rose#w".parse().unwrap(), NumericSpec::default())
-                .build(&owner_w),
+            AssetDefinition::new("rose#w".parse().unwrap(), NumericSpec::default()).build(&owner_w),
             AssetDefinition::new("tulip#w".parse().unwrap(), NumericSpec::default())
                 .build(&owner_w),
         ];
@@ -10762,8 +10693,7 @@ mod cli_integration_harness {
         let owner_w = sample_account_id("w", 2);
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
-            AssetDefinition::new("rose#w".parse().unwrap(), NumericSpec::default())
-                .build(&owner_w),
+            AssetDefinition::new("rose#w".parse().unwrap(), NumericSpec::default()).build(&owner_w),
             AssetDefinition::new("tulip#w".parse().unwrap(), NumericSpec::default())
                 .build(&owner_w),
             AssetDefinition::new("peony#w".parse().unwrap(), NumericSpec::default())

@@ -46,9 +46,6 @@ Each SDK now exposes a convenience helper that returns the IH58 (preferred) and 
 the warning string so UI layers can stay consistent:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)` (`javascript/iroha_js/src/address.js`)
-- JavaScript (global selectors): `AccountAddress.fromAccount({ registryId, publicKey })` builds
-  registry-backed addresses when Local selectors are retired; `domainSummary().kind` returns
-  `global` with no warning so wallets can suppress the Local-12 banner during the cutover.
 - Python: `AccountAddress.display_formats(network_prefix: int = 753)`
 - Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
 - Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)` (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
@@ -56,13 +53,11 @@ the warning string so UI layers can stay consistent:
 Use these helpers instead of reimplementing the encode logic in UI layers.
 Every helper returns a `domainSummary` payload alongside the IH58 (preferred) + compressed (`sora`, second-best)
 strings. The summary exposes `kind` (`default`, `local12`, `global`, `unknown`)
-and an optional `warning` message that mirrors the Local-12 cutover guidance in
-this document. Use the warning string to show inline banners when Local-12
-digests appear so operators know they must refresh cached addresses once
-registry-backed selectors become mandatory. The JavaScript helper also exposes
-selector details (`tag`, `digest_hex`, `registry_id`, `label`) so UIs can
-surface whether the selector is default, Local-12, or backed by a registry id
-without re-parsing the canonical payload.
+and an optional `warning` message that mirrors the Local-12 compatibility guidance in
+this document. Canonical payloads emitted by current SDKs are selector-free and
+therefore report `default`; `local12`/`global` are legacy decode diagnostics only.
+The JavaScript helper also exposes selector details (`tag`, `digest_hex`, `registry_id`, `label`) so UIs can
+surface whether an imported legacy literal carried a selector prefix without re-parsing the canonical payload.
 - JavaScript inspector: `inspectAccountId(...)` returns the `compressedWarning`
   string and appends it to `warnings` whenever a `sora…` literal is provided, so
   explorers and wallet dashboards can surface the Sora-only notice during paste/
@@ -131,8 +126,8 @@ arrays) without forcing operators to hand-normalize values ahead of time.
 When the selector targets the implicit default domain, clients may omit
 `@<domain>` entirely; Torii canonicalizes those preferred IH58 / second-best compressed (`sora`) inputs to
 canonical IH58 (no `@domain`) and emits the canonical string in responses + telemetry.
-Domainless literals for non-default domains still fail with
-`ERR_DOMAIN_SELECTOR_UNRESOLVED` so dashboards can detect misconfigurations.
+Domainless literals intended for non-default domains should carry an explicit `@<domain>` suffix (or resolve via alias/UAID context). Legacy selector-bearing literals without that context can still fail with
+`ERR_DOMAIN_SELECTOR_UNRESOLVED`, which dashboards can monitor during migration.
 
 ## Accessibility + implicit domain metadata
 
@@ -186,33 +181,32 @@ payload bit: │version  │ class  │  norm  │ext │
 - `addr_version = 0` (bits 7‑5) today; non‑zero values are reserved and must raise
   `AccountAddressError::InvalidHeaderVersion`.
 - `addr_class` distinguishes single (`0`) vs multisig (`1`) controllers.
-- `norm_version = 1` encodes the Norm v1 selector rules. Future norms will reuse the same 2‑bit field.
+- `norm_version = 1` encodes the selector-free Norm v1 payload rules. Future norms will reuse the same 2‑bit field.
 - `ext_flag` is always `0`—set bits indicate unsupported payload extensions.
 
-The selector immediately follows the header:
+For canonical payloads, the controller immediately follows the header:
 
 ```
 ┌──────────┬──────────────────────────────────────────────┐
-│ tag (u8) │ payload (depends on selector kind)           │
+│ tag (u8) │ payload (depends on controller kind)         │
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-UI and SDK surfaces should be ready to display the selector kind:
-
-- `0x00` = implicit default domain (no payload).
-- `0x01` = local digest (12‑byte `blake2s_mac("SORA-LOCAL-K:v1", label)`).
-- `0x02` = global registry entry (big‑endian `registry_id:u32`).
+Selector tags (`0x00` default, `0x01` local12, `0x02` global) are accepted only
+when decoding legacy payloads for backward compatibility.
 
 Canonical hex examples that wallet tooling can link or embed in docs/tests:
 
-| Selector kind | Canonical hex |
-|---------------|---------------|
-| Implicit default | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| Local digest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` |
-| Global registry (`registry_id = 42`) | `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201` |
+| Encoding family | Canonical hex |
+|-----------------|---------------|
+| Selector-free canonical | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 
-Linking this quick reference from SDK docs keeps binary and UX guidance in one place and lets operators
-cross‑check Local vs global selectors without spelunking the RFC every time.
+Legacy (decode-only) selector-bearing examples:
+
+| Legacy selector kind | Canonical hex |
+|----------------------|---------------|
+| Legacy local digest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` |
+| Legacy global registry (`registry_id = 42`) | `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201` |
 
 ## Torii response knobs
 
@@ -249,19 +243,18 @@ Local-domain selectors (`domain.kind = local12`) remain temporary encodings unti
 domain is backed by the Nexus registry. To detect lingering Local payloads and guide operators
 through the migration:
 
-1. Run `iroha tools address convert <address-or-account_id> --format json`. The payload now includes a
-   `domain` object with `kind`/`warning` fields and echoes any provided domain via the `input_domain`
-   field. When `kind` is `local12`, the CLI prints a warning to stderr and the JSON summary echoes the
-   same guidance so CI pipelines and SDKs can surface it. Pass `--append-domain` whenever you want the
-   converted encoding replayed as `<ih58>@<domain>`.
-2. SDKs can surface the same warning/summary via the JavaScript helper:
+1. Run `iroha tools address convert <address-or-account_id> --format json`. The payload includes
+   `detected_format`, `domain.kind`, and canonical encodings (`ih58`, `compressed`, `canonical_hex`).
+   Inputs must be canonical address literals (IH58 preferred, `sora...`, or canonical hex); `@domain`
+   suffixes are rejected.
+2. SDKs can surface the same summary via the JavaScript helper:
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
    const summary = inspectAccountId("sora...");
-   if (summary.domain.warning) {
-     console.warn(summary.domain.warning);
+   if (summary.domain.kind === "local12") {
+     console.warn("Local selector detected; migrate to canonical global address.");
    }
    console.log(summary.ih58.value, summary.compressed);
    ```
@@ -273,17 +266,17 @@ through the migration:
    (or request another encoding via `--format`). These strings are already safe to share externally.
 4. Update manifests, registries, and customer-facing documents with the canonical form and notify
    counterparties that Local selectors will be rejected once the cutover completes.
-5. For bulk data sets, run `iroha tools address audit --input addresses.txt --network-prefix 753`. The command
-   reads newline-separated literals (comments starting with `#` are ignored, and `--input -` or no flag uses STDIN),
-   emits a JSON report with canonical/preferred IH58/second-best compressed (`sora`) summaries for every entry, and counts both parse errors
-   automation with `--fail-on-warning` once operators are ready to block Local selectors in CI.
-6. When you need a newline-to-newline rewrite, use
-   The helper skips non-Local rows by default, converts every remaining entry into the requested encoding
-   (IH58 preferred/compressed (`sora`) second-best/hex/JSON), and preserves the original domain when `--append-domain` is set. Pair it with
-   `--allow-errors` to keep scanning even when a dump contains malformed literals.
+5. For bulk data sets, run `iroha tools address audit --input addresses.txt --network-prefix 753`.
+   The command reads newline-separated literals (comments starting with `#` are ignored, and
+   `--input -` or no flag uses STDIN) and emits JSON or CSV summaries for every entry. By default
+   audit fails on parse errors; use `--allow-errors` only for best-effort scans.
+6. For newline-to-newline rewrites, run `iroha tools address normalize --input addresses.txt --network-prefix 753 --format ih58`.
+   The helper rewrites each parsed row into the requested encoding
+   (IH58 preferred/compressed (`sora`) second-best/hex/JSON). Pair it with `--allow-errors` to keep scanning
+   malformed dumps.
 7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts the Local selectors from
-   `fixtures/account/address_vectors.json`, converts them via `iroha tools address normalize`, and replays
-   `iroha tools address audit --fail-on-warning` to prove releases no longer emit Local digests.
+   `fixtures/account/address_vectors.json`, converts them via `iroha tools address normalize`, and audits
+   the result to ensure parse errors are zero and no `domain.kind="local12"` entries remain.
 
 `torii_address_local8_total{endpoint}` plus
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
@@ -292,8 +285,7 @@ through the migration:
 show zero legitimate Local submissions and zero Local-12 collisions for 30 consecutive days, Torii
 will flip the Local-8 gate to hard-fail on mainnet, followed by Local-12 once global domains have
 matching registry entries.
-Consider the CLI output the operator-facing notice for this freeze—the same warning string is used
-across SDK tooltips and automation to keep parity with the roadmap exit criteria. The accompanying
+Consider the CLI output the operator-facing notice for this freeze. The accompanying
 Alertmanager pack (`dashboards/alerts/address_ingest_rules.yml`) surfaces three guardrails:
 
 - `AddressLocal8Resurgence` pages whenever any context reports a fresh Local-8 increment. Treat this
@@ -315,3 +307,8 @@ fallback to the default IH58 responses.
 ### Release note snippet (wallet & explorer)
 
 Include the following bullet in the wallet/explorer release notes when shipping the cutover:
+
+> **Addresses:** Updated migration tooling to use canonical address literals only.
+> `ci/check_address_normalize.sh` now normalizes fixture rows with
+> `iroha tools address normalize` and blocks releases when audit reports parse
+> errors or residual `domain.kind="local12"` entries.

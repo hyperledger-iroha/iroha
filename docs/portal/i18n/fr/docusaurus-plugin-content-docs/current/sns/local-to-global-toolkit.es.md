@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Options:
 
 - `--format compressed (`sora`)` pour sortir `sora...` à la place de IH58.
-- `--no-append-domain` pour émettre des lettres sans propriété.
+- `domainless output (default)` pour émettre des lettres sans propriété.
 - `--audit-only` pour omettre l'étape de conversion.
 - `--allow-errors` pour éviter les fils malformés (coïncidant avec le comportement de la CLI).Le script décrit les itinéraires des artefacts à la fin de l'éjection. Adjunta ambos archivos a
 votre ticket de gestion de changements avec la capture d'écran de Grafana qui vérifie zéro
@@ -46,7 +46,7 @@ détections Local-8 et zéro colisiones Local-12 pour >=30 dias.
 2. Bloquea fusionne lorsque `audit.json` rapporte les sélecteurs locaux (`domain.kind = local12`).
    en su valeur par défaut `true` (solo remplacer un `false` en clusters dev/test al
    diagnostiquer les régressions) et agrégation
-   `iroha tools address normalize --fail-on-warning --only-local` à CI pour les intentions de
+   `iroha tools address normalize` à CI pour les intentions de
    régression tombée avant de commencer la production.
 
 Consultez le document source pour plus de détails, les listes de contrôle des preuves et l'extrait de

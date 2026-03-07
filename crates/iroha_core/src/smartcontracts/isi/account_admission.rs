@@ -212,8 +212,7 @@ fn create_implicit_account(
     let (account_id, account_value) = account.clone().into_key_value();
     state_transaction
         .world
-        .accounts
-        .insert(account_id, account_value);
+        .insert_account_with_links(account_id, account_value);
 
     let mut default_role_granted = None;
     if let Some(role) = default_role_on_create {
@@ -225,7 +224,9 @@ fn create_implicit_account(
             .is_some()
         {
             state_transaction.world.account_roles.remove(role_key);
-            state_transaction.world.accounts.remove(destination.clone());
+            state_transaction
+                .world
+                .remove_account_with_links(destination);
             return Err(AccountAdmissionError::DefaultRoleError(
                 AccountAdmissionDefaultRoleError {
                     role: role.clone(),
@@ -357,18 +358,11 @@ pub(super) fn ensure_receiving_account(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeMap,
-        sync::{Arc, LazyLock, Mutex, MutexGuard},
-    };
+    use std::collections::BTreeMap;
 
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        account::{
-            AccountDomainSelector, admission::ImplicitAccountCreationFee,
-            clear_account_domain_selector_resolver, set_account_domain_selector_resolver,
-        },
-        permission::Permissions,
+        account::admission::ImplicitAccountCreationFee, permission::Permissions,
     };
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
@@ -380,33 +374,6 @@ mod tests {
         smartcontracts::Execute,
         state::{State, World},
     };
-
-    struct DomainSelectorGuard {
-        _lock: MutexGuard<'static, ()>,
-    }
-
-    impl Drop for DomainSelectorGuard {
-        fn drop(&mut self) {
-            clear_account_domain_selector_resolver();
-        }
-    }
-
-    fn guard_domain_selector_resolver(domain: DomainId) -> DomainSelectorGuard {
-        static DOMAIN_SELECTOR_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-        let lock = DOMAIN_SELECTOR_GUARD
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let selector = AccountDomainSelector::from_domain(&domain).expect("domain selector");
-        let resolver_domain = domain.clone();
-        set_account_domain_selector_resolver(Arc::new(move |candidate| {
-            if candidate == &selector {
-                Some(resolver_domain.clone())
-            } else {
-                None
-            }
-        }));
-        DomainSelectorGuard { _lock: lock }
-    }
 
     fn open_domain(domain_id: DomainId, policy: AccountAdmissionPolicy) -> Domain {
         let mut metadata = Metadata::default();
@@ -877,7 +844,6 @@ mod tests {
     #[test]
     fn implicit_creation_fee_is_enforced_and_charged() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
-        let _resolver_guard = guard_domain_selector_resolver(domain_id.clone());
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
         let fee_sink_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let fee_sink = AccountId::new(domain_id.clone(), fee_sink_kp.public_key().clone());

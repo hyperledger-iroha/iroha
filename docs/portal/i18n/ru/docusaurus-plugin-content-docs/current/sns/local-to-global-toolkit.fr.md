@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Опции:
 
 - `--format compressed (`sora`)` для вылазки `sora...` на месте IH58.
-- `--no-append-domain` для чтения новых книг.
+- `domainless output (default)` для чтения новых книг.
 - `--audit-only` для игнорирования этапа преобразования.
 - `--allow-errors` для продолжения сканирования четырех линий неправильного устройства (соответствует работе CLI).
 
@@ -48,7 +48,7 @@ Le script ecrit les chemins des artefacts a la fin de l'execution. Joignez les d
 2. Заблокируйте объединения и сигналы `audit.json` для локального выбора (`domain.kind = local12`).
    значение по умолчанию `true` (не проходит мимо `false`, которое используется для разработки/тестирования кластеров).
    диагностическая дерегрессия) и др.
-   `iroha tools address normalize --fail-on-warning --only-local` CI для регрессий
+   `iroha tools address normalize` CI для регрессий
    эхо перед производством.
 
 Просмотрите источник документа, а также подробную информацию, контрольные списки доказательств и фрагмент

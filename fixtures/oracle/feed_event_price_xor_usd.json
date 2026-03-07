@@ -15,19 +15,19 @@
       },
       "entries": [
         {
-          "oracle_id": "34mSYnLrmfrui7Ba2h9RbAPY1hHNEQje517tbXn44vUUkA7F8361DR6aQeHKSaNSKFruciKzA@validators",
-          "observation_hash": "hash:E42A3CF266BE136EB8B4B9F5B3ED3E5E47E78A5BFA4DD665CF5CFC5CD2716865#7658",
+          "oracle_id": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+          "observation_hash": "hash:F90B1AD1213C1DFACA8556B9D6965C75808792A9F31580FCF99DE3647DDB12C9#C8AB",
           "value": {
-            "mantissa": "1001500",
+            "mantissa": "1002500",
             "scale": 5
           },
           "outlier": false
         },
         {
-          "oracle_id": "34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA@validators",
-          "observation_hash": "hash:8798748E7AB132D96F5050604D5FE8239480A5B9C0EA108CD22832FC59DF0C41#8873",
+          "oracle_id": "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV",
+          "observation_hash": "hash:E9662A1D5ED2EA3E12B6F51C7423AAB232787599C61AA7D4CDAAEFD3B3B21CE7#D253",
           "value": {
-            "mantissa": "1002500",
+            "mantissa": "1001500",
             "scale": 5
           },
           "outlier": false

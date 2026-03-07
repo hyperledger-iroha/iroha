@@ -321,7 +321,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 pops: std::collections::BTreeMap::new(),
             }),
             default_account_domain_label: WithOrigin::inline(
-                iroha_data_model::account::address::DEFAULT_DOMAIN_NAME_FALLBACK.to_owned(),
+                iroha_data_model::account::address::DEFAULT_DOMAIN_NAME.to_owned(),
             ),
             chain_discriminant: WithOrigin::inline(defaults::common::chain_discriminant()),
         },
@@ -1160,16 +1160,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 .parse()
                 .expect("valid default citizenship asset id"),
             citizenship_bond_amount: defaults::governance::CITIZENSHIP_BOND_AMOUNT,
-            citizenship_escrow_account: defaults::governance::CITIZENSHIP_ESCROW_ACCOUNT
-                .parse()
-                .expect("valid default citizenship escrow account"),
+            citizenship_escrow_account: defaults::governance::citizenship_escrow_account_id(),
             min_bond_amount: 150,
-            bond_escrow_account: defaults::governance::BOND_ESCROW_ACCOUNT
-                .parse()
-                .expect("valid default governance bond escrow account"),
-            slash_receiver_account: defaults::governance::SLASH_RECEIVER_ACCOUNT
-                .parse()
-                .expect("valid default governance slash receiver account"),
+            bond_escrow_account: defaults::governance::bond_escrow_account_id(),
+            slash_receiver_account: defaults::governance::slash_receiver_account_id(),
             slash_double_vote_bps: 0,
             slash_invalid_proof_bps: 0,
             slash_ineligible_proof_bps: 0,

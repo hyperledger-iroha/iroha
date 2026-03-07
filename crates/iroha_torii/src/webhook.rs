@@ -197,6 +197,12 @@ fn proof_id_from_json(value: &norito::json::Value) -> Option<iroha_data_model::p
     }
 }
 
+fn parse_account_id_literal(input: &str) -> Option<iroha_data_model::account::AccountId> {
+    iroha_data_model::account::AccountId::parse_encoded(input)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .ok()
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct HttpTimeoutConfig {
     pub connect: Duration,
@@ -1219,7 +1225,7 @@ fn event_filter_boxes_from_expr(
                     .collect(),
                 "account_id" => value
                     .as_str()
-                    .and_then(|s| s.parse().ok())
+                    .and_then(parse_account_id_literal)
                     .map(|id| {
                         EventFilterBox::Data(df::DataEventFilter::Account(
                             df::AccountEventFilter::new().for_account(id),
@@ -1302,7 +1308,7 @@ fn event_filter_boxes_from_expr(
                     .collect(),
                 "execute_trigger_authority" => value
                     .as_str()
-                    .and_then(|s| s.parse().ok())
+                    .and_then(parse_account_id_literal)
                     .map(|acc: iroha_data_model::account::AccountId| {
                         EventFilterBox::ExecuteTrigger(
                             ExecuteTriggerEventFilter::new().under_authority(acc),
@@ -1408,7 +1414,9 @@ fn event_filter_boxes_from_expr(
                         // data ids
                         "peer_id" => c.peer_id = v.as_str().and_then(|s| s.parse().ok()),
                         "domain_id" => c.domain_id = v.as_str().and_then(|s| s.parse().ok()),
-                        "account_id" => c.account_id = v.as_str().and_then(|s| s.parse().ok()),
+                        "account_id" => {
+                            c.account_id = v.as_str().and_then(parse_account_id_literal)
+                        }
                         "asset_id" => c.asset_id = v.as_str().and_then(|s| s.parse().ok()),
                         "asset_definition_id" => {
                             c.asset_def_id = v.as_str().and_then(|s| s.parse().ok())
@@ -1523,7 +1531,7 @@ fn event_filter_boxes_from_expr(
                             c.exec_trig_id = v.as_str().and_then(|s| s.parse().ok());
                         }
                         "execute_trigger_authority" => {
-                            c.exec_trig_auth = v.as_str().and_then(|s| s.parse().ok());
+                            c.exec_trig_auth = v.as_str().and_then(parse_account_id_literal);
                         }
                         "trigger_completed_id" | "trigger_id" => {
                             c.trigc_id = v.as_str().and_then(|s| s.parse().ok());

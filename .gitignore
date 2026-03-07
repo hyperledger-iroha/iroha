@@ -63,6 +63,7 @@ javascript/iroha_js/scripts/release_matrix.targets.json
 build/*
 dist/*
 # Keep the dist directory itself tracked via marker file when tooling needs it.
+# Strict corridor/build tooling may require repository-root dist/ to exist.
 !dist/.gitkeep
 fastpq.trace/*
 cargo_err.txt

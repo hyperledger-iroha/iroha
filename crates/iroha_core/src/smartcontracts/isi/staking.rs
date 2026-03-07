@@ -838,11 +838,8 @@ impl Execute for ClaimPublicLaneRewards {
             &state_transaction.nexus.fees.fee_sink_account_id,
         )
         .or_else(|| {
-            state_transaction
-                .nexus
-                .fees
-                .fee_sink_account_id
-                .parse()
+            AccountId::parse_encoded(&state_transaction.nexus.fees.fee_sink_account_id)
+                .map(|parsed| parsed.into_account_id())
                 .ok()
         })
         .ok_or_else(|| {
@@ -1168,11 +1165,8 @@ fn validate_reward_sink(
         &state_transaction.nexus.fees.fee_sink_account_id,
     )
     .or_else(|| {
-        state_transaction
-            .nexus
-            .fees
-            .fee_sink_account_id
-            .parse()
+        AccountId::parse_encoded(&state_transaction.nexus.fees.fee_sink_account_id)
+            .map(|parsed| parsed.into_account_id())
             .ok()
     })
     .ok_or_else(|| {
@@ -1595,13 +1589,11 @@ fn parse_staking_account_literal(
     literal: &str,
     field: &'static str,
 ) -> Result<AccountId, Error> {
-    crate::block::parse_account_literal_with_world(world, literal)
-        .or_else(|| literal.parse().ok())
-        .ok_or_else(|| {
-            Error::InvariantViolation(
-                format!("invalid nexus.staking.{field}; expected account identifier").into(),
-            )
-        })
+    crate::block::parse_account_literal_with_world(world, literal).ok_or_else(|| {
+        Error::InvariantViolation(
+            format!("invalid nexus.staking.{field}; expected account identifier").into(),
+        )
+    })
 }
 
 fn assert_stake_amount_matches_spec(
@@ -4344,8 +4336,6 @@ mod tests {
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-
-        iroha_data_model::account::clear_account_domain_selector_resolver();
 
         let (_sink, validator, reward_asset, _asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(12), 200);

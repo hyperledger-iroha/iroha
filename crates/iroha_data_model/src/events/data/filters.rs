@@ -1611,7 +1611,8 @@ mod tests {
     fn entity_scope() {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let account_id = AccountId::new(domain_id.clone(), KeyPair::random().into_parts().0);
-        let asset_id: AssetId = format!("rose##{account_id}").parse().unwrap();
+        let definition_id: crate::asset::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = AssetId::new(definition_id, account_id.clone());
         let domain_owner_id = AccountId::new(domain_id.clone(), KeyPair::random().into_parts().0);
 
         let domain = Domain {
@@ -1702,18 +1703,22 @@ mod tests {
             offline::{AndroidIntegrityPolicy, OfflinePlatformTokenSnapshot},
         };
 
-        let controller = AccountId::from_str(
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
-        )
-        .unwrap();
-        let receiver = AccountId::from_str(
-            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D@wonderland",
-        )
-        .unwrap();
-        let deposit_account = AccountId::from_str(
-            "ed0120ED77765E503B45FF9C059A1C19BF1DDE82C60432B7C2D01F7FCD75F5F9F3C07C@wonderland",
-        )
-        .unwrap();
+        let controller =
+            AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+                .map(crate::account::ParsedAccountId::into_account_id)
+                .unwrap();
+        let receiver = AccountId::new(
+            "wonderland".parse().expect("domain id"),
+            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
+                .parse()
+                .expect("public key"),
+        );
+        let deposit_account = AccountId::new(
+            "wonderland".parse().expect("domain id"),
+            "ed0120ED77765E503B45FF9C059A1C19BF1DDE82C60432B7C2D01F7FCD75F5F9F3C07C"
+                .parse()
+                .expect("public key"),
+        );
         let asset_definition = AssetDefinitionId::from_str("xor#wonderland").unwrap();
         let platform_snapshot = OfflinePlatformTokenSnapshot {
             policy: AndroidIntegrityPolicy::PlayIntegrity.as_str().to_string(),

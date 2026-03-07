@@ -10,8 +10,8 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
-    let asset = asset_definition!("rose#wonderland");
+    let to = account!("6cmzPVPX8F5t35VB7wQQ68PAW8Wb1iAEr4PZHPLTQ3p69JAGG9oifzi");
+    let asset = asset_definition!("rose#default");
     mint_asset(to, asset, 250);
   }
 }

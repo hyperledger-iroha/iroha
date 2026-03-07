@@ -65,11 +65,21 @@ fn sample_binding(descriptor: &AxtDescriptor) -> AxtBinding {
     AxtBinding::new(binding)
 }
 
+fn encoded_account(public_key_hex: &str) -> String {
+    iroha_data_model::account::AccountId::new(
+        "wonderland".parse().expect("domain id"),
+        public_key_hex.parse().expect("public key"),
+    )
+    .to_string()
+}
+
 fn sample_handle(binding: AxtBinding) -> AssetHandle {
     AssetHandle {
         scope: vec!["transfer".into(), "register".into()],
         subject: HandleSubject {
-            account: "alice@wonderland".into(),
+            account: encoded_account(
+                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            ),
             origin_dsid: Some(DataSpaceId::new(7)),
         },
         budget: HandleBudget {
@@ -112,8 +122,12 @@ fn sample_intent() -> RemoteSpendIntent {
         asset_dsid: DataSpaceId::new(7),
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: encoded_account(
+                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            ),
+            to: encoded_account(
+                "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D",
+            ),
             amount: "250".into(),
         },
     }

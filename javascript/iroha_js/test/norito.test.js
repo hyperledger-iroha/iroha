@@ -7,6 +7,9 @@ import { noritoEncodeInstruction, noritoDecodeInstruction } from "../src/norito.
 import { makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
+const ACCOUNT_ID = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+const CANONICAL_ACCOUNT_EXPECTED =
+  "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
 
 const REGISTER_DOMAIN = {
   Register: {
@@ -23,15 +26,14 @@ const REGISTER_DOMAIN = {
 const REGISTER_ACCOUNT = {
   Register: {
     Account: {
-      id: ACCOUNT_ID(),
+      id: ACCOUNT_ID,
       label: null,
       uaid: null,
+      opaque_ids: [],
       metadata: { nickname: "alice" },
     },
   },
 };
-const ACCOUNT_ID_RAW =
-  "ED0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
 
 const REGISTER_ASSET = {
   Register: {
@@ -52,17 +54,11 @@ const REGISTER_ASSET = {
   },
 };
 
-function ACCOUNT_ID() {
-  return "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs";
-}
-
-const ACCOUNT_ID_LOWER = ACCOUNT_ID_RAW.toLowerCase();
-
 const MINT_ASSET = {
   Mint: {
     Asset: {
       object: "42",
-      destination: `rose##${ACCOUNT_ID()}`,
+      destination: `rose##${ACCOUNT_ID}`,
     },
   },
 };
@@ -70,9 +66,9 @@ const MINT_ASSET = {
 const TRANSFER_ASSET = {
   Transfer: {
     Asset: {
-      source: `rose##${ACCOUNT_ID()}`,
+      source: `rose##${ACCOUNT_ID}`,
       object: "10",
-      destination: ACCOUNT_ID(),
+      destination: ACCOUNT_ID,
     },
   },
 };
@@ -123,32 +119,20 @@ test("norito encode/decode supports transfer asset instructions", () => {
   assert.deepEqual(decoded, TRANSFER_ASSET);
 });
 
-test("noritoDecodeInstruction canonicalizes account multihash uppercase", () => {
-  const instruction = {
-    Register: {
-      Account: {
-        id: ACCOUNT_ID_LOWER,
-        metadata: { nickname: "alice" },
-      },
-    },
-  };
-  const encoded = noritoEncodeInstruction(instruction);
-  const decoded = noritoDecodeInstruction(encoded);
-  assert.equal(decoded.Register.Account.id, ACCOUNT_ID());
+test("noritoDecodeInstruction strips decoded @domain suffix from account ids", () => {
+  const fixture = loadInstructionFixture("mint_asset_numeric.json");
+  const bytes = Buffer.from(fixture.instruction, "base64");
+  const decoded = noritoDecodeInstruction(bytes);
+  const accountId = decoded?.Mint?.Asset?.destination?.split?.("##")?.[1];
+  assert.equal(accountId, CANONICAL_ACCOUNT_EXPECTED);
+  assert.equal(accountId.includes("@"), false);
 });
 
 test("noritoDecodeInstruction canonicalizes nested asset account identifiers", () => {
-  const instruction = {
-    Mint: {
-      Asset: {
-        object: "7",
-        destination: `rose##${ACCOUNT_ID_LOWER}`,
-      },
-    },
-  };
-  const encoded = noritoEncodeInstruction(instruction);
-  const decoded = noritoDecodeInstruction(encoded);
-  assert.equal(decoded.Mint.Asset.destination, `rose##${ACCOUNT_ID()}`);
+  const fixture = loadInstructionFixture("burn_asset_numeric.json");
+  const bytes = Buffer.from(fixture.instruction, "base64");
+  const decoded = noritoDecodeInstruction(bytes);
+  assert.equal(decoded.Burn.Asset.destination, `rose##${CANONICAL_ACCOUNT_EXPECTED}`);
 });
 
 test("noritoDecodeInstruction can return raw JSON string", () => {

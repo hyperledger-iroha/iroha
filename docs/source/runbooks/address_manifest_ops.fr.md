@@ -99,7 +99,7 @@ Champs d'en‑tête de `manifest.json` :
    - Les entrées `local_alias` DOIVENT embarquer le digest de 12 octets produit par
      Norm v1 (utilisez `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
      pour confirmer ; le résumé JSON reflète le domaine fourni via `input_domain` et
-     `--append-domain` rejoue l'encodage converti sous la forme `<ih58>@<domain>` pour les manifestes).
+     `legacy  suffix` rejoue l'encodage converti sous la forme `<ih58>@<domain>` pour les manifestes).
    - Les entrées `tombstone` DOIVENT référencer exactement le sélecteur retiré,
      inclure `reason_code`, `ticket`, et `replaces_sequence`.
 

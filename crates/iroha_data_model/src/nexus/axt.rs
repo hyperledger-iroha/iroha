@@ -878,6 +878,20 @@ mod tests {
         let dsid = DataSpaceId::new(11);
         let descriptor = sample_descriptor(dsid);
         let binding = AxtBinding::new([0xAB; 32]);
+        let alice_account = crate::account::AccountId::new(
+            "wonderland".parse().expect("domain id"),
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                .parse()
+                .expect("public key"),
+        )
+        .to_string();
+        let merchant_account = crate::account::AccountId::new(
+            "wonderland".parse().expect("domain id"),
+            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
+                .parse()
+                .expect("public key"),
+        )
+        .to_string();
         let envelope = AxtEnvelopeRecord {
             binding,
             lane: LaneId::new(1),
@@ -900,7 +914,7 @@ mod tests {
                 handle: AssetHandle {
                     scope: vec!["transfer".into()],
                     subject: HandleSubject {
-                        account: "alice@wonderland".into(),
+                        account: alice_account.clone(),
                         origin_dsid: Some(dsid),
                     },
                     budget: HandleBudget {
@@ -923,8 +937,8 @@ mod tests {
                     asset_dsid: dsid,
                     op: SpendOp {
                         kind: "transfer".into(),
-                        from: "alice@wonderland".into(),
-                        to: "merchant@wonder".into(),
+                        from: alice_account,
+                        to: merchant_account,
                         amount: "200".into(),
                     },
                 },

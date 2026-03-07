@@ -95,6 +95,48 @@ pub mod isi;
 // `iroha_executor::derive::default::impl_derive_visit` function
 // signature list.
 
+#[derive(norito::derive::JsonDeserialize)]
+struct IvmProvedJsonView {
+    bytecode: IvmBytecode,
+    overlay: Vec<InstructionBox>,
+    events_commitment: Hash,
+    gas_policy_commitment: Hash,
+}
+
+fn decode_ivm_proved_view(proved: &IvmProved) -> Option<(IvmBytecode, Vec<InstructionBox>)> {
+    let rendered = norito::json::to_json(proved).ok()?;
+    let parsed: IvmProvedJsonView = norito::json::from_str(&rendered).ok()?;
+    let _ = (parsed.events_commitment, parsed.gas_policy_commitment);
+    Some((parsed.bytecode, parsed.overlay))
+}
+
+#[cfg(test)]
+mod ivm_proved_decode_tests {
+    use super::*;
+
+    #[test]
+    fn decode_ivm_proved_view_roundtrips_minimal_payload() {
+        let expected_bytecode = IvmBytecode::from_compiled(vec![0xA1, 0xB2, 0xC3]);
+        let expected_events_commitment = Hash::new(b"executor-events");
+        let expected_gas_commitment = Hash::new(b"executor-gas");
+
+        let bytecode_json = norito::json::to_json(&expected_bytecode).expect("bytecode json");
+        let events_json =
+            norito::json::to_json(&expected_events_commitment).expect("events commitment json");
+        let gas_json = norito::json::to_json(&expected_gas_commitment).expect("gas json");
+        let proved_json = format!(
+            "{{\"bytecode\":{bytecode_json},\"overlay\":[],\"events_commitment\":{events_json},\"gas_policy_commitment\":{gas_json}}}"
+        );
+        let proved: IvmProved =
+            norito::json::from_str(&proved_json).expect("IvmProved JSON payload should decode");
+
+        let (bytecode, overlay) =
+            decode_ivm_proved_view(&proved).expect("helper should decode proved payload");
+        assert_eq!(bytecode.as_ref(), expected_bytecode.as_ref());
+        assert!(overlay.is_empty(), "overlay should roundtrip as empty");
+    }
+}
+
 /// Execute [`SignedTransaction`].
 ///
 /// Transaction is executed following successful validation.
@@ -109,8 +151,10 @@ pub fn visit_transaction<V: Execute + Visit + ?Sized>(
     match transaction.instructions() {
         Executable::Ivm(bytecode) => executor.visit_ivm(bytecode),
         Executable::IvmProved(proved) => {
-            executor.visit_ivm(&proved.bytecode);
-            for isi in &proved.overlay {
+            let (bytecode, overlay) =
+                decode_ivm_proved_view(proved).expect("IvmProved payload must decode");
+            executor.visit_ivm(&bytecode);
+            for isi in &overlay {
                 if executor.verdict().is_ok() {
                     executor.visit_instruction(isi);
                 }
@@ -2163,9 +2207,16 @@ pub mod role {
                     .strip_prefix(MULTISIG_SIGNATORY)?
                     .rsplit_once(DELIMITER)
                     .and_then(|(init, last)| {
-                        format!("{last}@{}", init.trim_matches(DELIMITER))
-                            .parse()
-                            .ok()
+                        let domain = init.trim_matches(DELIMITER).parse().ok()?;
+                        let parsed = AccountId::parse_encoded(last).ok()?.into_account_id();
+                        if let Some(signatory) = parsed.try_signatory() {
+                            return Some(AccountId::new(domain, signatory.clone()));
+                        }
+                        parsed
+                            .controller()
+                            .multisig_policy()
+                            .cloned()
+                            .map(|policy| AccountId::new_multisig(domain, policy))
                     })
             }
 
@@ -2728,11 +2779,12 @@ pub mod trigger {
 #[cfg(test)]
 mod sorafs_permission_tests {
     use core::num::NonZeroU64;
-    use std::str::FromStr;
 
+    use iroha_crypto::PublicKey;
     use iroha_data_model::{
         account::AccountId,
         block::BlockHeader,
+        domain::DomainId,
         isi::sorafs::{
             ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
             RecordCapacityTelemetry, RecordReplicationReceipt, RegisterCapacityDeclaration,
@@ -2766,10 +2818,26 @@ mod sorafs_permission_tests {
     use super::*;
     use crate::{Iroha, prelude, tests::with_mock_permissions};
 
-    const AUTHORITY_ID: &str =
-        "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland";
-    const OWNER_ID: &str =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+    const AUTHORITY_PUBLIC_KEY: &str =
+        "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
+    const OWNER_PUBLIC_KEY: &str =
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
+
+    fn account_id_from_public_key_hex(hex_literal: &str) -> AccountId {
+        let domain: DomainId = "wonderland".parse().expect("test domain should parse");
+        let public_key: PublicKey = hex_literal
+            .parse()
+            .expect("test public key literal should parse");
+        AccountId::new(domain, public_key)
+    }
+
+    fn authority_account_id() -> AccountId {
+        account_id_from_public_key_hex(AUTHORITY_PUBLIC_KEY)
+    }
+
+    fn owner_account_id() -> AccountId {
+        account_id_from_public_key_hex(OWNER_PUBLIC_KEY)
+    }
 
     #[derive(Debug)]
     struct MockExecutor {
@@ -2789,8 +2857,7 @@ mod sorafs_permission_tests {
                 0,
                 0,
             );
-            let authority =
-                AccountId::from_str(AUTHORITY_ID).expect("authority account id must parse");
+            let authority = authority_account_id();
             Self {
                 host: Iroha,
                 ctx: prelude::Context {
@@ -3003,10 +3070,7 @@ mod sorafs_permission_tests {
     }
 
     fn register_provider_owner() -> RegisterProviderOwner {
-        RegisterProviderOwner::new(
-            sample_provider_id(),
-            AccountId::from_str(OWNER_ID).expect("owner account must parse"),
-        )
+        RegisterProviderOwner::new(sample_provider_id(), owner_account_id())
     }
 
     fn unregister_provider_owner() -> UnregisterProviderOwner {

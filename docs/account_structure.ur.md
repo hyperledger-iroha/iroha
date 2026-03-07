@@ -140,38 +140,43 @@ Code_block_3
 نورم V1 ، توسیع کا جھنڈا صاف ہوگیا) اور ملٹی سیگ کنٹرولرز کے لئے inline_code_52 (ورژن 0 ،
 کلاس 1 ، نورم V1 ، توسیع کا جھنڈا صاف ہوگیا)۔
 
-#### 2.2 ڈومین سلیکٹر انکوڈنگز (EDDR-1A)
+#### 2.2 Legacy selector compatibility (decode-only)
 
-ڈومین سلیکٹر فوری طور پر ہیڈر کی پیروی کرتا ہے اور ٹیگ شدہ یونین ہے:
+Newly encoded canonical payloads do not include a domain-selector segment. For
+backward compatibility, decoders still accept pre-cutover payloads where a
+selector segment appears between header and controller as a tagged union:
 
-| ٹیگ | مطلب | پے لوڈ | نوٹ |
-| ----- | --------- | --------- | ------- |
-| inline_code_53 | | ضمنی ڈیفالٹ ڈومین | کوئی نہیں | کنفیگرڈ INLINE_CODE_54 سے میچ کرتا ہے۔ |
-| inline_code_555 | | مقامی ڈومین ڈائجسٹ | 12 بائٹس | ڈائجسٹ =@inline_code_56. |
-| inline_code_57 | | عالمی رجسٹری اندراج | 4 بائٹس | Big-endian inline_code_58 ؛ عالمی رجسٹری جہازوں تک محفوظ ہے۔ |
+| Tag | Meaning | Payload | Notes |
+|-----|---------|---------|-------|
+| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
+| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
-ڈومین لیبل ہیشنگ سے پہلے کیننیکلائزڈ (UTS-46 + STD3 + NFC) ہیں۔ نامعلوم ٹیگس اٹھائیں inline_code_59 جب کسی ڈومین کے خلاف کسی پتے کی توثیق کرتے ہو تو ، مماثل سلیکٹرز کو inline_code_60 بلند کرتے ہیں۔
+Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
 
-کوڈ_بلاک_4
+```
+legacy selector segment
+┌──────────┬──────────────────────────────────────────────┐
+│ tag (u8) │ payload (depends on selector kind, see table)│
+└──────────┴──────────────────────────────────────────────┘
+```
 
-سلیکٹر فوری طور پر کنٹرولر پے لوڈ سے متصل ہے ، لہذا ایک ڈیکوڈر چل سکتا ہے
-ترتیب میں تار کی شکل: ٹیگ بائٹ پڑھیں ، ٹیگ مخصوص پے لوڈ پڑھیں ، پھر آگے بڑھیں
-کنٹرولر بائٹس کو۔
+When present, the selector is immediately adjacent to the controller payload, so
+a decoder can walk the wire format in order: read the tag byte, read the
+tag-specific payload, then move on to the controller bytes.
 
-** سلیکٹر کی مثالیں **
+**Legacy selector examples**
 
-- * مضمر ڈیفالٹ * (inline_code_61)۔ کوئی پے لوڈ نہیں۔ پہلے سے طے شدہ کے لئے کینونیکل ہیکس
-  ڈومینسٹک ٹیسٹ کی کلید کا استعمال کرتے ہوئے ڈومین:
-  inline_code_62.
-- * مقامی ڈائجسٹ * (inline_code_63)۔ پے لوڈ 12 بائٹ ڈائجسٹ ہے۔ مثال (inline_code_64 بیج
-  inline_code_65): inline_code_66.
-- * عالمی رجسٹری * (inline_code_67)۔ پے لوڈ ایک بڑا-اینڈیان ہے inline_code_68۔ بائٹس
-  جو پے لوڈ کی پیروی کرتے ہیں وہ مضمر ڈیفالٹ کیس سے مماثل ہیں۔ سلیکٹر سیدھے
-  رجسٹری پوائنٹر کے ساتھ معمول کے مطابق ڈومین سٹرنگ کی جگہ لیتا ہے۔ مثال کے طور پر استعمال
-  inline_code_69 (decimal42) اور ڈٹرمینسٹک ڈیفالٹ کنٹرولر:
-  inline_code_70.  
-  خرابی: inline_code_71 ہیڈر ، inline_code_72 سلیکٹر ٹیگ ، inline_code_73 رجسٹری ID ، inline_code_74
-  کنٹرولر ٹیگ ، inline_code_75 وکر ID ، inline_code_76 کلیدی لمبائی ، 32- بائٹ ED25519 کلیدی پے لوڈ۔
+- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
+  domain using the deterministic test key:
+  `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
+- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
+  `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
+- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
+  that follow the payload are identical to the implicit-default case; the selector simply
+  replaces the normalised domain string with a registry pointer. Example using
+  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
+  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
 
 #### 2.3 کنٹرولر پے لوڈ انکوڈنگز (EDDR-1A)
 

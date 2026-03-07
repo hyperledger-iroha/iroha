@@ -510,9 +510,9 @@ iroha app sorafs gateway merkle proof \
   - `leaf_count` — number of entries included in the snapshot.
   - `entries[]` — `{index, kind, descriptor, hash_hex, policy_tier}` for every
     entry so auditors can map registry indexes back to the source file.
-- `account_id` entries are resolved through `/v1/accounts/resolve`, so alias,
-  UAID, and opaque literals are accepted; keep Torii reachable when linting or
-  emitting Merkle/evidence artefacts that validate account entries.
+- `account_id` entries are validated locally as encoded account literals
+  (`IH58` preferred, `sora…` compressed accepted). Alias, UAID, opaque, and
+  `` literals are rejected by the validator.
 - `merkle proof` recomputes the tree for the given denylist and produces a
   membership proof for the zero-based `--index` requested. The JSON artefact
   stores the root, the entry metadata, and the audit path (sibling hashes,

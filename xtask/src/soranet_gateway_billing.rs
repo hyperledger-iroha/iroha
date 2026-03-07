@@ -572,9 +572,11 @@ fn build_ledger_projection(
     asset_definition: &str,
     total_micros: u64,
 ) -> Result<LedgerProjection> {
-    let payer: AccountId = AccountId::from_str(payer)
+    let payer: AccountId = AccountId::parse_encoded(payer)
+        .map(|parsed| parsed.into_account_id())
         .wrap_err_with(|| format!("failed to parse payer account id `{payer}`"))?;
-    let treasury: AccountId = AccountId::from_str(treasury)
+    let treasury: AccountId = AccountId::parse_encoded(treasury)
+        .map(|parsed| parsed.into_account_id())
         .wrap_err_with(|| format!("failed to parse treasury account id `{treasury}`"))?;
     let asset_definition: AssetDefinitionId = AssetDefinitionId::from_str(asset_definition)
         .wrap_err_with(|| format!("failed to parse asset definition `{asset_definition}`"))?;

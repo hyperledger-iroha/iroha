@@ -12,8 +12,8 @@ use norito::{
 
 use super::{
     AccountAddressError::*, COMPRESSED_BASE_U8, COMPRESSED_CHECKSUM_LEN, COMPRESSED_SENTINEL,
-    CONTROLLER_MULTISIG_TAG, CONTROLLER_SINGLE_KEY_TAG, compressed_alphabet, compressed_to_digits,
-    default_domain_guard, default_domain_name,
+    CONTROLLER_MULTISIG_TAG, CONTROLLER_SINGLE_KEY_TAG, DomainSelector, compressed_alphabet,
+    compressed_to_digits, compute_local_digest, default_domain_guard, default_domain_name,
 };
 use crate::{
     account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
@@ -463,7 +463,7 @@ fn build_single_vector(
         "single-key vectors expect single controller tag"
     );
     let single_payload = decode_single_controller_payload(view.controller_payload);
-    let domain_selector = domain_selector_from_view(&view);
+    let domain_selector = canonical_selector_metadata();
 
     let (algorithm, key_bytes) = account
         .controller()
@@ -545,7 +545,7 @@ fn build_multisig_vectors(network_prefix: u16) -> Vec<MultisigVector> {
                 compressed_fullwidth: address
                     .to_compressed_sora_fullwidth()
                     .expect("fullwidth compressed encoding must succeed for multisig vector"),
-                domain_selector: domain_selector_from_view(&view),
+                domain_selector: canonical_selector_metadata(),
                 version: controller_payload.version,
                 threshold: controller_payload.threshold,
                 total_weight: policy.total_weight(),
@@ -738,9 +738,10 @@ impl ErrorHarness {
     }
 
     fn domain_mismatch(&self) -> ErrorVector {
+        let mut mismatched = self.address.clone();
+        mismatched.domain = DomainSelector::Local12(compute_local_digest("wonderland"));
         let other_domain = domain_id("treasury");
-        let err = self
-            .address
+        let err = mismatched
             .ensure_domain_matches(&other_domain)
             .expect_err("domain mismatch must fail");
         let other_domain_label = other_domain.to_string();
@@ -781,8 +782,6 @@ struct MultisigMemberPayload<'a> {
 
 #[derive(Clone, Copy)]
 struct CanonicalView<'a> {
-    domain_tag: u8,
-    domain_payload: &'a [u8],
     controller_tag: u8,
     controller_payload: &'a [u8],
 }
@@ -792,61 +791,20 @@ fn canonical_view(bytes: &[u8]) -> CanonicalView<'_> {
         !bytes.is_empty(),
         "canonical bytes must contain address header"
     );
-    let mut cursor = 1; // Skip header byte.
-    let domain_tag = bytes
-        .get(cursor)
-        .copied()
-        .expect("canonical payload must contain domain tag");
-    cursor += 1;
-    let domain_payload = match domain_tag {
-        0x00 => &bytes[cursor..cursor],
-        0x01 => {
-            let slice = bytes
-                .get(cursor..cursor + 12)
-                .expect("local digest payload must be present");
-            cursor += 12;
-            slice
-        }
-        0x02 => {
-            let slice = bytes
-                .get(cursor..cursor + 4)
-                .expect("global registry payload must be present");
-            cursor += 4;
-            slice
-        }
-        _ => &bytes[cursor..bytes.len().min(cursor + 12)],
-    };
     let controller_tag = *bytes
-        .get(cursor)
+        .get(1)
         .expect("canonical payload must contain controller tag");
-    cursor += 1;
     let controller_payload = bytes
-        .get(cursor..)
+        .get(2..)
         .expect("controller payload slice must be present");
     CanonicalView {
-        domain_tag,
-        domain_payload,
         controller_tag,
         controller_payload,
     }
 }
 
-fn domain_selector_from_view(view: &CanonicalView<'_>) -> DomainSelectorVector {
-    match view.domain_tag {
-        0x00 => DomainSelectorVector::ImplicitDefault,
-        0x01 => DomainSelectorVector::LocalDigest {
-            digest_hex: format_hex_prefixed(view.domain_payload),
-        },
-        0x02 => {
-            let registry_id = view
-                .domain_payload
-                .try_into()
-                .map(u32::from_be_bytes)
-                .unwrap_or_default();
-            DomainSelectorVector::Global { registry_id }
-        }
-        other => DomainSelectorVector::Unknown { tag: other },
-    }
+fn canonical_selector_metadata() -> DomainSelectorVector {
+    DomainSelectorVector::ImplicitDefault
 }
 
 fn decode_single_controller_payload(payload: &[u8]) -> SingleControllerPayload {
@@ -942,7 +900,6 @@ fn variant_name(error: &AccountAddressError) -> &'static str {
         InvalidDomainLabel(_) => "InvalidDomainLabel",
         UnexpectedNetworkPrefix { .. } => "UnexpectedNetworkPrefix",
         UnknownAddressClass(_) => "UnknownAddressClass",
-        UnknownDomainTag(_) => "UnknownDomainTag",
         UnexpectedExtensionFlag => "UnexpectedExtensionFlag",
         UnknownControllerTag(_) => "UnknownControllerTag",
         InvalidPublicKey => "InvalidPublicKey",
@@ -957,7 +914,6 @@ fn variant_name(error: &AccountAddressError) -> &'static str {
         UnsupportedAddressFormat => "UnsupportedAddressFormat",
         MultisigMemberOverflow(_) => "MultisigMemberOverflow",
         InvalidMultisigPolicy(_) => "InvalidMultisigPolicy",
-        LocalDigestTooShort { .. } => "LocalDigestTooShort",
     }
 }
 
@@ -1028,15 +984,15 @@ mod tests {
 
         assert_eq!(
             default_vector.canonical_hex,
-            "0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
+            "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
         );
         assert_eq!(
             default_vector.ih58,
-            "SW6eZfPiAFfM3Cx2p1EPSNnGpo9vVtwPaYC4iw1tXsdpcFXZHyVRiNaQ"
+            "6n7GJpgAsyaEoHR6UoQ39uQBWyJ896aEhEV2zDUAkryN943iyVxm5Rw"
         );
         assert_eq!(
             default_vector.compressed_halfwidth,
-            "sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8"
+            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
         );
         assert!(matches!(
             default_vector.domain_selector,

@@ -796,21 +796,7 @@ impl Queue {
                     "`gov_manifest_approvers` metadata entries must not be blank",
                 ));
             }
-            let canonical = if let Ok(account) = AccountId::from_str(trimmed) {
-                account.canonical_ih58().map_err(|err| {
-                    Self::enforcement_error(
-                        alias,
-                        format!(
-                            "invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"
-                        ),
-                    )
-                })?
-            } else {
-                let prefix = iroha_data_model::account::address::chain_discriminant();
-                let (address, _) = iroha_data_model::account::address::AccountAddress::parse_any(
-                    trimmed,
-                    Some(prefix),
-                )
+            let canonical = AccountId::parse_encoded(trimmed)
                 .map_err(|err| {
                     Self::enforcement_error(
                         alias,
@@ -818,16 +804,9 @@ impl Queue {
                             "invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"
                         ),
                     )
-                })?;
-                address.to_ih58(prefix).map_err(|err| {
-                    Self::enforcement_error(
-                        alias,
-                        format!(
-                            "invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"
-                        ),
-                    )
                 })?
-            };
+                .canonical()
+                .to_owned();
             approvals.insert(canonical);
         }
         Ok(approvals)

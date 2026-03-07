@@ -1476,10 +1476,12 @@ mod ttl_tests {
     #[test]
     fn zero_ttl_is_preserved_not_none() {
         let chain: ChainId = "test-chain".parse().unwrap();
-        let authority: AccountId =
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland"
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain id"),
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
-                .unwrap();
+                .expect("public key"),
+        );
         let mut builder = TransactionBuilder::new(chain, authority);
         builder.set_ttl(Duration::from_millis(0));
         // Internally we approximate zero by 1ms to distinguish from None
@@ -1655,10 +1657,10 @@ mod attachments_tests {
             return;
         }
         let chain: ChainId = "test-chain".parse().unwrap();
-        let authority: AccountId =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                .parse()
-                .unwrap();
+        let authority =
+            AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+                .expect("valid authority")
+                .into_account_id();
         let private_key: iroha_crypto::PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -1717,7 +1719,7 @@ impl TransactionResult {
 #[cfg(test)]
 mod norito_rpc_fixture_tests {
     use super::*;
-    use crate::account::address::{AccountAddress, AccountAddressFormat, ChainDiscriminantGuard};
+    use crate::account::address::{AccountAddressFormat, ChainDiscriminantGuard};
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD as BASE64;
     use iroha_crypto::Hash;
@@ -1772,19 +1774,16 @@ mod norito_rpc_fixture_tests {
     }
 
     fn authority_prefix(authority: &str) -> Option<u16> {
-        let (address_part, _) = authority
-            .split_once('@')
-            .unwrap_or_else(|| panic!("{authority}: missing @ separator"));
-        match AccountAddress::parse_any(address_part, None) {
-            Ok((_, AccountAddressFormat::IH58 { network_prefix })) => Some(network_prefix),
-            Ok(_) => None,
-            Err(_) => {
-                if address_part.parse::<iroha_crypto::PublicKey>().is_ok() {
-                    return None;
-                }
-                panic!("{authority}: unsupported authority address format");
-            }
-        }
+        AccountId::parse_encoded(authority)
+            .ok()
+            .and_then(|parsed| match parsed.source() {
+                crate::account::AccountAddressSource::Encoded(AccountAddressFormat::IH58 {
+                    network_prefix,
+                }) => Some(network_prefix),
+                crate::account::AccountAddressSource::Encoded(
+                    AccountAddressFormat::Compressed | AccountAddressFormat::CanonicalHex,
+                ) => None,
+            })
     }
 
     #[allow(
@@ -1853,12 +1852,13 @@ mod norito_rpc_fixture_tests {
                 "{name}: signed transaction has trailing bytes"
             );
             assert_eq!(signed_tx.chain().as_str(), chain, "{name}: chain mismatch");
-            let expected_authority: AccountId = authority
-                .parse()
-                .unwrap_or_else(|err| panic!("{name}: authority parse failed: {err}"));
+            let expected_authority = AccountId::parse_encoded(authority).map_or_else(
+                |err| panic!("{name}: authority parse failed: {err}"),
+                crate::account::ParsedAccountId::into_account_id,
+            );
             assert_eq!(
-                signed_tx.authority(),
-                &expected_authority,
+                signed_tx.authority().to_string(),
+                expected_authority.to_string(),
                 "{name}: authority mismatch"
             );
             let creation_ms = u64::try_from(signed_tx.creation_time().as_millis())

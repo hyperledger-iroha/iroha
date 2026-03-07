@@ -73,8 +73,7 @@ async fn post_and_get_contract_manifest_via_torii() -> Result<()> {
     let body = norito::json::object([
         (
             "authority",
-            norito::json::to_value(&format!("{}", *iroha_test_samples::ALICE_ID))
-                .expect("serialize authority"),
+            norito::json::to_value(&*iroha_test_samples::ALICE_ID).expect("serialize authority"),
         ),
         (
             "private_key",

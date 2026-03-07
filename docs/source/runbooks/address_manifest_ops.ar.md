@@ -95,7 +95,7 @@ address-manifest-<REVISION>/
    - يجب أن تتضمن إدخالات `global_domain` `{ "domain": "example", "chain": "sora:nexus:global", "selector": "global" }`.
    - يجب أن تتضمن إدخالات `local_alias` digest بطول 12 بايت ينتجه Norm v1
      (استخدم `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
-     للتحقق؛ يعكس ملخص JSON المجال عبر `input_domain` ويعيد `--append-domain` الترميز كـ `<ih58>@<domain>` للبيانات).
+     للتحقق؛ يعكس ملخص JSON المجال عبر `input_domain` ويعيد `legacy  suffix` الترميز كـ `<ih58>@<domain>` للبيانات).
    - يجب أن تشير إدخالات `tombstone` إلى selector المتقاعد بدقة وتضمين
      `reason_code` و`ticket` و`replaces_sequence`.
 

@@ -30,19 +30,19 @@ gas = "G_unreg_domain"
 
 [[syscall]]
 number = "0x12"
-args = "r10=&DomainId, r11=&AccountId"
+args = "r10=&DomainId, r11=&ScopedAccountId"
 ret = "u64=0"
 gas = "G_xfer_domain"
 
 [[syscall]]
 number = "0x13"
-args = "r10=&AccountId"
+args = "r10=&ScopedAccountId"
 ret = "u64=0"
 gas = "G_reg_acct"
 
 [[syscall]]
 number = "0x14"
-args = "r10=&AccountId"
+args = "r10=&ScopedAccountId"
 ret = "u64=0"
 gas = "G_unreg_acct"
 
@@ -60,25 +60,25 @@ gas = "G_unreg_peer"
 
 [[syscall]]
 number = "0x17"
-args = "r10=&AccountId, r11=&Json"
+args = "r10=&ScopedAccountId, r11=&Json"
 ret = "u64=0"
 gas = "G_add_sig"
 
 [[syscall]]
 number = "0x18"
-args = "r10=&AccountId, r11=&Json"
+args = "r10=&ScopedAccountId, r11=&Json"
 ret = "u64=0"
 gas = "G_rm_sig"
 
 [[syscall]]
 number = "0x19"
-args = "r10=&AccountId, r11=quorum:u64"
+args = "r10=&ScopedAccountId, r11=quorum:u64"
 ret = "u64=0"
 gas = "G_set_quorum"
 
 [[syscall]]
 number = "0x1A"
-args = "r10=&AccountId, r11=&Name, r12=&Json"
+args = "r10=&ScopedAccountId, r11=&Name, r12=&Json"
 ret = "u64=0"
 gas = "G_set_detail + bytes(val)"
 
@@ -96,31 +96,31 @@ gas = "G_unreg_asset"
 
 [[syscall]]
 number = "0x22"
-args = "r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)"
+args = "r10=&ScopedAccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)"
 ret = "u64=0"
 gas = "G_mint"
 
 [[syscall]]
 number = "0x23"
-args = "r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)"
+args = "r10=&ScopedAccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)"
 ret = "u64=0"
 gas = "G_burn"
 
 [[syscall]]
 number = "0x24"
-args = "r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)"
+args = "r10=&ScopedAccountId(from), r11=&ScopedAccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)"
 ret = "u64=0"
 gas = "G_transfer"
 
 [[syscall]]
 number = "0x25"
-args = "r10=&NftId, r11=&AccountId(owner)"
+args = "r10=&NftId, r11=&ScopedAccountId(owner)"
 ret = "u64=0"
 gas = "G_nft_mint_asset"
 
 [[syscall]]
 number = "0x26"
-args = "r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)"
+args = "r10=&ScopedAccountId(from), r11=&NftId, r12=&ScopedAccountId(to)"
 ret = "u64=0"
 gas = "G_nft_transfer_asset"
 
@@ -168,25 +168,25 @@ gas = "G_delete_role"
 
 [[syscall]]
 number = "0x32"
-args = "r10=&AccountId, r11=&Name"
+args = "r10=&ScopedAccountId, r11=&Name"
 ret = "u64=0"
 gas = "G_grant_role"
 
 [[syscall]]
 number = "0x33"
-args = "r10=&AccountId, r11=&Name"
+args = "r10=&ScopedAccountId, r11=&Name"
 ret = "u64=0"
 gas = "G_revoke_role"
 
 [[syscall]]
 number = "0x34"
-args = "r10=&AccountId, r11=&Name"
+args = "r10=&ScopedAccountId, r11=&Name"
 ret = "u64=0"
 gas = "G_grant_perm"
 
 [[syscall]]
 number = "0x35"
-args = "r10=&AccountId, r11=&Name"
+args = "r10=&ScopedAccountId, r11=&Name"
 ret = "u64=0"
 gas = "G_revoke_perm"
 
@@ -549,7 +549,7 @@ gas = "G_sc_depth"
 [[syscall]]
 number = "0xA4"
 args = "-"
-ret = "ptr (AccountId in INPUT)"
+ret = "ptr (ScopedAccountId in INPUT)"
 gas = "G_get_auth"
 
 [[syscall]]
@@ -632,7 +632,7 @@ gas = "G_mpath + len"
 
 [[syscall]]
 number = "0xF9"
-args = "r10=&AccountId, r11=&AssetDefinitionId"
+args = "r10=&ScopedAccountId, r11=&AssetDefinitionId"
 ret = "ptr (&NoritoBytes(Numeric))"
 gas = "G_get_bal"
 

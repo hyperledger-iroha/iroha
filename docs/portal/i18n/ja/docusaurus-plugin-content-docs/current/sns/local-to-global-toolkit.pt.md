@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 オペコ:
 
 - `--format compressed (`sora`)` は `sora...` と IH58 を比較しました。
-- `--no-append-domain` パラエミミール・リタライス・セム・ドミニオ。
+- `domainless output (default)` パラエミミール・リタライス・セム・ドミニオ。
 - `--audit-only` は、会話に関する質問です。
 - `--allow-errors` は、引き続き不正な不正行為を実行します (CLI のイグアル アオ コンポルタメント)。
 
@@ -48,7 +48,7 @@ O スクリプトは、最終的な実行を実行するためのスクリプト
 2. Bloqueie は、quando `audit.json` レポーター セレクター ローカル (`domain.kind = local12`) をマージします。
    勇気がありません `true` (つまり、`false` em クラスターの開発/テストの診断を変更します)
    regressoes) e アディシオーネ
-   `iroha tools address normalize --fail-on-warning --only-local` CI パラケリグレッソ
+   `iroha tools address normalize` CI パラケリグレッソ
    ファルヘム・アンテ・デ・シュガールは生産者です。
 
 詳細な文書、証拠およびスニペットのチェックリストを確認する

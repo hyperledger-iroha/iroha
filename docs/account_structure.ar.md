@@ -152,7 +152,7 @@ pub struct Common {
 
 #### 2.1 تخطيط بايت الرأس (ADDR-1a)
 
-يتم وضع كل حمولة أساسية على أنها `header · domain selector · controller`. ال
+يتم وضع كل حمولة أساسية على أنها `header · controller`. ال
 `header` عبارة عن بايت واحد ينقل قواعد المحلل اللغوي التي تنطبق على البايتات التي
 اتبع:
 
@@ -176,43 +176,43 @@ payload bit: │version  │ class  │  norm  │ext │
 المعيار v1، تم مسح علامة الامتداد) و`0x0A` لوحدات التحكم المتعددة (الإصدار 0،
 الفئة 1، القاعدة v1، تم مسح علامة الامتداد).
 
-#### 2.2 ترميزات محدد المجال (ADDR-1a)
+#### 2.2 Legacy selector compatibility (decode-only)
 
-يتبع محدد المجال الرأس مباشرة وهو عبارة عن اتحاد ذو علامة:
+Newly encoded canonical payloads do not include a domain-selector segment. For
+backward compatibility, decoders still accept pre-cutover payloads where a
+selector segment appears between header and controller as a tagged union:
 
-| العلامة | معنى | الحمولة | ملاحظات |
+| Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | المجال الافتراضي الضمني | لا شيء | يطابق `default_domain_name()` الذي تم تكوينه. |
-| `0x01` | ملخص المجال المحلي | 12 بايت | الملخص = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
-| `0x02` | إدخال التسجيل العالمي | 4 بايت | النهاية الكبيرة `registry_id`؛ محفوظة حتى السفن التسجيل العالمي. |
+| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
+| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
-يتم تحديد تسميات النطاق بشكل أساسي (UTS-46 + STD3 + NFC) قبل التجزئة. العلامات غير المعروفة ترفع `AccountAddressError::UnknownDomainTag`. عند التحقق من صحة عنوان مقابل مجال، ترفع المحددات غير المتطابقة `AccountAddressError::DomainMismatch`.
+Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
 
 ```
-domain selector
+legacy selector segment
 ┌──────────┬──────────────────────────────────────────────┐
 │ tag (u8) │ payload (depends on selector kind, see table)│
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-يكون المحدد مجاورًا مباشرة لحمولة وحدة التحكم، لذلك يمكن لجهاز فك التشفير التحرك
-تنسيق السلك بالترتيب: اقرأ بايت العلامة، واقرأ الحمولة الخاصة بالعلامة، ثم تابع
-إلى بايت وحدة التحكم.
+When present, the selector is immediately adjacent to the controller payload, so
+a decoder can walk the wire format in order: read the tag byte, read the
+tag-specific payload, then move on to the controller bytes.
 
-**أمثلة على أدوات التحديد**
+**Legacy selector examples**
 
-- *الافتراضي الضمني* (`tag = 0x00`). لا حمولة. مثال سداسي عشري أساسي للافتراضي
-  المجال باستخدام مفتاح الاختبار الحتمي:
-  `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
-- *الملخص المحلي* (`tag = 0x01`). الحمولة هي خلاصة 12 بايت. مثال (`treasury` بذرة
+- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
+  domain using the deterministic test key:
+  `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
+- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
   `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
-- *السجل العالمي* (`tag = 0x02`). الحمولة هي نهاية كبيرة `registry_id:u32`. البايتات
-  التي تتبع الحمولة مطابقة للحالة الافتراضية الضمنية؛ المحدد ببساطة
-  يستبدل سلسلة المجال التي تمت تسويتها بمؤشر التسجيل. مثال باستخدام
-  `registry_id = 0x0000_002A` (decimal42) ووحدة التحكم الافتراضية الحتمية:
-  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.  
-  التفاصيل: `0x02` الرأس، `0x02` علامة التحديد، `00 00 00 2A` معرف التسجيل، `0x00`
-  علامة وحدة التحكم، `0x01` معرف المنحنى، `0x20` طول المفتاح، حمولة مفتاح Ed25519 32 بايت.
+- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
+  that follow the payload are identical to the implicit-default case; the selector simply
+  replaces the normalised domain string with a registry pointer. Example using
+  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
+  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
 
 #### 2.3 ترميزات حمولة وحدة التحكم (ADDR-1a)
 
@@ -311,12 +311,12 @@ domain selector
 - تحويلات IME/NFKC: يمكن تسوية Sora kana بنصف العرض إلى أشكال العرض الكامل الخاصة بها دون كسر فك التشفير، ولكن يجب أن يظل ASCII `sora` وأرقام/حروف IH58 ASCII. سطح حراس كامل العرض أو مطوي على الحالة `ERR_MISSING_COMPRESSED_SENTINEL`، وترفع حمولات ASCII كاملة العرض `ERR_INVALID_COMPRESSED_CHAR`، وتظهر حالات عدم تطابق المجموع الاختباري كـ `ERR_CHECKSUM_MISMATCH`. تغطي اختبارات الخصائص في `crates/iroha_data_model/src/account/address.rs` هذه المسارات حتى تتمكن مجموعات SDK والمحافظ من الاعتماد على حالات الفشل الحتمية.
 - يقوم تحليل Torii وSDK للأسماء المستعارة `address@domain` بإصدار نفس الرموز `ERR_*` عندما تفشل مدخلات IH58 (المفضل)/sora (ثاني أفضل) قبل إرجاع الاسم المستعار (على سبيل المثال، عدم تطابق المجموع الاختباري، عدم تطابق ملخص المجال)، بحيث يمكن للعملاء ترحيل الأسباب المنظمة دون التخمين من سلاسل النثر.
 - حمولات المحدد المحلي التي يقل حجمها عن 12 بايت `ERR_LOCAL8_DEPRECATED`، مع الحفاظ على التحويل الثابت من ملخصات Local‑8 القديمة.
-- تعمل القيم الحرفية IH58 بدون مجال (المفضل)/sora (ثاني أفضل) على حل المحدد المضمن عبر محلل محدد المجال؛ إذا لم يتم تثبيت أي شيء (أو لا يمكن حل المحدد)، فسيفشل التحليل باستخدام `ERR_DOMAIN_SELECTOR_UNRESOLVED`. يحل المحدد الافتراضي الضمني لتسمية المجال الافتراضي الذي تم تكوينه دون الحاجة إلى محلل.
+- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
 
 #### 2.5 المتجهات الثنائية المعيارية
 
 - **المجال الافتراضي الضمني (`default`، البايت الأولي `0x00`)**  
-  الست عشري الأساسي: `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
+  الست عشري الأساسي: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
   التقسيم: `0x02` الرأس، `0x00` المحدد (افتراضي ضمني)، `0x00` علامة وحدة التحكم، `0x01` معرف المنحنى (Ed25519)، `0x20` طول المفتاح، متبوعًا بحمولة المفتاح 32 بايت.
 - **ملخص المجال المحلي (`treasury`، البايت الأولي `0x01`)**  
   الست عشري الأساسي: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
@@ -326,7 +326,7 @@ domain selector
 
 | المجال | بايت البذور | السداسي الكنسي | مضغوط (`sora`) |
 |-------------|-----------|-----------|---------|---|
-| الافتراضي | `0x00` | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` |
+| الافتراضي | `0x00` | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
 | الخزانة | `0x01` | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | بلاد العجائب | `0x02` | `0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394` | `sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS` |
 | إيروها | `0x03` | `0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1` | `sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L` |
@@ -352,7 +352,7 @@ domain selector
 
 | الحساب / المحدد | IH58 حرفي (البادئة `0x02F1`) | سورا مضغوط (`sora`) حرفي |
 |--------------------|--------------------------------|-------------------------|
-| `default` المجال (محدد ضمني، أولي `0x00`) | `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` (اختياري `@default` لاحقة عند تقديم تلميحات توجيه صريحة) |
+| `default` المجال (محدد ضمني، أولي `0x00`) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (اختياري `@default` لاحقة عند تقديم تلميحات توجيه صريحة) |
 | `treasury` (محدد الملخص المحلي، المصدر `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | مؤشر التسجيل العمومي (`registry_id = 0x0000_002A`، أي ما يعادل `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
@@ -398,7 +398,7 @@ domain selector
 حرفية لكل حمولة قانونية. أبرز النقاط:
 
 - **`addr-single-default-ed25519` (Sora Nexus، البادئة `0x02F1`).**  
-  IH58 `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`، مضغوط (`sora`)
+  IH58 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`، مضغوط (`sora`)
   `sora2QG…U4N5E5`. يُصدر Torii هذه السلاسل الدقيقة من `AccountId`
   تنفيذ `Display` (IH58 الأساسي) و`AccountAddress::to_compressed_sora`.
 - **`addr-global-registry-002a` (محدد التسجيل → الخزانة).**  
@@ -586,10 +586,10 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
    تقبل واجهة سطر الأوامر IH58، `sora…`، والقيم الأساسية `0x…`؛ إلحاق
    `@<domain>` فقط عندما تحتاج إلى الاحتفاظ بملصق للبيانات.
    يعرض ملخص JSON هذا النطاق عبر الحقل `input_domain`، و
-   `--append-domain` يعيد تشغيل الترميز المحول كـ `<address>@<domain>` لـ
+   `legacy  suffix` يعيد تشغيل الترميز المحول كـ `<address>@<domain>` لـ
    الاختلافات الواضحة (هذه اللاحقة عبارة عن بيانات وصفية، وليست معرف حساب أساسي).
    لاستخدام الصادرات الموجهة نحو الخط الجديد
-   `iroha tools address normalize --input <file> --only-local` لتحويل الكتلة المحلية
+   `iroha tools address normalize --input <file> legacy-selector input mode` لتحويل الكتلة المحلية
    المحددات في نماذج IH58 الأساسية (المفضلة)، أو المضغوطة (`sora`، ثاني أفضل)، أو النماذج السداسية، أو JSON أثناء التخطي
    صفوف غير محلية عندما يحتاج المدققون إلى أدلة مناسبة لجداول البيانات، قم بالتشغيل
    `iroha tools address audit --input <file> --format csv` لإرسال ملخص CSV
@@ -658,16 +658,15 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
   تسميات `<address>@<domain>` اختيارية، افتراضيًا لإخراج IH58 باستخدام بادئة Sora Nexus (`753`)،
   ويصدر فقط الأبجدية المضغوطة الخاصة بـ Sora فقط عندما يطلبها المشغلون صراحةً
   `--format compressed` أو وضع ملخص JSON. يفرض الأمر توقعات البادئة على
-  التحليل، ويسجل المجال المقدم (`input_domain` في JSON)، والعلامة `--append-domain`
+  التحليل، ويسجل المجال المقدم (`input_domain` في JSON)، والعلامة `legacy  suffix`
   يعيد تشغيل الترميز المحول كـ `<address>@<domain>` بحيث تظل الفروق الواضحة مريحة.
 - **Wallet/explorer UX:** اتبع [إرشادات عرض العنوان](source/sns/address_display_guidelines.md)
   يتم شحنه مع ADDR-6 - قم بتوفير أزرار النسخ المزدوجة، واحتفظ بـ IH58 كحمولة QR، وقم بالتحذير
   المستخدمين أن النموذج `sora…` المضغوط هو Sora فقط وهو عرضة لإعادة كتابة IME.
 - **تكامل Torii:** يظهر Cache Nexus احترام TTL، والإصدار
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` بشكل حتمي، و
-  فضح `POST /v1/accounts/resolve` لتحديد `alias@domain`،
-  `public_key@domain`، `uaid:`/`opaque:` أحرف أو عناوين مشفرة في
-  IH58 أثناء إرجاع المجال والمصدر الذي تم حله.
+  keep account-literal parsing encoded-only (`IH58` preferred, `sora…`
+  compressed accepted) with canonical IH58 output.
 
 ### تنسيقات استجابة توري
 
@@ -675,7 +674,7 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
   `POST /v1/accounts/query` يقبل نفس الحقل داخل مغلف JSON.
   القيم المدعومة هي:
   - `ih58` (افتراضي) — تصدر الاستجابات حمولات IH58 Base58 الأساسية (على سبيل المثال،
-    `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`).
+    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
   - `compressed` - تصدر الاستجابات عرض Sora فقط `sora…` المضغوط أثناء
     الحفاظ على المرشحات/معلمات المسار الأساسية.
 - تُرجع القيم غير الصالحة `400` (`QueryExecutionFail::Conversion`). هذا يسمح

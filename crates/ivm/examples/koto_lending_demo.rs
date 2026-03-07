@@ -2,9 +2,16 @@
 use std::collections::HashMap;
 
 use ivm::{
-    AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken,
+    AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken, ScopedAccountId,
     kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,
 };
+
+fn fixture_account(domain: &str, hex_public_key: &str) -> ScopedAccountId {
+    ScopedAccountId::new(
+        domain.parse().expect("domain id"),
+        hex_public_key.parse().expect("public key"),
+    )
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1) Compile the Kotodama sample to IVM bytecode
@@ -15,26 +22,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("compile lending_simple");
 
     // 2) Prepare a tiny world with a user, a vault account, and a debt asset
-    let user: AccountId =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-            .parse()?;
-    let vault: AccountId =
-        "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4@genesis".parse()?;
+    let user = fixture_account(
+        "wonderland",
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    );
+    let vault = fixture_account(
+        "genesis",
+        "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
+    );
     let debt_asset: AssetDefinitionId = "stable#wonderland".parse()?;
 
     // Initialize WSV: no balances yet; grant permissions so user can mint via host
     let mut wsv = MockWorldStateView::new();
     wsv.grant_permission(&user, PermissionToken::MintAsset(debt_asset.clone()));
-    wsv.grant_permission(&user, PermissionToken::ReadAccountAssets(user.clone()));
+    wsv.grant_permission(
+        &user,
+        PermissionToken::ReadAccountAssets(AccountId::from_account_id(&user)),
+    );
+    let user_subject = AccountId::from_account_id(&user);
+    let vault_subject = AccountId::from_account_id(&vault);
 
-    // 3) Map small integers to IDs used by syscalls
+    // 3) Map small integers to domainless account subjects used by syscalls
     let mut account_map = HashMap::new();
-    account_map.insert(1u64, user.clone());
-    account_map.insert(2u64, vault.clone());
+    account_map.insert(1u64, user_subject.clone());
+    account_map.insert(2u64, vault_subject);
     let mut asset_map = HashMap::new();
     asset_map.insert(1u64, debt_asset.clone());
 
-    let host = WsvHost::new(wsv, user.clone(), account_map, asset_map);
+    let host = WsvHost::new_with_subject_map(wsv, user_subject, account_map, asset_map);
 
     // 4) Create VM, attach host, load program
     let mut vm = IVM::new(1_000_000);

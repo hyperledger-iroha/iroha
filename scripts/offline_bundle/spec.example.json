@@ -3,13 +3,13 @@
     {
       "label": "ios-demo-bundle",
       "bundle_id_hex": "370F4B1FE64C999891A30D6A2173FD9252B57CB2AEC62E980697E57736979C7F",
-      "receiver": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
-      "deposit_account": "34mSYn6ySFTASoiVzNGuyBkedDbYTxqhobNmoDbzdhfaNtveqVrm8N49uoqtcRNvAUcapufe1",
-      "controller": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+      "receiver": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+      "deposit_account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+      "controller": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
       "recorded_at_ms": 1730315876000,
       "recorded_at_height": 640001,
       "balance_proof": {
-        "initial_asset": "xor##34mSYn6ySFTASoiVzNGuyBkedDbYTxqhobNmoDbzdhfaNtveqVrm8N49uoqtcRNvAUcapufe1",
+        "initial_asset": "xor##6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
         "initial_amount": "250.00",
         "initial_commitment_hex": "C6BD0E817F1D9ABDF72B1844A2A928D281F0100E3AE107BD86E7247308164140",
         "resulting_commitment_hex": "72954CFFEC45DA48B52B4356DDB147AF813BD1DAEDEEA74E430462E0607E4E2F",
@@ -19,9 +19,9 @@
       "receipts": [
         {
           "tx_id_hex": "FDE7DAC62A81775C0B6185C71D0BE28D05D2EAAAADE4C70DBD89DC3B3D8FFD1E",
-          "from": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
-          "to": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
-          "asset": "xor##34mSYn6ySFTASoiVzNGuyBkedDbYTxqhobNmoDbzdhfaNtveqVrm8N49uoqtcRNvAUcapufe1",
+          "from": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "to": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "asset": "xor##6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "amount": "25.00",
           "issued_at_ms": 1730314876000,
           "invoice_id": "INV-1001",
@@ -39,9 +39,9 @@
         },
         {
           "tx_id_hex": "8D9C844236791FBB80337F4201F19B3430B0004A00BBD5DF1626B28B912E2065",
-          "from": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
-          "to": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
-          "asset": "xor##34mSYn6ySFTASoiVzNGuyBkedDbYTxqhobNmoDbzdhfaNtveqVrm8N49uoqtcRNvAUcapufe1",
+          "from": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "to": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "asset": "xor##6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "amount": "20.00",
           "issued_at_ms": 1730314877000,
           "invoice_id": "INV-1002",

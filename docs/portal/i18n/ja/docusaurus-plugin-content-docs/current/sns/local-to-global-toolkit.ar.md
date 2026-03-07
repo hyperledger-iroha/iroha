@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 意味:
 
 - `--format compressed (`sora`)` は `sora...` の IH58 です。
-- `--no-append-domain` لاصدار リテラル بدون نطاق。
+- `domainless output (default)` لاصدار リテラル بدون نطاق。
 - `--audit-only` は。
 - `--allow-errors` للاستمرار عند ظهور صفوف تالفة (مطابق لسلوك CLI)。
 
@@ -48,7 +48,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 2. `audit.json` ローカル セレクター (`domain.kind = local12`)。
    テスト `true` (テスト テスト `false` テスト 開発/テスト)
    شخيص التراجعات) واضف
-   `iroha tools address normalize --fail-on-warning --only-local` CI 認証
+   `iroha tools address normalize` CI 認証
    制作を行っております。
 
 リリースノートの抜粋

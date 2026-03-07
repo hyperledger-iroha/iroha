@@ -637,13 +637,13 @@ mod tests {
         // Fail sending the first message
         fail_send.store(true, Ordering::SeqCst);
         telemetry_sender.send(system_connected_telemetry()).unwrap();
-        message_receiver.try_next().unwrap_err();
+        message_receiver.try_recv().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // The second message is not sent because the sink is reset
         fail_send.store(false, Ordering::SeqCst);
         telemetry_sender.send(system_interval_telemetry(1)).unwrap();
-        message_receiver.try_next().unwrap_err();
+        message_receiver.try_recv().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Fail the reconnection
@@ -652,7 +652,7 @@ mod tests {
 
         // The third message is not sent because the sink is not created yet
         telemetry_sender.send(system_interval_telemetry(1)).unwrap();
-        message_receiver.try_next().unwrap_err();
+        message_receiver.try_recv().unwrap_err();
     }
 
     async fn send_after_reconnect_fails_with_suite(suite: Suite) {
@@ -666,24 +666,24 @@ mod tests {
         // Fail sending the first message
         fail_send.store(true, Ordering::SeqCst);
         telemetry_sender.send(system_connected_telemetry()).unwrap();
-        message_receiver.try_next().unwrap_err();
+        message_receiver.try_recv().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // The second message is not sent because the sink is reset
         fail_send.store(false, Ordering::SeqCst);
         telemetry_sender.send(system_interval_telemetry(1)).unwrap();
-        message_receiver.try_next().unwrap_err();
+        message_receiver.try_recv().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Fail sending the first message after reconnect
         fail_send.store(true, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_secs(1)).await;
-        message_receiver.try_next().unwrap_err();
+        message_receiver.try_recv().unwrap_err();
 
         // The message is sent
         fail_send.store(false, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_secs(1)).await;
-        message_receiver.try_next().unwrap();
+        message_receiver.try_recv().unwrap();
     }
 
     async fn broadcast_lag_does_not_stop_client_with_suite(suite: Suite) {

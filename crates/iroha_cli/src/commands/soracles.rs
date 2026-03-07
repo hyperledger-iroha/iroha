@@ -848,6 +848,7 @@ mod tests {
     use iroha::data_model::oracle::{
         FeedEvent, FeedSuccess, ObservationBody, ObservationValue, ReportEntry,
     };
+    use iroha::data_model::{account::AccountId, domain::DomainId};
     use iroha_crypto::HashOf;
     use iroha_i18n::{Bundle as I18nBundle, Language, Localizer};
     use std::fmt::Display;
@@ -911,6 +912,17 @@ mod tests {
         }
     }
 
+    fn test_oracle_account_id() -> AccountId {
+        let domain: DomainId = iroha::account_address::default_domain_name()
+            .as_ref()
+            .parse()
+            .expect("default domain id");
+        let signatory = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+            .parse()
+            .expect("oracle signatory");
+        AccountId::new(domain, signatory)
+    }
+
     #[test]
     fn builds_bundle_and_marks_missing_hashes() {
         let tmp = TempDir::new().expect("tmpdir");
@@ -931,10 +943,7 @@ mod tests {
                 outcome: FeedEventOutcome::Success(FeedSuccess {
                     value: ObservationValue::new(1_000, 2),
                     entries: vec![ReportEntry {
-                        oracle_id:
-                            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@default"
-                                .parse()
-                                .expect("oracle id"),
+                        oracle_id: test_oracle_account_id(),
                         observation_hash,
                         value: ObservationValue::new(1_000, 2),
                         outlier: false,
@@ -1067,10 +1076,7 @@ mod tests {
                 outcome: FeedEventOutcome::Success(FeedSuccess {
                     value: ObservationValue::new(1_000, 2),
                     entries: vec![ReportEntry {
-                        oracle_id:
-                            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@default"
-                                .parse()
-                                .expect("oracle id"),
+                        oracle_id: test_oracle_account_id(),
                         observation_hash,
                         value: ObservationValue::new(1_000, 2),
                         outlier: false,

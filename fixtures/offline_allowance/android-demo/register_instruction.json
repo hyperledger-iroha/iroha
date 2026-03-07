@@ -2,12 +2,12 @@
   "certificate": {
     "allowance": {
       "amount": "150.00",
-      "asset": "usd#sora#34mSYnDgbaJM58rbLoif4Tkp7G6zNhAfct4B9QLcNFzMSQjFmyWod961RVTGBpe8a2SykUPyZ",
+      "asset": "usd#sora#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
       "commitment_hex": "603D84687B57A4804C4E559BBB3AA7DC3BD440103EAD6401B6B19AC692EBDD14"
     },
     "attestation_nonce_hex": null,
     "attestation_report_b64": "u2a7Zg==",
-    "controller": "34mSYnDgbaJM58rbLoif4Tkp7G6zNhAfct4B9QLcNFzMSQjFmyWod961RVTGBpe8a2SykUPyZ",
+    "controller": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
     "expires_at_ms": 1745900000000,
     "issued_at_ms": 1730314876000,
     "metadata": {
@@ -21,7 +21,7 @@
       ],
       "android.integrity.policy": "marker_key"
     },
-    "operator": "34mSYnDgbaJM58rbLoif4Tkp7G7VrmEx2UvM5oSfSY6GU46aEca41RKqHEBCLgaEgkuxPBX6W",
+    "operator": "6cmzPVPX8j6hZ4dceSGxHX65vr3iK4RG3em7w24HeJ9BbQXmKFVrykC",
     "operator_signature_hex": "6615316C398D38EAFA6024FFF9E07F964F8793CF7368C4A62F36712FBFF612C85F57B69B07B06E95C183F355875A78FC342E5096D83E9312F431A4DB1E4A9604",
     "policy": {
       "expires_at_ms": 1745900000000,

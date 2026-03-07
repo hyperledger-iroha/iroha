@@ -492,13 +492,13 @@ mod tests {
         fs::create_dir_all(&receipts_dir)?;
         fs::create_dir_all(&acks_dir)?;
 
-        let operator: AccountId =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                .parse()
+        let operator =
+            AccountId::parse_encoded("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .unwrap();
-        let other_operator: AccountId =
-            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland"
-                .parse()
+        let other_operator =
+            AccountId::parse_encoded("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU")
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .unwrap();
 
         let first = GarEnforcementReceiptV1 {

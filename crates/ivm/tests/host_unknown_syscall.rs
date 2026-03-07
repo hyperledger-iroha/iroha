@@ -100,7 +100,7 @@ fn default_host_axt_syscalls_handle_valid_sequence() {
     let handle = AssetHandle {
         scope: vec!["transfer".into()],
         subject: HandleSubject {
-            account: "alice@wonderland".into(),
+            account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
@@ -128,8 +128,8 @@ fn default_host_axt_syscalls_handle_valid_sequence() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "100".into(),
         },
     };

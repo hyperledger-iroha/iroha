@@ -154,7 +154,7 @@ aux docs/tests :
 
 | Type de sélecteur | Hex canonique |
 |--------------------|---------------|
-| Implicite par défaut | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Implicite par défaut | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | Digest local (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | Registre global (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -170,7 +170,7 @@ ou en chaînes compressées doivent suivre le workflow CLI documenté sous ADDR-
    `domain` avec les champs `kind`/`warning` et reflète tout domaine fourni via
    le champ `input_domain`. Quand `kind` vaut `local12`, la CLI imprime un
    avertissement sur stderr et le CV JSON reflète la même consigne pour que
-   les pipelines CI et les SDK peuvent l'afficher. Passer `--append-domain`
+   les pipelines CI et les SDK peuvent l'afficher. Passer `legacy  suffix`
    lorsque vous voulez rejouer l'encodage converti sous la forme `<ih58>@<domain>`.
 2. Les SDK peuvent afficher le même avertissement/resume via le helper
    Javascript :
@@ -199,20 +199,20 @@ ou en chaînes compressées doivent suivre le workflow CLI documenté sous ADDR-
    JSON avec des curriculum vitae canoniques/IH58/compresse pour chaque entrée, et compte
    les erreurs de parse ainsi que les avertissements de domaine Local. Utiliser
    `--allow-errors` lors de l'audit de dumps herites contenant des lignes
-   parasites, et bloquez l'automatisation via `--fail-on-warning` lorsque les
+   parasites, et bloquez l'automatisation via `strict CI post-check` lorsque les
    les opérateurs sont prêts à bloquer les sélecteurs Local dans CI.
 6. Lorsque vous avez besoin d'une réécriture ligne à ligne, utilisez
   Pour les feuilles de calcul de remédiation des sélecteurs Local, utilisez
   pour exporter un CSV `input,status,format,...` qui met en avant les encodages
   canoniques, avertissements et echecs de parse en une seule passe.
    Le helper ignore les lignes non Local par défaut, convertit chaque entréerestante dans l'encodage demandé (IH58/compresse/hex/JSON), et préserver le
-   domaine original quand `--append-domain` est actif. Associez-le à
+   domaine original quand `legacy  suffix` est actif. Associez-le à
    `--allow-errors` pour continuer l'analyse meme quand un dump contient des
    Littéraux mal formes.
 7. L'automatisation CI/lint peut exécuter `ci/check_address_normalize.sh`, qui
    extraire les sélecteurs Local de `fixtures/account/address_vectors.json`, les
    convertir via `iroha tools address normalize`, et rejouer
-   `iroha tools address audit --fail-on-warning` pour prouver que les versions
+   `iroha tools address audit` pour prouver que les versions
    n'emettent plus de digests Local.`torii_address_local8_total{endpoint}` plus
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
 `torii_address_collision_domain_total{endpoint,domain}`, et le tableau Grafana
@@ -247,7 +247,7 @@ barrières :- `AddressLocal8Resurgence` page chaque fois qu'un contexte signale
 ### Extrait de note de release (portefeuille et explorateur)
 
 Incluez le bullet suivant dans les notes de release portefeuille/explorateur
-lors du basculement :> **Adresses :** Ajoute le helper `iroha tools address normalize --only-local --append-domain`
+lors du basculement :> **Adresses :** Ajoute le helper `iroha tools address normalize`
 > et l'a branche dans CI (`ci/check_address_normalize.sh`) pour que les pipelines
 > portefeuille/explorateur peut convertir les sélecteurs Local herites vers
 > des formes canoniques IH58/compressées avant que Local-8/Local-12 soient

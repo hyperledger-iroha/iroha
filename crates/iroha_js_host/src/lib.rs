@@ -6952,12 +6952,14 @@ pub fn build_register_domain_transaction(
     let chain_id: ChainId = chain_id.parse().map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
-    let authority: AccountId = authority.parse().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid authority account id: {err}"),
-        )
-    })?;
+    let authority: AccountId = AccountId::parse_encoded(&authority)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid authority account id: {err}"),
+            )
+        })?;
     let domain_id: DomainId = domain_id.parse().map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
@@ -7022,12 +7024,14 @@ pub fn build_transaction(
     let chain_id: ChainId = chain_id.parse().map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
-    let authority: AccountId = authority.parse().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid authority account id: {err}"),
-        )
-    })?;
+    let authority: AccountId = AccountId::parse_encoded(&authority)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid authority account id: {err}"),
+            )
+        })?;
 
     build_transaction_from_instructions_json(
         chain_id,
@@ -7082,12 +7086,14 @@ pub fn build_time_trigger_action(
         None
     };
 
-    let authority: AccountId = authority.parse().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid trigger authority: {err}"),
-        )
-    })?;
+    let authority: AccountId = AccountId::parse_encoded(&authority)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid trigger authority: {err}"),
+            )
+        })?;
     let instructions = parse_instruction_payloads(instructions_json)?;
     let executable = Executable::from(instructions);
     let repeats = match repeats {
@@ -7126,12 +7132,14 @@ pub fn build_precommit_trigger_action(
     repeats: Option<u32>,
     metadata_json: Option<String>,
 ) -> napi::Result<String> {
-    let authority: AccountId = authority.parse().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid trigger authority: {err}"),
-        )
-    })?;
+    let authority: AccountId = AccountId::parse_encoded(&authority)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid trigger authority: {err}"),
+            )
+        })?;
     let instructions = parse_instruction_payloads(instructions_json)?;
     let executable = Executable::from(instructions);
     let repeats = match repeats {
@@ -8481,10 +8489,7 @@ mod tests {
         nullifier.insert("digest".into(), Value::String(hash_literal(0x22)));
         nullifier.insert("issued_at_ms".into(), Value::Number(json::Number::U64(99)));
 
-        let participant: AccountId =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                .parse()
-                .expect("canonical account address must parse");
+        let participant = sample_account("wonderland");
 
         let mut join = json::Map::new();
         join.insert("call_id".into(), Value::Object(call_id));
@@ -9469,7 +9474,9 @@ mod tests {
             .and_then(|v| v.get("host"))
             .and_then(|v| v.as_str())
         {
-            host.parse::<AccountId>().expect("host account id");
+            AccountId::parse_encoded(host)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("host account id");
         }
         if let Some(billing) = value
             .get("Kaigi")
@@ -9478,7 +9485,9 @@ mod tests {
             .and_then(|v| v.get("billing_account"))
             .and_then(|v| v.as_str())
         {
-            billing.parse::<AccountId>().expect("billing account id");
+            AccountId::parse_encoded(billing)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("billing account id");
         }
         if let Some(relay_id) = value
             .get("Kaigi")
@@ -9490,7 +9499,9 @@ mod tests {
             .and_then(|v| v.get("relay_id"))
             .and_then(|v| v.as_str())
         {
-            relay_id.parse::<AccountId>().expect("relay account id");
+            AccountId::parse_encoded(relay_id)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("relay account id");
         }
 
         instruction_from_json(json_payload).expect("JS builder payload must be parsable");

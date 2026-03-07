@@ -115,23 +115,23 @@ Numeric helpers (Norito)
 Domains / Peers
 - 0x10 REGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_reg_domain
 - 0x11 UNREGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_unreg_domain
-- 0x12 TRANSFER_DOMAIN — Args: `r10=&DomainId, r11=&AccountId` → 0 — Gas: G_xfer_domain
+- 0x12 TRANSFER_DOMAIN — Args: `r10=&DomainId, r11=&ScopedAccountId` → 0 — Gas: G_xfer_domain
 - 0x15 REGISTER_PEER — Args: `r10=&Json` (RegisterPeerWithPop) → 0 — Gas: G_reg_peer
   - JSON object: `{ "peer": "<public_key or public_key@addr>", "pop": [..], "activation_at": <u64?>, "expiry_at": <u64?>, "hsm": <HsmBinding?> }`
   - `peer` may be a string or an object with `public_key`/`publicKey`/`peer_id`/`peerId`/`key`; those keys are also accepted at top level.
 - 0x16 UNREGISTER_PEER — Args: `r10=&Json` (peer id string or object with `peer`/`peer_id`/`peerId`/`public_key`/`publicKey`/`key`) → 0 — Gas: G_unreg_peer
 
 Accounts
-- 0x13 REGISTER_ACCOUNT — Args: `r10=&AccountId` → 0 — Gas: G_reg_acct
-- 0x14 UNREGISTER_ACCOUNT — Args: `r10=&AccountId` → 0 — Gas: G_unreg_acct
-- 0x17 ADD_SIGNATORY — Args: `r10=&AccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_add_sig
-- 0x18 REMOVE_SIGNATORY — Args: `r10=&AccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_rm_sig
-- 0x19 SET_ACCOUNT_QUORUM — Args: `r10=&AccountId, r11=quorum:u64` → 0 — Gas: G_set_quorum
-- 0x1A SET_ACCOUNT_DETAIL — Args: `r10=&AccountId, r11=&Name, r12=&Json` → 0 — Gas: G_set_detail + bytes(val)
+- 0x13 REGISTER_ACCOUNT — Args: `r10=&ScopedAccountId` → 0 — Gas: G_reg_acct
+- 0x14 UNREGISTER_ACCOUNT — Args: `r10=&ScopedAccountId` → 0 — Gas: G_unreg_acct
+- 0x17 ADD_SIGNATORY — Args: `r10=&ScopedAccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_add_sig
+- 0x18 REMOVE_SIGNATORY — Args: `r10=&ScopedAccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_rm_sig
+- 0x19 SET_ACCOUNT_QUORUM — Args: `r10=&ScopedAccountId, r11=quorum:u64` → 0 — Gas: G_set_quorum
+- 0x1A SET_ACCOUNT_DETAIL — Args: `r10=&ScopedAccountId, r11=&Name, r12=&Json` → 0 — Gas: G_set_detail + bytes(val)
 
 Notes:
 - Signatory/quorum syscalls update the multisig spec stored in account metadata key `multisig/spec`.
-  The public key is mapped to an `AccountId` in the same domain with weight 1; the signatory
+  The public key is mapped to a `ScopedAccountId` in the same domain with weight 1; the signatory
   account must exist and the resulting spec must remain acyclic with quorum reachable.
 - These syscalls update multisig roles and metadata and rekey the account controller to the
   canonical multisig id derived from the spec (signatories must be single-key accounts).
@@ -139,13 +139,13 @@ Notes:
 Assets (FT)
 - 0x20 REGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_reg_asset
 - 0x21 UNREGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_unreg_asset
-- 0x22 MINT_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_mint
-- 0x23 BURN_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_burn
-- 0x24 TRANSFER_ASSET — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)` → 0 — Gas: G_transfer
+- 0x22 MINT_ASSET — Args: `r10=&ScopedAccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_mint
+- 0x23 BURN_ASSET — Args: `r10=&ScopedAccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_burn
+- 0x24 TRANSFER_ASSET — Args: `r10=&ScopedAccountId(from), r11=&ScopedAccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)` → 0 — Gas: G_transfer
 
 NFTs
-- 0x25 NFT_MINT_ASSET — Args: `r10=&NftId, r11=&AccountId(owner)` → 0 — Gas: G_nft_mint_asset
-- 0x26 NFT_TRANSFER_ASSET — Args: `r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)` → 0 — Gas: G_nft_transfer_asset
+- 0x25 NFT_MINT_ASSET — Args: `r10=&NftId, r11=&ScopedAccountId(owner)` → 0 — Gas: G_nft_mint_asset
+- 0x26 NFT_TRANSFER_ASSET — Args: `r10=&ScopedAccountId(from), r11=&NftId, r12=&ScopedAccountId(to)` → 0 — Gas: G_nft_transfer_asset
 - 0x27 NFT_SET_METADATA — Args: `r10=&NftId, r11=&Json` → 0 — Gas: G_nft_set_metadata
 - 0x28 NFT_BURN_ASSET — Args: `r10=&NftId` → 0 — Gas: G_nft_burn_asset
 
@@ -172,10 +172,10 @@ Roles / Permissions
 - 0x30 CREATE_ROLE — Args: `r10=&Name, r11=&Json` (perm set) → 0 — Gas: G_create_role
   - Permissions JSON: array of permission strings/objects or `{ "permissions": [...] }` / `{ "perms": [...] }`.
 - 0x31 DELETE_ROLE — Args: `r10=&Name` → 0 — Gas: G_delete_role
-- 0x32 GRANT_ROLE — Args: `r10=&AccountId, r11=&Name` → 0 — Gas: G_grant_role
-- 0x33 REVOKE_ROLE — Args: `r10=&AccountId, r11=&Name` → 0 — Gas: G_revoke_role
-- 0x34 GRANT_PERMISSION — Args: `r10=&AccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_grant_perm
-- 0x35 REVOKE_PERMISSION — Args: `r10=&AccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_revoke_perm
+- 0x32 GRANT_ROLE — Args: `r10=&ScopedAccountId, r11=&Name` → 0 — Gas: G_grant_role
+- 0x33 REVOKE_ROLE — Args: `r10=&ScopedAccountId, r11=&Name` → 0 — Gas: G_revoke_role
+- 0x34 GRANT_PERMISSION — Args: `r10=&ScopedAccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_grant_perm
+- 0x35 REVOKE_PERMISSION — Args: `r10=&ScopedAccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_revoke_perm
 
 Triggers
 - 0x40 CREATE_TRIGGER — Args: `r10=&Json` (trigger spec) → 0 — Gas: G_create_trig
@@ -229,7 +229,7 @@ JSON envelope support for EXECUTE_INSTRUCTION
 - 0xA1 EXECUTE_QUERY — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr` — Gas: G_scq
 - 0xA2 CREATE_NFTS_FOR_ALL_USERS — Args: none → `u64=count` — Gas: G_create_nfts_all
 - 0xA3 SET_SMARTCONTRACT_EXECUTION_DEPTH — Args: `r10=depth:u64` → `u64=prev` — Gas: G_sc_depth
-- 0xA4 GET_AUTHORITY — Args: none → `ptr` (AccountId in INPUT, `r10` points to it) — Gas: G_get_auth
+- 0xA4 GET_AUTHORITY — Args: none → `ptr` (ScopedAccountId in INPUT, `r10` points to it) — Gas: G_get_auth
 
 AXT host flow
 - 0xB0 AXT_BEGIN — Args: `r10=&AxtDescriptor`. Resets any in‑progress envelope and records the descriptor; hosts derive the canonical binding used by capability handles from this descriptor.
@@ -240,7 +240,7 @@ AXT host flow
 - Default and WSV hosts enforce descriptor membership, capability binding equality, budget checks, and proof presence before permitting commit.
 
 ZK Helpers
-- 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `ptr (&NoritoBytes(Numeric))` — Gas: G_get_bal
+- 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&ScopedAccountId, r11=&AssetDefinitionId` → `ptr (&NoritoBytes(Numeric))` — Gas: G_get_bal
 - 0xFB USE_NULLIFIER — Args: `r10=nullifier:u64` → `u64=0` — Gas: G_use_null
 - 0xFC VERIFY_SIGNATURE — Args: `r10=&Blob(message)`, `r11=&Blob(signature)`, `r12=&Blob(pubkey)`, `r13=scheme:u8` → `r10=0/1` — Gas: G_verify_sig
 

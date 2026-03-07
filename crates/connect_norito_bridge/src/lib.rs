@@ -149,7 +149,6 @@ const ERR_CONNECT_ENCODE: c_int = -405;
 
 const ACCOUNT_ADDRESS_FORMAT_IH58: u8 = 0;
 const ACCOUNT_ADDRESS_FORMAT_COMPRESSED: u8 = 1;
-const ACCOUNT_ADDRESS_FORMAT_CANONICAL_HEX: u8 = 2;
 
 const OFFLINE_BALANCE_PROOF_VERSION: u8 = 1;
 const OFFLINE_DELTA_PROOF_BYTES: usize = 96;
@@ -279,7 +278,6 @@ fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
             fields.insert("found".into(), JsonValue::from(u64::from(*found)));
         }
         UnknownAddressClass(value)
-        | UnknownDomainTag(value)
         | UnknownControllerTag(value)
         | InvalidIh58PrefixEncoding(value) => {
             fields.insert("value".into(), JsonValue::from(u64::from(*value)));
@@ -292,10 +290,6 @@ fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
         }
         InvalidCompressedDigit(digit) => {
             fields.insert("digit".into(), JsonValue::from(u64::from(*digit)));
-        }
-        LocalDigestTooShort { expected, found } => {
-            fields.insert("expected".into(), JsonValue::from(*expected as u64));
-            fields.insert("found".into(), JsonValue::from(*found as u64));
         }
         MultisigMemberOverflow(count) => {
             fields.insert("count".into(), JsonValue::from(*count as u64));
@@ -395,11 +389,15 @@ unsafe fn write_bytes_bridge(
 }
 
 fn parse_account_id(value: String) -> BridgeResult<AccountId> {
-    value.parse().map_err(|_| BridgeError::Authority)
+    AccountId::parse_encoded(&value)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|_| BridgeError::Authority)
 }
 
 fn parse_destination(value: String) -> BridgeResult<AccountId> {
-    value.parse().map_err(|_| BridgeError::Destination)
+    AccountId::parse_encoded(&value)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|_| BridgeError::Destination)
 }
 
 fn parse_asset_definition(value: String) -> BridgeResult<AssetDefinitionId> {
@@ -943,7 +941,9 @@ fn compute_offline_receipt_challenge(
         return Err(BridgeError::ChainId);
     }
     let chain_id = ChainId::from_str(&chain_id_raw).map_err(|_| BridgeError::ChainId)?;
-    let receiver = AccountId::from_str(&receiver_raw).map_err(|_| BridgeError::OfflineReceiver)?;
+    let receiver = AccountId::parse_encoded(&receiver_raw)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|_| BridgeError::OfflineReceiver)?;
     let asset = AssetId::from_str(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
     let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
     let sender_certificate_id =
@@ -979,8 +979,12 @@ fn encode_offline_spend_receipt_payload(
     sender_certificate_id_hex: String,
 ) -> BridgeResult<Vec<u8>> {
     let tx_id = Hash::from_str(&tx_id_hex).map_err(|_| BridgeError::OfflineNonce)?;
-    let from = AccountId::from_str(&from_raw).map_err(|_| BridgeError::Authority)?;
-    let to = AccountId::from_str(&to_raw).map_err(|_| BridgeError::Destination)?;
+    let from = AccountId::parse_encoded(&from_raw)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|_| BridgeError::Authority)?;
+    let to = AccountId::parse_encoded(&to_raw)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|_| BridgeError::Destination)?;
     let asset = AssetId::from_str(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
     let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
     let platform_proof: OfflinePlatformProof =
@@ -1496,12 +1500,16 @@ pub unsafe extern "C" fn connect_norito_account_address_parse(
     } else {
         None
     };
-    let (address, format) = match AccountAddress::parse_any(&input, expect_prefix) {
+    let (address, format) = match AccountAddress::parse_encoded(&input, expect_prefix) {
         Ok(values) => values,
         Err(err) => {
             return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
         }
     };
+    debug_assert!(matches!(
+        format,
+        AccountAddressFormat::IH58 { .. } | AccountAddressFormat::Compressed
+    ));
     let canonical_hex = match address.canonical_hex() {
         Ok(value) => value,
         Err(err) => {
@@ -1531,7 +1539,7 @@ pub unsafe extern "C" fn connect_norito_account_address_parse(
             (ACCOUNT_ADDRESS_FORMAT_IH58, network_prefix)
         }
         AccountAddressFormat::Compressed => (ACCOUNT_ADDRESS_FORMAT_COMPRESSED, 0),
-        AccountAddressFormat::CanonicalHex => (ACCOUNT_ADDRESS_FORMAT_CANONICAL_HEX, 0),
+        AccountAddressFormat::CanonicalHex => unreachable!("canonical-hex rejected above"),
     };
     unsafe {
         *out_format = format_code;
@@ -7262,7 +7270,8 @@ mod accel_tests {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, private_key) = keypair.into_parts();
         let domain_id: DomainId = domain.parse().expect("valid domain");
-        let account = CString::new(format!("{public_key}@{domain_id}")).expect("valid cstring");
+        let account_id = AccountId::new(domain_id, public_key);
+        let account = CString::new(account_id.to_string()).expect("valid cstring");
         let (_, bytes) = private_key.to_bytes();
         (account, bytes)
     }
@@ -7271,7 +7280,8 @@ mod accel_tests {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
         let domain_id: DomainId = domain.parse().expect("valid domain");
-        CString::new(format!("{public_key}@{domain_id}")).expect("valid cstring")
+        let account_id = AccountId::new(domain_id, public_key);
+        CString::new(account_id.to_string()).expect("valid cstring")
     }
 
     pub(super) fn cstring(s: &str) -> CString {
@@ -7474,6 +7484,16 @@ mod accel_tests {
         private_bytes
     }
 
+    fn fixture_authority(domain: &str) -> CString {
+        let seed = hex::decode("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032")
+            .expect("fixture seed hex");
+        let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+        let (public_key, _) = keypair.into_parts();
+        let domain_id: DomainId = domain.parse().expect("valid domain");
+        let account = AccountId::new(domain_id, public_key);
+        CString::new(account.to_string()).expect("valid cstring")
+    }
+
     fn assert_signed_hash_matches(out_hash: [u8; 32], signed_ptr: *mut u8, signed_len: c_ulong) {
         let signed_bytes = unsafe { slice::from_raw_parts(signed_ptr, signed_len as usize) };
         let signed = decode_signed_transaction(signed_bytes).expect("decode signed transaction");
@@ -7484,9 +7504,7 @@ mod accel_tests {
     fn swift_parity_transfer_hash_matches_fixture() {
         let _reset = ChainDiscriminantReset::new(42);
         let chain = cstring("00000042");
-        let authority = cstring(
-            "ed01201F857FE980524A2EE4FE65E5D346F7AAADCB636A640F1D191D1C6E158607BA1E@wonderland",
-        );
+        let authority = fixture_authority("wonderland");
         let asset_definition = cstring("rose#wonderland");
         let quantity = cstring("15.7500");
         let destination = authority.clone();
@@ -7530,9 +7548,7 @@ mod accel_tests {
     fn swift_parity_mint_hash_matches_fixture() {
         let _reset = ChainDiscriminantReset::new(42);
         let chain = cstring("00000043");
-        let authority = cstring(
-            "ed01201F857FE980524A2EE4FE65E5D346F7AAADCB636A640F1D191D1C6E158607BA1E@wonderland",
-        );
+        let authority = fixture_authority("wonderland");
         let asset_definition = cstring("rose#wonderland");
         let quantity = cstring("42.0100");
         let destination = authority.clone();
@@ -7576,9 +7592,7 @@ mod accel_tests {
     fn swift_parity_burn_hash_matches_fixture() {
         let _reset = ChainDiscriminantReset::new(42);
         let chain = cstring("00000044");
-        let authority = cstring(
-            "ed01201F857FE980524A2EE4FE65E5D346F7AAADCB636A640F1D191D1C6E158607BA1E@wonderland",
-        );
+        let authority = fixture_authority("wonderland");
         let asset_definition = cstring("rose#wonderland");
         let quantity = cstring("5.2500");
         let destination = authority.clone();
@@ -8085,8 +8099,12 @@ mod accel_tests {
         let (authority, private) = sample_account("default", 0);
         let member_a_str = sample_destination("default", 2);
         let member_b_str = sample_destination("default", 3);
-        let member_a: AccountId = member_a_str.to_str().unwrap().parse().unwrap();
-        let member_b: AccountId = member_b_str.to_str().unwrap().parse().unwrap();
+        let member_a = AccountId::parse_encoded(member_a_str.to_str().unwrap())
+            .expect("member A account id")
+            .into_account_id();
+        let member_b = AccountId::parse_encoded(member_b_str.to_str().unwrap())
+            .expect("member B account id")
+            .into_account_id();
         let mut members = BTreeMap::new();
         members.insert(member_a, 2);
         members.insert(member_b, 1);
@@ -8244,7 +8262,7 @@ mod offline_challenge_tests {
     use super::*;
 
     fn account_literal(account: &AccountId) -> String {
-        format!("{}@{}", account.signatory(), account.domain())
+        account.to_string()
     }
 
     fn asset_literal(asset: &AssetId) -> String {
@@ -8257,8 +8275,11 @@ mod offline_challenge_tests {
         let domain_id = DomainId::from_str(domain).expect("domain");
         let account = AccountId::new(domain_id, public_key);
         let literal = account_literal(&account);
+        let parsed = AccountId::parse_encoded(&literal)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("encoded account");
         let cstring = CString::new(literal).expect("account string");
-        (account, cstring)
+        (parsed, cstring)
     }
 
     #[test]
@@ -8315,11 +8336,10 @@ mod offline_challenge_tests {
 
         let decoded: OfflineReceiptChallengePreimage =
             decode_from_bytes(&preimage).expect("decode");
-        let receiver_account: AccountId = receiver_cstr
-            .to_str()
-            .expect("receiver str")
-            .parse()
-            .expect("account id");
+        let receiver_account =
+            AccountId::parse_encoded(receiver_cstr.to_str().expect("receiver str"))
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("account id");
         assert_eq!(decoded.invoice_id, "inv-ffi");
         assert_eq!(decoded.receiver, receiver_account);
         assert_eq!(decoded.asset, asset_id);
@@ -8333,11 +8353,10 @@ mod offline_challenge_tests {
         let expected_client: [u8; 32] = Sha256::digest(expected_hash.as_ref()).into();
         assert_eq!(client_hash, expected_client);
 
-        let controller_again: AccountId = controller_cstr
-            .to_str()
-            .expect("controller str")
-            .parse()
-            .expect("account id");
+        let controller_again =
+            AccountId::parse_encoded(controller_cstr.to_str().expect("controller str"))
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("account id");
         assert_eq!(controller_again, controller_account);
     }
 
@@ -8441,7 +8460,11 @@ mod offline_fastpq_proof_tests {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
         let domain = DomainId::from_str("default").expect("domain");
-        AccountId::new(domain, public_key)
+        let account = AccountId::new(domain, public_key);
+        let literal = account.to_string();
+        AccountId::parse_encoded(&literal)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("encoded account")
     }
 
     fn sample_header(bundle_id: Hash, certificate_id: Hash) -> OfflineProofRequestHeader {
@@ -8458,8 +8481,8 @@ mod offline_fastpq_proof_tests {
         let bundle_id = Hash::new(b"bundle-fastpq");
         let certificate_id = Hash::new(b"cert-fastpq");
         let header = sample_header(bundle_id, certificate_id);
-        let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::from_str("xor#default").expect("asset definition");
+        let asset_definition = AssetDefinitionId::from_str(&format!("xor#{}", owner.domain()))
+            .expect("asset definition");
         let asset_id = AssetId::new(asset_definition, owner);
         let receipt_amounts = vec![Numeric::new(10, 0), Numeric::new(15, 0)];
         let claimed_delta = Numeric::new(25, 0);
@@ -10028,7 +10051,7 @@ mod offline_receipt_challenge_tests {
     }
 
     fn account_literal(account: &AccountId) -> String {
-        format!("{}@{}", account.signatory(), account.domain())
+        account.to_string()
     }
 
     fn asset_literal(asset: &AssetId) -> String {
@@ -11480,7 +11503,10 @@ mod tests {
     #[test]
     fn zk_ballot_public_inputs_rejects_partial_lock_hints() {
         let mut map = JsonMap::new();
-        map.insert("owner".to_owned(), JsonValue::from("alice@wonderland"));
+        map.insert(
+            "owner".to_owned(),
+            JsonValue::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+        );
         let mut value = JsonValue::Object(map);
         assert!(normalize_zk_ballot_public_inputs(&mut value).is_err());
     }
@@ -11502,7 +11528,10 @@ mod tests {
     #[test]
     fn zk_ballot_public_inputs_rejects_invalid_hex() {
         let mut map = JsonMap::new();
-        map.insert("owner".to_owned(), JsonValue::from("alice@wonderland"));
+        map.insert(
+            "owner".to_owned(),
+            JsonValue::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+        );
         map.insert("amount".to_owned(), JsonValue::from("100"));
         map.insert("duration_blocks".to_owned(), JsonValue::from(64u64));
         map.insert("root_hint".to_owned(), JsonValue::from("not-hex"));
@@ -11782,6 +11811,41 @@ mod tests {
         connect_norito_free(ih58_ptr);
         connect_norito_free(compressed_ptr);
         connect_norito_free(compressed_full_ptr);
+
+        let canonical_literal =
+            CString::new(address.canonical_hex().expect("canonical hex")).expect("cstring");
+        let mut canonical_err_ptr: *mut c_uchar = ptr::null_mut();
+        let mut canonical_err_len: c_ulong = 0;
+        let mut canonical_out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut canonical_out_len: c_ulong = 0;
+        let canonical_rc = unsafe {
+            connect_norito_account_address_parse(
+                canonical_literal.as_ptr(),
+                canonical_literal.as_bytes().len() as c_ulong,
+                0,
+                0,
+                &mut canonical_out_ptr,
+                &mut canonical_out_len,
+                &mut detected_format,
+                &mut prefix,
+                &mut canonical_err_ptr,
+                &mut canonical_err_len,
+            )
+        };
+        assert_eq!(
+            canonical_rc, ERR_ACCOUNT_ADDRESS,
+            "canonical hex must be rejected"
+        );
+        assert!(canonical_out_ptr.is_null());
+        let canonical_err_value: JsonValue = unsafe {
+            let bytes = slice::from_raw_parts(canonical_err_ptr, canonical_err_len as usize);
+            norito::json::from_slice(bytes).expect("json")
+        };
+        assert_eq!(
+            canonical_err_value.get("code").and_then(JsonValue::as_str),
+            Some("ERR_UNSUPPORTED_ADDRESS_FORMAT")
+        );
+        connect_norito_free(canonical_err_ptr);
 
         let invalid = CString::new("").expect("empty literal");
         let mut err_out_ptr: *mut c_uchar = ptr::null_mut();

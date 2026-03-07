@@ -32,7 +32,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 אפשרויות:
 
 - `--format compressed (`sora`)` ליציאת `sora...` במקום IH58.
-- `--no-append-domain` להפקת literals ללא domain.
+- `domainless output (default)` להפקת literals ללא domain.
 - `--audit-only` לדילוג על שלב ההמרה.
 - `--allow-errors` להמשך סריקה גם כשיש שורות פגומות (כמו התנהגות CLI).
 
@@ -45,7 +45,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 1. הריצו את הסקריפט ב-job ייעודי והעלו את הפלטים.
 2. חסמו merges כאשר `audit.json` מדווח על Local selectors (`domain.kind = local12`).
    בערך ברירת המחדל `true` (החליפו ל-`false` רק ב-dev/test לאבחון רגרסיות) והוסיפו
-   `iroha tools address normalize --fail-on-warning --only-local` ל-CI כדי שניסיונות
+   `iroha tools address normalize` ל-CI כדי שניסיונות
    רגרסיה ייכשלו לפני production.
 
 לפרטים נוספים, checklists של evidence ו-release-note snippet שניתן להשתמש בו בהכרזת cutover,

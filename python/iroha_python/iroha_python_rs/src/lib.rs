@@ -230,7 +230,8 @@ fn parse_chain_id(value: &str) -> PyResult<ChainId> {
 }
 
 fn parse_account_id(value: &str) -> PyResult<AccountId> {
-    AccountId::from_str(value)
+    AccountId::parse_encoded(value)
+        .map(|parsed| parsed.into_account_id())
         .map_err(|err| PyValueError::new_err(format!("invalid account id: {err}")))
 }
 
@@ -5364,9 +5365,7 @@ impl Instruction {
         account_id: &str,
         metadata: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
-        let account_id: AccountId = account_id.parse().map_err(|err| {
-            PyValueError::new_err(format!("invalid account id `{account_id}`: {err}"))
-        })?;
+        let account_id: AccountId = parse_account_id(account_id)?;
         ensure_ed25519_account(&account_id)?;
         let metadata = py_to_metadata(py, metadata)?;
         let mut new_account = Account::new(account_id.clone());
@@ -5463,11 +5462,7 @@ impl Instruction {
         let asset_id: AssetId = asset_id.parse().map_err(|err| {
             PyValueError::new_err(format!("invalid asset id `{asset_id}`: {err}"))
         })?;
-        let destination: AccountId = destination.parse().map_err(|err| {
-            PyValueError::new_err(format!(
-                "invalid destination account `{destination}`: {err}"
-            ))
-        })?;
+        let destination: AccountId = parse_account_id(destination)?;
         ensure_ed25519_account(&destination)?;
         let quantity = parse_numeric(quantity)?;
         let instruction = Transfer::asset_numeric(asset_id, quantity, destination);

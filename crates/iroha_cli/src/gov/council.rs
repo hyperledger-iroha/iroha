@@ -45,7 +45,7 @@ pub struct PersistCouncilArgs {
     /// Path to JSON file with candidates: [{ `account_id`, variant: Normal|Small, `pk_b64`, `proof_b64` }, ...]
     #[arg(long, value_name = "PATH")]
     pub candidates_file: std::path::PathBuf,
-    /// Authority `AccountId` for signing (e.g., alice@wonderland)
+    /// Authority `AccountId` for signing (IH58 or sora compressed literal).
     #[arg(long)]
     pub authority: String,
     /// Private key (hex) for signing
@@ -58,16 +58,18 @@ impl Run for PersistCouncilArgs {
         let client: Client = context.client_from_config();
         // Read candidates JSON from file
         let s = std::fs::read_to_string(&self.candidates_file)?;
-        let candidates: norito::json::Value = norito::json::from_str(&s)?;
+        let mut candidates: norito::json::Value = norito::json::from_str(&s)?;
         if !candidates.is_array() {
             return Err(eyre!("candidates file must contain a JSON array"));
         }
+        canonicalize_candidate_accounts(&mut candidates, "candidates")?;
+        let authority = canonicalize_account_literal(&self.authority, "--authority")?;
         let body = json_object(vec![
             ("committee_size", json_value(&self.committee_size)?),
             ("alternate_size", json_value(&self.alternate_size)?),
             ("epoch", json_value(&self.epoch)?),
             ("candidates", candidates),
-            ("authority", json_value(&self.authority)?),
+            ("authority", json_value(&authority)?),
             ("private_key", json_value(&self.private_key)?),
         ])?;
         let value = client.post_gov_council_persist_json(&body)?;
@@ -114,7 +116,7 @@ pub struct GenVrfArgs {
     /// Beacon hash hex (32 bytes as 64 hex) to derive the seed (ignored if --seed-hex is provided)
     #[arg(long)]
     pub beacon_hex: Option<String>,
-    /// Account id prefix (final id is `${prefix}-${i}@${domain}`)
+    /// Seed prefix used when deriving deterministic candidate account keys.
     #[arg(long, default_value = "node")]
     pub account_prefix: String,
     /// Domain used in generated account ids
@@ -372,7 +374,7 @@ pub struct DeriveAndPersistArgs {
     /// Path to JSON file with candidates: [{ `account_id`, variant: Normal|Small, `pk_b64`, `proof_b64` }, ...]
     #[arg(long, value_name = "PATH")]
     pub candidates_file: std::path::PathBuf,
-    /// Authority `AccountId` for signing (e.g., alice@wonderland)
+    /// Authority `AccountId` for signing (IH58 or sora compressed literal).
     #[arg(long)]
     pub authority: String,
     /// Private key (hex) for signing
@@ -409,11 +411,12 @@ impl DeriveAndPersistArgs {
     fn load_candidates(&self) -> Result<norito::json::Value> {
         let contents =
             std::fs::read_to_string(&self.candidates_file).wrap_err("read --candidates-file")?;
-        let value: norito::json::Value =
+        let mut value: norito::json::Value =
             norito::json::from_str(&contents).wrap_err("parse candidates JSON")?;
         if !value.is_array() {
             return Err(eyre!("candidates file must contain a JSON array"));
         }
+        canonicalize_candidate_accounts(&mut value, "candidates")?;
         Ok(value)
     }
 
@@ -463,11 +466,12 @@ impl DeriveAndPersistArgs {
         candidates: &norito::json::Value,
         epoch: u64,
     ) -> Result<norito::json::Value> {
+        let authority = canonicalize_account_literal(&self.authority, "--authority")?;
         let mut pairs = vec![
             ("committee_size", json_value(&self.committee_size)?),
             ("epoch", json_value(&epoch)?),
             ("candidates", candidates.clone()),
-            ("authority", json_value(&self.authority)?),
+            ("authority", json_value(&authority)?),
             ("private_key", json_value(&self.private_key)?),
         ];
         if let Some(alternate_size) = self.alternate_size {
@@ -592,13 +596,13 @@ impl Run for CouncilArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ReplaceCouncilArgs {
-    /// Account id of the member to replace (e.g., alice@wonderland)
+    /// Account id of the member to replace (IH58 or sora compressed literal).
     #[arg(long)]
     pub missing: String,
     /// Optional epoch override; defaults to the latest persisted epoch
     #[arg(long)]
     pub epoch: Option<u64>,
-    /// Authority `AccountId` for signing (e.g., alice@wonderland)
+    /// Authority `AccountId` for signing (IH58 or sora compressed literal).
     #[arg(long)]
     pub authority: String,
     /// Private key (hex) for signing
@@ -609,10 +613,12 @@ pub struct ReplaceCouncilArgs {
 impl Run for ReplaceCouncilArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
+        let missing = canonicalize_account_literal(&self.missing, "--missing")?;
+        let authority = canonicalize_account_literal(&self.authority, "--authority")?;
         let body = json_object(vec![
-            ("missing", json_value(&self.missing)?),
+            ("missing", json_value(&missing)?),
             ("epoch", json_value(&self.epoch)?),
-            ("authority", json_value(&self.authority)?),
+            ("authority", json_value(&authority)?),
             ("private_key", json_value(&self.private_key)?),
         ])?;
         let value = client.post_gov_council_replace_json(&body)?;
@@ -647,6 +653,42 @@ pub struct VrfCandidateArg {
     pub proof_b64: String,
 }
 
+fn canonicalize_account_literal(raw: &str, field: &str) -> Result<String> {
+    AccountId::parse_encoded(raw)
+        .map(|parsed| parsed.canonical().to_string())
+        .map_err(|err| eyre!("invalid {field}: {}", err.reason()))
+}
+
+fn canonicalize_account_literal_for_flag(
+    raw: &str,
+    field: &str,
+) -> std::result::Result<String, String> {
+    AccountId::parse_encoded(raw)
+        .map(|parsed| parsed.canonical().to_string())
+        .map_err(|err| format!("invalid {field}: {}", err.reason()))
+}
+
+fn canonicalize_candidate_accounts(value: &mut norito::json::Value, label: &str) -> Result<()> {
+    let entries = value
+        .as_array_mut()
+        .ok_or_else(|| eyre!("{label} must be a JSON array"))?;
+    for (index, entry) in entries.iter_mut().enumerate() {
+        let obj = entry
+            .as_object_mut()
+            .ok_or_else(|| eyre!("{label}[{index}] must be a JSON object"))?;
+        let raw = obj
+            .get("account_id")
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| eyre!("{label}[{index}] missing string field `account_id`"))?;
+        let canonical = canonicalize_account_literal(raw, &format!("{label}[{index}].account_id"))?;
+        obj.insert(
+            "account_id".to_string(),
+            norito::json::Value::String(canonical),
+        );
+    }
+    Ok(())
+}
+
 fn parse_candidate_flag(s: &str) -> Result<VrfCandidateArg, String> {
     // Format: account_id,variant,pk_b64,proof_b64
     let parts: Vec<&str> = s.split(',').collect();
@@ -658,8 +700,9 @@ fn parse_candidate_flag(s: &str) -> Result<VrfCandidateArg, String> {
     if !variant_ok {
         return Err("variant must be 'Normal' or 'Small'".to_string());
     }
+    let account_id = canonicalize_account_literal_for_flag(parts[0].trim(), "account_id")?;
     Ok(VrfCandidateArg {
-        account_id: parts[0].trim().to_string(),
+        account_id,
         variant: if variant == "normal" {
             "Normal".into()
         } else if variant == "small" {
@@ -769,8 +812,9 @@ impl DeriveVrfArgs {
         pk_b64: &str,
         proof_b64: &str,
     ) -> Result<norito::json::Value> {
+        let account_id = canonicalize_account_literal(account_id, "candidate.account_id")?;
         json_object(vec![
-            ("account_id", json_value(account_id)?),
+            ("account_id", json_value(&account_id)?),
             ("variant", json_value(variant)?),
             ("pk_b64", json_value(pk_b64)?),
             ("proof_b64", json_value(proof_b64)?),
@@ -837,9 +881,12 @@ mod tests {
 
     #[test]
     fn parse_candidate_flag_ok() {
-        let s = "alice@wonderland,normal,UEtCQjQ=,UFJPT0Y=";
+        let s = "6cmzPVPXA7A2kgMVibuvWvhcriXC6MKSTArKMVWX3rbMq3HsX29pCwi,normal,UEtCQjQ=,UFJPT0Y=";
         let c = parse_candidate_flag(s).expect("parse ok");
-        assert_eq!(c.account_id, "alice@wonderland");
+        assert_eq!(
+            c.account_id,
+            "6cmzPVPXA7A2kgMVibuvWvhcriXC6MKSTArKMVWX3rbMq3HsX29pCwi"
+        );
         assert_eq!(c.variant, "Normal");
         assert_eq!(c.pk_b64, "UEtCQjQ=");
         assert_eq!(c.proof_b64, "UFJPT0Y=");
@@ -847,10 +894,23 @@ mod tests {
 
     #[test]
     fn parse_candidate_flag_invalid_variant() {
-        let err = parse_candidate_flag("bob@wonderland,Other,pk,proof").unwrap_err();
+        let err = parse_candidate_flag(
+            "6cmzPVPXA7A2kgMVibuvWvhcriXC6MKSTArKMVWX3rbMq3HsX29pCwi,Other,pk,proof",
+        )
+        .unwrap_err();
         assert!(
             err.contains("variant"),
             "expected error about variant, got {err}"
+        );
+    }
+
+    #[test]
+    fn parse_candidate_flag_rejects_legacy_account_literal() {
+        let err = parse_candidate_flag("alice@invalid-domain,Normal,pk,proof")
+            .expect_err("legacy literal must be rejected");
+        assert!(
+            err.contains("invalid account_id"),
+            "expected account_id error, got {err}"
         );
     }
 }

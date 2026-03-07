@@ -198,20 +198,79 @@ function canonicalizeDecodedValue(value) {
   }
   if (typeof value === "string") {
     if (!value.startsWith("hash:") && value.includes("#")) {
-      try {
-        return normalizeAssetId(value, "decoded.assetId");
-      } catch {
-        return value;
-      }
+      return canonicalizeDecodedAssetId(value);
     }
     if (value.includes("@")) {
+      return canonicalizeDecodedAccountId(value);
+    }
+  }
+  return value;
+}
+
+function canonicalizeDecodedAccountId(value) {
+  try {
+    return normalizeAccountId(value, "decoded.accountId");
+  } catch {
+    return canonicalizeDecodedAccountWithDomainSuffix(value);
+  }
+}
+
+function canonicalizeDecodedAssetId(value) {
+  try {
+    return normalizeAssetId(value, "decoded.assetId");
+  } catch {
+    const rewritten = rewriteDecodedAssetAccountSegment(value);
+    if (rewritten !== value) {
       try {
-        return normalizeAccountId(value, "decoded.accountId");
+        return normalizeAssetId(rewritten, "decoded.assetId");
       } catch {
         return value;
       }
     }
+    return value;
   }
+}
+
+function canonicalizeDecodedAccountWithDomainSuffix(value) {
+  const trimmed = value.trim();
+  const at = trimmed.lastIndexOf("@");
+  if (at <= 0 || at >= trimmed.length - 1) {
+    return value;
+  }
+  const identifier = trimmed.slice(0, at);
+  try {
+    const canonical = normalizeAccountId(identifier, "decoded.accountId.identifier");
+    return canonical.includes("@") ? value : canonical;
+  } catch {
+    return value;
+  }
+}
+
+function rewriteDecodedAssetAccountSegment(value) {
+  const separatorIndex = value.indexOf("##");
+  if (separatorIndex !== -1) {
+    const definition = value.slice(0, separatorIndex);
+    const accountPart = value.slice(separatorIndex + 2);
+    if (accountPart.length === 0) {
+      return value;
+    }
+    const rewrittenAccount = canonicalizeDecodedAccountWithDomainSuffix(accountPart);
+    return rewrittenAccount === accountPart
+      ? value
+      : `${definition}##${rewrittenAccount}`;
+  }
+
+  const segments = value.split("#");
+  if (segments.length >= 3) {
+    const accountPart = segments[segments.length - 1];
+    const rewrittenAccount = canonicalizeDecodedAccountWithDomainSuffix(accountPart);
+    if (rewrittenAccount === accountPart) {
+      return value;
+    }
+    segments[segments.length - 1] = rewrittenAccount;
+    return segments.join("#");
+  }
+
   return value;
 }
 

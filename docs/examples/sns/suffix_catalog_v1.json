@@ -7,8 +7,8 @@
       "suffix": ".sora",
       "suffix_id": 1,
       "status": "active",
-      "steward_account": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
-      "fund_splitter_account": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+      "steward_account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+      "fund_splitter_account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
       "payment_asset_id": "xor#sora",
       "referral_cap_bps": 500,
       "min_term_years": 1,
@@ -19,7 +19,7 @@
       "reserved_labels": [
         {
           "label": "treasury",
-          "assigned_to": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+          "assigned_to": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "release_at_ms": null,
           "note": "Protocol reserved"
         }
@@ -49,8 +49,8 @@
       "suffix": ".nexus",
       "suffix_id": 2,
       "status": "paused",
-      "steward_account": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
-      "fund_splitter_account": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+      "steward_account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+      "fund_splitter_account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
       "payment_asset_id": "xor#sora",
       "referral_cap_bps": 300,
       "min_term_years": 1,
@@ -61,13 +61,13 @@
       "reserved_labels": [
         {
           "label": "treasury",
-          "assigned_to": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+          "assigned_to": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "release_at_ms": null,
           "note": "Protocol reserved"
         },
         {
           "label": "guardian",
-          "assigned_to": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+          "assigned_to": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "release_at_ms": null,
           "note": "Guardian controls nexus.* GAR manifests"
         }
@@ -112,8 +112,8 @@
       "suffix": ".dao",
       "suffix_id": 3,
       "status": "revoked",
-      "steward_account": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
-      "fund_splitter_account": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sns",
+      "steward_account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+      "fund_splitter_account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
       "payment_asset_id": "xor#sora",
       "referral_cap_bps": 0,
       "min_term_years": 1,

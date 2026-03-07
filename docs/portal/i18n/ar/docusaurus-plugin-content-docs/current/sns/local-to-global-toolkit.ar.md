@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 الخيارات:
 
 - `--format compressed (`sora`)` لخروج `sora...` بدلات من IH58.
-- `--no-append-domain` لاصدار حرفي بدون نطاق.
+- `domainless output (default)` لاصدار حرفي بدون نطاق.
 - `--audit-only` للتخطي خطوة للتحويل.
 - `--allow-errors` للاستمرار عند ظهور صفوف تالفة (وفقًا لسلوك CLI).
 
@@ -46,7 +46,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 2. حظر المنتجات المدمجة للطلاب `audit.json` عن المحددات المحلية (`domain.kind = local12`).
    على القيمة الافتراضية `true` (قم بالتحويل الى `false` فقط على بيئات dev/test عند
    تشخيصات السماء) واضف
-   `iroha tools address normalize --fail-on-warning --only-local` إلى CI حتى الفشل
+   `iroha tools address normalize` إلى CI حتى الفشل
    منذ اللحظة قبل الوصول الى الإنتاج.
 
 راجع المستند إلى المصدر مشددًا على التفاصيل وقوائم المحامين ومقتطف مذكرة الإصدار

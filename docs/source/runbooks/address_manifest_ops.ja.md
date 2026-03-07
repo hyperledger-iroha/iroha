@@ -94,7 +94,7 @@ address-manifest-<REVISION>/
 
 6. **エントリの健全性。**
    - `global_domain` エントリは `{ "domain": "example", "chain": "sora:nexus:global", "selector": "global" }` を必ず含む。
-   - `local_alias` エントリは Norm v1 の 12 バイト digest を含める（`iroha tools address convert <address-or-account_id> --format json --expect-prefix 753` で確認。JSON 概要は `input_domain` にドメインを反映し、`--append-domain` は `<ih58>@<domain>` 形式の再エンコードを示す）。
+   - `local_alias` エントリは Norm v1 の 12 バイト digest を含める（`iroha tools address convert <address-or-account_id> --format json --expect-prefix 753` で確認。JSON 概要は `input_domain` にドメインを反映し、`legacy  suffix` は `<ih58>@<domain>` 形式の再エンコードを示す）。
    - `tombstone` エントリは退役対象の selector を正確に参照し、`reason_code`、`ticket`、`replaces_sequence` を含める。
 
 7. **フィクスチャ整合性。** 正規ベクトルを再生成し、Local digest

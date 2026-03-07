@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 الخيارات:
 
 - `--format compressed (`sora`)` pour `sora...` pour IH58.
-- `--no-append-domain` لاصدار littéraux بدون نطاق.
+- `domainless output (default)` لاصدار littéraux بدون نطاق.
 - `--audit-only` pour votre téléphone.
 - `--allow-errors` للاستمرار عند ظهور صفوف تالفة (مطابق لسلوك CLI).
 
@@ -46,7 +46,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 2. Utilisez les sélecteurs locaux `audit.json` (`domain.kind = local12`).
    على القيمة الافتراضية `true` (قم byالتحويل الى `false` فقط على بيئات dev/test عند
    تشخيص التراجعات) واضف
-   `iroha tools address normalize --fail-on-warning --only-local` الى CI حتى تفشل
+   `iroha tools address normalize` الى CI حتى تفشل
    محاولات التراجع قبل الوصول الى production.
 
 راجع المستند المصدر لمزيد من التفاصيل وقوائم الادلة et extrait de note de version

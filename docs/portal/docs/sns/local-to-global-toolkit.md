@@ -31,7 +31,6 @@ scripts/address_local_toolkit.sh \
 Options:
 
 - `--format compressed` for `sora…` output instead of IH58.
-- `--no-append-domain` to emit bare literals.
 - `--audit-only` to skip the conversion step.
 - `--allow-errors` to keep scanning when malformed rows appear (matches the CLI behaviour).
 
@@ -42,10 +41,8 @@ Local-8 detections and zero Local-12 collisions for ≥30 days.
 ## CI integration
 
 1. Run the script in a dedicated job and upload its outputs.
-2. Block merges when `audit.json` reports Local selectors (`domain.kind = local12`).
-   at its default `true` value (only override to `false` on dev/test clusters when
-   diagnosing regressions) and add
-   `iroha tools address normalize --fail-on-warning --only-local` to CI so regression
-   attempts fail before hitting production.
+2. Block merges when `audit.json` reports parse errors or Local selectors (`domain.kind = local12`).
+3. You can also run `ci/check_address_normalize.sh` as a lightweight guard: it normalizes fixture
+   rows and fails if audit still reports parse errors or `domain.kind = local12`.
 
 See the source document for more details, sample evidence checklists, and the release-note snippet you can reuse when announcing the cutover to customers.

@@ -48,9 +48,10 @@ async fn vote_tally_handler_returns_finalized_tally() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let eid = "election-alpha".to_string();
-    let owner: AccountId = format!("{ACCOUNT_SIGNATORY}@zkd")
-        .parse()
-        .expect("valid account id");
+    let owner = AccountId::new(
+        "zkd".parse().expect("domain"),
+        ACCOUNT_SIGNATORY.parse().expect("public key"),
+    );
     let owner_domain = owner.domain().clone();
     stx.world
         .executor()

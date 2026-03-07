@@ -153,7 +153,7 @@ payload bit: │version  │ class  │  norm  │ext │
 
 | نوع المحدد | هيكس كانونيكو |
 |---------------|---------------|
-| ضمني بسبب العيب | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| ضمني بسبب العيب | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | الملخص المحلي (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | التسجيل العالمي (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -168,7 +168,7 @@ payload bit: │version  │ class  │  norm  │ext │
    `domain` مع الحرمين `kind`/`warning` ويمثل أي سلطة متناسبة
    عبر إل كامبو `input_domain`. عندما `kind` هو `local12`، يقوم CLI بطباعة واحدة
    يُظهر الإعلان القياسي والسيرة الذاتية JSON نفس الدليل الذي يناسبهم
-   يمكن عرض خطوط أنابيب CI ومجموعات SDK. باسا `--append-domain`
+   يمكن عرض خطوط أنابيب CI ومجموعات SDK. باسا `legacy  suffix`
    أريد أن يتم تحويل الكود إلى `<ih58>@<domain>`.
 2. يمكن لمجموعات SDK إظهار نفس الإعلان/الاستئناف عبر المساعد
    جافا سكريبت:
@@ -198,19 +198,19 @@ payload bit: │version  │ class  │  norm  │ext │
    السير الذاتية canonicos/IH58/comprimidos لكل مدخل، وتسجيل الأخطاء
    تحليل وإعلانات النطاق المحلي. الولايات المتحدة الأمريكية `--allow-errors` مقالب المدقق
    الموروثة التي تحتوي على قاع الأسرة، وتمنع الأتمتة مع
-   `--fail-on-warning` عندما يكون لدى المشغلين قوائم للحظر
+   `strict CI post-check` عندما يكون لدى المشغلين قوائم للحظر
    المحددات المحلية وCI.
 6. عندما تحتاج إلى كتابة خطية, الولايات المتحدة الأمريكية
   من أجل حساب معالجة المحددات المحلية بالولايات المتحدة الأمريكية
   لتصدير ملف CSV `input,status,format,...` لعرض الكودات
   الكتب الكنسية والإعلانات والتحليلات في خطوة واحدة فقط.
    المساعد لا يحذف الملفات محليًا بسبب الخلل، حيث يتم تحويل كل جزء منها إلى مكان آخر
-   بالترميز المطلوب (IH58/comprimido/hex/JSON)، والحفاظ على السيادةالأصلي cuando se usa `--append-domain`. كومبينالو كون `--allow-errors` الفقرة
+   بالترميز المطلوب (IH58/comprimido/hex/JSON)، والحفاظ على السيادةالأصلي cuando se usa `legacy  suffix`. كومبينالو كون `--allow-errors` الفقرة
    قم بالمسح المستمر حتى عندما يحتوي التفريغ على صيغ حرفية سيئة.
 7. يمكن تشغيل CI/lint تلقائيًا `ci/check_address_normalize.sh`,
    ما هي المحددات الإضافية المحلية لـ `fixtures/account/address_vectors.json`،
    يتم التحويل عبر `iroha tools address normalize`، ثم قم بالتشغيل
-   `iroha tools address audit --fail-on-warning` لإظهار أن الإصدارات ليست كذلك
+   `iroha tools address audit` لإظهار أن الإصدارات ليست كذلك
    emiten هضم المحلية.`torii_address_local8_total{endpoint}` جونتو كون
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
 `torii_address_collision_domain_total{endpoint,domain}` والطاولة Grafana
@@ -245,7 +245,7 @@ ADDR-7 يوضح أن `domain_kind="local12"` دائم على مدار الوقت
 ### جزء من ملاحظات التخطيط (النشرة والمستكشف)
 
 قم بتضمين النقطة التالية في مذكرات حفظ البيانات/المستكشف
-نشر القطع:> **الاتجاهات:** انضم إلى المساعد `iroha tools address normalize --only-local --append-domain`
+نشر القطع:> **الاتجاهات:** انضم إلى المساعد `iroha tools address normalize`
 > وقم بالاتصال بـ CI (`ci/check_address_normalize.sh`) لخطوط الأنابيب
 > يمكن للمستكشفين/المستكشفين تحويل المحددات المحلية إلى أشكال
 > Canonicas IH58/comprimidas antes de que Local-8/Local-12 تم حظرها على الشبكة الرئيسية.

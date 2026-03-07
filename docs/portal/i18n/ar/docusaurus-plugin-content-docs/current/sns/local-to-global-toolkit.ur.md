@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 اختیارات:
 
 - `--format compressed` IH58 بجائے `sora...` إخراج .
-- `--no-append-domain` هذه مجرد كلمات حرفية.
+- `domainless output (default)` هذه مجرد كلمات حرفية.
 - تم تحديد خطوة التحويل `--audit-only`.
 - `--allow-errors` يقوم بفحص الصفوف المشوهة ويتم فحصها (سلوك CLI).
 
@@ -45,7 +45,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 ## CI المفقودين1. يتم إنشاء سكربت وظيفة مخصصة ويتم تسجيل المخرجات.
 2. الجب `audit.json` سجل المحددات المحلية (`domain.kind = local12`) يدمج روك دي.
    الافتراضي `true` (تم تحديد انحدارات dev/test في وقت `false`) و
-   `iroha tools address normalize --fail-on-warning --only-local` الذي يشتمل على تقنية CI
+   `iroha tools address normalize` الذي يشتمل على تقنية CI
    إنتاج الانحدارات تک پہنچنے سے پہلے فيل ہوں.
 
 مزيد من التفاصيل، وقوائم التحقق من الأدلة، ومقتطف مذكرة الإصدار للحصول على معلومات مفصلة

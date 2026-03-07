@@ -5723,10 +5723,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
 mod pointer_abi_tests {
     use core::{num::NonZeroU16, str::FromStr};
 
-    use iroha_crypto::{Hash as IrohaHash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair};
     use iroha_data_model::smart_contract::manifest::ContractManifest;
     use iroha_primitives::json::Json;
-    use iroha_test_samples::ALICE_ID;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
     use ivm::{
         axt::{GroupBinding, HandleBudget, HandleSubject, SpendOp},
         syscalls as ivm_sys,
@@ -5754,6 +5754,24 @@ mod pointer_abi_tests {
         let h = IrohaHash::new(payload);
         v.extend_from_slice(h.as_ref());
         v
+    }
+
+    fn fixture_account(label: &str) -> AccountId {
+        match label {
+            "alice" => ALICE_ID.clone(),
+            "bob" => BOB_ID.clone(),
+            "carol" | "charlie" => {
+                let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
+                let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
+                let domain: DomainId = "wonderland".parse().expect("fixture domain id");
+                AccountId::new(domain, public_key)
+            }
+            other => panic!("unsupported fixture account label: {other}"),
+        }
+    }
+
+    fn fixture_account_literal(label: &str) -> String {
+        fixture_account(label).to_string()
     }
 
     #[test]
@@ -5787,7 +5805,7 @@ mod pointer_abi_tests {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000_000);
         // Prepare a valid TLV for AccountId("alice@wonderland") at INPUT_START
-        let acc: AccountId = "alice@wonderland".parse().expect("valid AccountId");
+        let acc: AccountId = fixture_account("alice");
         let payload = norito::to_bytes(&acc).expect("encode account id");
         let tlv = make_tlv(1u16, &payload);
         vm.memory.preload_input(0, &tlv).expect("preload input");
@@ -5835,7 +5853,7 @@ mod pointer_abi_tests {
     fn tlv_decode_invalid_hash_rejected() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000_000);
-        let acc: AccountId = "alice@wonderland".parse().expect("valid AccountId");
+        let acc: AccountId = fixture_account("alice");
         let payload = norito::to_bytes(&acc).expect("encode account id");
         let mut tlv = make_tlv(1u16, &payload);
         // Corrupt one byte of the hash (last byte)
@@ -5992,7 +6010,7 @@ mod pointer_abi_tests {
             max_clock_skew_ms: 1,
             ..Default::default()
         };
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority)
             .with_axt_policy_snapshot(&snapshot)
             .with_axt_timing(timing);
@@ -6033,7 +6051,7 @@ mod pointer_abi_tests {
         };
         let mut current_slot = 9;
         let snapshot = make_policy_snapshot(dsid, manifest_root, current_slot);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
@@ -6107,7 +6125,7 @@ mod pointer_abi_tests {
             }],
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
@@ -6146,7 +6164,7 @@ mod pointer_abi_tests {
         snapshot.entries[0].policy.min_handle_era = 0;
         snapshot.entries[0].policy.min_sub_nonce = 0;
         snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
@@ -6189,7 +6207,7 @@ mod pointer_abi_tests {
             op: SpendOp {
                 kind: "transfer".into(),
                 from: authority.to_string(),
-                to: "bob@wonderland".into(),
+                to: fixture_account_literal("bob"),
                 amount: "5".into(),
             },
         };
@@ -6221,7 +6239,7 @@ mod pointer_abi_tests {
             touches: Vec::new(),
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
@@ -6264,7 +6282,7 @@ mod pointer_abi_tests {
             op: SpendOp {
                 kind: "transfer".into(),
                 from: authority.to_string(),
-                to: "bob@wonderland".into(),
+                to: fixture_account_literal("bob"),
                 amount: "5".into(),
             },
         };
@@ -6296,7 +6314,7 @@ mod pointer_abi_tests {
             touches: Vec::new(),
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
@@ -6338,7 +6356,7 @@ mod pointer_abi_tests {
             op: SpendOp {
                 kind: "transfer".into(),
                 from: authority.to_string(),
-                to: "bob@wonderland".into(),
+                to: fixture_account_literal("bob"),
                 amount: "5".into(),
             },
         };
@@ -6372,7 +6390,7 @@ mod pointer_abi_tests {
         };
         let mut current_slot = 9;
         let snapshot = make_policy_snapshot(dsid, manifest_root, current_slot);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
         let mut host = CoreHost::new(authority)
@@ -6457,7 +6475,7 @@ mod pointer_abi_tests {
         let mut snapshot = make_policy_snapshot(dsid, manifest_root, 12);
         snapshot.entries[0].policy.min_handle_era = 5;
         snapshot.entries[0].policy.min_sub_nonce = 3;
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
         let mut host = CoreHost::new(authority.clone())
@@ -6509,7 +6527,7 @@ mod pointer_abi_tests {
             op: SpendOp {
                 kind: "transfer".into(),
                 from: authority.to_string(),
-                to: "bob@wonderland".into(),
+                to: fixture_account_literal("bob"),
                 amount: "5".into(),
             },
         };
@@ -6562,7 +6580,7 @@ mod pointer_abi_tests {
         snapshot.entries[0].policy.min_handle_era = 5;
         snapshot.entries[0].policy.min_sub_nonce = 2;
         snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone())
             .with_axt_policy_snapshot(&snapshot)
             .with_axt_timing(iroha_config::parameters::actual::NexusAxt::default());
@@ -6576,7 +6594,7 @@ mod pointer_abi_tests {
             op: SpendOp {
                 kind: "transfer".into(),
                 from: authority.to_string(),
-                to: "bob@wonderland".into(),
+                to: fixture_account_literal("bob"),
                 amount: "5".into(),
             },
         };
@@ -6679,7 +6697,7 @@ mod pointer_abi_tests {
             touches: Vec::new(),
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 12);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
@@ -6733,7 +6751,7 @@ mod pointer_abi_tests {
         let dsid = DataSpaceId::new(12);
         let manifest_root = [0x44; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 20);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let digest: [u8; 32] = Hash::new(manifest_root).into();
 
@@ -6764,7 +6782,7 @@ mod pointer_abi_tests {
         let dsid = DataSpaceId::new(21);
         let manifest_root = [0x77; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 15);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let descriptor = axt::AxtDescriptor {
             dsids: vec![dsid],
@@ -6797,7 +6815,7 @@ mod pointer_abi_tests {
         let dsid = DataSpaceId::new(13);
         let manifest_root = [0x55; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 30);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let digest: [u8; 32] = Hash::new(manifest_root).into();
 
@@ -6836,7 +6854,7 @@ mod pointer_abi_tests {
             )
             .expect("non-zero replay retention"),
         };
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority)
             .with_axt_policy_snapshot(&snapshot)
             .with_axt_timing(timing);
@@ -6901,7 +6919,7 @@ mod pointer_abi_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::from_state(authority.clone(), &state);
 
         let handle = AssetHandle {
@@ -6931,7 +6949,7 @@ mod pointer_abi_tests {
             op: SpendOp {
                 kind: "transfer".into(),
                 from: authority.to_string(),
-                to: "bob@wonderland".into(),
+                to: fixture_account_literal("bob"),
                 amount: "5".into(),
             },
         };
@@ -6969,7 +6987,7 @@ mod pointer_abi_tests {
                 .expect("non-zero retention window"),
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, current_slot);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone())
             .with_axt_policy_snapshot(&snapshot)
             .with_axt_timing(timing);
@@ -7002,7 +7020,7 @@ mod pointer_abi_tests {
             op: SpendOp {
                 kind: "transfer".into(),
                 from: authority.to_string(),
-                to: "bob@wonderland".into(),
+                to: fixture_account_literal("bob"),
                 amount: "5".into(),
             },
         };
@@ -7047,7 +7065,7 @@ mod pointer_abi_tests {
                 .expect("non-zero retention window"),
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, current_slot);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone())
             .with_axt_policy_snapshot(&snapshot)
             .with_axt_timing(timing);
@@ -7095,7 +7113,7 @@ mod pointer_abi_tests {
             op: SpendOp {
                 kind: "transfer".into(),
                 from: authority.to_string(),
-                to: "bob@wonderland".into(),
+                to: fixture_account_literal("bob"),
                 amount: "5".into(),
             },
         };
@@ -7161,7 +7179,7 @@ mod pointer_abi_tests {
             state.nexus.get_mut().axt.replay_retention_slots.get()
         };
         state.prune_axt_replay_ledger_for_tests(retention_slots, retention_slots);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::from_state(authority.clone(), &state);
 
         let handle = AssetHandle {
@@ -7191,7 +7209,7 @@ mod pointer_abi_tests {
             op: SpendOp {
                 kind: "transfer".into(),
                 from: authority.to_string(),
-                to: "charlie@wonderland".into(),
+                to: fixture_account_literal("charlie"),
                 amount: "3".into(),
             },
         };
@@ -7365,10 +7383,10 @@ mod pointer_abi_tests {
     #[test]
     fn register_account_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let account: AccountId = fixture_account("bob");
         let ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
         vm.set_register(10, ptr);
 
@@ -7382,10 +7400,10 @@ mod pointer_abi_tests {
     #[test]
     fn unregister_account_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let account: AccountId = fixture_account("bob");
         let ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
         vm.set_register(10, ptr);
 
@@ -7399,7 +7417,7 @@ mod pointer_abi_tests {
     #[test]
     fn register_asset_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
@@ -7422,7 +7440,7 @@ mod pointer_abi_tests {
     #[test]
     fn unregister_asset_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
@@ -7444,7 +7462,7 @@ mod pointer_abi_tests {
     fn register_peer_syscall_queues_instruction() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
         let peer_id = PeerId::new(KeyPair::random().public_key().clone());
@@ -7464,7 +7482,7 @@ mod pointer_abi_tests {
     fn register_peer_syscall_accepts_object_peer() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
         let peer_id = PeerId::new(KeyPair::random().public_key().clone());
@@ -7497,7 +7515,7 @@ mod pointer_abi_tests {
     fn unregister_peer_syscall_queues_instruction() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
         let peer_id = PeerId::new(KeyPair::random().public_key().clone());
@@ -7536,7 +7554,7 @@ mod pointer_abi_tests {
     #[test]
     fn create_role_syscall_queues_instruction_alias() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         assert_create_role_syscall_queues_instruction(authority);
     }
 
@@ -7549,7 +7567,7 @@ mod pointer_abi_tests {
     #[test]
     fn delete_role_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
         let role_name: Name = "auditor".parse().unwrap();
@@ -7566,10 +7584,10 @@ mod pointer_abi_tests {
     #[test]
     fn grant_role_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let account: AccountId = fixture_account("bob");
         let role_name: Name = "auditor".parse().unwrap();
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
         let role_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&role_name));
@@ -7586,10 +7604,10 @@ mod pointer_abi_tests {
     #[test]
     fn revoke_role_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let account: AccountId = fixture_account("bob");
         let role_name: Name = "auditor".parse().unwrap();
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
         let role_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&role_name));
@@ -7606,10 +7624,10 @@ mod pointer_abi_tests {
     #[test]
     fn grant_permission_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let account: AccountId = fixture_account("bob");
         let perm_name: Name = "read_assets".parse().unwrap();
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
         let perm_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&perm_name));
@@ -7629,10 +7647,10 @@ mod pointer_abi_tests {
     #[test]
     fn revoke_permission_syscall_queues_instruction_from_json() {
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let account: AccountId = fixture_account("bob");
         let permission = Permission::new("transfer_asset".to_string(), Json::new(()));
         let perm_json = Json::new(permission.clone());
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
@@ -7651,10 +7669,10 @@ mod pointer_abi_tests {
     fn add_signatory_syscall_queues_instruction() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let account: AccountId = fixture_account("bob");
         let public_key = KeyPair::random().public_key().clone();
         let pk_json = Json::new(public_key.clone());
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
@@ -7673,10 +7691,10 @@ mod pointer_abi_tests {
     fn remove_signatory_syscall_queues_instruction() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let account: AccountId = fixture_account("bob");
         let public_key = KeyPair::random().public_key().clone();
         let pk_json = Json::new(public_key.clone());
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
@@ -7695,10 +7713,10 @@ mod pointer_abi_tests {
     fn remove_signatory_syscall_accepts_object_public_key() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let account: AccountId = fixture_account("bob");
         let public_key = KeyPair::random().public_key().clone();
         let mut key_map = BTreeMap::new();
         key_map.insert(
@@ -7722,10 +7740,10 @@ mod pointer_abi_tests {
     fn set_account_quorum_syscall_queues_instruction() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let account: AccountId = fixture_account("bob");
         let quorum = NonZeroU16::new(2).expect("non-zero quorum");
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
         vm.set_register(10, account_ptr);
@@ -7774,8 +7792,6 @@ mod pointer_abi_tests {
         let mut vm = ivm::IVM::new(1_000);
         let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority.clone());
-        let domain = Domain::new(authority.domain().clone()).build(&authority);
-        let _domain_selector_guard = super::tests::install_domain_selector_resolver(&[domain]);
 
         let trigger_id: TriggerId = "trigger_object".parse().unwrap();
         let action = SpecializedAction::new(
@@ -7820,8 +7836,6 @@ mod pointer_abi_tests {
         let mut vm = ivm::IVM::new(1_000);
         let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority.clone());
-        let domain = Domain::new(authority.domain().clone()).build(&authority);
-        let _domain_selector_guard = super::tests::install_domain_selector_resolver(&[domain]);
 
         let trigger_id: TriggerId = "trigger_object_fallback".parse().unwrap();
         let action = SpecializedAction::new(
@@ -7873,7 +7887,7 @@ mod pointer_abi_tests {
     #[test]
     fn remove_trigger_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
         let name: Name = "drop_me".parse().unwrap();
@@ -7890,7 +7904,7 @@ mod pointer_abi_tests {
     #[test]
     fn set_trigger_enabled_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
         let name: Name = "toggle_me".parse().unwrap();
@@ -7916,7 +7930,7 @@ mod pointer_abi_tests {
     fn mint_asset_syscall_returns_metered_gas() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
         vm.load_program(&ivm::ProgramMetadata::default().encode())
             .expect("load header");
@@ -8037,7 +8051,7 @@ mod pointer_abi_tests {
     fn unknown_syscall_is_rejected_by_policy() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(10_000);
-        let mut host = CoreHost::new("alice@wonderland".parse().unwrap());
+        let mut host = CoreHost::new(fixture_account("alice"));
         // Pick a syscall number outside allowed/known ranges
         let res = host.syscall(0x99, &mut vm);
         assert!(matches!(res, Err(ivm::VMError::UnknownSyscall(0x99))));
@@ -8048,7 +8062,7 @@ mod pointer_abi_tests {
         crate::test_alias::ensure();
         // Build a program that calls SYSCALL_NFT_SET_METADATA and pass a TLV with wrong type for key
         let mut vm = IVM::new(1_000);
-        let owner: AccountId = "alice@wonderland".parse().unwrap();
+        let owner: AccountId = fixture_account("alice");
         vm.set_host(CoreHost::with_accounts(
             owner.clone(),
             Arc::new(vec![owner.clone()]),
@@ -8109,7 +8123,7 @@ mod pointer_abi_tests {
         crate::test_alias::ensure();
         // Build a TLV with wrong version and with wrong hash and ensure validator rejects
         let mut vm = IVM::new(0);
-        let owner: AccountId = "alice@wonderland".parse().unwrap();
+        let owner: AccountId = fixture_account("alice");
         vm.set_host(CoreHost::with_accounts(
             owner.clone(),
             Arc::new(vec![owner.clone()]),
@@ -8169,11 +8183,9 @@ fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeMap,
-        sync::{Arc, LazyLock, Mutex, MutexGuard},
-    };
+    use std::{collections::BTreeMap, sync::Arc};
 
+    use iroha_crypto::{Algorithm, KeyPair};
     #[cfg(not(feature = "fast_dsl"))]
     use iroha_data_model::query::account::prelude::FindAccounts;
     use iroha_data_model::{
@@ -8190,7 +8202,7 @@ mod tests {
             parameters::{FetchSize, ForwardCursor, Pagination, QueryParams, Sorting},
         },
     };
-    use iroha_test_samples::ALICE_ID;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
     use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
     use nonzero_ext::nonzero;
 
@@ -8228,39 +8240,28 @@ mod tests {
         vm.alloc_input_tlv(&tlv).expect("allocate TLV input")
     }
 
-    pub(super) struct DomainSelectorResolverGuard {
-        _lock: MutexGuard<'static, ()>,
-    }
-
-    impl Drop for DomainSelectorResolverGuard {
-        fn drop(&mut self) {
-            iroha_data_model::account::clear_account_domain_selector_resolver();
-        }
-    }
-
-    pub(super) fn install_domain_selector_resolver(
-        domains: &[Domain],
-    ) -> DomainSelectorResolverGuard {
-        static DOMAIN_SELECTOR_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-        let lock = DOMAIN_SELECTOR_GUARD
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut index = BTreeMap::new();
-        for domain in domains {
-            let selector =
-                iroha_data_model::account::AccountDomainSelector::from_domain(domain.id())
-                    .expect("domain selector");
-            if let Some(existing) = index.get(&selector) {
-                assert_eq!(existing, domain.id(), "domain selector collision");
-                continue;
+    fn fixture_account(label: &str) -> AccountId {
+        match label {
+            "alice" => ALICE_ID.clone(),
+            "bob" => BOB_ID.clone(),
+            "carol" | "charlie" => {
+                let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
+                let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
+                let domain: DomainId = "wonderland".parse().expect("fixture domain id");
+                AccountId::new(domain, public_key)
             }
-            index.insert(selector, domain.id().clone());
+            other => panic!("unsupported fixture account label: {other}"),
         }
-        let index = Arc::new(index);
-        iroha_data_model::account::set_account_domain_selector_resolver(Arc::new(
-            move |selector| index.get(selector).cloned(),
-        ));
-        DomainSelectorResolverGuard { _lock: lock }
+    }
+
+    fn fixture_account_in_domain(label: &str, _domain_label: &str) -> AccountId {
+        let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
+        let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
+        let domain: DomainId = iroha_data_model::account::address::default_domain_name()
+            .as_ref()
+            .parse()
+            .expect("default fixture domain id");
+        AccountId::new(domain, public_key)
     }
 
     #[test]
@@ -8270,7 +8271,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let view = state.view();
         let mut host = CoreHostImpl::new(authority);
         host.set_query_state(&view);
@@ -8301,7 +8302,7 @@ mod tests {
     #[test]
     fn get_account_balance_syscall_reads_numeric_asset() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
@@ -8344,12 +8345,12 @@ mod tests {
     #[test]
     fn execute_query_syscall_charges_sorted_queries_by_scanned_items() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
         let accounts = vec![
             Account::new(authority.clone()).build(&authority),
-            Account::new("bob@wonderland".parse().unwrap()).build(&authority),
-            Account::new("carol@wonderland".parse().unwrap()).build(&authority),
+            Account::new(fixture_account("bob")).build(&authority),
+            Account::new(fixture_account("carol")).build(&authority),
         ];
         let world = World::with([domain], accounts, []);
         let kura = Kura::blank_kura_for_testing();
@@ -8422,12 +8423,12 @@ mod tests {
     #[test]
     fn execute_query_syscall_sorted_offset_ignores_offset_penalty() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
         let accounts = vec![
             Account::new(authority.clone()).build(&authority),
-            Account::new("bob@wonderland".parse().unwrap()).build(&authority),
-            Account::new("carol@wonderland".parse().unwrap()).build(&authority),
+            Account::new(fixture_account("bob")).build(&authority),
+            Account::new(fixture_account("carol")).build(&authority),
         ];
         let world = World::with([domain], accounts, []);
         let kura = Kura::blank_kura_for_testing();
@@ -8500,7 +8501,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let view = state.view();
         let mut host = CoreHostImpl::new(authority);
         host.set_query_state(&view);
@@ -8524,7 +8525,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let view = state.view();
         let mut host = CoreHostImpl::new(authority);
         host.set_query_state(&view);
@@ -8548,7 +8549,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let view = state.view();
         let mut host = CoreHostImpl::new(authority);
         host.set_query_state(&view);
@@ -8574,8 +8575,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn subscription_bill_fixed_plan_transfers_and_reschedules() {
         crate::test_alias::ensure();
-        let provider: AccountId = "acme@commerce".parse().unwrap();
-        let subscriber: AccountId = "alice@users".parse().unwrap();
+        let provider = fixture_account_in_domain("acme", "commerce");
+        let subscriber = fixture_account_in_domain("alice", "users");
         let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
         let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
         let period_ms = 1_000_u64;
@@ -8638,7 +8639,6 @@ mod tests {
             Domain::new("pay".parse().unwrap()).build(&provider),
             Domain::new("subscriptions".parse().unwrap()).build(&provider),
         ];
-        let _domain_selector_guard = install_domain_selector_resolver(&domains);
         let accounts = vec![
             Account::new(provider.clone()).build(&provider),
             Account::new(subscriber.clone()).build(&provider),
@@ -8797,8 +8797,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn subscription_record_usage_updates_metadata() {
         crate::test_alias::ensure();
-        let provider: AccountId = "acme@commerce".parse().unwrap();
-        let subscriber: AccountId = "alice@users".parse().unwrap();
+        let provider = fixture_account_in_domain("acme", "commerce");
+        let subscriber = fixture_account_in_domain("alice", "users");
         let plan_id: AssetDefinitionId = "usage_plan#commerce".parse().unwrap();
         let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
         let unit_key: Name = "compute_ms".parse().unwrap();
@@ -8860,7 +8860,6 @@ mod tests {
             Domain::new("pay".parse().unwrap()).build(&provider),
             Domain::new("subscriptions".parse().unwrap()).build(&provider),
         ];
-        let _domain_selector_guard = install_domain_selector_resolver(&domains);
         let accounts = vec![
             Account::new(provider.clone()).build(&provider),
             Account::new(subscriber.clone()).build(&provider),
@@ -8913,8 +8912,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn subscription_bill_failed_reschedules_and_records_invoice() {
         crate::test_alias::ensure();
-        let provider: AccountId = "acme@commerce".parse().unwrap();
-        let subscriber: AccountId = "alice@users".parse().unwrap();
+        let provider = fixture_account_in_domain("acme", "commerce");
+        let subscriber = fixture_account_in_domain("alice", "users");
         let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
         let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
         let period_ms = 1_000_u64;
@@ -8978,7 +8977,6 @@ mod tests {
             Domain::new("pay".parse().unwrap()).build(&provider),
             Domain::new("subscriptions".parse().unwrap()).build(&provider),
         ];
-        let _domain_selector_guard = install_domain_selector_resolver(&domains);
         let accounts = vec![
             Account::new(provider.clone()).build(&provider),
             Account::new(subscriber.clone()).build(&provider),
@@ -9089,8 +9087,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn subscription_bill_suspends_after_max_failures() {
         crate::test_alias::ensure();
-        let provider: AccountId = "acme@commerce".parse().unwrap();
-        let subscriber: AccountId = "alice@users".parse().unwrap();
+        let provider = fixture_account_in_domain("acme", "commerce");
+        let subscriber = fixture_account_in_domain("alice", "users");
         let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
         let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
         let period_ms = 1_000_u64;
@@ -9151,7 +9149,6 @@ mod tests {
             Domain::new("pay".parse().unwrap()).build(&provider),
             Domain::new("subscriptions".parse().unwrap()).build(&provider),
         ];
-        let _domain_selector_guard = install_domain_selector_resolver(&domains);
         let accounts = vec![
             Account::new(provider.clone()).build(&provider),
             Account::new(subscriber.clone()).build(&provider),
@@ -9267,7 +9264,7 @@ mod tests {
 
     #[test]
     fn fastpq_batch_entry_syscall_returns_transfer_gas() {
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
         let mut vm = IVM::new(1_000);
         vm.load_program(&ivm::ProgramMetadata::default().encode())
@@ -9277,7 +9274,7 @@ mod tests {
             .expect("begin batch");
 
         let from = authority.clone();
-        let to: AccountId = "bob@wonderland".parse().unwrap();
+        let to: AccountId = fixture_account("bob");
         let asset_def: AssetDefinitionId = "xor#wonderland".parse().unwrap();
         let amount = 7_u64;
 
@@ -9316,14 +9313,14 @@ mod tests {
 
     #[test]
     fn fastpq_batch_apply_syscall_returns_batch_gas() {
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
         let mut vm = IVM::new(1_000);
         vm.load_program(&ivm::ProgramMetadata::default().encode())
             .expect("load meta");
 
         let from = authority;
-        let to: AccountId = "bob@wonderland".parse().unwrap();
+        let to: AccountId = fixture_account("bob");
         let asset_def: AssetDefinitionId = "xor#wonderland".parse().unwrap();
         let entries = vec![
             TransferAssetBatchEntry::new(from.clone(), to.clone(), asset_def.clone(), 1_u64),
@@ -9407,7 +9404,7 @@ mod tests {
     #[test]
     fn get_authority_allocates_in_input_bump() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
         let mut vm = IVM::new(1_000_000);
         vm.load_program(&ivm::ProgramMetadata::default().encode())
@@ -9469,7 +9466,7 @@ mod tests {
     #[test]
     fn state_syscall_works_without_access_logging() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
         let mut vm = IVM::new(10_000);
 
@@ -9501,7 +9498,7 @@ mod tests {
     #[test]
     fn encode_decode_int_syscalls_roundtrip() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
         let mut vm = IVM::new(10_000);
 
@@ -9521,7 +9518,7 @@ mod tests {
     #[test]
     fn numeric_helper_syscalls_roundtrip_through_codec_host() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
         let mut vm = IVM::new(10_000);
 
@@ -9547,7 +9544,7 @@ mod tests {
     #[test]
     fn state_syscall_logs_access_when_enabled() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority).with_access_logging();
         let mut vm = IVM::new(10_000);
 
@@ -9582,7 +9579,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::from_state(authority, &state);
         let mut vm = IVM::new(10_000);
 
@@ -9647,7 +9644,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::from_state(authority, &state);
         let mut vm = IVM::new(10_000);
 
@@ -9704,7 +9701,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::from_state(authority, &state);
         let mut vm = IVM::new(10_000);
 
@@ -9757,7 +9754,7 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let view = state.view();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
         host.set_halo2_config(&view.zk.halo2);
         host.set_chain_id(&view.chain_id);
@@ -9819,7 +9816,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let host = CoreHost::from_state(authority, &state);
 
         assert_eq!(
@@ -9846,7 +9843,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let header = iroha_data_model::block::BlockHeader::new(
             nonzero_ext::nonzero!(1_u64),
             None,
@@ -9943,7 +9940,7 @@ mod tests {
     #[test]
     fn enforce_zk_envelope_maps_errors_and_ok() {
         crate::test_alias::ensure();
-        let mut host = CoreHost::new("alice@wonderland".parse().unwrap());
+        let mut host = CoreHost::new(fixture_account("alice"));
         host.set_chain_id_bytes(b"chain".to_vec());
         host.set_current_manifest_id(Some("core".to_string()));
 
@@ -9988,7 +9985,7 @@ mod tests {
     #[test]
     fn enforce_zk_envelope_rejects_namespace_and_manifest_replays() {
         crate::test_alias::ensure();
-        let mut host = CoreHost::new("alice@wonderland".parse().unwrap());
+        let mut host = CoreHost::new(fixture_account("alice"));
         host.set_chain_id_bytes(b"chain".to_vec());
         host.set_current_manifest_id(Some("core".to_string()));
 
@@ -10043,7 +10040,7 @@ mod tests {
     #[test]
     fn enforce_zk_envelope_rejects_vk_metadata_mismatch() {
         crate::test_alias::ensure();
-        let mut host = CoreHost::new("alice@wonderland".parse().unwrap());
+        let mut host = CoreHost::new(fixture_account("alice"));
         host.set_chain_id_bytes(b"chain".to_vec());
         host.set_current_manifest_id(Some("core".to_string()));
 
@@ -10092,7 +10089,7 @@ mod tests {
     #[test]
     fn zk_verify_batch_returns_statuses_with_registry_binding() {
         crate::test_alias::ensure();
-        let mut host = CoreHost::new("alice@wonderland".parse().unwrap());
+        let mut host = CoreHost::new(fixture_account("alice"));
         host.set_chain_id_bytes(b"chain".to_vec());
         host.set_current_manifest_id(Some("core".to_string()));
 
@@ -10139,7 +10136,7 @@ mod tests {
         crate::test_alias::ensure();
         // Build a minimal program that calls INPUT_PUBLISH_TLV and then HALT
         let mut vm = IVM::new(10_000);
-        let owner: AccountId = "alice@wonderland".parse().unwrap();
+        let owner: AccountId = fixture_account("alice");
         vm.set_host(CoreHost::with_accounts(
             owner.clone(),
             Arc::new(vec![owner.clone()]),
@@ -10189,7 +10186,7 @@ mod tests {
     #[test]
     fn get_public_input_uses_wsv_registry_and_charges_gas() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let name: Name = "pub_key".parse().unwrap();
         let payload = b"hello".to_vec();
         let tlv = make_tlv(PointerType::Blob as u16, &payload);
@@ -10230,7 +10227,7 @@ mod tests {
     #[test]
     fn get_public_input_uses_programmatic_setters() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let name: Name = "pub_key".parse().unwrap();
         let payload = b"hello".to_vec();
         let tlv = make_tlv(PointerType::Blob as u16, &payload);
@@ -10259,7 +10256,7 @@ mod tests {
     #[test]
     fn get_public_input_exposes_trigger_event_args() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let args = Json::from(norito::json!({
             "kind": "asset_change",
             "amount_i64": 10
@@ -10294,7 +10291,7 @@ mod tests {
     #[test]
     fn get_public_input_missing_name_is_error() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let name: Name = "missing".parse().unwrap();
         let mut host = CoreHost::new(authority);
         let mut vm = IVM::new(10_000);
@@ -10310,7 +10307,7 @@ mod tests {
     #[test]
     fn get_public_input_rejects_registry_type_mismatch() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let name: Name = "pub_key".parse().unwrap();
         let payload = b"hello".to_vec();
         let tlv = make_tlv(PointerType::Blob as u16, &payload);
@@ -10344,7 +10341,7 @@ mod tests {
     #[test]
     fn set_account_detail_rejects_tlv_with_bad_hash() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let key: Name = "cursor".parse().unwrap();
 
         let account_tlv = make_tlv(PointerType::AccountId as u16, &norito_blob(&authority));
@@ -10430,14 +10427,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn pointer_abi_transfer_asset_enqueues_isi() {
         // Prepare Norito-encoded inputs in INPUT region
-        let from: AccountId =
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-                .parse()
-                .unwrap();
-        let to: AccountId =
-            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
-                .parse()
-                .unwrap();
+        let from: AccountId = fixture_account("alice");
+        let to: AccountId = fixture_account("bob");
         let asset_def: AssetDefinitionId = "coin#wonder".parse().unwrap();
         let amount = Numeric::from(1234_u64);
         let from_bytes = norito_blob(&from);
@@ -10527,15 +10518,9 @@ mod tests {
     // builder helpers stabilize across metadata header formats.
     #[test]
     fn nft_mint_enqueues_register_and_transfer() {
-        let authority: AccountId =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                .parse()
-                .unwrap();
+        let authority: AccountId = fixture_account("alice");
         let authority_clone = authority.clone();
-        let owner: AccountId =
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-                .parse()
-                .unwrap();
+        let owner: AccountId = fixture_account("bob");
         let nft_id: NftId = "gold$wonderland".parse().unwrap();
         let nft_tlv = make_tlv(PointerType::NftId as u16, &norito_blob(&nft_id));
         let owner_tlv = make_tlv(PointerType::AccountId as u16, &norito_blob(&owner));
@@ -10595,7 +10580,7 @@ mod tests {
     #[test]
     fn sm3_syscall_records_success_metric() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let message = b"telemetry";
         let tlv = pointer_abi_tests::make_tlv(ivm::PointerType::Blob as u16, message);
 
@@ -10638,7 +10623,7 @@ mod tests {
     #[test]
     fn sm3_syscall_failure_records_failure_metric() {
         crate::test_alias::ensure();
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority: AccountId = fixture_account("alice");
         let message = b"not-a-blob";
         // Encode a TLV with the wrong pointer type to trigger a Norito validation error.
         let tlv = pointer_abi_tests::make_tlv(ivm::PointerType::AccountId as u16, message);

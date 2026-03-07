@@ -43,7 +43,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 اختیارات:
 
 - `--format compressed` IH58 کے بجائے `sora...` output کے لیے۔
-- `--no-append-domain` تاکہ bare literals نکلیں۔
+- `domainless output (default)` تاکہ bare literals نکلیں۔
 - `--audit-only` conversion step چھوڑنے کے لیے۔
 - `--allow-errors` تاکہ malformed rows پر بھی scan جاری رہے (CLI behavior جیسا)۔
 
@@ -56,7 +56,7 @@ change-management ticket کے ساتھ منسلک کریں اور Grafana screen
 1. اسکرپٹ کو dedicated job میں چلائیں اور outputs اپ لوڈ کریں۔
 2. جب `audit.json` Local selectors رپورٹ کرے (`domain.kind = local12`) تو merges روک دیں۔
    default `true` پر رکھیں (صرف dev/test میں regressions کی تشخیص کے وقت `false` کریں) اور
-   `iroha tools address normalize --fail-on-warning --only-local` کو CI میں شامل کریں تاکہ
+   `iroha tools address normalize` کو CI میں شامل کریں تاکہ
    regressions production تک پہنچنے سے پہلے فیل ہوں۔
 
 مزید تفصیلات، evidence checklists، اور release-note snippet کے لیے سورس دستاویز دیکھیں

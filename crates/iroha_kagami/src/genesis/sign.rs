@@ -217,13 +217,12 @@ impl<T: Write> RunArgs<T> for Args {
         let next_consensus_mode = self.next_consensus_mode.map(SumeragiConsensusMode::from);
 
         let mut genesis = RawGenesisTransaction::from_path(&self.genesis_file)?;
-        let consensus_mode = consensus_mode_override
-            .or_else(|| genesis.consensus_mode())
-            .ok_or_else(|| {
-                eyre!(
-                    "genesis manifest missing consensus_mode; pass --consensus-mode or regenerate with `kagami genesis generate --consensus-mode <mode>`"
-                )
-            })?;
+        let manifest_consensus_mode = genesis.consensus_mode().ok_or_else(|| {
+            eyre!(
+                "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode <mode>`"
+            )
+        })?;
+        let consensus_mode = consensus_mode_override.unwrap_or(manifest_consensus_mode);
         let params = genesis.effective_parameters();
         let staged_next_mode = params.sumeragi().next_mode();
         let staged_activation_height = params.sumeragi().mode_activation_height();
@@ -638,6 +637,31 @@ mod tests {
             seed: None,
             algorithm: Algorithm::Ed25519,
             consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        let err = args
+            .run(&mut writer)
+            .expect_err("missing consensus_mode should be rejected");
+        assert!(
+            err.to_string().contains("consensus_mode"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn sign_rejects_missing_consensus_mode_even_with_override() {
+        let args = Args {
+            genesis_file: legacy_genesis_file_missing_consensus_mode(),
+            out_file: None,
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            consensus_mode: Some(ConsensusModeArg::Permissioned),
             next_consensus_mode: None,
             mode_activation_height: None,
         };

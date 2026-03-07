@@ -1,8 +1,8 @@
 {
   "label": "android-hms-demo",
   "certificate_id_hex": "AE3CEE7A42A0091D218A7FF6CC96D29BD6FCBCD070B21F617125074069D3318F",
-  "controller": "34mSYnDgbaJM58rbLoif4Tkp7G5jowHzX2wpqErt5uNjSaXGjsQoTGzsyFsSZwxLQRwJhJgfu",
-  "allowance_asset": "jpy#sora#34mSYnDgbaJM58rbLoif4Tkp7G5jowHzX2wpqErt5uNjSaXGjsQoTGzsyFsSZwxLQRwJhJgfu",
+  "controller": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+  "allowance_asset": "jpy#sora#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
   "allowance_amount": "90",
   "commitment_hex": "1224573F290A69CC4DEB201F4ABAF2C5C8AA0A2BD8515CFAC5FC306D4E06C365",
   "blinding_hex": "4444444444444444444444444444444444444444444444444444444444444444",

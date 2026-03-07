@@ -283,7 +283,7 @@ async fn transactions_endpoint_accepts_public_key_segments() {
 async fn invalid_account_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorabaddigest";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
         .reason();
     let before = metrics
@@ -318,7 +318,7 @@ async fn invalid_account_segments_increment_metric() {
 async fn local8_segments_increment_invalid_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sn1short";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("short Local-8 literal must fail to parse")
         .reason();
     let before_invalid = metrics
@@ -401,7 +401,7 @@ async fn transactions_query_endpoint_rejects_invalid_account_segment() {
 async fn transactions_query_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorabaddigest";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
         .reason();
     let before = metrics
@@ -488,7 +488,7 @@ async fn transactions_query_rejects_checksum_mismatch() {
 async fn transactions_query_placeholder_literal_rejected_without_shim() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "ignored@wonderland";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("placeholder literal should fail checksum validation")
         .reason();
     let counter = metrics
@@ -632,7 +632,7 @@ async fn assets_endpoint_rejects_invalid_segment() {
 async fn assets_endpoint_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorabaddigest";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
         .reason();
     let before = metrics
@@ -728,7 +728,7 @@ async fn assets_query_endpoint_accepts_encoded_account_segments() {
 async fn assets_query_endpoint_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorabaddigest";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
         .reason();
     let before = metrics
@@ -853,7 +853,7 @@ async fn permissions_endpoint_accepts_default_domain_without_suffix() {
 async fn permissions_endpoint_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorabaddigest";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
         .reason();
     let before = metrics
@@ -915,7 +915,7 @@ async fn explorer_domains_query_accepts_encoded_account_params() {
 async fn explorer_domains_query_invalid_account_param_records_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorainvalid";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
         .reason();
     let context = "/v1/explorer/domains?owned_by";
@@ -978,7 +978,7 @@ async fn explorer_account_detail_accepts_encoded_account_segments() {
 async fn explorer_account_detail_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorainvalid";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
         .reason();
     let context = "/v1/explorer/accounts/{account_id}";
@@ -1539,7 +1539,7 @@ async fn repo_agreements_query_filter_accepts_default_domain_literals() {
 async fn repo_agreements_query_filter_rejects_invalid_literal() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorabaddigest";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail")
         .reason();
     let counter = metrics
@@ -1572,7 +1572,7 @@ async fn repo_agreements_query_filter_rejects_invalid_literal() {
 async fn repo_agreements_query_filter_rejects_local8_literal() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sn1short";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail")
         .reason();
     let invalid_counter = metrics
@@ -2291,7 +2291,7 @@ async fn offline_revocations_endpoint_accepts_default_domain_filter_literals() {
 async fn offline_revocations_endpoint_filter_rejects_invalid_literal() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorabaddigest";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
         .reason();
     let counter = metrics
@@ -2433,7 +2433,7 @@ async fn offline_revocations_query_filter_accepts_default_domain_literals() {
 async fn offline_revocations_query_filter_rejects_invalid_literal() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorabaddigest";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail")
         .reason();
     let counter = metrics
@@ -2466,7 +2466,7 @@ async fn offline_revocations_query_filter_rejects_invalid_literal() {
 async fn offline_revocations_query_filter_rejects_local8_literal() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sn1short";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail")
         .reason();
     let invalid_counter = metrics
@@ -2582,7 +2582,7 @@ async fn kaigi_relay_detail_rejects_invalid_segment() {
 async fn kaigi_relay_detail_invalid_segment_increments_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorainvalid";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
         .reason();
     let counter = metrics
@@ -2608,7 +2608,7 @@ async fn kaigi_relay_detail_invalid_segment_increments_metric() {
 async fn kaigi_relay_detail_local8_segment_increments_invalid_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sn1short";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
         .reason();
     let invalid_counter = metrics
@@ -2793,7 +2793,7 @@ async fn nexus_public_lane_stake_accepts_public_key_validator() {
 async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorainvalid";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail")
         .reason();
     let counter = metrics
@@ -2821,7 +2821,7 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
 async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sn1short";
-    let reason = AccountId::parse(literal)
+    let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail")
         .reason();
     let invalid_counter = metrics
