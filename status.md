@@ -1,6 +1,22 @@
 # Status
 
-Last update: 2026-03-04
+Last update: 2026-03-06
+- Compile-time optimization continuation for unchanged runtime/ZK behavior (`Cargo.toml`, `crates/iroha_core/Cargo.toml`, `crates/iroha_torii/Cargo.toml`, `crates/iroha_torii/src/{lib.rs,sns.rs}`, `integration_tests/Cargo.toml`): removed additional unused `iroha_core` direct edges (`sha3`, `async-trait`, `futures`, `itoa`, `zeroize`, `crc64fast`), made `halo2-ecc` optional and kept `zk-halo2-jemallocator` wiring intact, stopped forcing Torii `ws_integration_tests` for `irohad` builds, removed `ws_integration_tests` from Torii crate defaults (kept as explicit opt-in where needed), moved Torii `humantime` to `dev-dependencies`, and made `axum::debug_handler` checks opt-in via new `iroha_torii/axum-debug-handler` (default-off) while dropping always-on Axum `macros`.
+- Validation:
+  - `scripts/cargo_fast.sh -- check -p irohad` (ok).
+  - `scripts/cargo_fast.sh -- check -p integration_tests` (ok).
+  - `scripts/cargo_fast.sh -- check -p iroha_core --features zk-halo2-jemallocator` (ok).
+  - `scripts/cargo_fast.sh -- check -p iroha_torii --features axum-debug-handler` (ok).
+  - `scripts/cargo_fast.sh -- check -p iroha_torii --test sorafs_discovery` (fails on pre-existing `world_mut_for_testing` method absence in `sorafs_discovery.rs`, unrelated to these Cargo/feature edits).
+  - Cold timing sweep (`/usr/bin/time -p scripts/cargo_fast.sh --no-sccache --linker off --target-dir ... -- check -q -p irohad`):
+    - baseline before this continuation: `real 151.51s` (`/tmp/iroha_final_current`)
+    - after Torii WS test-feature unforcing: `real 150.84s` (`/tmp/iroha_after_ws`)
+    - after debug-handler opt-in change: `real 146.70s` best repeat (`/tmp/iroha_after_debughandler2`; one noisy run at `159.77s` on `/tmp/iroha_after_debughandler`)
+    - net best-repeat improvement vs baseline in this continuation: ~`3.2%` faster cold `irohad` check.
+  - Torii-default feature timing check:
+    - `cargo check -q -p iroha_torii` with current defaults (no `ws_integration_tests`): `real 143.73s` (`/tmp/iroha_torii_no_ws_default`) and `real 158.24s` (`/tmp/iroha_torii_no_ws_default_r2`)
+    - same check with `--features ws_integration_tests` (old-default equivalent): `real 151.11s` (`/tmp/iroha_torii_with_ws_default_sim`) and `real 152.23s` (`/tmp/iroha_torii_with_ws_default_sim_r2`)
+    - high host variance observed; median-of-2 suggests a small improvement (~`0.5%`) with the new default feature set.
 - Compile-time optimization follow-up for unchanged runtime feature behavior (`Cargo.toml`, `crates/iroha_core/Cargo.toml`, `crates/iroha_core/src/block_sync.rs`, `crates/iroha_torii/Cargo.toml`, `crates/{iroha_config,iroha_js_host,iroha_torii_shared}/Cargo.toml`): removed test-only feature forcing from normal Torii/Core builds (`iroha_core` default no longer includes `iroha-core-tests`; Torii no longer enables `zk-tests` by default or via workspace dependency), retained runtime ZK defaults (`zk-halo2`, `zk-halo2-ipa`), removed additional unused direct edges (`iroha_config`: `json5`, `displaydoc`, `derive_more`, `iroha_schema`; `iroha_js_host`: `futures`, `httpmock`; `iroha_torii_shared`: `iroha_primitives`), and dropped unused Axum features `multipart`/`original-uri` in Torii. Updated `iroha_core/src/block_sync.rs` imports with feature-gated `StateReadOnly`/`StateView` to keep default builds warning-clean after feature tightening.
 - Validation:
   - `scripts/cargo_fast.sh -- check -p iroha_torii -p irohad` (ok, multiple passes).

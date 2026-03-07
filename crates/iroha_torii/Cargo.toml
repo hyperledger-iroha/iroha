@@ -23,7 +23,6 @@ workspace = true
 default = [
     "app_api",
     "transparent_api",
-    "ws_integration_tests",
     "connect",
     "push",
     "circuit-params",
@@ -31,6 +30,9 @@ default = [
     "zk-halo2-ipa",
     "ipa-commitment"
 ]
+# Enable `#[axum::debug_handler]` compile-time route signature checks.
+# Off by default to reduce macro expansion overhead in normal builds.
+axum-debug-handler = ["axum/macros"]
 # Enables Telemetry (i.e. Status, Metrics, and API Version) endpoints
 telemetry = ["iroha_telemetry", "iroha_core/telemetry", "dep:prometheus"]
 # Enables profiling endpoint
@@ -55,8 +57,7 @@ app_api_wss = ["dep:tokio-tungstenite"]
 push = ["app_api"]
 ## Experimental: scaffold for CommittedTransaction predicate atoms mapping.
 tx_predicates = []
-## Enable WebSocket integration tests (requires tokio-tungstenite). On by default; disable with
-## `--no-default-features --features app_api,transparent_api`.
+## Enable WebSocket integration tests (requires tokio-tungstenite). Opt-in.
 ws_integration_tests = ["app_api_wss"]
 ## Governance VRF-backed council derivation (app API). Optional.
 gov_vrf = []
@@ -105,7 +106,7 @@ prometheus = { workspace = true, optional = true }
 thiserror = { workspace = true }
 displaydoc = { workspace = true }
 futures = { workspace = true, features = ["std", "async-await"] }
-axum = { workspace = true, features = ["ws", "query", "json", "tokio", "http1", "macros"] }
+axum = { workspace = true, features = ["ws", "query", "json", "tokio", "http1"] }
 tower-http = { version = "0.6.6", features = ["trace", "timeout"] }
 tower = "0.5.2"
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
@@ -131,7 +132,6 @@ tempfile = { workspace = true }
 mv = { workspace = true }
 dashmap = { workspace = true }
 hyper = { version = "1.7.0", default-features = false, features = ["http1", "client", "server" ] }
-humantime = { workspace = true }
 http-body-util = { workspace = true }
 http = { workspace = true }
 hyper-rustls = { version = "0.27.7", default-features = false, features = ["http1", "tls12"], optional = true }
@@ -156,6 +156,7 @@ ivm = { path = "../ivm" }
 iroha_telemetry = { workspace = true }
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }
 iroha_test_samples = { path = "../iroha_test_samples" }
+humantime = { workspace = true }
 
 [[bench]]
 name = "status_tail"

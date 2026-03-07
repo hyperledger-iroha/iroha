@@ -722,7 +722,7 @@ fn record_registrar_status<T>(app: &SharedAppState, suffix: &str, outcome: &Resu
 }
 
 /// Handle `POST /v1/sns/registrations`.
-#[axum::debug_handler(state = SharedAppState)]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler(state = SharedAppState))]
 pub async fn handle_register(
     State(app): State<SharedAppState>,
     crate::JsonOnly(request): crate::JsonOnly<RegisterNameRequestV1>,

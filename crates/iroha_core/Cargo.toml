@@ -97,7 +97,7 @@ iroha-core-tests = []
 # This forwards to `iroha_crypto/bls` and compiles the BLS path in `block.rs` guarded by `#[cfg(feature = "bls")]`.
 bls = ["iroha_crypto/bls", "iroha_data_model/bls"]
 bls-multi-pairing = ["iroha_crypto/bls-multi-pairing"]
-zk-halo2-jemallocator = ["halo2-ecc/jemallocator"]
+zk-halo2-jemallocator = ["dep:halo2-ecc", "halo2-ecc/jemallocator"]
 goldilocks_backend = ["iroha_zkp_halo2/goldilocks_backend", "ivm/goldilocks_backend"]
 
 # Consensus mode (compile-time). Exactly one should be enabled in a given build.
@@ -134,25 +134,19 @@ sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 settlement_router = { path = "../settlement_router" }
 tracing = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false }
-sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
 rayon = { workspace = true }
 base64 = { workspace = true }
 rust_decimal = { workspace = true }
-crc64fast = "1.1"
 http = "1.3.1"
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore"] }
 halo2_gadgets = { version = "0.3.1", optional = true }
-halo2-base = { version = "0.5.1" }
-halo2-ecc = { version = "0.5.1", default-features = false, features = ["halo2-axiom", "display"] }
+halo2-ecc = { version = "0.5.1", optional = true, default-features = false, features = ["halo2-axiom", "display"] }
 ff = "0.13.1"
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
-zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 kaigi_zk = { path = "../kaigi_zk", optional = true }
 
-async-trait = { workspace = true }
 dashmap = { workspace = true }
 eyre = { workspace = true }
-futures = { workspace = true, features = ["std", "async-await"] }
 rand = { workspace = true }
 rand_core_06 = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt", "io-util", "rt-multi-thread", "macros", "fs"] }
@@ -163,7 +157,6 @@ parking_lot = { workspace = true, features = ["deadlock_detection"] }
 derive_more = { workspace = true }
 nonzero_ext = { workspace = true }
 hex = { workspace = true }
-itoa = "1.0.15"
 blake3 = "1.8.2"
 curve25519-dalek = "4.1.3"
 blake2 = { workspace = true }

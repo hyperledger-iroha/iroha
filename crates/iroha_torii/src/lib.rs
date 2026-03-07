@@ -176,7 +176,6 @@ use std::{
 use axum::{
     Router,
     body::{Body, Bytes},
-    debug_handler,
     extract::{
         DefaultBodyLimit, Extension, State, WebSocketUpgrade,
         connect_info::IntoMakeServiceWithConnectInfo,
@@ -2727,7 +2726,7 @@ pub async fn handle_v1_zk_verify_batch(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_accounts_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -2746,7 +2745,7 @@ async fn handler_accounts_list(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_accounts_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -2776,7 +2775,7 @@ async fn handler_accounts_query(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_accounts_resolve(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -2804,7 +2803,7 @@ async fn handler_accounts_resolve(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_accounts_onboard(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -2837,7 +2836,7 @@ struct AccountsPortfolioQuery {
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_accounts_portfolio(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -2923,7 +2922,7 @@ mod nexus_lane_boundary_tests {
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_nexus_public_lane_validators(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -2965,7 +2964,7 @@ async fn handler_nexus_public_lane_validators(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_nexus_public_lane_stake(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3004,7 +3003,7 @@ async fn handler_nexus_public_lane_stake(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_nexus_public_lane_rewards(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3043,7 +3042,7 @@ async fn handler_nexus_public_lane_rewards(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_nexus_dataspaces_account_summary(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3087,7 +3086,7 @@ async fn handler_nexus_dataspaces_account_summary(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_space_directory_bindings(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3125,7 +3124,7 @@ async fn handler_space_directory_bindings(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_space_directory_manifests(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3163,7 +3162,7 @@ async fn handler_space_directory_manifests(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_space_directory_manifest_publish(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3204,7 +3203,7 @@ async fn handler_space_directory_manifest_publish(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_space_directory_manifest_revoke(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3245,7 +3244,7 @@ async fn handler_space_directory_manifest_revoke(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_repo_agreements(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3268,7 +3267,7 @@ async fn handler_repo_agreements(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_repo_agreements_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3298,7 +3297,7 @@ async fn handler_repo_agreements_query(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_allowances_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3322,7 +3321,7 @@ async fn handler_offline_allowances_list(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_allowances_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3352,7 +3351,7 @@ async fn handler_offline_allowances_query(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_certificates_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3389,7 +3388,7 @@ async fn handler_offline_certificates_query(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_allowances_issue(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3423,7 +3422,7 @@ async fn handler_offline_allowances_issue(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_certificates_issue(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3460,7 +3459,7 @@ async fn handler_offline_certificates_issue(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_build_claims_issue(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3497,7 +3496,7 @@ async fn handler_offline_build_claims_issue(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_allowance_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3532,7 +3531,7 @@ async fn handler_offline_allowance_get(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_certificates_renew_issue(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3572,7 +3571,7 @@ async fn handler_offline_certificates_renew_issue(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_allowances_renew(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3616,7 +3615,7 @@ async fn handler_offline_allowances_renew(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_certificates_revoke(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3657,7 +3656,7 @@ async fn handler_offline_certificates_revoke(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_settlements_submit(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3693,7 +3692,7 @@ async fn handler_offline_settlements_submit(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_spend_receipts_submit(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3723,7 +3722,7 @@ async fn handler_offline_spend_receipts_submit(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_state(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3740,7 +3739,7 @@ async fn handler_offline_state(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_revocations_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3764,7 +3763,7 @@ async fn handler_offline_revocations_list(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_revocations_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3801,7 +3800,7 @@ async fn handler_offline_revocations_query(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_summaries_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3824,7 +3823,7 @@ async fn handler_offline_summaries_list(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_summaries_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3854,7 +3853,7 @@ async fn handler_offline_summaries_query(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_receipts_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3877,7 +3876,7 @@ async fn handler_offline_receipts_list(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_receipts_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3907,7 +3906,7 @@ async fn handler_offline_receipts_query(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_transfers_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3930,7 +3929,7 @@ async fn handler_offline_transfers_list(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_transfer_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3968,7 +3967,7 @@ async fn handler_offline_transfer_get(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_transfers_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3998,7 +3997,7 @@ async fn handler_offline_transfers_query(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_transfer_proof(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
@@ -4039,7 +4038,7 @@ async fn handler_offline_transfer_proof(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_bundle_proof_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4074,7 +4073,7 @@ async fn handler_offline_bundle_proof_status(
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_offline_rejections(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4252,7 +4251,7 @@ fn parse_nft_id(raw: &str) -> Result<NftId, Error> {
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_accounts_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4279,7 +4278,7 @@ async fn handler_explorer_accounts_list(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_domains_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4305,7 +4304,7 @@ async fn handler_explorer_domains_list(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_asset_definitions_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4337,7 +4336,7 @@ async fn handler_explorer_asset_definitions_list(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_assets_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4380,7 +4379,7 @@ async fn handler_explorer_assets_list(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_nfts_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4411,7 +4410,7 @@ async fn handler_explorer_nfts_list(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_blocks_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4426,7 +4425,7 @@ async fn handler_explorer_blocks_list(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_transactions_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4478,7 +4477,7 @@ async fn handler_explorer_transactions_list(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_instructions_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4559,7 +4558,7 @@ async fn handler_explorer_instructions_list(
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_metrics(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4573,7 +4572,7 @@ async fn handler_explorer_metrics(
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_telemetry_peers_info(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4587,7 +4586,7 @@ async fn handler_telemetry_peers_info(
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_telemetry_propagation(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4601,7 +4600,7 @@ async fn handler_telemetry_propagation(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_account_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4617,7 +4616,7 @@ async fn handler_explorer_account_detail(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_account_qr(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4641,7 +4640,7 @@ async fn handler_explorer_account_qr(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_domain_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4656,7 +4655,7 @@ async fn handler_explorer_domain_detail(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_asset_definition_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4671,7 +4670,7 @@ async fn handler_explorer_asset_definition_detail(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_asset_definition_econometrics(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4693,7 +4692,7 @@ async fn handler_explorer_asset_definition_econometrics(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_asset_definition_snapshot(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4714,7 +4713,7 @@ async fn handler_explorer_asset_definition_snapshot(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_asset_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4729,7 +4728,7 @@ async fn handler_explorer_asset_detail(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_nft_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4744,7 +4743,7 @@ async fn handler_explorer_nft_detail(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_block_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4759,7 +4758,7 @@ async fn handler_explorer_block_detail(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_transaction_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4781,7 +4780,7 @@ async fn handler_explorer_transaction_detail(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_explorer_instruction_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4997,7 +4996,7 @@ async fn handler_nfts_list(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
+#[cfg_attr(feature = "axum-debug-handler", axum::debug_handler)]
 async fn handler_nfts_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,

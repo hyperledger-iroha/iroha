@@ -25,7 +25,7 @@ iroha_test_network = { workspace = true }
 reed-solomon-erasure = { version = "6", default-features = false, features = ["std"], optional = true }
 iroha_data_model = { workspace = true, features = ["http", "fast_dsl", "governance", "json"] }
 iroha_crypto = { workspace = true }
-iroha_torii = { workspace = true }
+iroha_torii = { workspace = true, features = ["ws_integration_tests"] }
 norito = { workspace = true }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_manifest = { workspace = true }
