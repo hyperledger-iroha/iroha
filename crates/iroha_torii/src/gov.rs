@@ -2802,7 +2802,7 @@ mod tests {
     #[test]
     fn parse_candidates_rejects_invalid_account_id_literal() {
         let candidates = vec![VrfCandidateDto {
-            account_id: "alice@wonderland".to_string(),
+            account_id: "not-an-ih58@invalid-domain".to_string(),
             variant: "Normal".to_string(),
             pk_b64: "AQ==".to_string(),
             proof_b64: "AQ==".to_string(),
@@ -2910,10 +2910,12 @@ mod tests {
             );
             let enact = Permission::new("CanEnactGovernance".to_string(), norito::json!({}));
             let mut world_block = world.block();
-            #[cfg(feature = "telemetry")]
-            let mut world_tx = world_block.trasaction(None, LaneConfig::default(), 0);
-            #[cfg(not(feature = "telemetry"))]
-            let mut world_tx = world_block.trasaction(LaneConfig::default(), 0);
+            let mut world_tx = world_block.trasaction(
+                #[cfg(feature = "telemetry")]
+                None,
+                LaneConfig::default(),
+                0,
+            );
             let _ = world_tx.add_account_permission(&authority, propose);
             let _ = world_tx.add_account_permission(&authority, ballot);
             let _ = world_tx.add_account_permission(&authority, enact);

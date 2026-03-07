@@ -464,7 +464,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         }
     }
     if let Some(rest) = access_key.strip_prefix("asset:")
-        && let Ok(id) = iroha_data_model::asset::AssetId::from_str(rest)
+        && let Ok(id) = iroha_data_model::asset::AssetId::parse_encoded(rest)
     {
         let pre = state_block.world.assets().get(&id).map(|v| &**v);
         record_read_asset(&id, pre);

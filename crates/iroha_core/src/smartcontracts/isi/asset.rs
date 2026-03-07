@@ -623,7 +623,7 @@ pub mod query {
                     }
                 }
                 "id" => {
-                    if let Ok(asset_id) = raw.parse::<AssetId>() {
+                    if let Ok(asset_id) = AssetId::parse_encoded(raw) {
                         self.accounts.insert(asset_id.account().clone());
                         self.definitions.insert(asset_id.definition().clone());
                         self.domains.insert(asset_id.account().domain().clone());

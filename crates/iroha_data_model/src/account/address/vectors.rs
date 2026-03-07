@@ -723,8 +723,8 @@ impl ErrorHarness {
 
     fn unsupported_alias_literal() -> ErrorVector {
         let alias_literal = "alice@wonderland";
-        let err =
-            AccountAddress::parse_any(alias_literal, None).expect_err("alias literal must fail");
+        let err = AccountAddress::parse_encoded(alias_literal, None)
+            .expect_err("alias literal must fail");
 
         ErrorVector {
             label: "unsupported_alias_literal",
@@ -1063,7 +1063,7 @@ mod tests {
             let address = AccountAddress::from_account_id(&account)
                 .expect("account must encode into AccountAddress");
             let compressed = address.to_compressed_sora().expect("compressed encoding succeeds");
-            let (decoded, format) = AccountAddress::parse_any(&compressed, None).expect("parse compressed value succeeds");
+            let (decoded, format) = AccountAddress::parse_encoded(&compressed, None).expect("parse compressed value succeeds");
             prop_assert_eq!(format, AccountAddressFormat::Compressed);
             prop_assert_eq!(
                 decoded.canonical_bytes().expect("decoded canonical bytes"),

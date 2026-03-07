@@ -154,7 +154,7 @@ fn extract_account_transaction_authorities(value: &norito::json::Value) -> Vec<S
 
 fn assert_authorities_are_ih58(authorities: &[String]) -> Result<()> {
     for literal in authorities {
-        let (_, format) = AccountAddress::parse_any(literal, None)
+        let (_, format) = AccountAddress::parse_encoded(literal, None)
             .wrap_err_with(|| format!("authority {literal} should parse as account address"))?;
         if !matches!(format, AccountAddressFormat::IH58 { .. }) {
             return Err(eyre!(
@@ -1028,10 +1028,10 @@ async fn account_path_endpoints_reject_local8_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn account_path_endpoints_accept_public_key_literals() -> Result<()> {
+async fn account_path_endpoints_reject_public_key_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(account_path_endpoints_accept_public_key_literals),
+        stringify!(account_path_endpoints_reject_public_key_literals),
     )
     .await?
     else {
@@ -1040,6 +1040,10 @@ async fn account_path_endpoints_accept_public_key_literals() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let literal = public_key_literal();
+    let reason = AccountId::parse_encoded(&literal)
+        .expect_err("public-key@domain literal must fail strict parsing")
+        .reason()
+        .to_string();
     let http = http_client();
     let surfaces: [SurfaceSpec; 3] = [
         (&["assets"], &[("limit", "4")]),
@@ -1060,10 +1064,15 @@ async fn account_path_endpoints_accept_public_key_literals() -> Result<()> {
             .header("Accept", "application/json")
             .send()
             .await?;
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "public-key@domain literal should be rejected for {url}"
+        );
+        let body = resp.text().await.unwrap_or_default();
         assert!(
-            resp.status().is_success(),
-            "public-key literal should be accepted for {url}, got {}",
-            resp.status()
+            body.contains(&reason),
+            "response body should mention {reason}, got {body}"
         );
     }
 
@@ -1867,10 +1876,10 @@ async fn accounts_query_rejects_local8_filter_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn accounts_query_accepts_public_key_filter_literals() -> Result<()> {
+async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_query_accepts_public_key_filter_literals),
+        stringify!(accounts_query_rejects_public_key_filter_literals),
     )
     .await?
     else {
@@ -1879,6 +1888,10 @@ async fn accounts_query_accepts_public_key_filter_literals() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let literal = public_key_literal();
+    let reason = AccountId::parse_encoded(&literal)
+        .expect_err("public-key@domain literal must fail strict parsing")
+        .reason()
+        .to_string();
     let body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
@@ -1895,17 +1908,15 @@ async fn accounts_query_accepts_public_key_filter_literals() -> Result<()> {
         .body(body)
         .send()
         .await?;
-    assert!(
-        resp.status().is_success(),
-        "public-key literal in filter should be accepted, got {}",
-        resp.status()
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "public-key@domain literal in filter should be rejected"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let ids = extract_account_ids(&parsed);
-    let expected = ALICE_ID.to_string();
+    let body = resp.text().await.unwrap_or_default();
     assert!(
-        ids.iter().any(|id| id == &expected),
-        "public-key literal should resolve to {expected}, got {ids:?}"
+        body.contains(&reason),
+        "response body should mention {reason}, got {body}"
     );
 
     Ok(())

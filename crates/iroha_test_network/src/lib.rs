@@ -4757,9 +4757,15 @@ impl NetworkBuilder {
             let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
             let stake_asset_id: AssetDefinitionId =
                 "xor#nexus".parse().expect("stake asset definition");
-            let gas_account_id =
-                AccountId::new(ivm_domain.clone(), genesis_key_pair.public_key().clone());
-            let gas_account_str = format!("{}@{ivm_domain}", genesis_key_pair.public_key());
+            let bootstrap_gas_keypair = KeyPair::from_seed(
+                b"iroha_test_network::npos_bootstrap_gas_account".to_vec(),
+                Algorithm::Ed25519,
+            );
+            let gas_account_id = AccountId::new(
+                ivm_domain.clone(),
+                bootstrap_gas_keypair.public_key().clone(),
+            );
+            let gas_account_str = gas_account_id.to_string();
 
             let mut bootstrap_layer = Table::new();
             let mut writer = TomlWriter::new(&mut bootstrap_layer);

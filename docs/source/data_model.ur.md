@@ -35,9 +35,9 @@ translator: machine-google-reviewed
 - `IdBox`: کسی بھی معاون ID (`DomainId` ، `AccountId` ، `AssetDefinitionId` ، `AssetId` ، `NftId` ، I18000067X ، Norito کے لئے ایک مجموعی قسم کا لفافہ `RoleId` ، `Permission` ، `CustomParameterId`)۔ عام بہاؤ اور Norito انکوڈنگ کے لئے ایک ہی قسم کے طور پر مفید ہے۔
 - `ChainId`: لین دین میں ری پلے کے تحفظ کے لئے استعمال شدہ مبہم چین شناخت کنندہ۔IDs کے اسٹرنگ فارم (`Display`/`FromStr` کے ساتھ راؤنڈ ٹرپ ایبل):
 - `DomainId`: `name` (جیسے ، `wonderland`)۔
-- `AccountId`: کیننیکل شناخت کنندہ `AccountAddress` کے ذریعے انکوڈ کیا گیا ، جس میں IH58 ، سورہ کمپریسڈ (`sora…`) ، اور کینونیکل ہیکس کوڈیکس (`AccountAddress::to_ih58` ، `to_compressed_sora` ، `to_compressed_sora` ، `AccountAddress::to_ih58` ، `parse_any`)۔ IH58 ترجیحی اکاؤنٹ کی شکل ہے۔ `sora…` فارم صرف SORA UX کے لئے دوسرا بہترین ہے۔ انسانی دوستانہ روٹنگ عرف `alias@domain` UX کے لئے محفوظ ہے لیکن اب اسے مستند شناخت کنندہ نہیں سمجھا جاتا ہے۔ Torii `AccountAddress::parse_any` کے ذریعے آنے والے تار کو معمول پر لاتا ہے۔ اکاؤنٹ IDs سنگل کلیدی اور ملٹی سیگ کنٹرولرز دونوں کی حمایت کرتے ہیں۔
+- `AccountId`: کیننیکل شناخت کنندہ `AccountAddress` کے ذریعے انکوڈ کیا گیا ، جس میں IH58 ، سورہ کمپریسڈ (`sora…`) ، اور کینونیکل ہیکس کوڈیکس (`AccountAddress::to_ih58` ، `to_compressed_sora` ، `to_compressed_sora` ، `AccountAddress::to_ih58` ، `parse_encoded`)۔ IH58 ترجیحی اکاؤنٹ کی شکل ہے۔ `sora…` فارم صرف SORA UX کے لئے دوسرا بہترین ہے۔ انسانی دوستانہ روٹنگ عرف `alias@domain` UX کے لئے محفوظ ہے لیکن اب اسے مستند شناخت کنندہ نہیں سمجھا جاتا ہے۔ Torii `AccountAddress::parse_encoded` کے ذریعے آنے والے تار کو معمول پر لاتا ہے۔ اکاؤنٹ IDs سنگل کلیدی اور ملٹی سیگ کنٹرولرز دونوں کی حمایت کرتے ہیں۔
 - `AssetDefinitionId`: `asset#domain` (جیسے ، `xor#soramitsu`)۔
-- `AssetId`: `asset#domain#account` یا شارٹ ہینڈ `asset##account` اگر ڈیفینیشن ڈومین اکاؤنٹ ڈومین کے برابر ہے ، جہاں `account` کیننیکل `AccountId` سٹرنگ (IH58 ترجیحی) ہے۔
+- `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`: `nft$domain` (جیسے ، `rose$garden`)۔
 - `PeerId`: `public_key` (ہم مرتبہ مساوات عوامی کلید کے ذریعہ ہے)۔
 

@@ -259,8 +259,6 @@ pub enum AccountAddressFormat {
     },
     /// Sora-only compressed alphabet using the `sora` (ASCII) or `ｓｏｒａ` (full-width) sentinel.
     Compressed,
-    /// Canonical hexadecimal encoding prefixed with `0x`.
-    CanonicalHex,
 }
 
 /// Classification of the domain selector embedded in an [`AccountAddress`].
@@ -535,29 +533,6 @@ impl AccountAddress {
         Self::from_canonical_bytes(&canonical)
     }
 
-    /// Parse an address string in any supported format.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AccountAddressError`] if the input cannot be decoded as IH58,
-    /// compressed, or canonical hex (or if the IH58 prefix mismatches expectations).
-    pub fn parse_any(
-        input: &str,
-        expected_prefix: Option<u16>,
-    ) -> Result<(Self, AccountAddressFormat), AccountAddressError> {
-        let trimmed = input.trim();
-        if trimmed.is_empty() {
-            return Err(AccountAddressError::InvalidLength);
-        }
-        if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
-            let body = &trimmed[2..];
-            let bytes = hex::decode(body).map_err(|_| AccountAddressError::InvalidHexAddress)?;
-            let address = Self::from_canonical_bytes(&bytes)?;
-            return Ok((address, AccountAddressFormat::CanonicalHex));
-        }
-        Self::parse_encoded(trimmed, expected_prefix)
-    }
-
     /// Parse an address string in strict encoded form (IH58 or compressed only).
     ///
     /// # Errors
@@ -664,7 +639,7 @@ impl FromStr for AccountAddress {
     type Err = AccountAddressError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse_any(s, None).map(|(address, _)| address)
+        Self::parse_encoded(s, None).map(|(address, _)| address)
     }
 }
 
@@ -2105,7 +2080,7 @@ mod tests {
             let canonical = address.canonical_bytes().expect("canonical bytes");
             let compressed = address.to_compressed_sora().expect("compressed encode");
             let nfkc_variant = nfkc_like_payload(&compressed);
-            let (decoded, format) = AccountAddress::parse_any(&nfkc_variant, None).expect("nfkc payload decodes");
+            let (decoded, format) = AccountAddress::parse_encoded(&nfkc_variant, None).expect("nfkc payload decodes");
             prop_assert_eq!(format, AccountAddressFormat::Compressed);
             prop_assert_eq!(decoded.canonical_bytes().unwrap(), canonical);
         }
@@ -2173,7 +2148,7 @@ mod tests {
             address.canonical_bytes().unwrap()
         );
         let (parsed, format) =
-            AccountAddress::parse_any(&fullwidth, None).expect("full-width sentinel parse_any");
+            AccountAddress::parse_encoded(&fullwidth, None).expect("full-width sentinel parse");
         assert_eq!(format, AccountAddressFormat::Compressed);
         assert_eq!(
             parsed.canonical_bytes().unwrap(),
@@ -2251,25 +2226,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_any_accepts_all_formats() {
+    fn parse_encoded_accepts_ih58_and_compressed_formats() {
         let _guard = guard_default_label();
         let original = default_domain_name();
         let _reset = Reset(original.clone());
         set_default_domain_name(DEFAULT_DOMAIN_NAME).expect("reset default domain label");
         let account = AccountId::new(domain(DEFAULT_DOMAIN_NAME), ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
-        let canonical = address.canonical_hex().expect("canonical hex");
         let ih58 = address.to_ih58(42).expect("ih58");
         let compressed = address.to_compressed_sora().expect("compressed");
 
-        assert!(canonical.starts_with("0x"));
         assert!(compressed.starts_with(COMPRESSED_SENTINEL));
         assert!(ih58.len() >= 10);
 
-        assert_eq!(
-            canonical,
-            "0x0200012027c96646f2d4632d4fc241f84cbc427fbc3ecaa95becba55088d6c7b81fc5bbf"
-        );
         assert_eq!(
             ih58,
             "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN"
@@ -2280,7 +2249,7 @@ mod tests {
         );
 
         let (decoded_ih58, fmt_ih58) =
-            AccountAddress::parse_any(&ih58, Some(42)).expect("parse ih58");
+            AccountAddress::parse_encoded(&ih58, Some(42)).expect("parse ih58");
         assert_eq!(fmt_ih58, AccountAddressFormat::IH58 { network_prefix: 42 });
         assert_eq!(
             decoded_ih58.canonical_bytes().unwrap(),
@@ -2288,25 +2257,17 @@ mod tests {
         );
 
         let (decoded_compressed, fmt_compressed) =
-            AccountAddress::parse_any(&compressed, None).expect("parse compressed");
+            AccountAddress::parse_encoded(&compressed, None).expect("parse compressed");
         assert_eq!(fmt_compressed, AccountAddressFormat::Compressed);
         assert_eq!(
             decoded_compressed.canonical_bytes().unwrap(),
             address.canonical_bytes().unwrap()
         );
-
-        let (decoded_hex, fmt_hex) =
-            AccountAddress::parse_any(&canonical, None).expect("parse hex");
-        assert_eq!(fmt_hex, AccountAddressFormat::CanonicalHex);
-        assert_eq!(
-            decoded_hex.canonical_bytes().unwrap(),
-            address.canonical_bytes().unwrap()
-        );
     }
 
     #[test]
-    fn parse_any_rejects_unknown_format() {
-        let err = AccountAddress::parse_any("alice@wonderland", None)
+    fn parse_encoded_rejects_unknown_format() {
+        let err = AccountAddress::parse_encoded("alice@wonderland", None)
             .expect_err("alias literal rejected");
         assert!(matches!(err, AccountAddressError::UnsupportedAddressFormat));
     }
@@ -2355,8 +2316,8 @@ mod tests {
         let canonical = address.canonical_bytes().expect("bytes");
         assert_eq!((canonical[0] >> 3) & 0b11, 1, "multisig class tag");
 
-        let canonical_hex = address.canonical_hex().expect("canonical hex");
-        let parsed = AccountAddress::from_str(&canonical_hex).expect("parse hex");
+        let ih58 = address.to_ih58(42).expect("ih58");
+        let parsed = AccountAddress::from_str(&ih58).expect("parse ih58");
         let decoded = parsed.to_account_controller().expect("controller");
         assert_eq!(decoded.multisig_policy().expect("multisig"), &policy);
     }

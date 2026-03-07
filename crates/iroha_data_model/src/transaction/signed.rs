@@ -1780,9 +1780,9 @@ mod norito_rpc_fixture_tests {
                 crate::account::AccountAddressSource::Encoded(AccountAddressFormat::IH58 {
                     network_prefix,
                 }) => Some(network_prefix),
-                crate::account::AccountAddressSource::Encoded(
-                    AccountAddressFormat::Compressed | AccountAddressFormat::CanonicalHex,
-                ) => None,
+                crate::account::AccountAddressSource::Encoded(AccountAddressFormat::Compressed) => {
+                    None
+                }
             })
     }
 

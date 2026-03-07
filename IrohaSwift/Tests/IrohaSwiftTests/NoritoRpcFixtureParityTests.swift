@@ -172,7 +172,7 @@ private enum FixtureConstants {
 
 private func expectedAuthorityLiteral(from label: String) throws -> String {
     if !label.contains("@") {
-        guard let parsed = try? AccountAddress.parseAny(label,
+        guard let parsed = try? AccountAddress.parseEncoded(label,
                                                         expectedPrefix: FixtureConstants.networkPrefix) else {
             throw FixtureError.invalidAuthority(label)
         }
@@ -184,7 +184,7 @@ private func expectedAuthorityLiteral(from label: String) throws -> String {
     }
     let signatory = String(parts[0])
     let domain = String(parts[1])
-    if let parsed = try? AccountAddress.parseAny(signatory,
+    if let parsed = try? AccountAddress.parseEncoded(signatory,
                                                  expectedPrefix: FixtureConstants.networkPrefix) {
         guard parsed.0.matchesDomainLabel(domain) else {
             throw FixtureError.invalidAuthority(label)

@@ -66,7 +66,7 @@ Parse accepts:
   optional `@<domain>` suffixes for explicit routing hints.
 - `<label>@<domain>` aliases resolved through the account-alias resolver
   (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<public_key>@<domain>` where `public_key` is the canonical multihash string.
+- `<alias>@<domain>` for domain-scoped alias routing; account IDs themselves are canonical encoded literals (IH58 or compressed).
 - `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
@@ -144,9 +144,9 @@ pub struct Common {
 - **العرافة الأساسية** - ترميز `0x…` للبايت الأساسي سهل التصحيح
   المغلف.
 
-`AccountAddress::parse_any` يكتشف تلقائيًا IH58 (المفضل)، أو المضغوط (`sora`، ثاني أفضل)، أو سداسي عشري أساسي
+`AccountAddress::parse_encoded` يكتشف تلقائيًا IH58 (المفضل)، أو المضغوط (`sora`، ثاني أفضل)، أو سداسي عشري أساسي
 (`0x...` فقط؛ تم رفض السداسية العارية) المدخلات وإرجاع كل من الحمولة النافعة التي تم فك تشفيرها والحمولة المكتشفة
-`AccountAddressFormat`. يقوم Torii الآن باستدعاء `parse_any` للحصول على ISO 20022 التكميلي
+`AccountAddressFormat`. يقوم Torii الآن باستدعاء `parse_encoded` للحصول على ISO 20022 التكميلي
 يعالج ويخزن النموذج السداسي الأساسي بحيث تظل البيانات التعريفية حتمية
 بغض النظر عن التمثيل الأصلي.
 
@@ -322,7 +322,7 @@ tag-specific payload, then move on to the controller bytes.
   الست عشري الأساسي: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
   التفصيل: `0x02` الرأس، وعلامة التحديد `0x01` بالإضافة إلى الملخص `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`، متبوعة بحمولة المفتاح الفردي (`0x00`، العلامة `0x01`، معرف المنحنى، `0x20` الطول، 32 بايت مفتاح Ed25519).
 
-تؤكد اختبارات الوحدة (`account::address::tests::parse_any_accepts_all_formats`) على متجهات V1 أدناه عبر `AccountAddress::parse_any`، مما يضمن أن الأدوات يمكن أن تعتمد على الحمولة الأساسية عبر النماذج السداسية، وIH58 (المفضل)، والنماذج المضغوطة (`sora`، ثاني أفضل النماذج). قم بإعادة إنشاء مجموعة التركيبات الموسعة باستخدام `cargo run -p iroha_data_model --example address_vectors`.
+تؤكد اختبارات الوحدة (`account::address::tests::parse_encoded_accepts_all_formats`) على متجهات V1 أدناه عبر `AccountAddress::parse_encoded`، مما يضمن أن الأدوات يمكن أن تعتمد على الحمولة الأساسية عبر النماذج السداسية، وIH58 (المفضل)، والنماذج المضغوطة (`sora`، ثاني أفضل النماذج). قم بإعادة إنشاء مجموعة التركيبات الموسعة باستخدام `cargo run -p iroha_data_model --example address_vectors`.
 
 | المجال | بايت البذور | السداسي الكنسي | مضغوط (`sora`) |
 |-------------|-----------|-----------|---------|---|
@@ -370,7 +370,7 @@ tag-specific payload, then move on to the controller bytes.
   سلاسل الأدوات.
 - **مساعدو الآلة:** نشر برامج الترميز لـ Rust، وTypeScript/JavaScript، وPython،
   وKotlin التي تغطي IH58 والتنسيقات المضغوطة (`AccountAddress::to_ih58`،
-  `AccountAddress::parse_any`، وما يعادلها من SDK). مساعدي CAIP-10 هم
+  `AccountAddress::parse_encoded`، وما يعادلها من SDK). مساعدي CAIP-10 هم
   العمل المستقبلي.
 
 #### 2.7 الاسم المستعار الحتمي IH58
@@ -389,7 +389,7 @@ tag-specific payload, then move on to the controller bytes.
 - **التشفير:** `encode_ih58()` يربط بايتات البادئة مع البايتات الأساسية
   الحمولة ويلحق مجموع اختباري 16 بت مشتق من Blake2b-512 مع الثابت
   البادئة `IH58PRE` (`b"IH58PRE" || prefix || payload`). والنتيجة هي ترميز Base58 عبر `bs58`.
-  يعرض مساعدو CLI/SDK نفس الإجراء، و`AccountAddress::parse_any`
+  يعرض مساعدو CLI/SDK نفس الإجراء، و`AccountAddress::parse_encoded`
   يعكسه عبر `decode_ih58`.
 
 #### 2.8 نواقل الاختبار النصي المعياري
@@ -617,7 +617,7 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
   تم وضع علامة واضحة على أنها بيانات تعريف وصفية قد تتغير، في حين أن IH58 هو
   عنوان مستقر.
 - **تحديد الإدخال الأساسي:** تقبل Torii وSDKs IH58 (المفضل)/sora (ثاني أفضل)/0x
-  العناوين بالإضافة إلى `alias@domain` و`public_key@domain` و`uaid:…` و
+  العناوين بالإضافة إلى `alias@domain` و `uaid:…` و
   نماذج `opaque:…`، ثم قم بتحويلها إلى IH58 للإخراج. لا يوجد
   تبديل الوضع الصارم؛ يجب أن تظل معرفات الهاتف/البريد الإلكتروني الأولية خارج دفتر الأستاذ
   عبر UAID/تعيينات غير شفافة.
@@ -778,7 +778,7 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
 ## الخطوات التالية
 
 1. وصل ترميز IH58 إلى `iroha_data_model` (`AccountAddress::to_ih58`،
-   `parse_any`); استمر في نقل التركيبات/الاختبارات إلى كل SDK وقم بإزالة أي منها
+   `parse_encoded`); استمر في نقل التركيبات/الاختبارات إلى كل SDK وقم بإزالة أي منها
    العناصر النائبة Bech32m.
 2. قم بتوسيع مخطط التكوين باستخدام `chain_discriminant` واشتقاقه بشكل معقول
   الإعدادات الافتراضية لإعدادات الاختبار/التطوير الحالية. **(تم: `common.chain_discriminant`

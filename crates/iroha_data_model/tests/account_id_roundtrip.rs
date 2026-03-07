@@ -37,8 +37,9 @@ fn account_id_roundtrip_supports_gost_public_key() {
     let domain: DomainId = "wonderland".parse().expect("domain");
     let id = AccountId::new(domain, key_pair.public_key().clone());
     let rendered = id.to_string();
-    let (_address, format) = iroha_data_model::account::AccountAddress::parse_any(&rendered, None)
-        .expect("IH58 encoding should parse");
+    let (_address, format) =
+        iroha_data_model::account::AccountAddress::parse_encoded(&rendered, None)
+            .expect("IH58 encoding should parse");
     assert!(
         matches!(
             format,

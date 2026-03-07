@@ -430,8 +430,8 @@ mod tests {
 
     fn account(name: &str, domain: &str) -> AccountId {
         let domain_id = DomainId::from_str(domain).expect("domain");
-        let canonical = format!("{name}@{domain}");
-        let mut seed = canonical.into_bytes();
+        let seed_literal = format!("{name}::{domain}");
+        let mut seed = seed_literal.into_bytes();
         if seed.is_empty() {
             seed.extend_from_slice(b"lane-compliance-account");
         }

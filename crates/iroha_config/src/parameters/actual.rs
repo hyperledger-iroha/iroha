@@ -4664,7 +4664,7 @@ pub struct Torii {
     pub api_fee_asset_id: Option<String>,
     /// Optional fee policy: fixed amount per request.
     pub api_fee_amount: Option<u64>,
-    /// Optional fee policy: receiver account id (IH58 or `<alias|public_key>@domain`).
+    /// Optional fee policy: receiver account id (IH58 or sora compressed literal).
     pub api_fee_receiver: Option<String>,
     /// SoraNet privacy ingestion guard rails (auth/rate/namespace).
     pub soranet_privacy_ingest: SoranetPrivacyIngest,
@@ -6281,7 +6281,7 @@ pub struct IsoBridgeSigner {
 pub struct IsoAccountAlias {
     /// External IBAN representation.
     pub iban: String,
-    /// Account identifier (IH58 or `<alias|public_key>@domain`).
+    /// Account identifier (IH58 or sora compressed literal).
     pub account_id: String,
 }
 

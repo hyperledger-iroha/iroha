@@ -58,11 +58,8 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let domain = "wonderland"
         let chainId = "00000000-0000-0000-0000-000000000000"
         let assetDefinitionId = "xor#\(domain)"
-        let address = try AccountAddress.fromAccount(domain: domain,
-                                                     publicKey: keypair.publicKey,
-                                                     algorithm: "secp256k1")
-        let ih58 = try address.toIH58(networkPrefix: 753)
-        let authority = "\(ih58)@\(domain)"
+        let multihash = OfflineNorito.publicKeyMultihash(algorithm: .secp256k1, payload: keypair.publicKey)
+        let authority = "secp256k1:\(multihash)@\(domain)"
         let request = TransferRequest(chainId: chainId,
                                       authority: authority,
                                       assetDefinitionId: assetDefinitionId,

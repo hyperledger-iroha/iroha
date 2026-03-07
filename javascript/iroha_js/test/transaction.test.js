@@ -58,7 +58,7 @@ function ih58FromEd25519AccountId(raw) {
   const trimmed = raw.trim();
   const atIndex = trimmed.lastIndexOf("@");
   if (atIndex === -1) {
-    const { address } = AccountAddress.parseAny(trimmed);
+    const { address } = AccountAddress.parseEncoded(trimmed);
     return address.toIH58();
   }
   const signatory = trimmed.slice(0, atIndex).trim().toUpperCase();
@@ -380,7 +380,7 @@ test("buildMintAndTransferTransaction supports transfer arrays", () => {
         transfers: [
           { quantity: "5", destinationAccountId: AUTHORITY_ID_INPUT },
           {
-            sourceAssetId: `${ASSET_DEFINITION_ID_INPUT}#${NEW_ACCOUNT_ID_INPUT}`,
+            sourceAssetId: `${ASSET_DEFINITION_ID_INPUT}##${NEW_ACCOUNT_ID_INPUT}`,
             quantity: "1",
             destinationAccountId: NEW_ACCOUNT_ID_INPUT,
           },
@@ -406,7 +406,7 @@ test("buildMintAndTransferTransaction supports transfer arrays", () => {
   assert.deepEqual(instructions[2], {
     Transfer: {
       Asset: {
-        source: `${ASSET_DEFINITION_ID}#${NEW_ACCOUNT_ID}`,
+        source: `${ASSET_DEFINITION_ID}##${NEW_ACCOUNT_ID}`,
         object: "1",
         destination: NEW_ACCOUNT_ID,
       },
@@ -499,7 +499,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
         domain: { domainId: "garden_of_live_flowers" },
         mints: [
           { assetId: ASSET_ID_INPUT, quantity: "3" },
-          { assetId: `${ASSET_DEFINITION_ID_INPUT}#${AUTHORITY_ID_INPUT}`, quantity: "1" },
+          { assetId: `${ASSET_DEFINITION_ID_INPUT}##${AUTHORITY_ID_INPUT}`, quantity: "1" },
         ],
         privateKey: PRIVATE_KEY,
       }),
@@ -514,7 +514,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
   assert.deepEqual(instructions[2], {
     Mint: {
       Asset: {
-        destination: `${ASSET_DEFINITION_ID}#${AUTHORITY_ID}`,
+        destination: `${ASSET_DEFINITION_ID}##${AUTHORITY_ID}`,
         object: "1",
       },
     },
@@ -705,7 +705,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
         },
         mint: {
           accountId: NEW_ACCOUNT_ID_INPUT,
-          assetId: `${ASSET_DEFINITION_ID_INPUT}#${NEW_ACCOUNT_ID_INPUT}`,
+          assetId: `${ASSET_DEFINITION_ID_INPUT}##${NEW_ACCOUNT_ID_INPUT}`,
           quantity: "9",
         },
         privateKey: PRIVATE_KEY,
@@ -736,7 +736,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
     Mint: {
       Asset: {
         object: "9",
-        destination: `${ASSET_DEFINITION_ID}#${NEW_ACCOUNT_ID}`,
+        destination: `${ASSET_DEFINITION_ID}##${NEW_ACCOUNT_ID}`,
       },
     },
   });
@@ -761,7 +761,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "4" },
-          { assetId: `${ASSET_DEFINITION_ID_INPUT}#${AUTHORITY_ID_INPUT}`, quantity: "2" },
+          { assetId: `${ASSET_DEFINITION_ID_INPUT}##${AUTHORITY_ID_INPUT}`, quantity: "2" },
         ],
         privateKey: PRIVATE_KEY,
       }),
@@ -773,7 +773,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
     Mint: {
       Asset: {
         object: "4",
-        destination: `${ASSET_DEFINITION_ID}#${NEW_ACCOUNT_ID}`,
+        destination: `${ASSET_DEFINITION_ID}##${NEW_ACCOUNT_ID}`,
       },
     },
   });
@@ -781,7 +781,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
     Mint: {
       Asset: {
         object: "2",
-        destination: `${ASSET_DEFINITION_ID}#${AUTHORITY_ID}`,
+        destination: `${ASSET_DEFINITION_ID}##${AUTHORITY_ID}`,
       },
     },
   });
@@ -826,7 +826,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects mismatched assetId/
         mints: [
           {
             accountId: NEW_ACCOUNT_ID_INPUT,
-            assetId: `${ASSET_DEFINITION_ID}#someone_else`,
+            assetId: `${ASSET_DEFINITION_ID}##someone_else`,
             quantity: "1",
           },
         ],
@@ -865,7 +865,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
   assert.deepEqual(instructions[1], {
     Mint: {
       Asset: {
-        destination: `${ASSET_DEFINITION_ID}#${NEW_ACCOUNT_ID}`,
+        destination: `${ASSET_DEFINITION_ID}##${NEW_ACCOUNT_ID}`,
         object: "5",
       },
     },
@@ -873,7 +873,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
   assert.deepEqual(instructions[2], {
     Transfer: {
       Asset: {
-        source: `${ASSET_DEFINITION_ID}#${NEW_ACCOUNT_ID}`,
+        source: `${ASSET_DEFINITION_ID}##${NEW_ACCOUNT_ID}`,
         object: "2",
         destination: AUTHORITY_ID,
       },
@@ -904,12 +904,12 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "6" },
-          { assetId: `${ASSET_DEFINITION_ID_INPUT}#${AUTHORITY_ID_INPUT}`, quantity: "1" },
+          { assetId: `${ASSET_DEFINITION_ID_INPUT}##${AUTHORITY_ID_INPUT}`, quantity: "1" },
         ],
         transfers: [
           { quantity: "4", destinationAccountId: AUTHORITY_ID_INPUT },
           {
-            sourceAssetId: `${ASSET_DEFINITION_ID_INPUT}#${AUTHORITY_ID_INPUT}`,
+            sourceAssetId: `${ASSET_DEFINITION_ID_INPUT}##${AUTHORITY_ID_INPUT}`,
             destinationAccountId: secondAccountIdInput,
             quantity: "1",
           },
@@ -923,7 +923,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   assert.deepEqual(instructions[3], {
     Transfer: {
       Asset: {
-        source: `${ASSET_DEFINITION_ID}#${NEW_ACCOUNT_ID}`,
+        source: `${ASSET_DEFINITION_ID}##${NEW_ACCOUNT_ID}`,
         object: "4",
         destination: AUTHORITY_ID,
       },
@@ -932,7 +932,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   assert.deepEqual(instructions[4], {
     Transfer: {
       Asset: {
-        source: `${ASSET_DEFINITION_ID}#${AUTHORITY_ID}`,
+        source: `${ASSET_DEFINITION_ID}##${AUTHORITY_ID}`,
         object: "1",
         destination: secondAccountId,
       },
@@ -1011,7 +1011,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects mismatched 
         mints: [
           {
             accountId: NEW_ACCOUNT_ID_INPUT,
-            assetId: `${ASSET_DEFINITION_ID}#someone_else`,
+            assetId: `${ASSET_DEFINITION_ID}##someone_else`,
             quantity: "1",
           },
         ],

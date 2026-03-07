@@ -2708,7 +2708,7 @@ async fn handler_accounts_portfolio(
     let asset_id = match query.asset_id {
         Some(raw) => {
             let parsed = parse_asset_id(&raw)?;
-            Some(format!("{}#{}", parsed.definition(), parsed.account()))
+            Some(parsed.canonical_encoded())
         }
         None => None,
     };
@@ -4103,7 +4103,7 @@ fn parse_asset_definition_id(raw: &str) -> Result<AssetDefinitionId, Error> {
 
 #[cfg(feature = "app_api")]
 fn parse_asset_id(raw: &str) -> Result<AssetId, Error> {
-    raw.parse::<AssetId>()
+    AssetId::parse_encoded(raw)
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
 }
 
@@ -19742,11 +19742,15 @@ pub(crate) mod tests_runtime_handlers {
             authority: creds.account.clone(),
             private_key: clone_private_key(&creds.private_key),
             manifest: empty_manifest(),
+            gov_namespace: None,
+            gov_contract_id: None,
         };
         let dto2 = RegisterContractCodeDto {
             authority: creds.account.clone(),
             private_key: clone_private_key(&creds.private_key),
             manifest: empty_manifest(),
+            gov_namespace: None,
+            gov_contract_id: None,
         };
 
         let first = super::handler_post_contract_code(

@@ -139,6 +139,12 @@ public final class MultisigSeedHelper {
     if (domain.isBlank()) {
       return Optional.empty();
     }
+    if (identifier.indexOf('@') >= 0) {
+      return Optional.empty();
+    }
+    if (identifier.startsWith("0x") || identifier.startsWith("0X")) {
+      return Optional.empty();
+    }
     final Optional<KeyPayload> payload = parseSingleKeyIdentifier(identifier);
     if (payload.isEmpty()) {
       return Optional.empty();
@@ -153,7 +159,7 @@ public final class MultisigSeedHelper {
 
   private static Optional<KeyPayload> parseSingleKeyIdentifier(final String identifier) {
     try {
-      final AccountAddress.ParseResult parsed = AccountAddress.parseAny(identifier, null);
+      final AccountAddress.ParseResult parsed = AccountAddress.parseEncoded(identifier, null);
       final Optional<AccountAddress.SingleKeyPayload> payloadOpt =
           parsed.address.singleKeyPayload();
       if (payloadOpt.isPresent()) {

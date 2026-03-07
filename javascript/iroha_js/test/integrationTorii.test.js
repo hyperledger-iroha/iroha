@@ -1106,7 +1106,7 @@ test(
     assertSuccessfulStatus(accountStatus, accountId);
 
     const assetDefinitionId = randomAssetDefinitionId(domainId);
-    const assetId = `${assetDefinitionId}#${accountId}`;
+    const assetId = `${assetDefinitionId}##${accountId}`;
     const { signedTransaction: assetTx, hash: assetHash } =
       buildRegisterAssetDefinitionAndMintTransaction({
         chainId: CHAIN_ID,
@@ -1257,8 +1257,8 @@ test(
     const senderAccountId = randomAccountId(domainId);
     const receiverAccountId = randomAccountId(domainId);
     const assetDefinitionId = randomAssetDefinitionId(domainId);
-    const senderAssetId = `${assetDefinitionId}#${senderAccountId}`;
-    const receiverAssetId = `${assetDefinitionId}#${receiverAccountId}`;
+    const senderAssetId = `${assetDefinitionId}##${senderAccountId}`;
+    const receiverAssetId = `${assetDefinitionId}##${receiverAccountId}`;
     const mintedQuantity = "15";
     const transferQuantity = "6";
     const remainingQuantity = (BigInt(mintedQuantity) - BigInt(transferQuantity)).toString();
@@ -1905,7 +1905,7 @@ test(
     });
     const triggerId = randomTriggerId();
     const namespace = "apps";
-    const assetId = `rose#wonderland#${AUTHORITY_ACCOUNT_ID}`;
+    const assetId = `rose#wonderland##${AUTHORITY_ACCOUNT_ID}`;
     const action = buildTimeTriggerAction({
       authority: AUTHORITY_ACCOUNT_ID,
       instructions: [

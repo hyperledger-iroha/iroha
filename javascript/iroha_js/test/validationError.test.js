@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 
 import {
   AccountAddress,
-  AccountAddressError,
-  AccountAddressErrorCode,
   DEFAULT_DOMAIN_NAME,
   ValidationError,
   ValidationErrorCode,
@@ -29,9 +27,14 @@ test("normalizeAccountId exposes ValidationError metadata", () => {
   );
 });
 
-test("normalizeAccountId canonicalizes domain labels with UTS-46 rules", () => {
-  const normalized = normalizeAccountId("alice@Exämple", "accountId");
-  assert.equal(normalized, "alice@xn--exmple-cua");
+test("normalizeAccountId rejects '@domain' literals (no UTS-46 canonicalization path)", () => {
+  assert.throws(
+    () => normalizeAccountId("alice@Exämple", "accountId"),
+    (error) =>
+      error instanceof ValidationError &&
+      error.code === ValidationErrorCode.INVALID_ACCOUNT_ID &&
+      /must not include '@domain'/i.test(error.message),
+  );
 });
 
 test("normalizeAccountId accepts default-domain literal without suffix", () => {
@@ -51,7 +54,22 @@ test("normalizeAccountId accepts default-domain literal without suffix", () => {
     (error) =>
       error instanceof ValidationError &&
       error.code === ValidationErrorCode.INVALID_ACCOUNT_ID &&
-      /append '@domain'/i.test(error.message),
+      /must not include '@domain'/i.test(error.message),
+  );
+});
+
+test("normalizeAccountId rejects canonical hex account literals", () => {
+  const address = AccountAddress.fromAccount({
+    domain: DEFAULT_DOMAIN_NAME,
+    publicKey: SAMPLE_KEY,
+  });
+  const canonicalHex = address.canonicalHex();
+  assert.throws(
+    () => normalizeAccountId(canonicalHex, "accountId"),
+    (error) =>
+      error instanceof ValidationError &&
+      error.code === ValidationErrorCode.INVALID_ACCOUNT_ID &&
+      /IH58 \(preferred\)\/sora \(second-best\)/i.test(error.message),
   );
 });
 
@@ -65,7 +83,7 @@ maybeTestCompressed("normalizeAccountId accepts compressed default-domain litera
   const compressed = address.toCompressedSora();
   const normalized = normalizeAccountId(compressed, "accountId");
 
-  const parsed = AccountAddress.parseAny(normalized, undefined, DEFAULT_DOMAIN_NAME).address;
+  const parsed = AccountAddress.parseEncoded(normalized, undefined, DEFAULT_DOMAIN_NAME).address;
   assert.deepEqual(
     Buffer.from(parsed.canonicalBytes()),
     Buffer.from(address.canonicalBytes()),
@@ -80,7 +98,7 @@ test("normalizeAccountId canonicalizes compressed literal without suffix for non
   const compressed = address.toCompressedSora();
 
   const normalized = normalizeAccountId(compressed, "accountId");
-  const parsed = AccountAddress.parseAny(normalized, undefined, "wonderland").address;
+  const parsed = AccountAddress.parseEncoded(normalized, undefined, "wonderland").address;
   assert.deepEqual(
     Buffer.from(parsed.canonicalBytes()),
     Buffer.from(address.canonicalBytes()),
@@ -103,8 +121,7 @@ test("normalizeAccountId rejects invalid domain labels", () => {
     (error) =>
       error instanceof ValidationError &&
       error.code === ValidationErrorCode.INVALID_ACCOUNT_ID &&
-      error.cause instanceof AccountAddressError &&
-      error.cause.code === AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+      /must not include '@domain'/i.test(error.message),
   );
 });
 
@@ -149,25 +166,17 @@ test("normalizeAccountId rejects encoded addresses with domain suffixes", () => 
     (error) =>
       error instanceof ValidationError &&
       error.code === ValidationErrorCode.INVALID_ACCOUNT_ID &&
-      /append '@domain'/i.test(error.message),
+      /must not include '@domain'/i.test(error.message),
   );
 });
 
-test("normalizeAccountId bypasses canonical parsing for friendly identifiers", () => {
-  const originalParseAny = AccountAddress.parseAny;
-  let parseCalls = 0;
-  AccountAddress.parseAny = () => {
-    parseCalls += 1;
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_IH58_ENCODING,
-      "invalid IH58 literal",
-    );
-  };
-  try {
-    const normalized = normalizeAccountId("carol@legacy-domain", "accountId");
-    assert.equal(normalized, "carol@legacy-domain");
-    assert.ok(parseCalls >= 1, "fallback path should attempt canonical parsing before accepting literal");
-  } finally {
-    AccountAddress.parseAny = originalParseAny;
-  }
+test("normalizeAccountId rejects alias-style literals with domain suffixes", () => {
+  const aliasLike = `ed0120${"ab".repeat(32)}`;
+  assert.throws(
+    () => normalizeAccountId(`${aliasLike}@Example-Domain`, "accountId"),
+    (error) =>
+      error instanceof ValidationError &&
+      error.code === ValidationErrorCode.INVALID_ACCOUNT_ID &&
+      /must not include '@domain'/i.test(error.message),
+  );
 });

@@ -222,9 +222,8 @@ impl InstructionSpec {
 }
 
 fn parse_asset_literal(value: &str) -> Result<AssetId, String> {
-    value
-        .parse::<AssetId>()
-        .map_err(|err| format!("invalid asset literal '{value}': {err}"))
+    AssetId::parse_encoded(value)
+        .map_err(|err| format!("invalid encoded asset literal '{value}': {err}"))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -385,19 +384,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_asset_literal_splits_definition_and_owner() {
+    fn parse_asset_literal_accepts_encoded_literal() {
         let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
         let domain: DomainId = "wonderland".parse().expect("valid domain");
         let owner = AccountId::new(domain.clone(), keypair.public_key().clone());
-        let owner_literal = account_literal(&owner);
-        let expected_owner = AccountId::parse_encoded(&owner_literal)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("encoded owner account");
         let definition: AssetDefinitionId = "rose#wonderland".parse().expect("valid definition");
-        let asset_literal = format!("{definition}#{owner_literal}");
+        let asset_literal = AssetId::new(definition.clone(), owner.clone()).canonical_encoded();
         let parsed = parse_asset_literal(&asset_literal).expect("parse asset literal");
         assert_eq!(parsed.definition, definition);
-        assert_eq!(parsed.account, expected_owner);
+        assert_eq!(parsed.account, owner);
     }
 
     #[test]
@@ -407,7 +402,7 @@ mod tests {
         let authority = AccountId::new(domain.clone(), keypair.public_key().clone());
         let destination = AccountId::new(domain, keypair.public_key().clone());
         let definition: AssetDefinitionId = "rose#wonderland".parse().expect("valid definition");
-        let asset_literal = format!("{definition}#{}", account_literal(&authority));
+        let asset_literal = AssetId::new(definition, authority.clone()).canonical_encoded();
         let mut args = BTreeMap::new();
         args.insert("action".into(), "TransferAsset".into());
         args.insert("asset".into(), asset_literal);

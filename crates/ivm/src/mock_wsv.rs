@@ -8,10 +8,10 @@ use std::{
 };
 
 use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
+pub use iroha_data_model::account::AccountSubjectId;
 pub use iroha_data_model::prelude::{
     AccountId as ScopedAccountId, AssetDefinitionId, DomainId, Mintable, Name, NftId, Peer,
 };
-pub use iroha_data_model::account::AccountSubjectId;
 use iroha_data_model::{
     isi::{smart_contract_code as scode, transfer::TransferAssetBatch},
     nexus::{AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId},
@@ -6674,7 +6674,7 @@ mod tests_null_decode {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
-        let bad = b"alice@wonderland";
+        let bad = b"not-norito-encoded-name";
         let ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, bad))
             .expect("alloc tlv");

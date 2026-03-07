@@ -17,8 +17,7 @@ Action items:
 2. **Accepted inputs:** parsers MUST accept IH58 (preferred), `sora` compressed,
    and canonical hex (`0x...` only; bare hex is rejected). Inputs MAY carry an
    `@<domain>` suffix for routing hints; `<label>@<domain>` aliases require a
-   resolver. Raw `public_key@domain` (multihash hex) remains supported.
-3. **Resolvers:** domainless IH58/sora parsing requires a domain-selector
+   resolver.  3. **Resolvers:** domainless IH58/sora parsing requires a domain-selector
    resolver unless the selector is implicit default (use the configured default
    domain label). UAID (`uaid:...`) and opaque (`opaque:...`) literals require
    resolvers.

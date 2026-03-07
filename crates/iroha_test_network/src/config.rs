@@ -753,7 +753,7 @@ fn apply_preexec_nexus_overrides(
 ) -> Result<(), Report> {
     let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
     let gas_account_id = AccountId::new(ivm_domain, genesis_key_pair.public_key().clone());
-    let gas_account = format!("{}@{}", gas_account_id.signatory(), gas_account_id.domain());
+    let gas_account = gas_account_id.to_string();
 
     let mut nexus = nexus_config.cloned().unwrap_or_default();
     if let Some(policies) = block_policies
@@ -1901,13 +1901,10 @@ mod tests {
                     }
                 }
             }
-            assert!(
-                saw_alice,
-                "minimal genesis should register alice@wonderland"
-            );
+            assert!(saw_alice, "minimal genesis should register ALICE_ID");
             assert!(
                 saw_carpenter,
-                "minimal genesis should register carpenter@garden_of_live_flowers"
+                "minimal genesis should register a fixture account in garden_of_live_flowers"
             );
         }
 

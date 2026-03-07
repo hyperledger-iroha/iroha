@@ -331,10 +331,6 @@ impl From<AccountAddressFormat> for DetectedFormat {
                 kind: "compressed",
                 network_prefix: None,
             },
-            AccountAddressFormat::CanonicalHex => Self {
-                kind: "canonical-hex",
-                network_prefix: None,
-            },
         }
     }
 }
@@ -555,7 +551,9 @@ mod tests {
             parsed: ParsedAccountAddress {
                 domain_kind: address.domain_kind(),
                 address,
-                format: AccountAddressFormat::CanonicalHex,
+                format: AccountAddressFormat::IH58 {
+                    network_prefix: DEFAULT_IH58_PREFIX,
+                },
             },
         };
         let summary = AddressSummary::build(&parsed, DEFAULT_IH58_PREFIX).expect("summary");
@@ -571,7 +569,9 @@ mod tests {
             parsed: ParsedAccountAddress {
                 domain_kind: address.domain_kind(),
                 address,
-                format: AccountAddressFormat::CanonicalHex,
+                format: AccountAddressFormat::IH58 {
+                    network_prefix: DEFAULT_IH58_PREFIX,
+                },
             },
         };
         let summary = AddressSummary::build(&parsed, DEFAULT_IH58_PREFIX).expect("summary");

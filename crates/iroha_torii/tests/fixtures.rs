@@ -25,24 +25,19 @@ pub struct AccountLiterals {
     pub canonical: String,
     /// Compressed literal.
     pub compressed: String,
-    /// Raw public-key literal with domain suffix.
-    pub raw_public_key: String,
 }
 
 /// Singleton fixture so all tx query tests share the same literals.
 #[allow(dead_code)]
 pub static TX_QUERY_ACCOUNT: LazyLock<AccountLiterals> = LazyLock::new(|| {
     let account = ALICE_ID.clone();
-    let domain_label = account.domain().to_string();
     let compressed = account
         .to_account_address()
         .and_then(|addr| addr.to_compressed_sora())
         .expect("compressed literal should encode");
-    let raw_public_key = format!("{}@{}", account.signatory(), domain_label);
     AccountLiterals {
         canonical: account.to_string(),
         compressed,
-        raw_public_key,
     }
 });
 

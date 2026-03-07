@@ -64,7 +64,7 @@ use iroha_crypto::{HashOf, KeyPair, MerkleTree, PublicKey};
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
     ChainId, Identifiable,
-    account::{AccountController, AccountId},
+    account::{AccountController, AccountDomainSelector, AccountId, AccountLabel, OpaqueAccountId},
     asset::{AssetDefinitionId, AssetId},
     block::{
         consensus::{LaneBlockCommitment, LaneSettlementReceipt},
@@ -82,9 +82,11 @@ use iroha_data_model::{
         GrantBox, InstructionBox, RemoveKeyValueBox, SetKeyValueBox, register::RegisterBox,
         transfer::TransferBox,
     },
+    name::Name,
     nexus::{
         AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason,
-        DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
+        DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob, UniversalAccountId,
+        proof_matches_manifest,
     },
     peer::PeerId,
     permission::Permission,
@@ -768,12 +770,107 @@ fn conflict_rate_bps(vertices: u64, edges: u64) -> u64 {
 }
 
 pub(crate) fn parse_account_literal_with_world(
-    _world: &impl WorldReadOnly,
+    world: &impl WorldReadOnly,
     input: &str,
 ) -> Option<AccountId> {
-    AccountId::parse_encoded(input.trim())
+    let literal = input.trim();
+    if literal.is_empty() {
+        return None;
+    }
+
+    if let Some(account_id) = parse_encoded_account_literal(world, literal) {
+        return Some(account_id);
+    }
+    if let Some(account_id) = parse_uaid_account_literal(world, literal) {
+        return Some(account_id);
+    }
+    if let Some(account_id) = parse_opaque_account_literal(world, literal) {
+        return Some(account_id);
+    }
+    parse_domain_scoped_legacy_literal(world, literal)
+}
+
+fn parse_encoded_account_literal(world: &impl WorldReadOnly, literal: &str) -> Option<AccountId> {
+    let parsed = AccountId::parse_encoded(literal)
         .ok()
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)?;
+    let subject = parsed.subject_id();
+    let subject_accounts = world
+        .accounts_for_subject_iter(&subject)
+        .map(|entry| entry.id().clone())
+        .collect::<BTreeSet<_>>();
+
+    match subject_accounts.len() {
+        0 => resolve_selector_domain_candidate(world, &parsed).or(Some(parsed)),
+        1 => subject_accounts.into_iter().next(),
+        _ => subject_accounts.contains(&parsed).then_some(parsed),
+    }
+}
+
+fn resolve_selector_domain_candidate(
+    world: &impl WorldReadOnly,
+    parsed: &AccountId,
+) -> Option<AccountId> {
+    let selector = AccountDomainSelector::from_domain(parsed.domain()).ok()?;
+    let resolved_domain = world.domain_selectors().get(&selector)?.clone();
+    Some(AccountId {
+        domain: resolved_domain,
+        controller: parsed.controller().clone(),
+    })
+}
+
+fn parse_uaid_account_literal(world: &impl WorldReadOnly, literal: &str) -> Option<AccountId> {
+    if !literal
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("uaid:"))
+    {
+        return None;
+    }
+    let uaid = UniversalAccountId::from_str(literal).ok()?;
+    world.uaid_accounts().get(&uaid).cloned()
+}
+
+fn parse_opaque_account_literal(world: &impl WorldReadOnly, literal: &str) -> Option<AccountId> {
+    if !literal
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("opaque:"))
+    {
+        return None;
+    }
+    let opaque = OpaqueAccountId::from_str(literal).ok()?;
+    let uaid = world.opaque_uaids().get(&opaque)?;
+    world.uaid_accounts().get(uaid).cloned()
+}
+
+fn parse_domain_scoped_legacy_literal(
+    world: &impl WorldReadOnly,
+    literal: &str,
+) -> Option<AccountId> {
+    let (identity, domain_raw) = literal.rsplit_once('@')?;
+    let identity = identity.trim();
+    if identity.is_empty() {
+        return None;
+    }
+    // Prevent mixed literals like `<ih58>@<domain>`.
+    if AccountId::parse_encoded(identity).is_ok() {
+        return None;
+    }
+
+    let domain = DomainId::from_str(domain_raw.trim()).ok()?;
+    if let Ok(public_key) = PublicKey::from_str(identity) {
+        let account_id = AccountId::new(domain.clone(), public_key);
+        return world.accounts().get(&account_id).map(|_| account_id);
+    }
+
+    let label = Name::from_str(identity).ok()?;
+    let account_label = AccountLabel::new(domain.clone(), label);
+    if let Some(account_id) = world.account_aliases().get(&account_label) {
+        return Some(account_id.clone());
+    }
+    if let Some(record) = world.account_rekey_records().get(&account_label) {
+        return Some(AccountId::new(domain, record.active_signatory.clone()));
+    }
+    None
 }
 
 fn parse_account_from_access_key(world: &impl WorldReadOnly, key: &str) -> Option<AccountId> {
@@ -837,10 +934,12 @@ fn prefetch_account_stores(state_block: &StateBlock<'_>, account_id: &AccountId)
 mod prefetch_tests {
     use iroha_data_model::{
         Registrable,
-        account::{Account, AccountDetails, AccountDomainSelector, AccountId, AccountValue},
+        account::{
+            Account, AccountDetails, AccountDomainSelector, AccountId, AccountLabel, AccountValue,
+        },
         asset::AssetDefinitionId,
         block::BlockHeader,
-        domain::Domain,
+        domain::{Domain, DomainId},
         isi::{InstructionBox, Log},
         name::Name,
         nexus::LaneConfig,
@@ -910,6 +1009,58 @@ mod prefetch_tests {
         assert_eq!(
             parse_account_literal_with_world(&world_view, &ih58),
             Some(alice)
+        );
+    }
+
+    #[test]
+    fn parse_account_literal_rejects_ambiguous_encoded_subject() {
+        let signatory = ALICE_ID.signatory().clone();
+        let alpha: DomainId = "alpha".parse().expect("alpha domain");
+        let beta: DomainId = "beta".parse().expect("beta domain");
+        let alpha_account = AccountId::new(alpha.clone(), signatory.clone());
+        let beta_account = AccountId::new(beta.clone(), signatory);
+        let alpha_domain = Domain::new(alpha).build(&alpha_account);
+        let beta_domain = Domain::new(beta).build(&alpha_account);
+        let world = World::with(
+            [alpha_domain, beta_domain],
+            [
+                Account::new(alpha_account.clone()).build(&alpha_account),
+                Account::new(beta_account).build(&alpha_account),
+            ],
+            [],
+        );
+        let world_view = world.view();
+
+        let encoded = alpha_account
+            .canonical_ih58()
+            .expect("canonical ih58 account literal");
+        assert_eq!(
+            parse_account_literal_with_world(&world_view, &encoded),
+            None,
+            "domainless literals must not resolve when a subject exists in multiple domains"
+        );
+    }
+
+    #[test]
+    fn parse_account_literal_accepts_alias_domain_literals() {
+        let domain_id: DomainId = "ivm".parse().expect("domain");
+        let account_id = AccountId::new(domain_id.clone(), ALICE_ID.signatory().clone());
+        let alias = AccountLabel::new(
+            domain_id.clone(),
+            Name::from_str("gas").expect("alias name"),
+        );
+        let world = World::with(
+            [Domain::new(domain_id.clone()).build(&account_id)],
+            [Account::new(account_id.clone())
+                .with_label(Some(alias))
+                .build(&account_id)],
+            [],
+        );
+        let world_view = world.view();
+
+        assert_eq!(
+            parse_account_literal_with_world(&world_view, "gas@ivm"),
+            Some(account_id)
         );
     }
 

@@ -25,9 +25,9 @@ This document explains the structures, identifiers, traits, and protocols that f
 
 String forms of IDs (round-trippable with `Display`/`FromStr`):
 - `DomainId`: `name` (e.g., `wonderland`).
-- `AccountId`: canonical identifier encoded via `AccountAddress`, which exposes IH58, Sora compressed (`sora…`), and canonical hex codecs (`AccountAddress::to_ih58`, `to_compressed_sora`, `canonical_hex`, `parse_any`). IH58 is the preferred account format; the `sora…` form is second-best for Sora-only UX. The human-friendly routing alias `alias@domain` is preserved for UX but is no longer treated as the authoritative identifier. Torii normalises incoming strings through `AccountAddress::parse_any`. Account IDs support both single-key and multisig controllers.
+- `AccountId`: canonical identifier encoded via `AccountAddress`, which exposes IH58, Sora compressed (`sora…`), and canonical hex codecs (`AccountAddress::to_ih58`, `to_compressed_sora`, `canonical_hex`, `parse_encoded`). IH58 is the preferred account format; the `sora…` form is second-best for Sora-only UX. The human-friendly routing alias `alias@domain` is preserved for UX but is no longer treated as the authoritative identifier. Torii normalises incoming strings through `AccountAddress::parse_encoded`. Account IDs support both single-key and multisig controllers.
 - `AssetDefinitionId`: `asset#domain` (e.g., `xor#soramitsu`).
-- `AssetId`: `asset#domain#account` or shorthand `asset##account` if the definition domain equals the account domain, where `account` is the canonical `AccountId` string (IH58 preferred).
+- `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`: `nft$domain` (e.g., `rose$garden`).
 - `PeerId`: `public_key` (peer equality is by public key).
 

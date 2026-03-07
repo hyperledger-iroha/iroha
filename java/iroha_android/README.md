@@ -62,6 +62,8 @@ System.out.println(formats.compressedWarning);
 
 Use `displayFormats()` whenever UI layers need to render or copy addresses so the warning text and
 network prefix stay aligned with `docs/source/sns/address_display_guidelines.md`.
+Account-id parsers accept encoded address identifiers (IH58 preferred, `sora` compressed accepted)
+and reject legacy plain-name literals.
 
 ## Multisig specs and TTL preview
 
@@ -73,8 +75,8 @@ MultisigSpec spec =
     MultisigSpec.builder()
         .setQuorum(3)
         .setTransactionTtlMs(86_400_000L)
-        .addSignatory("alice@wonderland", 2)
-        .addSignatory("bob@wonderland", 1)
+        .addSignatory("<account_ih58>@wonderland", 2)
+        .addSignatory("<backup_ih58>@wonderland", 1)
         .build();
 
 MultisigProposalTtlPreview preview = spec.enforceProposalTtl(90_000L, System.currentTimeMillis());
@@ -126,7 +128,7 @@ plan.put("period", "month");
 SubscriptionPlanCreateResponse planResponse =
     client.createSubscriptionPlan(
             SubscriptionPlanCreateRequest.builder()
-                .authority("aws@commerce")
+                .authority("<authority_ih58>@commerce")
                 .privateKey("<hex>")
                 .planId("aws_compute#commerce")
                 .plan(plan)
@@ -136,7 +138,7 @@ SubscriptionPlanCreateResponse planResponse =
 SubscriptionCreateResponse subscriptionResponse =
     client.createSubscription(
             SubscriptionCreateRequest.builder()
-                .authority("alice@wonderland")
+                .authority("<account_ih58>@subscriptions")
                 .privateKey("<hex>")
                 .subscriptionId("sub-001$subscriptions")
                 .planId("aws_compute#commerce")
@@ -146,7 +148,7 @@ SubscriptionCreateResponse subscriptionResponse =
 client.recordSubscriptionUsage(
         "sub-001$subscriptions",
         SubscriptionUsageRequest.builder()
-            .authority("aws@commerce")
+            .authority("<authority_ih58>@commerce")
             .privateKey("<hex>")
             .unitKey("compute_ms")
             .delta("3600000")
@@ -716,9 +718,9 @@ building ad-hoc HTTP requests:
 import java.net.URI;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
 
-URI uri = URI.create("https://torii.example/v1/accounts/alice@wonderland/assets?limit=10");
+URI uri = URI.create("https://torii.example/v1/accounts/<account_ih58>/assets?limit=10");
 Map<String, String> headers =
-    CanonicalRequestSigner.buildHeaders("get", uri, new byte[0], "alice@wonderland", keyPair.getPrivate());
+    CanonicalRequestSigner.buildHeaders("get", uri, new byte[0], "<account_ih58>", keyPair.getPrivate());
 ```
 
 Signatures cover the canonical method/path/query/body layout, matching the Rust
@@ -1012,7 +1014,7 @@ from any `HttpClientTransport`:
 ```java
 OfflineListParams params = OfflineListParams.builder()
     .limit(10L)
-    .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"merchant@wonderland\"]}")
+    .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"<merchant_ih58>@wonderland\"]}")
     .build();
 
 transport.offlineToriiClient().listAllowances(params)
@@ -1023,7 +1025,7 @@ transport.offlineToriiClient().listAllowances(params)
     });
 
 OfflineQueryEnvelope query = OfflineQueryEnvelope.builder()
-    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"merchant@wonderland\"]}")
+    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"<merchant_ih58>@wonderland\"]}")
     .setLimit(25L)
     .build();
 

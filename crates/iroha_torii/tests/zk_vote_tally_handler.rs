@@ -38,7 +38,12 @@ async fn vote_tally_handler_returns_finalized_tally() {
         iroha_core::telemetry::StateTelemetry::default(),
     );
     #[cfg(not(feature = "telemetry"))]
-    let mut core_state = CoreState::new(World::new(), kura, query);
+    let mut core_state = CoreState::new(
+        World::new(),
+        kura,
+        query,
+        iroha_core::telemetry::StateTelemetry::default(),
+    );
     core_state.zk.halo2.enabled = true;
     core_state.zk.verify_timeout = Duration::ZERO;
     let state = Arc::new(core_state);

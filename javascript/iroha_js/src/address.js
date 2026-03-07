@@ -282,7 +282,6 @@ export class AccountAddressError extends Error {
 export const AccountAddressFormat = Object.freeze({
   IH58: "ih58",
   COMPRESSED: "compressed",
-  CANONICAL_HEX: "canonical_hex",
 });
 
 const AddressClass = Object.freeze({
@@ -1226,28 +1225,6 @@ export class AccountAddress {
     return new AccountAddress(header, { tag: 0, payload: null }, controller);
   }
 
-  static fromCanonicalHex(encoded) {
-    const nativeParsed = parseWithNativeCodec(
-      encoded,
-      undefined,
-      AccountAddressFormat.CANONICAL_HEX,
-    );
-    if (nativeParsed) {
-      return AccountAddress.fromCanonicalBytes(nativeParsed.canonicalBytes);
-    }
-    const body = encoded.startsWith("0x") || encoded.startsWith("0X") ? encoded.slice(2) : encoded;
-    if (body.length === 0 || body.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(body)) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_HEX_ADDRESS, "invalid canonical hex account address");
-    }
-    let bytes;
-    try {
-      bytes = Buffer.from(body, "hex");
-    } catch (error) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_HEX_ADDRESS, "invalid canonical hex account address");
-    }
-    return AccountAddress.fromCanonicalBytes(bytes);
-  }
-
   static fromIH58(encoded, expectedPrefix) {
     const normalizedExpectedPrefix =
       expectedPrefix === undefined
@@ -1291,7 +1268,7 @@ export class AccountAddress {
     return AccountAddress.fromCanonicalBytes(canonical);
   }
 
-  static parseAny(input, expectedPrefix, expectedDomainName) {
+  static parseEncoded(input, expectedPrefix, expectedDomainName) {
     if (typeof input !== "string") {
       throw new TypeError("account address literal must be a string");
     }
@@ -1299,15 +1276,22 @@ export class AccountAddress {
     if (trimmed.length === 0) {
       throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
     }
+    if (trimmed.includes("@")) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+        "account address literals must not include '@domain'; use IH58 or compressed sora",
+      );
+    }
     if (trimmed.startsWith(COMPRESSED_SENTINEL)) {
       const address = AccountAddress.fromCompressedSora(trimmed);
       assertDomainMatches(address, expectedDomainName);
       return { address, format: AccountAddressFormat.COMPRESSED };
     }
     if (isCanonicalHexLiteral(trimmed)) {
-      const address = AccountAddress.fromCanonicalHex(trimmed);
-      assertDomainMatches(address, expectedDomainName);
-      return { address, format: AccountAddressFormat.CANONICAL_HEX };
+      throw new AccountAddressError(
+        AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+        "canonical hex account addresses are not accepted; use IH58 or compressed sora",
+      );
     }
     try {
       const address = AccountAddress.fromIH58(trimmed, expectedPrefix);
@@ -1502,13 +1486,13 @@ function initNativeAddressCodec(binding) {
     return null;
   }
   if (
-    typeof binding.accountAddressParseAny !== "function" ||
+    typeof binding.accountAddressParseEncoded !== "function" ||
     typeof binding.accountAddressRender !== "function"
   ) {
     return null;
   }
   return {
-    parseAny: binding.accountAddressParseAny.bind(binding),
+    parseEncoded: binding.accountAddressParseEncoded.bind(binding),
     render: binding.accountAddressRender.bind(binding),
   };
 }
@@ -1518,7 +1502,7 @@ function parseWithNativeCodec(input, expectedPrefix, requiredFormat) {
     return null;
   }
   try {
-    const parsed = nativeAddressCodec.parseAny(String(input), expectedPrefix ?? null);
+    const parsed = nativeAddressCodec.parseEncoded(String(input), expectedPrefix ?? null);
     if (!parsed) {
       return null;
     }
@@ -1611,9 +1595,6 @@ function normalizeNativeAddressFormat(kind) {
       return AccountAddressFormat.IH58;
     case AccountAddressFormat.COMPRESSED:
       return AccountAddressFormat.COMPRESSED;
-    case AccountAddressFormat.CANONICAL_HEX:
-    case "canonical-hex":
-      return AccountAddressFormat.CANONICAL_HEX;
     default:
       return null;
   }
@@ -1670,8 +1651,6 @@ function classifyDetectedFormat(literal, format, networkPrefix) {
   switch (format) {
     case AccountAddressFormat.COMPRESSED:
       return { kind: "compressed" };
-    case AccountAddressFormat.CANONICAL_HEX:
-      return { kind: "canonical-hex" };
     case AccountAddressFormat.IH58:
       return {
         kind: "ih58",
@@ -1684,10 +1663,10 @@ function classifyDetectedFormat(literal, format, networkPrefix) {
 }
 
 /**
- * Inspect an account-id literal (IH58 (preferred)/sora (second-best)/canonical) and emit canonical
+ * Inspect an account-id literal (IH58 (preferred)/sora (second-best)) and emit canonical
  * encodings plus compatibility warnings (for example compressed literals).
  *
- * @param {string} literal - Account literal (IH58 (preferred)/sora (second-best)/0x)
+ * @param {string} literal - Account literal (IH58 (preferred)/sora (second-best))
  * @param {{ networkPrefix?: number, expectPrefix?: number }} [options]
  * @returns {{
  *   detectedFormat: { kind: string, networkPrefix?: number },
@@ -1714,7 +1693,7 @@ export function inspectAccountId(literal, options = {}) {
   }
 
   const normalizedOptions = normalizeInspectAccountOptions(options);
-  const { address, format, networkPrefix: detectedPrefix } = AccountAddress.parseAny(
+  const { address, format, networkPrefix: detectedPrefix } = AccountAddress.parseEncoded(
     trimmed,
     normalizedOptions.expectPrefix,
   );

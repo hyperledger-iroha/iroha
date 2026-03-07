@@ -135,12 +135,7 @@ const FIXTURE_VAULT_ID = fixtureAccountId("vault");
 const FIXTURE_MERCHANT_ID = fixtureAccountId("merchant");
 const FIXTURE_ISSUER_ID = fixtureAccountId("issuer");
 const FIXTURE_AUTHORITY_ID = fixtureAccountId("authority");
-const LEGACY_FIXTURE_ALICE_ID = FIXTURE_ALICE_ID;
-const LEGACY_FIXTURE_BOB_ID = FIXTURE_BOB_ID;
-const LEGACY_FIXTURE_CAROL_ID = FIXTURE_CAROL_ID;
-const LEGACY_FIXTURE_VAULT_ID = FIXTURE_VAULT_ID;
-const LEGACY_FIXTURE_MERCHANT_ID = FIXTURE_MERCHANT_ID;
-const LEGACY_FIXTURE_AUTHORITY_ID = FIXTURE_AUTHORITY_ID;
+const FIXTURE_COUNCIL_TEST_ID = fixtureAccountId("council", "test");
 
 function expectValidationErrorFixture(error, key) {
   assert(error instanceof ValidationError);
@@ -961,15 +956,15 @@ test("getVerifyingKeyTyped decodes payload", async () => {
 
 test("registerVerifyingKey canonicalizes payload", async () => {
   let captured;
-  const legacyAuthority =
-    LEGACY_FIXTURE_ALICE_ID;
+  const canonicalAuthority =
+    FIXTURE_ALICE_ID;
   const fetchImpl = async (url, init) => {
     captured = { url, init, body: JSON.parse(init.body) };
     return createResponse({ status: 202 });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await client.registerVerifyingKey({
-    authority: legacyAuthority,
+    authority: canonicalAuthority,
     private_key: "ed0120",
     backend: "halo2/ipa",
     name: "vk_main",
@@ -990,7 +985,7 @@ test("registerVerifyingKey canonicalizes payload", async () => {
     "application/json",
   );
   const body = captured.body;
-  assert.equal(body.authority, normalizeAccountId(legacyAuthority, "registerVerifyingKey.authority"));
+  assert.equal(body.authority, normalizeAccountId(canonicalAuthority, "registerVerifyingKey.authority"));
   assert.equal(body.private_key, "ed0120");
   assert.equal(body.backend, "halo2/ipa");
   assert.equal(body.name, "vk_main");
@@ -1712,7 +1707,7 @@ test("registerSorafsPinManifest posts payload and returns JSON", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.registerSorafsPinManifest({
-    authority: LEGACY_FIXTURE_ALICE_ID,
+    authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
     chunker: {
       profileId: 1,
@@ -1731,7 +1726,7 @@ test("registerSorafsPinManifest posts payload and returns JSON", async () => {
   assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/pin/register`);
   assert.equal(captured?.init?.method, "POST");
   const body = JSON.parse(captured?.init?.body ?? "{}");
-  assert.equal(body.authority, LEGACY_FIXTURE_ALICE_ID);
+  assert.equal(body.authority, FIXTURE_ALICE_ID);
   assert.equal(body.chunker_profile_id, 1);
   assert.equal(body.pin_policy?.storage_class?.type, "Hot");
   assert.equal(body.chunk_digest_sha3_256_hex, chunkHex);
@@ -1752,7 +1747,7 @@ test("registerSorafsPinManifest validates storage class input", async () => {
   await assert.rejects(
     () =>
       client.registerSorafsPinManifest({
-        authority: LEGACY_FIXTURE_ALICE_ID,
+        authority: FIXTURE_ALICE_ID,
         privateKey: "ed25519:deadbeef",
         chunker: {
           profileId: 1,
@@ -1791,7 +1786,7 @@ test("registerSorafsPinManifestTyped normalizes response payloads", async () => 
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.registerSorafsPinManifestTyped({
-    authority: LEGACY_FIXTURE_ALICE_ID,
+    authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
     chunker: {
       profileId: 1,
@@ -1847,7 +1842,7 @@ test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async
     },
     chunk_digest_sha3_256_hex: "2".repeat(64),
     pin_policy: { min_replicas: 3 },
-    submitted_by: LEGACY_FIXTURE_CAROL_ID,
+    submitted_by: FIXTURE_CAROL_ID,
     submitted_epoch: 42,
     status: { state: "approved", epoch: 45 },
     metadata: { note: "demo" },
@@ -1861,7 +1856,7 @@ test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async
         effective_at: "2025-01-01T00:00:00Z",
         effective_at_unix: 1_700_000_000,
         targets: { alias: "docs/main", pin_digest_hex: manifestHex },
-        signers: [LEGACY_FIXTURE_CAROL_ID],
+        signers: [FIXTURE_CAROL_ID],
       },
     ],
     council_envelope_digest_hex: councilHex,
@@ -1880,7 +1875,7 @@ test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async
     namespace: "sora",
     name: "docs",
     manifest_digest_hex: manifestHex,
-    bound_by: LEGACY_FIXTURE_ALICE_ID,
+    bound_by: FIXTURE_ALICE_ID,
     bound_epoch: 10,
     expiry_epoch: 99,
     proof_b64: Buffer.from("proof").toString("base64"),
@@ -1896,7 +1891,7 @@ test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async
   const orderRecord = {
     order_id_hex: "c".repeat(64),
     manifest_digest_hex: manifestHex,
-    issued_by: LEGACY_FIXTURE_BOB_ID,
+    issued_by: FIXTURE_BOB_ID,
     issued_epoch: 50,
     deadline_epoch: 80,
     status: { state: "pending" },
@@ -1954,7 +1949,7 @@ test("getSorafsPinManifestTyped rejects non-integer status timestamps", async ()
     },
     chunk_digest_sha3_256_hex: "2".repeat(64),
     pin_policy: { min_replicas: 3 },
-    submitted_by: LEGACY_FIXTURE_CAROL_ID,
+    submitted_by: FIXTURE_CAROL_ID,
     submitted_epoch: 42,
     status: { state: "approved", epoch: 45 },
     metadata: {},
@@ -1991,7 +1986,7 @@ test("listSorafsAliases normalizes response and applies filters", async () => {
     namespace: "sora",
     name: "docs",
     manifest_digest_hex: manifestHex,
-    bound_by: LEGACY_FIXTURE_ALICE_ID,
+    bound_by: FIXTURE_ALICE_ID,
     bound_epoch: 10,
     expiry_epoch: 99,
     proof_b64: Buffer.from("proof").toString("base64"),
@@ -2055,7 +2050,7 @@ test("listSorafsPinManifests normalizes manifest payloads and guards filters", a
     },
     chunk_digest_sha3_256_hex: "2".repeat(64),
     pin_policy: { min_replicas: 3 },
-    submitted_by: LEGACY_FIXTURE_CAROL_ID,
+    submitted_by: FIXTURE_CAROL_ID,
     submitted_epoch: 42,
     status: { state: "approved", epoch: 45 },
     metadata: { note: "demo" },
@@ -2069,7 +2064,7 @@ test("listSorafsPinManifests normalizes manifest payloads and guards filters", a
         effective_at: "2025-01-01T00:00:00Z",
         effective_at_unix: 1_700_000_000,
         targets: { alias: "docs/main", pin_digest_hex: manifestHex },
-        signers: [LEGACY_FIXTURE_CAROL_ID],
+        signers: [FIXTURE_CAROL_ID],
       },
     ],
     council_envelope_digest_hex: councilHex,
@@ -2137,7 +2132,7 @@ test("listSorafsReplicationOrders normalizes response and validates status filte
   const orderRecord = {
     order_id_hex: orderHex,
     manifest_digest_hex: manifestHex,
-    issued_by: LEGACY_FIXTURE_BOB_ID,
+    issued_by: FIXTURE_BOB_ID,
     issued_epoch: 50,
     deadline_epoch: 80,
     status: { state: "pending" },
@@ -2595,7 +2590,7 @@ test("iterateSorafsAliases paginates alias listings", async () => {
     namespace: "sora",
     name: "docs",
     manifest_digest_hex: "0".repeat(64),
-    bound_by: LEGACY_FIXTURE_ALICE_ID,
+    bound_by: FIXTURE_ALICE_ID,
     bound_epoch: 10,
     expiry_epoch: 99,
     proof_b64: Buffer.from("proof").toString("base64"),
@@ -2674,7 +2669,7 @@ test("iterateSorafsPinManifests honors maxItems and pagination", async () => {
     },
     chunk_digest_sha3_256_hex: "2".repeat(64),
     pin_policy: { min_replicas: 3 },
-    submitted_by: LEGACY_FIXTURE_CAROL_ID,
+    submitted_by: FIXTURE_CAROL_ID,
     submitted_epoch: 42,
     status: { state: "approved", epoch: 45 },
     metadata: { note: "demo" },
@@ -2751,7 +2746,7 @@ test("iterateSorafsReplicationOrders paginates results", async () => {
   const baseOrder = {
     order_id_hex: "c".repeat(64),
     manifest_digest_hex: "b".repeat(64),
-    issued_by: LEGACY_FIXTURE_BOB_ID,
+    issued_by: FIXTURE_BOB_ID,
     issued_epoch: 50,
     deadline_epoch: 80,
     status: { state: "pending", epoch: null },
@@ -8322,7 +8317,7 @@ test("listRuntimeUpgrades normalizes manifest and status payloads", async () => 
                 end_height: 20,
               },
               status: { ActivatedAt: 12 },
-              proposer: LEGACY_FIXTURE_ALICE_ID,
+              proposer: FIXTURE_ALICE_ID,
               created_height: 8,
             },
           },
@@ -8340,7 +8335,7 @@ test("listRuntimeUpgrades normalizes manifest and status payloads", async () => 
                 end_height: 40,
               },
               status: { Proposed: null },
-              proposer: LEGACY_FIXTURE_BOB_ID,
+              proposer: FIXTURE_BOB_ID,
               created_height: 25,
             },
           },
@@ -8365,7 +8360,7 @@ test("listRuntimeUpgrades normalizes manifest and status payloads", async () => 
         endHeight: 20,
       },
       status: { kind: "ActivatedAt", activatedHeight: 12 },
-      proposer: LEGACY_FIXTURE_ALICE_ID,
+      proposer: FIXTURE_ALICE_ID,
       createdHeight: 8,
     },
   });
@@ -8958,10 +8953,10 @@ test("governanceSubmitPlainBallot normalizes amount and direction", async () => 
     },
   });
   const ballot = await client.governanceSubmitPlainBallot({
-    authority: LEGACY_FIXTURE_ALICE_ID,
+    authority: FIXTURE_ALICE_ID,
     chainId: "chain-0",
     referendumId: "ref-plain",
-    owner: LEGACY_FIXTURE_ALICE_ID,
+    owner: FIXTURE_ALICE_ID,
     amount: 500n,
     durationBlocks: "600",
     direction: "nay",
@@ -8985,10 +8980,10 @@ test("governanceSubmitPlainBallot accepts decimal Numeric amounts", async () => 
     },
   });
   await client.governanceSubmitPlainBallot({
-    authority: LEGACY_FIXTURE_ALICE_ID,
+    authority: FIXTURE_ALICE_ID,
     chainId: "chain-0",
     referendumId: "ref-plain-decimal",
-    owner: LEGACY_FIXTURE_ALICE_ID,
+    owner: FIXTURE_ALICE_ID,
     amount: "12.500",
     durationBlocks: 1,
     direction: "aye",
@@ -9011,10 +9006,10 @@ test("governanceSubmitPlainBallot forwards AbortSignal to fetch", async () => {
   const controller = new AbortController();
   await client.governanceSubmitPlainBallot(
     {
-      authority: LEGACY_FIXTURE_ALICE_ID,
+      authority: FIXTURE_ALICE_ID,
       chainId: "chain-0",
       referendumId: "ref-plain",
-      owner: LEGACY_FIXTURE_ALICE_ID,
+      owner: FIXTURE_ALICE_ID,
       amount: "5000",
       durationBlocks: 1_000,
       direction: "Aye",
@@ -9091,10 +9086,10 @@ test("governance helpers reject unsupported option keys", async () => {
     /getGovernanceCouncilCurrent options contains unsupported fields: extra/,
   );
   const ballotPayload = {
-    authority: LEGACY_FIXTURE_ALICE_ID,
+    authority: FIXTURE_ALICE_ID,
     chainId: "chain-1",
     referendumId: "ref-1",
-    owner: LEGACY_FIXTURE_ALICE_ID,
+    owner: FIXTURE_ALICE_ID,
     amount: "10",
     durationBlocks: 1,
     direction: "Aye",
@@ -9146,7 +9141,7 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
     },
   });
   const zkResult = await client.governanceSubmitZkBallot({
-    authority: LEGACY_FIXTURE_BOB_ID,
+    authority: FIXTURE_BOB_ID,
     chainId: "chain-0",
     electionId: "ref-zk",
     proof: [1, 2, 3],
@@ -9171,7 +9166,7 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
   assert.equal(zkResult.accepted, true);
 
   const zkV1Result = await client.governanceSubmitZkBallotV1({
-    authority: LEGACY_FIXTURE_BOB_ID,
+    authority: FIXTURE_BOB_ID,
     chainId: "chain-0",
     electionId: "ref-zk",
     backend: "halo2/ipa",
@@ -9187,7 +9182,7 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
   assert.equal(zkV1Result.reason, "build transaction skeleton");
 
   const zkProofResult = await client.governanceSubmitZkBallotProofV1({
-    authority: LEGACY_FIXTURE_BOB_ID,
+    authority: FIXTURE_BOB_ID,
     chainId: "chain-0",
     electionId: "ref-zk",
     ballot: {
@@ -9215,7 +9210,7 @@ test("governanceSubmitZk ballots reject partial lock hints", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallot({
-        authority: LEGACY_FIXTURE_BOB_ID,
+        authority: FIXTURE_BOB_ID,
         chainId: "chain-0",
         electionId: "ref-zk",
         proof: [1, 2, 3],
@@ -9238,7 +9233,7 @@ test("governanceSubmitZk ballots reject invalid hex hints", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallot({
-        authority: LEGACY_FIXTURE_BOB_ID,
+        authority: FIXTURE_BOB_ID,
         chainId: "chain-0",
         electionId: "ref-zk",
         proof: [1, 2, 3],
@@ -9266,7 +9261,7 @@ test("governanceSubmitZk ballots reject deprecated public input keys", async () 
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallot({
-        authority: LEGACY_FIXTURE_BOB_ID,
+        authority: FIXTURE_BOB_ID,
         chainId: "chain-0",
         electionId: "ref-zk",
         proof: [1, 2, 3],
@@ -9293,7 +9288,7 @@ test("governanceSubmitZk ballots reject noncanonical owners", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallot({
-        authority: LEGACY_FIXTURE_BOB_ID,
+        authority: FIXTURE_BOB_ID,
         chainId: "chain-0",
         electionId: "ref-zk",
         proof: [1, 2, 3],
@@ -9320,7 +9315,7 @@ test("governanceSubmitZkBallotV1 rejects partial lock hints", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallotV1({
-        authority: LEGACY_FIXTURE_BOB_ID,
+        authority: FIXTURE_BOB_ID,
         chainId: "chain-0",
         electionId: "ref-zk",
         backend: "halo2/ipa",
@@ -9344,7 +9339,7 @@ test("governanceSubmitZkBallotV1 rejects noncanonical owner", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallotV1({
-        authority: LEGACY_FIXTURE_BOB_ID,
+        authority: FIXTURE_BOB_ID,
         chainId: "chain-0",
         electionId: "ref-zk",
         backend: "halo2/ipa",
@@ -9370,7 +9365,7 @@ test("governanceSubmitZkBallotV1 rejects invalid hex hints", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallotV1({
-        authority: LEGACY_FIXTURE_BOB_ID,
+        authority: FIXTURE_BOB_ID,
         chainId: "chain-0",
         electionId: "ref-zk",
         backend: "halo2/ipa",
@@ -9394,7 +9389,7 @@ test("governanceSubmitZkBallotProofV1 rejects partial lock hints", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallotProofV1({
-        authority: LEGACY_FIXTURE_BOB_ID,
+        authority: FIXTURE_BOB_ID,
         chainId: "chain-0",
         electionId: "ref-zk",
         ballot: { owner: SAMPLE_ACCOUNT_FORMS.ih58 },
@@ -9416,7 +9411,7 @@ test("governanceSubmitZkBallotProofV1 rejects noncanonical owner", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallotProofV1({
-        authority: LEGACY_FIXTURE_BOB_ID,
+        authority: FIXTURE_BOB_ID,
         chainId: "chain-0",
         electionId: "ref-zk",
         ballot: {
@@ -9495,7 +9490,7 @@ test("governanceDeriveCouncilVrf encodes candidate payload", async () => {
     epoch: "9",
     candidates: [
       {
-        accountId: "validator@test",
+        accountId: FIXTURE_VALIDATOR_TEST_ID,
         variant: "small",
         pk_b64: Buffer.alloc(48, 0xaa),
         proof_b64: Buffer.alloc(96, 0xbb),
@@ -9505,7 +9500,7 @@ test("governanceDeriveCouncilVrf encodes candidate payload", async () => {
   assert.equal(captured.committee_size, 3);
   assert.equal(captured.epoch, 9);
   assert.equal(captured.candidates.length, 1);
-  assert.equal(captured.candidates[0].account_id, "validator@test");
+  assert.equal(captured.candidates[0].account_id, FIXTURE_VALIDATOR_TEST_ID);
   assert.equal(captured.candidates[0].variant, "Small");
   assert.match(captured.candidates[0].pk_b64, /^[A-Za-z0-9+/]+=*$/);
   assert.match(captured.candidates[0].proof_b64, /^[A-Za-z0-9+/]+=*$/);
@@ -9531,16 +9526,16 @@ test("governancePersistCouncil forwards credentials and validates pairing", asyn
     committeeSize: 1,
     candidates: [
       {
-        accountId: "validator@test",
+        accountId: FIXTURE_VALIDATOR_TEST_ID,
         variant: "Normal",
         pk_b64: Buffer.alloc(48).toString("base64"),
         proof_b64: Buffer.alloc(96).toString("base64"),
       },
     ],
-    authority: "council@test",
+    authority: FIXTURE_COUNCIL_TEST_ID,
     privateKey: "ed25519:deadbeef",
   });
-  assert.equal(captured.authority, "council@test");
+  assert.equal(captured.authority, FIXTURE_COUNCIL_TEST_ID);
   assert.equal(captured.private_key, "ed25519:deadbeef");
   assert.equal(response.derived_by, "Vrf");
   await assert.rejects(
@@ -9549,13 +9544,13 @@ test("governancePersistCouncil forwards credentials and validates pairing", asyn
         committeeSize: 1,
         candidates: [
           {
-            accountId: "validator@test",
+            accountId: FIXTURE_VALIDATOR_TEST_ID,
             variant: "Normal",
             pk_b64: Buffer.alloc(48).toString("base64"),
             proof_b64: Buffer.alloc(96).toString("base64"),
           },
         ],
-        authority: "council@test",
+        authority: FIXTURE_COUNCIL_TEST_ID,
       }),
     /requires both authority and privateKey/,
   );
@@ -10877,7 +10872,7 @@ test("listAccounts encodes iterable params", async () => {
     assert.equal(parsed.searchParams.get("offset"), "5");
     assert.equal(
       parsed.searchParams.get("filter"),
-      JSON.stringify({ Eq: ["id", LEGACY_FIXTURE_ALICE_ID] }),
+      JSON.stringify({ Eq: ["id", FIXTURE_ALICE_ID] }),
     );
     assert.equal(parsed.searchParams.get("sort"), "id:asc");
     assert.equal(parsed.searchParams.get("address_format"), "compressed");
@@ -10891,7 +10886,7 @@ test("listAccounts encodes iterable params", async () => {
   const payload = await client.listAccounts({
     limit: "10",
     offset: 5n,
-    filter: { Eq: ["id", LEGACY_FIXTURE_ALICE_ID] },
+    filter: { Eq: ["id", FIXTURE_ALICE_ID] },
     sort: [{ key: "id", order: "asc" }],
     addressFormat: "compressed",
   });
@@ -11051,7 +11046,7 @@ test("queryAccounts rejects non-query iterable fields", async () => {
     },
   });
   await assert.rejects(
-    () => client.queryAccounts({ controllerId: LEGACY_FIXTURE_ALICE_ID }),
+    () => client.queryAccounts({ controllerId: FIXTURE_ALICE_ID }),
     /options for \/v1\/accounts\/query contains unsupported fields: controllerId/,
   );
 });
@@ -11608,7 +11603,7 @@ test("listNfts surfaces permission errors with payload details", async () => {
 test("listAccountPermissions encodes pagination and parses response", async () => {
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(LEGACY_FIXTURE_ALICE_ID, "/permissions"));
+    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/permissions"));
     assert.equal(parsed.searchParams.get("limit"), "5");
     assert.equal(parsed.searchParams.get("offset"), "2");
     return createResponse({
@@ -11621,7 +11616,7 @@ test("listAccountPermissions encodes pagination and parses response", async () =
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listAccountPermissions(LEGACY_FIXTURE_ALICE_ID, {
+  const result = await client.listAccountPermissions(FIXTURE_ALICE_ID, {
     limit: 5,
     offset: 2,
   });
@@ -11648,7 +11643,7 @@ test("listAccountPermissions rejects non-object options", async () => {
     },
   });
   await assert.rejects(
-    () => client.listAccountPermissions(LEGACY_FIXTURE_ALICE_ID, 1),
+    () => client.listAccountPermissions(FIXTURE_ALICE_ID, 1),
     /listAccountPermissions options must be an object/,
   );
   assert.equal(fetchCalled, false);
@@ -11668,7 +11663,7 @@ test("listAccountPermissions rejects invalid signals", async () => {
   });
   await assert.rejects(
     () =>
-      client.listAccountPermissions(LEGACY_FIXTURE_ALICE_ID, {
+      client.listAccountPermissions(FIXTURE_ALICE_ID, {
         // @ts-expect-error intentional invalid signal for runtime guard
         signal: {},
       }),
@@ -11690,7 +11685,7 @@ test("listAccountPermissions forwards AbortSignal instances", async () => {
       });
     },
   });
-  await client.listAccountPermissions(LEGACY_FIXTURE_ALICE_ID, {
+  await client.listAccountPermissions(FIXTURE_ALICE_ID, {
     limit: 1,
     signal: controller.signal,
   });
@@ -11702,7 +11697,7 @@ test("iterateAccountPermissions paginates account-scoped permissions", async () 
   let callCount = 0;
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(LEGACY_FIXTURE_ALICE_ID, "/permissions"));
+    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/permissions"));
     const limit = Number(parsed.searchParams.get("limit"));
     const offset = Number(parsed.searchParams.get("offset") ?? "0");
     callCount += 1;
@@ -11723,7 +11718,7 @@ test("iterateAccountPermissions paginates account-scoped permissions", async () 
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const collected = [];
-  for await (const item of client.iterateAccountPermissions(LEGACY_FIXTURE_ALICE_ID, {
+  for await (const item of client.iterateAccountPermissions(FIXTURE_ALICE_ID, {
     pageSize: 2,
     maxItems: 3,
   })) {
@@ -11743,7 +11738,7 @@ test("listAccountPermissions validates entry names", async () => {
       }),
   });
   await assert.rejects(
-    () => client.listAccountPermissions(LEGACY_FIXTURE_ALICE_ID),
+    () => client.listAccountPermissions(FIXTURE_ALICE_ID),
     /account permission list response\.items\[0]\.name/,
   );
 });
@@ -11769,38 +11764,53 @@ test("listAccountPermissions normalizes IH58 and compressed (`sora`) account ids
 test("listAccountAssets encodes pagination params", async () => {
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(LEGACY_FIXTURE_ALICE_ID, "/assets"));
+    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/assets"));
     assert.equal(parsed.searchParams.get("limit"), "5");
     assert.equal(parsed.searchParams.get("offset"), "1");
     return createResponse({
       status: 200,
       jsonData: {
-        items: [{ asset_id: `rose#wonderland#${FIXTURE_ALICE_ID}`, quantity: "10" }],
+        items: [{ asset_id: `rose#wonderland##${FIXTURE_ALICE_ID}`, quantity: "10" }],
         total: 1,
       },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAccountAssets(LEGACY_FIXTURE_ALICE_ID, { limit: 5, offset: 1 });
-  assert.equal(payload.items[0].asset_id, `rose#wonderland#${FIXTURE_ALICE_ID}`);
+  const payload = await client.listAccountAssets(FIXTURE_ALICE_ID, { limit: 5, offset: 1 });
+  assert.equal(payload.items[0].asset_id, `rose#wonderland##${FIXTURE_ALICE_ID}`);
 });
 
 test("listAccountAssets encodes assetId filters", async () => {
-  const assetId = `rose#wonderland#${FIXTURE_ALICE_ID}`;
+  const assetId = "norito:DEADBEEF";
+  const normalizedAssetId = "norito:deadbeef";
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(LEGACY_FIXTURE_ALICE_ID, "/assets"));
-    assert.equal(parsed.searchParams.get("asset_id"), assetId);
+    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/assets"));
+    assert.equal(parsed.searchParams.get("asset_id"), normalizedAssetId);
     return createResponse({
       status: 200,
-      jsonData: { items: [{ asset_id: assetId, quantity: "10" }], total: 1 },
+      jsonData: { items: [{ asset_id: normalizedAssetId, quantity: "10" }], total: 1 },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAccountAssets(LEGACY_FIXTURE_ALICE_ID, { assetId });
-  assert.equal(payload.items[0].asset_id, assetId);
+  const payload = await client.listAccountAssets(FIXTURE_ALICE_ID, { assetId });
+  assert.equal(payload.items[0].asset_id, normalizedAssetId);
+});
+
+test("listAccountAssets rejects unsupported asset#domain#account filters", async () => {
+  const invalidAssetId = `rose#wonderland#${FIXTURE_ALICE_ID}`;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not be called");
+    },
+  });
+
+  await assert.rejects(
+    () => client.listAccountAssets(FIXTURE_ALICE_ID, { assetId: invalidAssetId }),
+    /must use encoded AssetId form 'norito:<hex>'; legacy 'asset#domain#account' and 'asset##account' forms are not supported/,
+  );
 });
 
 test("listAccountAssets enforces canonical quantity strings", async () => {
@@ -11809,14 +11819,14 @@ test("listAccountAssets enforces canonical quantity strings", async () => {
       createResponse({
         status: 200,
         jsonData: {
-          items: [{ asset_id: `rose#wonderland#${FIXTURE_ALICE_ID}`, quantity: 10 }],
+          items: [{ asset_id: `rose#wonderland##${FIXTURE_ALICE_ID}`, quantity: 10 }],
           total: 1,
         },
         headers: { "content-type": "application/json" },
       }),
   });
   await assert.rejects(
-    () => client.listAccountAssets(LEGACY_FIXTURE_ALICE_ID),
+    () => client.listAccountAssets(FIXTURE_ALICE_ID),
     /account asset list response\.items\[0]\.quantity/,
   );
 });
@@ -11829,8 +11839,8 @@ test("listAccountAssets rejects camelCase assetId fields", async () => {
         jsonData: {
           items: [
             {
-              asset_id: `rose#wonderland#${FIXTURE_ALICE_ID}`,
-              assetId: `rose#wonderland#${FIXTURE_ALICE_ID}`,
+              asset_id: `rose#wonderland##${FIXTURE_ALICE_ID}`,
+              assetId: `rose#wonderland##${FIXTURE_ALICE_ID}`,
               quantity: "10",
             },
           ],
@@ -11840,7 +11850,7 @@ test("listAccountAssets rejects camelCase assetId fields", async () => {
       }),
   });
   await assert.rejects(
-    () => client.listAccountAssets(LEGACY_FIXTURE_ALICE_ID),
+    () => client.listAccountAssets(FIXTURE_ALICE_ID),
     /account asset list response\.items\[0]\.assetId is not supported/,
   );
 });
@@ -11856,7 +11866,7 @@ test("queryAccountAssets posts structured envelope", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryAccountAssets(LEGACY_FIXTURE_ALICE_ID, {
+  await client.queryAccountAssets(FIXTURE_ALICE_ID, {
     filter: { Gte: ["quantity", 5] },
     sort: [{ key: "quantity", order: "desc" }],
     fetchSize: 10,
@@ -11878,7 +11888,7 @@ test("queryAccountAssets surfaces errors for invalid filters", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
     () =>
-      client.queryAccountAssets(LEGACY_FIXTURE_ALICE_ID, {
+      client.queryAccountAssets(FIXTURE_ALICE_ID, {
         filter: { IsNull: ["asset_id"] },
       }),
     (error) => {
@@ -11907,7 +11917,7 @@ test("iterateAccountAssets walks multiple pages", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const collected = [];
-  for await (const holding of client.iterateAccountAssets(LEGACY_FIXTURE_ALICE_ID, { pageSize: 1 })) {
+  for await (const holding of client.iterateAccountAssets(FIXTURE_ALICE_ID, { pageSize: 1 })) {
     collected.push(holding.asset_id);
   }
   assert.deepEqual(collected, [`rose##${FIXTURE_ALICE_ID}`, `daisy##${FIXTURE_ALICE_ID}`]);
@@ -11917,7 +11927,7 @@ test("iterateAccountAssetsQuery paginates per-account query endpoint", async () 
   let callCount = 0;
   const fetchImpl = async (url, init) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(LEGACY_FIXTURE_ALICE_ID, "/assets/query"));
+    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/assets/query"));
     const body = JSON.parse(init.body);
     const offset = Number(body.pagination?.offset ?? 0);
     callCount += 1;
@@ -11933,7 +11943,7 @@ test("iterateAccountAssetsQuery paginates per-account query endpoint", async () 
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const seen = [];
-  for await (const holding of client.iterateAccountAssetsQuery(LEGACY_FIXTURE_ALICE_ID, {
+  for await (const holding of client.iterateAccountAssetsQuery(FIXTURE_ALICE_ID, {
     pageSize: 1,
   })) {
     seen.push(holding.asset_id);
@@ -11949,7 +11959,7 @@ test("iterateAccountAssets enforces credentials when requirePermissions is set",
     },
   });
   assert.throws(
-    () => client.iterateAccountAssets(LEGACY_FIXTURE_ALICE_ID, { requirePermissions: true }),
+    () => client.iterateAccountAssets(FIXTURE_ALICE_ID, { requirePermissions: true }),
     /iterateAccountAssets requires authToken or apiToken/,
   );
 });
@@ -11966,7 +11976,7 @@ test("iterateAccountAssetsQuery honours requirePermissions with credentials", as
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl, apiToken: "token" });
   const holdings = [];
-  for await (const item of client.iterateAccountAssetsQuery(LEGACY_FIXTURE_ALICE_ID, {
+  for await (const item of client.iterateAccountAssetsQuery(FIXTURE_ALICE_ID, {
     requirePermissions: true,
   })) {
     holdings.push(item.asset_id);
@@ -11996,7 +12006,7 @@ test("iterateAccountAssets enforces maxItems and offset progression", async () =
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const collected = [];
-  for await (const holding of client.iterateAccountAssets(LEGACY_FIXTURE_ALICE_ID, {
+  for await (const holding of client.iterateAccountAssets(FIXTURE_ALICE_ID, {
     pageSize: 2,
     maxItems: 3,
   })) {
@@ -12019,7 +12029,7 @@ test("listAccountAssets surfaces permission errors with payload details", async 
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.listAccountAssets(LEGACY_FIXTURE_ALICE_ID, { limit: 1 }),
+    () => client.listAccountAssets(FIXTURE_ALICE_ID, { limit: 1 }),
     (error) => {
       assert.ok(error instanceof ToriiHttpError);
       assert.equal(error.status, 403);
@@ -12040,7 +12050,7 @@ test("queryAccountAssets surfaces permission errors with payload details", async
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.queryAccountAssets(LEGACY_FIXTURE_ALICE_ID, { filter: { Eq: ["asset_id", "rose##alice"] } }),
+    () => client.queryAccountAssets(FIXTURE_ALICE_ID, { filter: { Eq: ["asset_id", "rose##alice"] } }),
     (error) => {
       assert.ok(error instanceof ToriiHttpError);
       assert.equal(error.status, 403);
@@ -12054,7 +12064,7 @@ test("queryAccountAssets surfaces permission errors with payload details", async
 test("listAccountTransactions encodes pagination params", async () => {
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(LEGACY_FIXTURE_ALICE_ID, "/transactions"));
+    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/transactions"));
     assert.equal(parsed.searchParams.get("limit"), "3");
     assert.equal(parsed.searchParams.get("offset"), "4");
     return createResponse({
@@ -12062,7 +12072,7 @@ test("listAccountTransactions encodes pagination params", async () => {
       jsonData: {
         items: [
           {
-            authority: LEGACY_FIXTURE_ALICE_ID,
+            authority: FIXTURE_ALICE_ID,
             entrypoint_hash: "abc",
             result_ok: true,
             timestamp_ms: 123,
@@ -12074,7 +12084,7 @@ test("listAccountTransactions encodes pagination params", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAccountTransactions(LEGACY_FIXTURE_ALICE_ID, {
+  const payload = await client.listAccountTransactions(FIXTURE_ALICE_ID, {
     limit: 3,
     offset: 4,
   });
@@ -12082,11 +12092,12 @@ test("listAccountTransactions encodes pagination params", async () => {
 });
 
 test("listAccountTransactions encodes assetId filters", async () => {
-  const assetId = `rose#wonderland#${FIXTURE_ALICE_ID}`;
+  const assetId = "norito:DEADBEEF";
+  const normalizedAssetId = "norito:deadbeef";
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(LEGACY_FIXTURE_ALICE_ID, "/transactions"));
-    assert.equal(parsed.searchParams.get("asset_id"), assetId);
+    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/transactions"));
+    assert.equal(parsed.searchParams.get("asset_id"), normalizedAssetId);
     return createResponse({
       status: 200,
       jsonData: {
@@ -12097,7 +12108,7 @@ test("listAccountTransactions encodes assetId filters", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAccountTransactions(LEGACY_FIXTURE_ALICE_ID, {
+  const payload = await client.listAccountTransactions(FIXTURE_ALICE_ID, {
     assetId,
   });
   assert.equal(payload.items[0].entrypoint_hash, "abc");
@@ -12116,7 +12127,7 @@ test("listAccountTransactions validates boolean result fields", async () => {
       }),
   });
   await assert.rejects(
-    () => client.listAccountTransactions(LEGACY_FIXTURE_ALICE_ID),
+    () => client.listAccountTransactions(FIXTURE_ALICE_ID),
     /account transaction list response\.items\[0]\.result_ok/,
   );
 });
@@ -12140,7 +12151,7 @@ test("listAccountTransactions rejects camelCase entrypointHash fields", async ()
       }),
   });
   await assert.rejects(
-    () => client.listAccountTransactions(LEGACY_FIXTURE_ALICE_ID),
+    () => client.listAccountTransactions(FIXTURE_ALICE_ID),
     /account transaction list response\.items\[0]\.entrypointHash is not supported/,
   );
 });
@@ -12157,13 +12168,13 @@ test("queryAccountTransactions posts structured envelope", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryAccountTransactions(LEGACY_FIXTURE_ALICE_ID, {
-    filter: { Eq: ["authority", LEGACY_FIXTURE_ALICE_ID] },
+  await client.queryAccountTransactions(FIXTURE_ALICE_ID, {
+    filter: { Eq: ["authority", FIXTURE_ALICE_ID] },
     sort: [{ key: "timestamp_ms", order: "desc" }],
     fetchSize: 5,
     queryName: "AccountTransactions",
   });
-  assert.deepEqual(capturedBody.filter, { Eq: ["authority", LEGACY_FIXTURE_ALICE_ID] });
+  assert.deepEqual(capturedBody.filter, { Eq: ["authority", FIXTURE_ALICE_ID] });
   assert.deepEqual(capturedBody.sort, [{ key: "timestamp_ms", order: "desc" }]);
   assert.equal(capturedBody.fetch_size, 5);
   assert.equal(capturedBody.query, "AccountTransactions");
@@ -12196,7 +12207,7 @@ test("iterateAccountTransactions paginates results", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const hashes = [];
-  for await (const tx of client.iterateAccountTransactions(LEGACY_FIXTURE_ALICE_ID, {
+  for await (const tx of client.iterateAccountTransactions(FIXTURE_ALICE_ID, {
     pageSize: 1,
     maxItems: 3,
   })) {
@@ -12210,7 +12221,7 @@ test("iterateAccountTransactionsQuery walks query endpoint", async () => {
   let callCount = 0;
   const fetchImpl = async (url, init) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(LEGACY_FIXTURE_ALICE_ID, "/transactions/query"));
+    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/transactions/query"));
     const body = JSON.parse(init.body);
     const offset = Number(body.pagination?.offset ?? 0);
     callCount += 1;
@@ -12226,7 +12237,7 @@ test("iterateAccountTransactionsQuery walks query endpoint", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const hashes = [];
-  for await (const tx of client.iterateAccountTransactionsQuery(LEGACY_FIXTURE_ALICE_ID, {
+  for await (const tx of client.iterateAccountTransactionsQuery(FIXTURE_ALICE_ID, {
     pageSize: 1,
   })) {
     hashes.push(tx.entrypoint_hash);
@@ -12258,8 +12269,8 @@ test("listAccountAssets trims and encodes path segments", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.listAccountAssets(`  ${LEGACY_FIXTURE_ALICE_ID}  `);
-  assert.equal(capturedPath, accountPath(LEGACY_FIXTURE_ALICE_ID, "/assets"));
+  await client.listAccountAssets(`  ${FIXTURE_ALICE_ID}  `);
+  assert.equal(capturedPath, accountPath(FIXTURE_ALICE_ID, "/assets"));
 });
 
 test("listAssetHolders encodes definition id", async () => {
@@ -12281,11 +12292,12 @@ test("listAssetHolders encodes definition id", async () => {
 });
 
 test("listAssetHolders encodes assetId filters", async () => {
-  const assetId = `rose#wonderland#${FIXTURE_ALICE_ID}`;
+  const assetId = "norito:DEADBEEF";
+  const normalizedAssetId = "norito:deadbeef";
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
     assert.equal(parsed.pathname, "/v1/assets/rose%23wonderland/holders");
-    assert.equal(parsed.searchParams.get("asset_id"), assetId);
+    assert.equal(parsed.searchParams.get("asset_id"), normalizedAssetId);
     return createResponse({
       status: 200,
       jsonData: {
@@ -12525,10 +12537,10 @@ test("iterateTriggers paginates list endpoint", async () => {
     const items =
       offset === 0
         ? [
-            { id: "trigger-1", owner: LEGACY_FIXTURE_ALICE_ID },
-            { id: "trigger-2", owner: LEGACY_FIXTURE_BOB_ID },
+            { id: "trigger-1", owner: FIXTURE_ALICE_ID },
+            { id: "trigger-2", owner: FIXTURE_BOB_ID },
           ]
-        : [{ id: "trigger-3", owner: LEGACY_FIXTURE_CAROL_ID }];
+        : [{ id: "trigger-3", owner: FIXTURE_CAROL_ID }];
     return createResponse({
       status: 200,
       jsonData: { items, total: 3 },
@@ -12552,15 +12564,15 @@ test("iterateTriggersQuery paginates query payloads", async () => {
     assert.equal(parsed.pathname, "/v1/triggers/query");
     const body = JSON.parse(init.body);
     const offset = Number(body.pagination?.offset ?? 0);
-    assert.deepEqual(body.filter, { Eq: ["object.authority", LEGACY_FIXTURE_ALICE_ID] });
+    assert.deepEqual(body.filter, { Eq: ["object.authority", FIXTURE_ALICE_ID] });
     callCount += 1;
     const items =
       offset === 0
         ? [
-            { id: "trigger-1", owner: LEGACY_FIXTURE_ALICE_ID },
-            { id: "trigger-2", owner: LEGACY_FIXTURE_ALICE_ID },
+            { id: "trigger-1", owner: FIXTURE_ALICE_ID },
+            { id: "trigger-2", owner: FIXTURE_ALICE_ID },
           ]
-        : [{ id: "trigger-3", owner: LEGACY_FIXTURE_ALICE_ID }];
+        : [{ id: "trigger-3", owner: FIXTURE_ALICE_ID }];
     return createResponse({
       status: 200,
       jsonData: { items, total: 3 },
@@ -12570,7 +12582,7 @@ test("iterateTriggersQuery paginates query payloads", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const ids = [];
   for await (const trigger of client.iterateTriggersQuery({
-    filter: { Eq: ["object.authority", LEGACY_FIXTURE_ALICE_ID] },
+    filter: { Eq: ["object.authority", FIXTURE_ALICE_ID] },
     pageSize: 2,
   })) {
     ids.push(trigger.id);
@@ -12634,7 +12646,7 @@ test("extractToriiFeatureConfig normalizes feature sections", () => {
           signer: { account_id: hashedAccountRaw, private_key: "ed01" },
           account_aliases: [
             { iban: VALID_IBAN, account_id: hashedAccountRaw },
-            { iban: "DE89370400440532013000", account_id: "alice@test" },
+            { iban: "DE89370400440532013000", account_id: FIXTURE_ALICE_TEST_ID },
           ],
           currency_assets: [{ currency: "USD", asset_definition: "usd#bank" }],
         },
@@ -12675,7 +12687,7 @@ test("extractToriiFeatureConfig normalizes feature sections", () => {
       )
     : null;
   assert.equal(aliasAccountId, hashedAccountCanonical);
-  assert.equal(snapshot.isoBridge?.accountAliases[1]?.accountId, "alice@test");
+  assert.equal(snapshot.isoBridge?.accountAliases[1]?.accountId, FIXTURE_ALICE_TEST_ID);
   assert.equal(snapshot.rbcSampling?.maxSamplesPerRequest, 4);
   assert.equal(snapshot.connect?.wsMaxSessions, 10);
 });
@@ -13179,10 +13191,11 @@ test("listKaigiRelays forwards AbortSignal", async () => {
   assert.equal(payload.total, 0);
 });
 test("getKaigiRelay returns null on 404 and normalizes detail response", async () => {
+  const relayId = FIXTURE_ALICE_ID;
   const fallbackClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 404 }),
   });
-  const missing = await fallbackClient.getKaigiRelay("relay@kaigi");
+  const missing = await fallbackClient.getKaigiRelay(relayId);
   assert.equal(missing, null);
 
   let requested;
@@ -13192,7 +13205,7 @@ test("getKaigiRelay returns null on 404 and normalizes detail response", async (
       status: 200,
       jsonData: {
         relay: {
-          relay_id: "relay@kaigi",
+          relay_id: relayId,
           domain: "kaigi",
           bandwidth_class: 7,
           hpke_fingerprint_hex: "bb".repeat(32),
@@ -13215,8 +13228,8 @@ test("getKaigiRelay returns null on 404 and normalizes detail response", async (
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const detail = await client.getKaigiRelay("relay@kaigi");
-  assert.equal(requested, `${BASE_URL}/v1/kaigi/relays/relay%40kaigi`);
+  const detail = await client.getKaigiRelay(relayId);
+  assert.equal(requested, `${BASE_URL}/v1/kaigi/relays/${encodeURIComponent(relayId)}`);
   assert.equal(detail?.hpke_public_key_b64, "qrvM");
   assert.equal(detail?.reported_call?.call_name, "demo");
   assert.equal(detail?.metrics?.registrations_total, 3);
@@ -13234,15 +13247,16 @@ test("getKaigiRelay rejects unsupported option keys", async () => {
 });
 
 test("getKaigiRelay forwards AbortSignal", async () => {
+  const relayId = FIXTURE_BOB_ID;
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/kaigi/relays/relay%40kaigi`);
+    assert.equal(url, `${BASE_URL}/v1/kaigi/relays/${encodeURIComponent(relayId)}`);
     assert.strictEqual(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: {
         relay: {
-          relay_id: "relay@kaigi",
+          relay_id: relayId,
           domain: "kaigi",
           bandwidth_class: 1,
           hpke_fingerprint_hex: "aa".repeat(32),
@@ -13256,8 +13270,8 @@ test("getKaigiRelay forwards AbortSignal", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const detail = await client.getKaigiRelay("relay@kaigi", { signal: controller.signal });
-  assert.equal(detail?.relay?.relay_id, "relay@kaigi");
+  const detail = await client.getKaigiRelay(relayId, { signal: controller.signal });
+  assert.equal(detail?.relay?.relay_id, relayId);
 });
 
 test("getKaigiRelaysHealth parses counters and domain metrics", async () => {
@@ -14420,7 +14434,7 @@ test("registerContractCode posts manifest JSON", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await client.registerContractCode({
-    authority: LEGACY_FIXTURE_ALICE_ID,
+    authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
     manifest: { code_hash: "a".repeat(64), compiler_fingerprint: "rustc" },
     codeBytes: Buffer.from("hello"),
@@ -14430,7 +14444,7 @@ test("registerContractCode posts manifest JSON", async () => {
   assert.equal(captured.init.headers["Content-Type"], "application/json");
   const body = JSON.parse(captured.init.body);
   assert.deepEqual(body, {
-    authority: LEGACY_FIXTURE_ALICE_ID,
+    authority: FIXTURE_ALICE_ID,
     private_key: "ed25519:deadbeef",
     manifest: {
       code_hash: "a".repeat(64),
@@ -14461,7 +14475,7 @@ test("deployContract submits base64 payload and returns response", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.deployContract({
-    authority: LEGACY_FIXTURE_ALICE_ID,
+    authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
     codeB64: Buffer.from("payload"),
     manifest: { features_bitmap: 1 },
@@ -14489,7 +14503,7 @@ test("deployContract rejects invalid base64 payloads", async () => {
   await assert.rejects(
     () =>
       client.deployContract({
-        authority: LEGACY_FIXTURE_ALICE_ID,
+        authority: FIXTURE_ALICE_ID,
         privateKey: "ed25519:deadbeef",
         codeB64: "YmFzZTY0*",
       }),
@@ -14509,7 +14523,7 @@ test("deployContract rejects empty code bytes", async () => {
   await assert.rejects(
     () =>
       client.deployContract({
-        authority: LEGACY_FIXTURE_ALICE_ID,
+        authority: FIXTURE_ALICE_ID,
         privateKey: "ed25519:deadbeef",
         codeB64: Buffer.alloc(0),
       }),
@@ -14536,17 +14550,17 @@ test("deployContractInstance posts combined payload", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.deployContractInstance({
-    authority: LEGACY_FIXTURE_ALICE_ID,
+    authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
     namespace: "apps",
     contractId: "calc",
     codeB64: "YmFzZTY0",
-    manifest: { access_set_hints: { read_keys: [`account:${LEGACY_FIXTURE_ALICE_ID}`] } },
+    manifest: { access_set_hints: { read_keys: [`account:${FIXTURE_ALICE_ID}`] } },
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/instance`);
   const body = JSON.parse(captured.init.body);
   assert.deepEqual(body, {
-    authority: LEGACY_FIXTURE_ALICE_ID,
+    authority: FIXTURE_ALICE_ID,
     private_key: "ed25519:deadbeef",
     namespace: "apps",
     contract_id: "calc",
@@ -14556,7 +14570,7 @@ test("deployContractInstance posts combined payload", async () => {
       abi_hash: null,
       compiler_fingerprint: null,
       features_bitmap: null,
-      access_set_hints: { read_keys: [`account:${LEGACY_FIXTURE_ALICE_ID}`], write_keys: [] },
+      access_set_hints: { read_keys: [`account:${FIXTURE_ALICE_ID}`], write_keys: [] },
       entrypoints: null,
     },
   });
@@ -14575,7 +14589,7 @@ test("activateContractInstance normalizes code hash", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.activateContractInstance({
-    authority: LEGACY_FIXTURE_ALICE_ID,
+    authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
     namespace: "apps",
     contractId: "calc",
@@ -14608,7 +14622,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = { value: 7, labels: ["a", "b"] };
   const result = await client.callContract({
-    authority: LEGACY_FIXTURE_ALICE_ID,
+    authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
     namespace: "apps",
     contractId: "calc",
@@ -14620,7 +14634,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call`);
   const body = JSON.parse(captured.init.body);
   assert.deepEqual(body, {
-    authority: LEGACY_FIXTURE_ALICE_ID,
+    authority: FIXTURE_ALICE_ID,
     private_key: "ed25519:deadbeef",
     namespace: "apps",
     contract_id: "calc",
@@ -14649,7 +14663,7 @@ test("callContract rejects missing gasLimit", async () => {
   await assert.rejects(
     () =>
       client.callContract({
-        authority: LEGACY_FIXTURE_ALICE_ID,
+        authority: FIXTURE_ALICE_ID,
         privateKey: "ed25519:deadbeef",
         namespace: "apps",
         contractId: "calc",
@@ -14668,7 +14682,7 @@ test("callContract rejects non-object options", async () => {
     () =>
       client.callContract(
         {
-          authority: LEGACY_FIXTURE_ALICE_ID,
+          authority: FIXTURE_ALICE_ID,
           privateKey: "ed25519:deadbeef",
           namespace: "apps",
           contractId: "calc",
@@ -14690,7 +14704,7 @@ test("callContract rejects unsupported option fields", async () => {
     () =>
       client.callContract(
         {
-          authority: LEGACY_FIXTURE_ALICE_ID,
+          authority: FIXTURE_ALICE_ID,
           privateKey: "ed25519:deadbeef",
           namespace: "apps",
           contractId: "calc",
@@ -14886,7 +14900,7 @@ test("listContractInstances rejects invalid signal values", async () => {
 test("listTriggers encodes query params and normalizes payload", async () => {
   let capturedUrl;
   const authority = normalizeAccountId(
-    LEGACY_FIXTURE_AUTHORITY_ID,
+    FIXTURE_AUTHORITY_ID,
     "listTriggers.authority",
   );
   const triggerPayload = {
@@ -15234,7 +15248,7 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
   let capturedUrl;
   const allowanceRecord = {
     certificate: {
-      controller: LEGACY_FIXTURE_ALICE_ID,
+      controller: FIXTURE_ALICE_ID,
       allowance: { asset: "usd#wonderland", amount: "500" },
     },
     current_commitment: "0xdeadbeef",
@@ -15378,7 +15392,7 @@ test("listOfflineAllowances captures play integrity metadata", async () => {
         items: [
           {
             certificate_id_hex: "cafebabe",
-            controller_id: LEGACY_FIXTURE_ALICE_ID,
+            controller_id: FIXTURE_ALICE_ID,
             controller_display: "soraqqqqqqqq",
             asset_id: "usd#wonderland",
             registered_at_ms: "1234",
@@ -15434,7 +15448,7 @@ test("listOfflineAllowances captures hms safety detect metadata", async () => {
         items: [
           {
             certificate_id_hex: "deadbeef",
-            controller_id: LEGACY_FIXTURE_BOB_ID,
+            controller_id: FIXTURE_BOB_ID,
             controller_display: "soraqqqqqqqq",
             asset_id: "usd#wonderland",
             registered_at_ms: "1234",
@@ -15467,12 +15481,14 @@ test("listOfflineAllowances captures hms safety detect metadata", async () => {
 
 test("listOfflineTransfers normalizes payloads and metadata", async () => {
   let capturedUrl = null;
+  const assetId = "norito:DEADBEEF";
+  const normalizedAssetId = "norito:deadbeef";
   const receiverId = normalizeAccountId(
-    LEGACY_FIXTURE_VAULT_ID,
+    FIXTURE_VAULT_ID,
     "listOfflineTransfers.receiver_id",
   );
   const depositAccountId = normalizeAccountId(
-    LEGACY_FIXTURE_MERCHANT_ID,
+    FIXTURE_MERCHANT_ID,
     "listOfflineTransfers.deposit_account_id",
   );
   const transferRecord = {
@@ -15496,13 +15512,13 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
         items: [
           {
             bundle_id_hex: "CAFEBABE",
-            controller_id: LEGACY_FIXTURE_ALICE_ID,
+            controller_id: FIXTURE_ALICE_ID,
             controller_display: "soraqqqqqqqq",
-            receiver_id: LEGACY_FIXTURE_VAULT_ID,
+            receiver_id: FIXTURE_VAULT_ID,
             receiver_display: "soraqqqqqqqr",
-            deposit_account_id: LEGACY_FIXTURE_VAULT_ID,
+            deposit_account_id: FIXTURE_VAULT_ID,
             deposit_account_display: "soraqqqqqqqs",
-            asset_id: "usd#wonderland",
+            asset_id: normalizedAssetId,
             receipt_count: "2",
             total_amount: "15",
             claimed_delta: "15",
@@ -15525,11 +15541,11 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
           },
           {
             bundle_id_hex: "FEEDBEEF",
-            controller_id: LEGACY_FIXTURE_BOB_ID,
+            controller_id: FIXTURE_BOB_ID,
             controller_display: "soraqqqqqqqt",
-            receiver_id: LEGACY_FIXTURE_VAULT_ID,
+            receiver_id: FIXTURE_VAULT_ID,
             receiver_display: "soraqqqqqqqu",
-            deposit_account_id: LEGACY_FIXTURE_VAULT_ID,
+            deposit_account_id: FIXTURE_VAULT_ID,
             deposit_account_display: "soraqqqqqqqv",
             asset_id: null,
             receipt_count: 1,
@@ -15563,7 +15579,7 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
     controllerId: FIXTURE_ALICE_ID,
     receiverId,
     depositAccountId,
-    assetId: `usd##${FIXTURE_ALICE_ID}`,
+    assetId,
     platformPolicy: "PLAY_INTEGRITY",
   });
   assert.ok(capturedUrl, "request not issued");
@@ -15575,14 +15591,14 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
   assert.equal(parsed.searchParams.get("controller_id"), FIXTURE_ALICE_ID);
   assert.equal(parsed.searchParams.get("receiver_id"), receiverId);
   assert.equal(parsed.searchParams.get("deposit_account_id"), depositAccountId);
-  assert.equal(parsed.searchParams.get("asset_id"), `usd##${FIXTURE_ALICE_ID}`);
+  assert.equal(parsed.searchParams.get("asset_id"), normalizedAssetId);
   assert.equal(parsed.searchParams.get("platform_policy"), "play_integrity");
   assert.equal(page.total, 2);
   const [transfer, fallback] = page.items;
   assert.equal(transfer.bundle_id_hex, "CAFEBABE");
   assert.equal(transfer.controller_id, FIXTURE_ALICE_ID);
   assert.equal(transfer.receiver_id, receiverId);
-  assert.equal(transfer.asset_id, "usd#wonderland");
+  assert.equal(transfer.asset_id, normalizedAssetId);
   assert.equal(transfer.receipt_count, 2);
   assert.equal(transfer.total_amount, "15");
   assert.equal(transfer.platform_policy, "play_integrity");
@@ -15604,7 +15620,7 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
 test("issueOfflineCertificate posts draft and parses response", async () => {
   const certId = "deadbeef".repeat(8);
   const draft = {
-    controller: LEGACY_FIXTURE_ALICE_ID,
+    controller: FIXTURE_ALICE_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "10",
@@ -15628,7 +15644,7 @@ test("issueOfflineCertificate posts draft and parses response", async () => {
       jsonData: {
         certificate_id_hex: certId,
         certificate: {
-          controller: LEGACY_FIXTURE_ALICE_ID,
+          controller: FIXTURE_ALICE_ID,
           operator: FIXTURE_AUTHORITY_ID,
           allowance: {
             asset: "usd#wonderland",
@@ -15663,7 +15679,7 @@ test("issueOfflineCertificate posts draft and parses response", async () => {
   assert.deepEqual(body.certificate.attestation_report, [4, 5, 6]);
   assert.equal("operator" in body.certificate, false);
   assert.equal(response.certificate_id_hex, certId);
-  assert.equal(response.certificate.controller, LEGACY_FIXTURE_ALICE_ID);
+  assert.equal(response.certificate.controller, FIXTURE_ALICE_ID);
 });
 
 test("submitOfflineSettlement posts transfer and parses response", async () => {
@@ -15978,7 +15994,7 @@ test("issueOfflineCertificate rejects invalid Numeric amounts", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const draft = {
-    controller: LEGACY_FIXTURE_ALICE_ID,
+    controller: FIXTURE_ALICE_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "1e-3",
@@ -16011,7 +16027,7 @@ test("issueOfflineCertificateRenewal posts to renewal path", async () => {
       jsonData: {
         certificate_id_hex: certId,
         certificate: {
-          controller: LEGACY_FIXTURE_ALICE_ID,
+          controller: FIXTURE_ALICE_ID,
           operator: FIXTURE_AUTHORITY_ID,
           allowance: {
             asset: "usd#wonderland",
@@ -16039,7 +16055,7 @@ test("issueOfflineCertificateRenewal posts to renewal path", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await client.issueOfflineCertificateRenewal(certId.toUpperCase(), {
-    controller: LEGACY_FIXTURE_ALICE_ID,
+    controller: FIXTURE_ALICE_ID,
     allowance: {
       asset: "usd#wonderland",
       amount: "10",
@@ -16328,6 +16344,8 @@ test("topUpOfflineAllowanceRenewal chains issue and renew", async () => {
 
 test("listOfflineAllowances encodes convenience query params", async () => {
   let capturedUrl = null;
+  const assetId = "norito:DEADBEEF";
+  const normalizedAssetId = "norito:deadbeef";
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async (url) => {
       capturedUrl = url;
@@ -16340,7 +16358,7 @@ test("listOfflineAllowances encodes convenience query params", async () => {
   });
   await client.listOfflineAllowances({
     controllerId: FIXTURE_ALICE_ID,
-    assetId: `usd##${FIXTURE_ALICE_ID}`,
+    assetId,
     certificateExpiresBeforeMs: 1_000,
     certificateExpiresAfterMs: 100,
     policyExpiresBeforeMs: 2_000,
@@ -16354,7 +16372,7 @@ test("listOfflineAllowances encodes convenience query params", async () => {
   assert.ok(capturedUrl, "request not issued");
   const parsed = new URL(capturedUrl);
   assert.equal(parsed.searchParams.get("controller_id"), FIXTURE_ALICE_ID);
-  assert.equal(parsed.searchParams.get("asset_id"), `usd##${FIXTURE_ALICE_ID}`);
+  assert.equal(parsed.searchParams.get("asset_id"), normalizedAssetId);
   assert.equal(parsed.searchParams.get("certificate_expires_before_ms"), "1000");
   assert.equal(parsed.searchParams.get("certificate_expires_after_ms"), "100");
   assert.equal(parsed.searchParams.get("policy_expires_before_ms"), "2000");
@@ -16887,22 +16905,22 @@ test("queryOfflineTransfers allows numeric range filters", async () => {
 test("queryOfflineTransfers posts envelope and normalizes optional fields", async () => {
   let capturedInit;
   const expectedReceiverId = normalizeAccountId(
-    LEGACY_FIXTURE_BOB_ID,
+    FIXTURE_BOB_ID,
     "queryOfflineTransfers.receiver_id",
   );
   const expectedDepositAccountId = normalizeAccountId(
-    LEGACY_FIXTURE_MERCHANT_ID,
+    FIXTURE_MERCHANT_ID,
     "queryOfflineTransfers.deposit_account_id",
   );
   const payload = {
     items: [
       {
         bundle_id_hex: "ff00",
-        controller_id: LEGACY_FIXTURE_ALICE_ID,
+        controller_id: FIXTURE_ALICE_ID,
         controller_display: "soracontroller",
-        receiver_id: LEGACY_FIXTURE_BOB_ID,
+        receiver_id: FIXTURE_BOB_ID,
         receiver_display: "sorareceiver",
-        deposit_account_id: LEGACY_FIXTURE_MERCHANT_ID,
+        deposit_account_id: FIXTURE_MERCHANT_ID,
         deposit_account_display: "soravault",
         status: "Pending",
         recorded_at_ms: 1_000,
@@ -17470,7 +17488,7 @@ test("getExplorerAccountQr rejects non-object options", async () => {
     },
   });
   await assert.rejects(
-    () => client.getExplorerAccountQr(LEGACY_FIXTURE_ALICE_ID, 42),
+    () => client.getExplorerAccountQr(FIXTURE_ALICE_ID, 42),
     /getExplorerAccountQr options must be an object/,
   );
 });
@@ -17482,7 +17500,7 @@ test("getExplorerAccountQr rejects unsupported option fields", async () => {
     },
   });
   await assert.rejects(
-    () => client.getExplorerAccountQr(LEGACY_FIXTURE_ALICE_ID, { addressFormat: "ih58", extra: true }),
+    () => client.getExplorerAccountQr(FIXTURE_ALICE_ID, { addressFormat: "ih58", extra: true }),
     /getExplorerAccountQr options contains unsupported fields: extra/,
   );
 });
@@ -17948,7 +17966,7 @@ test("createSnsGovernanceCase normalizes camelCase payload fields before posting
     priority: "high",
     reason: "abuse-report",
     reporter: { role: "registrar", contact: "ops@example.com", referenceTicket: "SUP-42" },
-    respondents: [{ role: "registrant", accountId: LEGACY_FIXTURE_ALICE_ID }],
+    respondents: [{ role: "registrant", accountId: FIXTURE_ALICE_ID }],
     allegations: [{ code: "A1", summary: "ownership dispute", policyReference: "policy-1" }],
     evidence: [
       {
@@ -17978,7 +17996,7 @@ test("createSnsGovernanceCase normalizes camelCase payload fields before posting
     priority: "high",
     reason: "abuse-report",
     reporter: { role: "registrar", contact: "ops@example.com", reference_ticket: "SUP-42" },
-    respondents: [{ role: "registrant", account_id: LEGACY_FIXTURE_ALICE_ID }],
+    respondents: [{ role: "registrant", account_id: FIXTURE_ALICE_ID }],
     allegations: [{ code: "A1", summary: "ownership dispute", policy_reference: "policy-1" }],
     evidence: [
       {

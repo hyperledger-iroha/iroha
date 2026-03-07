@@ -24,7 +24,12 @@ repositories {
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     options.release.set(21)
-    val javaHome = System.getenv("JAVA_HOME")?.let { file(it) }
+    val javaHome =
+        System.getenv("JAVA_HOME")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { file(it) }
+            ?.takeIf { it.isDirectory }
     if (javaHome != null) {
         options.isFork = true
         options.forkOptions.javaHome = javaHome

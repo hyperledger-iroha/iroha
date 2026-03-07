@@ -272,14 +272,6 @@ public final class AccountAddress {
     return new AccountAddress(copy);
   }
 
-  public static AccountAddress fromCanonicalHex(final String encoded) throws AccountAddressException {
-    final String body = encoded.startsWith("0x") || encoded.startsWith("0X")
-        ? encoded.substring(2)
-        : encoded;
-    final byte[] bytes = hexToBytes(body);
-    return fromCanonicalBytes(bytes);
-  }
-
   public static AccountAddress fromIH58(final String encoded, final Integer expectedPrefix)
       throws AccountAddressException {
     final DecodeResult decode = decodeIh58(encoded);
@@ -301,11 +293,22 @@ public final class AccountAddress {
     return fromCanonicalBytes(canonical);
   }
 
-  public static ParseResult parseAny(final String input, final Integer expectedPrefix)
+  /**
+   * Parses encoded account addresses only.
+   *
+   * <p>Accepted formats are IH58 (preferred) and compressed sora. Canonical hex is intentionally
+   * excluded from this parser.
+   */
+  public static ParseResult parseEncoded(final String input, final Integer expectedPrefix)
       throws AccountAddressException {
     final String trimmed = input.trim();
     if (trimmed.isEmpty()) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "address string is empty");
+    }
+    if (trimmed.indexOf('@') >= 0) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+          "account address must not include @domain suffix");
     }
     if (trimmed.startsWith(COMPRESSED_SENTINEL)) {
       return new ParseResult(fromCompressedSora(trimmed), Format.COMPRESSED);
@@ -313,9 +316,6 @@ public final class AccountAddress {
     if (containsCompressedGlyph(trimmed)) {
       throw new AccountAddressException(
           AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "compressed address must start with sora sentinel");
-    }
-    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
-      return new ParseResult(fromCanonicalHex(trimmed), Format.CANONICAL_HEX);
     }
     try {
       return new ParseResult(fromIH58(trimmed, expectedPrefix), Format.IH58);
@@ -343,8 +343,7 @@ public final class AccountAddress {
 
   public enum Format {
     IH58,
-    COMPRESSED,
-    CANONICAL_HEX
+    COMPRESSED
   }
 
   public enum AccountAddressErrorCode {
@@ -1266,21 +1265,6 @@ public final class AccountAddress {
       sb.append(String.format("%02x", b & 0xFF));
     }
     return sb.toString();
-  }
-
-  private static byte[] hexToBytes(final String hex) throws AccountAddressException {
-    if ((hex.length() & 1) == 1) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_HEX_ADDRESS, "hex string must have even length");
-    }
-    final byte[] out = new byte[hex.length() / 2];
-    for (int i = 0; i < hex.length(); i += 2) {
-      try {
-        out[i / 2] = (byte) Integer.parseInt(hex.substring(i, i + 2), 16);
-      } catch (final NumberFormatException ex) {
-        throw new AccountAddressException(AccountAddressErrorCode.INVALID_HEX_ADDRESS, "invalid hex string");
-      }
-    }
-    return out;
   }
 
   public static final class CurveSupportConfig {

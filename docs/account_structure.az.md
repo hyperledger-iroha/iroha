@@ -78,7 +78,7 @@ Parse accepts:
   optional `@<domain>` suffixes for explicit routing hints.
 - `<label>@<domain>` aliases resolved through the account-alias resolver
   (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<public_key>@<domain>` where `public_key` is the canonical multihash string.
+- `<alias>@<domain>` for domain-scoped alias routing; account IDs themselves are canonical encoded literals (IH58 or compressed).
 - `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
@@ -156,9 +156,9 @@ dəyər əlavə edir. Canonical hex sazlama yardımı olaraq qalır.
 - **Canonical hex** – kanonik baytın sazlama üçün əlverişli `0x…` kodlaması
   zərf.
 
-`AccountAddress::parse_any` IH58 (üstünlük verilir), sıxılmış (`sora`, ikinci ən yaxşı) və ya kanonik hex-i avtomatik aşkarlayır
+`AccountAddress::parse_encoded` IH58 (üstünlük verilir), sıxılmış (`sora`, ikinci ən yaxşı) və ya kanonik hex-i avtomatik aşkarlayır
 (yalnız `0x...`; çılpaq hex rədd edilir) həm deşifrə edilmiş faydalı yükü, həm də aşkarlanmış yükü daxil edir və qaytarır
-`AccountAddressFormat`. Torii indi ISO 20022 əlavəsi üçün `parse_any` çağırır
+`AccountAddressFormat`. Torii indi ISO 20022 əlavəsi üçün `parse_encoded` çağırır
 kanonik hex formasını ünvanlayır və saxlayır ki, metadata deterministik olaraq qalır
 orijinal təmsilindən asılı olmayaraq.
 
@@ -332,7 +332,7 @@ SDK-lar və operator iş axınları arasında ardıcıl.
   Parçalanma: `0x02` başlığı, `0x00` selektoru (örtülü defolt), `0x00` nəzarətçi teqi, `0x01` əyri identifikatoru (Ed25519), I18NI0000027X açarı yükləmək, 3-byte açarı yükləmək.
 - **Yerli domen həzmi (`treasury`, toxum baytı `0x01`)**  
   Kanonik hex: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
-  Parçalanma: `0x02` başlığı, selektor teqi `0x01` üstəgəl həzm `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, ardınca tək düyməli faydalı yük (`0x00` teqi, `0x01` əyri id, uzunluğu 002, I18 byte) Ed25519 açarı).Vahid testləri (`account::address::tests::parse_any_accepts_all_formats`) aşağıdakı V1 vektorlarını `AccountAddress::parse_any` vasitəsilə təsdiqləyir və alətlərin hex, IH58 (üstünlük verilir) və sıxılmış (`sora`, ikinci ən yaxşı) formalar üzrə kanonik faydalı yükə etibar edə biləcəyinə zəmanət verir. Genişləndirilmiş armatur dəstini `cargo run -p iroha_data_model --example address_vectors` ilə bərpa edin.
+  Parçalanma: `0x02` başlığı, selektor teqi `0x01` üstəgəl həzm `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, ardınca tək düyməli faydalı yük (`0x00` teqi, `0x01` əyri id, uzunluğu 002, I18 byte) Ed25519 açarı).Vahid testləri (`account::address::tests::parse_encoded_accepts_all_formats`) aşağıdakı V1 vektorlarını `AccountAddress::parse_encoded` vasitəsilə təsdiqləyir və alətlərin hex, IH58 (üstünlük verilir) və sıxılmış (`sora`, ikinci ən yaxşı) formalar üzrə kanonik faydalı yükə etibar edə biləcəyinə zəmanət verir. Genişləndirilmiş armatur dəstini `cargo run -p iroha_data_model --example address_vectors` ilə bərpa edin.
 
 | Domain | Toxum baytı | kanonik hex | Sıxılmış (`sora`) |
 |-------------|-----------|-----------------------------------------------------------------------------------------|------------|
@@ -380,7 +380,7 @@ axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişi
   alət zəncirləri.
 - **Maşın köməkçiləri:** Rust, TypeScript/JavaScript, Python, üçün kodekləri dərc edin,
   və IH58 və sıxılmış formatları əhatə edən Kotlin (`AccountAddress::to_ih58`,
-  `AccountAddress::parse_any` və onların SDK ekvivalentləri). CAIP-10 köməkçiləridir
+  `AccountAddress::parse_encoded` və onların SDK ekvivalentləri). CAIP-10 köməkçiləridir
   gələcək iş.
 
 #### 2.7 Deterministik IH58 ləqəbi
@@ -399,7 +399,7 @@ axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişi
 - **Kodlaşdırma:** `encode_ih58()` prefiks baytlarını kanonik baytlarla birləşdirir
   faydalı yüklənir və Blake2b-512-dən əldə edilmiş 16 bitlik yoxlama məbləğini sabitlə əlavə edir.
   prefiks `IH58PRE` (`b"IH58PRE" || prefix || payload`). Nəticə `bs58` vasitəsilə Base58 ilə kodlanmışdır.
-  CLI/SDK köməkçiləri eyni proseduru ifşa edir və `AccountAddress::parse_any`
+  CLI/SDK köməkçiləri eyni proseduru ifşa edir və `AccountAddress::parse_encoded`
   onu `decode_ih58` vasitəsilə geri qaytarır.
 
 #### 2.8 Normativ mətn test vektorları
@@ -625,7 +625,7 @@ onların dəyişmə biletləri.
   aydın şəkildə dəyişə bilən təsviri metadata kimi qeyd olunur, IH58 isə
   sabit ünvan.
 - **Daxiletmənin kanonikləşdirilməsi:** Torii və SDK-lar IH58 (üstünlük verilir)/sora (ikinci ən yaxşı)/0x qəbul edir
-  ünvanlar üstəgəl `alias@domain`, `public_key@domain`, `uaid:…` və
+  ünvanlar üstəgəl `alias@domain`, `uaid:…` və
   `opaque:…` formalaşdırır, sonra çıxış üçün IH58-ə kanonikləşir. yoxdur
   ciddi rejimdə keçid; xam telefon/e-poçt identifikatorları kitabdan kənar saxlanılmalıdır
   UAID/şəffaf xəritələr vasitəsilə.
@@ -782,7 +782,7 @@ mesajlar, üstəlik tövsiyə olunan düzəliş təlimatı.
 ## Növbəti Addımlar
 
 1. IH58 kodlaşdırması `iroha_data_model` (`AccountAddress::to_ih58`,
-   `parse_any`); qurğuları/testləri hər SDK-ya daşımağa davam edin və hər hansı birini təmizləyin
+   `parse_encoded`); qurğuları/testləri hər SDK-ya daşımağa davam edin və hər hansı birini təmizləyin
    Bech32m yer tutucular.
 2. `chain_discriminant` ilə konfiqurasiya sxemini genişləndirin və həssas əldə edin
   mövcud test/dev quraşdırmaları üçün defoltlar. **(Tamamlandı: `common.chain_discriminant`

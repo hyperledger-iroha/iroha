@@ -2378,8 +2378,8 @@ mod asset {
 
     #[derive(clap::Args, Debug)]
     pub struct Transfer {
-        /// Asset in the format `asset#domain#account` or `asset##account`
-        #[arg(short, long)]
+        /// Encoded asset identifier (`norito:<hex>`)
+        #[arg(short, long, value_parser = parse_asset_id_literal)]
         pub id: AssetId,
         /// Destination account identifier (IH58 (preferred) or sora compressed literal)
         #[arg(short, long)]
@@ -2394,15 +2394,15 @@ mod asset {
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Asset in the format `asset#domain#account` or `asset##account`
-        #[arg(short, long)]
+        /// Encoded asset identifier (`norito:<hex>`)
+        #[arg(short, long, value_parser = parse_asset_id_literal)]
         pub id: AssetId,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct IdQuantity {
-        /// Asset in the format `asset#domain#account` or `asset##account`
-        #[arg(short, long)]
+        /// Encoded asset identifier (`norito:<hex>`)
+        #[arg(short, long, value_parser = parse_asset_id_literal)]
         pub id: AssetId,
         /// Amount of change (integer or decimal)
         #[arg(short, long)]
@@ -4605,8 +4605,8 @@ mod trigger {
         /// Data filter preset: events for an account (IH58 (preferred) or sora compressed literal)
         #[arg(long)]
         pub data_account: Option<String>,
-        /// Data filter preset: events for an asset
-        #[arg(long)]
+        /// Data filter preset: events for an encoded asset (`norito:<hex>`)
+        #[arg(long, value_parser = parse_asset_id_literal)]
         pub data_asset: Option<AssetId>,
         /// Data filter preset: events for an asset definition
         #[arg(long)]
@@ -6527,6 +6527,14 @@ pub(crate) fn resolve_account_id<C: RunContext>(_context: &C, literal: &str) -> 
     resolve_account_id_with(literal)
 }
 
+fn parse_asset_id_literal_with(literal: &str, field: &str) -> Result<AssetId> {
+    AssetId::parse_encoded(literal).map_err(|err| eyre!("{field}: {err}"))
+}
+
+fn parse_asset_id_literal(literal: &str) -> Result<AssetId> {
+    parse_asset_id_literal_with(literal, "asset literal")
+}
+
 fn parse_register_account_id(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
@@ -6855,6 +6863,65 @@ mod tests {
         let err = parse_register_account_id(&literal).expect_err("canonical hex should fail");
         assert!(
             err.to_string().contains("canonical hex is not accepted"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_asset_id_literal_accepts_encoded_literal() {
+        let account = account_with_seed("wonderland", 22);
+        let definition: iroha::data_model::asset::id::AssetDefinitionId =
+            "xor#wonderland".parse().expect("asset definition");
+        let expected = AssetId::new(definition, account);
+        let encoded = format!(
+            "norito:{}",
+            hex::encode(norito::to_bytes(&expected).expect("encode asset id"))
+        );
+
+        let parsed = parse_asset_id_literal(&encoded).expect("encoded asset literal should parse");
+        assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn parse_asset_id_literal_rejects_textual_literal() {
+        let account = account_with_seed("wonderland", 23);
+        let literal = format!("xor#wonderland#{account}");
+
+        let err = parse_asset_id_literal(&literal).expect_err("textual literal must be rejected");
+        assert!(
+            err.to_string().contains("norito:<hex>"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn ledger_asset_mint_parser_rejects_textual_literal() {
+        let account = account_with_seed("wonderland", 24);
+        let literal = format!("xor#wonderland#{account}");
+
+        let err = Args::try_parse_from([
+            "iroha",
+            "ledger",
+            "asset",
+            "mint",
+            "--id",
+            &literal,
+            "--quantity",
+            "1",
+        ])
+        .expect_err("textual asset literal must be rejected");
+        assert!(
+            err.to_string().contains("norito:<hex>"),
+            "unexpected clap error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_asset_id_literal_rejects_invalid_norito_hex() {
+        let err = parse_asset_id_literal("norito:not-hex")
+            .expect_err("invalid norito hex payload must fail");
+        assert!(
+            err.to_string().contains("must be valid hex"),
             "unexpected error: {err}"
         );
     }

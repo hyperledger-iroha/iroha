@@ -3435,9 +3435,12 @@ pub fn generate_gateway_attestation(options: GatewayAttestOptions) -> Result<(),
         KeyPair::from_private_key(private_key).map_err(|err| format!("invalid key pair: {err}"))?;
 
     let signer_literal = signer_account.trim();
-    let signer = AccountAddress::parse_any(signer_literal, None)
-        .map(|(address, _)| address)
-        .map_err(|err| format!("invalid signer account `{}`: {err}", signer_literal))?;
+    let signer = AccountAddress::parse_encoded(
+        signer_literal,
+        Some(iroha_data_model::account::address::chain_discriminant()),
+    )
+    .map(|(address, _)| address)
+    .map_err(|err| format!("invalid signer account `{}`: {err}", signer_literal))?;
 
     let bundle = integration_tests::sorafs_gateway_conformance::generate_attestation(
         &suite,

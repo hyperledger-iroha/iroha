@@ -35,9 +35,9 @@ translator: machine-google-reviewed
 - `IdBox`. Գումարի տիպի ծրար ցանկացած աջակցվող ID-ի համար (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `AssetId`, Norito `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`): Օգտակար է ընդհանուր հոսքերի և Norito կոդավորման համար որպես մեկ տեսակ:
 - `ChainId`. Անթափանց շղթայի նույնացուցիչ, որն օգտագործվում է գործարքներում կրկնակի պաշտպանության համար:ID-ների լարային ձևեր (շրջադարձային `Display`/`FromStr`-ով).
 - `DomainId`: `name` (օրինակ՝ `wonderland`):
-- `AccountId`. կանոնական նույնացուցիչ՝ կոդավորված `AccountAddress`-ի միջոցով, որը բացահայտում է IH58, Sora սեղմված (`sora…`) և կանոնական վեցանկյուն կոդեկներ (Kotodama, Kotodama, `canonical_hex`, `parse_any`): IH58-ը հաշվի նախընտրելի ձևաչափն է. `sora…` ձևը երկրորդ լավագույնն է միայն Sora-ի UX-ի համար: `alias@domain` մարդու համար հարմար երթուղային կեղծանունը պահպանվել է UX-ի համար, սակայն այն այլևս չի դիտարկվում որպես հեղինակավոր նույնացուցիչ: Torii-ը նորմալացնում է մուտքային տողերը `AccountAddress::parse_any`-ի միջոցով: Հաշվի ID-ներն աջակցում են ինչպես մեկ բանալիով, այնպես էլ բազմանշանակ կարգավորիչներով:
+- `AccountId`. կանոնական նույնացուցիչ՝ կոդավորված `AccountAddress`-ի միջոցով, որը բացահայտում է IH58, Sora սեղմված (`sora…`) և կանոնական վեցանկյուն կոդեկներ (Kotodama, Kotodama, `canonical_hex`, `parse_encoded`): IH58-ը հաշվի նախընտրելի ձևաչափն է. `sora…` ձևը երկրորդ լավագույնն է միայն Sora-ի UX-ի համար: `alias@domain` մարդու համար հարմար երթուղային կեղծանունը պահպանվել է UX-ի համար, սակայն այն այլևս չի դիտարկվում որպես հեղինակավոր նույնացուցիչ: Torii-ը նորմալացնում է մուտքային տողերը `AccountAddress::parse_encoded`-ի միջոցով: Հաշվի ID-ներն աջակցում են ինչպես մեկ բանալիով, այնպես էլ բազմանշանակ կարգավորիչներով:
 - `AssetDefinitionId`՝ `asset#domain` (օրինակ՝ `xor#soramitsu`):
-- `AssetId`. `asset#domain#account` կամ սղագրություն `asset##account`, եթե սահմանման տիրույթը հավասար է հաշվի տիրույթին, որտեղ `account`-ը `AccountId` կանոնական տողն է (նախընտրելի IH58):
+- `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`՝ `nft$domain` (օրինակ՝ `rose$garden`):
 - `PeerId`՝ `public_key` (հասակակիցների հավասարությունը հանրային բանալին է):
 

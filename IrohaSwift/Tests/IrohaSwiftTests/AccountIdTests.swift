@@ -8,16 +8,13 @@ final class AccountIdTests: XCTestCase {
         XCTAssertEqual(AccountId.defaultNetworkPrefix, 0x02F1)
     }
 
-    func testMakeProducesEd0120Format() {
+    func testMakeProducesIH58Format() {
         let publicKey = Data(repeating: 0xAB, count: 32)
         let accountId = AccountId.make(publicKey: publicKey, domain: "wonderland")
 
-        XCTAssertTrue(accountId.hasPrefix("ed0120"))
-        XCTAssertTrue(accountId.hasSuffix("@wonderland"))
-        XCTAssertEqual(
-            accountId,
-            "ed0120ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB@wonderland"
-        )
+        XCTAssertFalse(accountId.hasPrefix("ed0120"))
+        XCTAssertFalse(accountId.contains("@"))
+        XCTAssertGreaterThan(accountId.count, 30)
     }
 
     func testMakeIH58ProducesValidFormat() throws {
@@ -76,41 +73,36 @@ final class AccountIdTests: XCTestCase {
         XCTAssertFalse(accountId.contains("@"))
     }
 
-    func testMakeAndMakeIH58ProduceDifferentFormats() throws {
+    func testMakeAndMakeIH58ProduceSameFormat() throws {
         let publicKey = Data(repeating: 0xEF, count: 32)
         let domain = "wonderland"
 
-        let ed0120AccountId = AccountId.make(publicKey: publicKey, domain: domain)
+        let accountId = AccountId.make(publicKey: publicKey, domain: domain)
         let ih58AccountId = try AccountId.makeIH58(publicKey: publicKey, domain: domain)
 
-        // They should be different formats
-        XCTAssertNotEqual(ed0120AccountId, ih58AccountId)
-
-        // ed0120 format
-        XCTAssertTrue(ed0120AccountId.hasPrefix("ed0120"))
-
-        // IH58 format
-        XCTAssertFalse(ih58AccountId.hasPrefix("ed0120"))
+        XCTAssertEqual(accountId, ih58AccountId)
+        XCTAssertFalse(accountId.hasPrefix("ed0120"))
+        XCTAssertFalse(accountId.contains("@"))
     }
 
-    func testNormalizeForComparisonStripsDomainSuffixForIh58() throws {
+    func testNormalizeForComparisonDoesNotStripDomainSuffixFromEncodedAddresses() throws {
         let publicKey = Data(repeating: 0x11, count: 32)
         let ih58 = try AccountId.makeIH58(publicKey: publicKey, domain: "default")
 
         XCTAssertEqual(AccountId.normalizeForComparison(ih58), ih58)
-        XCTAssertEqual(AccountId.normalizeForComparison("\(ih58)@default"), ih58)
-        XCTAssertEqual(AccountId.normalizeForComparison("\(ih58)@WONDERLAND"), ih58)
+        XCTAssertEqual(AccountId.normalizeForComparison("\(ih58)@default"), "\(ih58)@default")
+        XCTAssertEqual(AccountId.normalizeForComparison("\(ih58)@WONDERLAND"), "\(ih58)@wonderland")
 
-        XCTAssertTrue(AccountId.matchesForComparison(ih58, "\(ih58)@default"))
-        XCTAssertTrue(AccountId.matchesForComparison("\(ih58)@default", "\(ih58)@wonderland"))
+        XCTAssertFalse(AccountId.matchesForComparison(ih58, "\(ih58)@default"))
+        XCTAssertFalse(AccountId.matchesForComparison("\(ih58)@default", "\(ih58)@wonderland"))
     }
 
-    func testNormalizeForComparisonCanonicalizesDomainForNonIh58Literals() {
+    func testNormalizeForComparisonCanonicalizesDomainForLegacyLiterals() {
         let publicKey = Data(repeating: 0xAB, count: 32)
-        let rawUpper = AccountId.make(publicKey: publicKey, domain: "WONDERLAND")
-        let rawLower = AccountId.make(publicKey: publicKey, domain: "wonderland")
+        let rawUpper = "ed0120\(publicKey.map { String(format: "%02X", $0) }.joined())@WONDERLAND"
+        let rawLower = "ed0120\(publicKey.map { String(format: "%02X", $0) }.joined())@wonderland"
 
         XCTAssertEqual(AccountId.normalizeForComparison(rawUpper), rawLower)
-        XCTAssertFalse(AccountId.matchesForComparison(rawUpper, AccountId.make(publicKey: publicKey, domain: "otherland")))
+        XCTAssertFalse(AccountId.matchesForComparison(rawUpper, "ed0120\(publicKey.map { String(format: "%02X", $0) }.joined())@otherland"))
     }
 }

@@ -66,7 +66,7 @@ Parse accepts:
   optional `@<domain>` suffixes for explicit routing hints.
 - `<label>@<domain>` aliases resolved through the account-alias resolver
   (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<public_key>@<domain>` where `public_key` is the canonical multihash string.
+- `<alias>@<domain>` for domain-scoped alias routing; account IDs themselves are canonical encoded literals (IH58 or compressed).
 - `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
@@ -144,9 +144,9 @@ pub struct Common {
 - **Канонический шестнадцатеричный** – удобное для отладки кодирование `0x…` канонического байта.
   конверт.
 
-`AccountAddress::parse_any` автоматически определяет IH58 (предпочтительно), сжатый (`sora`, второй вариант) или канонический шестнадцатеричный формат
+`AccountAddress::parse_encoded` автоматически определяет IH58 (предпочтительно), сжатый (`sora`, второй вариант) или канонический шестнадцатеричный формат
 Только (`0x...`; пустой шестнадцатеричный код отклоняется) вводит и возвращает как декодированные полезные данные, так и обнаруженные
-`AccountAddressFormat`. Тории теперь вызывает `parse_any` для получения дополнительного сертификата ISO 20022.
+`AccountAddressFormat`. Тории теперь вызывает `parse_encoded` для получения дополнительного сертификата ISO 20022.
 обращается и сохраняет каноническую шестнадцатеричную форму, поэтому метаданные остаются детерминированными
 независимо от исходного представления.
 
@@ -322,7 +322,7 @@ tag-specific payload, then move on to the controller bytes.
   Канонический шестнадцатеричный код: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
   Разбивка: заголовок `0x02`, тег селектора `0x01` плюс дайджест `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, за которым следуют полезные данные с одним ключом (`0x00` тег, `0x01` идентификатор кривой, `0x20` длина, 32 байта Ed25519 ключ).
 
-Модульные тесты (`account::address::tests::parse_any_accepts_all_formats`) подтверждают приведенные ниже векторы V1 через `AccountAddress::parse_any`, гарантируя, что инструментарий может полагаться на каноническую полезную нагрузку в шестнадцатеричной форме, IH58 (предпочтительно) и сжатой (`sora`, второй по качеству) форме. Восстановите расширенный набор приборов с помощью `cargo run -p iroha_data_model --example address_vectors`.
+Модульные тесты (`account::address::tests::parse_encoded_accepts_all_formats`) подтверждают приведенные ниже векторы V1 через `AccountAddress::parse_encoded`, гарантируя, что инструментарий может полагаться на каноническую полезную нагрузку в шестнадцатеричной форме, IH58 (предпочтительно) и сжатой (`sora`, второй по качеству) форме. Восстановите расширенный набор приборов с помощью `cargo run -p iroha_data_model --example address_vectors`.
 
 | Домен | Начальный байт | Канонический шестнадцатеричный | Сжатый (`sora`) |
 |-------------|-----------|---------------------------------------------------------------------------------------------|------------|
@@ -370,7 +370,7 @@ tag-specific payload, then move on to the controller bytes.
   цепочки инструментов.
 - **Помощники по машинам:** Публикация кодеков для Rust, TypeScript/JavaScript, Python,
   и Kotlin, охватывающий IH58 и сжатые форматы (`AccountAddress::to_ih58`,
-  `AccountAddress::parse_any` и их эквиваленты в SDK). Помощники CAIP-10
+  `AccountAddress::parse_encoded` и их эквиваленты в SDK). Помощники CAIP-10
   будущая работа.
 
 #### 2.7 Детерминированный псевдоним IH58
@@ -389,7 +389,7 @@ tag-specific payload, then move on to the controller bytes.
 - **Кодировка:** `encode_ih58()` объединяет байты префикса с каноническими
   полезная нагрузка и добавляет 16-битную контрольную сумму, полученную из Blake2b-512, с фиксированной
   префикс `IH58PRE` (`b"IH58PRE" || prefix || payload`). Результат закодирован в Base58 с помощью `bs58`.
-  Помощники CLI/SDK предоставляют ту же процедуру и `AccountAddress::parse_any`
+  Помощники CLI/SDK предоставляют ту же процедуру и `AccountAddress::parse_encoded`
   отменяет его через `decode_ih58`.
 
 #### 2.8 Нормативные текстовые тестовые векторы
@@ -617,7 +617,7 @@ Nexus публикует **манифест, предназначенный то
   четко обозначены как описательные метаданные, которые могут меняться, тогда как IH58 является
   стабильный адрес.
 - **Канонизация входных данных:** Torii и SDK принимают IH58 (предпочтительно)/sora (второй лучший)/0x.
-  адреса плюс `alias@domain`, `public_key@domain`, `uaid:…` и
+  адреса плюс `alias@domain`, `uaid:…` и
   `opaque:…` формируется, затем канонизируется в IH58 для вывода. Нет
   переключение строгого режима; необработанные идентификаторы телефона/электронной почты должны храниться вне реестра.
   через UAID/непрозрачные сопоставления.
@@ -778,7 +778,7 @@ Nexus публикует **манифест, предназначенный то
 ## Следующие шаги
 
 1. Кодировка IH58 размещена в `iroha_data_model` (`AccountAddress::to_ih58`,
-   `parse_any`); продолжайте портировать фикстуры/тесты в каждый SDK и очищайте все
+   `parse_encoded`); продолжайте портировать фикстуры/тесты в каждый SDK и очищайте все
    Заполнители Беч32м.
 2. Расширьте схему конфигурации с помощью `chain_discriminant` и получите разумный
   значения по умолчанию для существующих настроек тестирования/разработки. **(Выполнено: `common.chain_discriminant`

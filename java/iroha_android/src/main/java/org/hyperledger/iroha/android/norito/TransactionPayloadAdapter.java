@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.InstructionBox;
@@ -158,13 +159,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
     @Override
     public void encode(final NoritoEncoder encoder, final String value) {
-      final AccountIdPayload payload = parseAuthority(value);
-      if (payload == null) {
-        STRING_ADAPTER.encode(encoder, value);
-        return;
-      }
-      encodeSizedField(encoder, DOMAIN_ID_ADAPTER, payload.domain);
-      encodeSizedField(encoder, CONTROLLER_ADAPTER, payload.controller);
+      STRING_ADAPTER.encode(encoder, normalizeAuthority(value));
     }
 
     @Override
@@ -183,7 +178,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
         if (stringDecoder.remaining() != 0) {
           throw new IllegalArgumentException("Trailing bytes after authority payload");
         }
-        return literal;
+        return normalizeAuthority(literal);
       }
     }
 
@@ -204,7 +199,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       if (decoder.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after AccountId payload");
       }
-      return renderAuthority(domain, controller);
+      return renderAuthority(controller);
     }
 
     private static String decodeAccountIdLegacy(
@@ -225,84 +220,38 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       if (decoder.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after AccountId payload");
       }
-      return renderAuthority(domain, controller);
+      return renderAuthority(controller);
     }
 
-    private static AccountIdPayload parseAuthority(final String authority) {
+    private static String normalizeAuthority(final String authority) {
       if (authority == null || authority.isBlank()) {
         throw new IllegalArgumentException("authority must not be blank");
       }
       final String trimmed = authority.trim();
-      final int atIndex = trimmed.lastIndexOf('@');
-      if (atIndex <= 0 || atIndex == trimmed.length() - 1) {
-        return null;
+      if (trimmed.indexOf('@') >= 0) {
+        throw new IllegalArgumentException("authority identifier must not include @domain suffix");
       }
-      final String identifier = trimmed.substring(0, atIndex);
-      final String domain = trimmed.substring(atIndex + 1).trim();
-      if (domain.isBlank()) {
-        return null;
-      }
-      final ControllerPayload controller = parseIdentifierToController(identifier);
-      if (controller == null) {
-        return null;
-      }
-      return new AccountIdPayload(domain, controller);
-    }
-
-    private static ControllerPayload parseIdentifierToController(final String identifier) {
       try {
-        final AccountAddress.ParseResult parsed = AccountAddress.parseAny(identifier, null);
-        final java.util.Optional<AccountAddress.SingleKeyPayload> singlePayload =
-            parsed.address.singleKeyPayload();
-        if (singlePayload.isPresent()) {
-          final AccountAddress.SingleKeyPayload payload = singlePayload.get();
-          final String publicKey =
-              PublicKeyCodec.encodePublicKeyMultihash(payload.curveId(), payload.publicKey());
-          return ControllerPayload.single(publicKey);
-        }
-        final java.util.Optional<AccountAddress.MultisigPolicyPayload> multisigPayload =
-            parsed.address.multisigPolicyPayload();
-        if (multisigPayload.isPresent()) {
-          return ControllerPayload.multisig(multisigPayload.get());
-        }
-      } catch (final AccountAddress.AccountAddressException ignored) {
-        // Fall through to multihash parsing.
+        return AccountIdLiteral.extractIh58Address(trimmed);
+      } catch (final IllegalArgumentException ex) {
+        throw new IllegalArgumentException("authority identifier must be IH58 or sora-encoded", ex);
       }
-      final PublicKeyCodec.PublicKeyPayload payload =
-          PublicKeyCodec.decodePublicKeyLiteral(identifier);
-      if (payload == null) {
-        return null;
-      }
-      final String publicKey =
-          PublicKeyCodec.encodePublicKeyMultihash(payload.curveId(), payload.keyBytes());
-      return ControllerPayload.single(publicKey);
     }
 
-    private static String renderAuthority(final String domain, final ControllerPayload controller) {
+    private static String renderAuthority(final ControllerPayload controller) {
       if (controller.isSingle()) {
         final String publicKeyLiteral = controller.publicKeyLiteral();
         final PublicKeyCodec.PublicKeyPayload payload =
             PublicKeyCodec.decodePublicKeyLiteral(publicKeyLiteral);
         if (payload != null) {
-          final String ih58 = toIh58(domain, payload);
+          final String ih58 = toIh58(payload);
           if (ih58 != null) {
-            return ih58 + "@" + domain;
+            return ih58;
           }
         }
-        return publicKeyLiteral + "@" + domain;
+        throw new IllegalArgumentException("Unsupported legacy authority key payload");
       }
-      final String ih58 = toMultisigIh58(domain, controller.multisigPolicy());
-      return ih58 + "@" + domain;
-    }
-
-    private static final class AccountIdPayload {
-      private final String domain;
-      private final ControllerPayload controller;
-
-      private AccountIdPayload(final String domain, final ControllerPayload controller) {
-        this.domain = domain;
-        this.controller = controller;
-      }
+      return toMultisigIh58(controller.multisigPolicy());
     }
 
     private static final class ControllerPayload {
@@ -425,25 +374,25 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       }
     }
 
-    private static String toIh58(
-        final String domain, final PublicKeyCodec.PublicKeyPayload payload) {
+    private static String toIh58(final PublicKeyCodec.PublicKeyPayload payload) {
       final String algorithm = PublicKeyCodec.algorithmForCurveId(payload.curveId());
       if (algorithm == null) {
         return null;
       }
       try {
         final AccountAddress address =
-            AccountAddress.fromAccount(domain, payload.keyBytes(), algorithm);
+            AccountAddress.fromAccount(
+                AccountAddress.DEFAULT_DOMAIN_NAME, payload.keyBytes(), algorithm);
         return address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
       } catch (final AccountAddress.AccountAddressException ex) {
         return null;
       }
     }
 
-    private static String toMultisigIh58(
-        final String domain, final AccountAddress.MultisigPolicyPayload policy) {
+    private static String toMultisigIh58(final AccountAddress.MultisigPolicyPayload policy) {
       try {
-        final AccountAddress address = AccountAddress.fromMultisigPolicy(domain, policy);
+        final AccountAddress address =
+            AccountAddress.fromMultisigPolicy(AccountAddress.DEFAULT_DOMAIN_NAME, policy);
         return address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
       } catch (final AccountAddress.AccountAddressException ex) {
         throw new IllegalArgumentException("Invalid multisig policy for AccountId", ex);

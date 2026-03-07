@@ -970,23 +970,11 @@ pub mod genesis_instructions_json {
     }
 
     fn account_literal(account: &AccountId) -> Option<String> {
-        if let Ok(ih58) = account.canonical_ih58() {
-            return Some(format!("{ih58}@{}", account.domain()));
-        }
-        account
-            .try_signatory()
-            .map(|pk| format!("{pk}@{}", account.domain()))
+        account.canonical_ih58().ok()
     }
 
     fn asset_literal(asset: &AssetId) -> Option<String> {
-        let account_literal = account_literal(asset.account())?;
-        let definition = asset.definition();
-        let literal = if definition.domain() == asset.account().domain() {
-            format!("{}##{account_literal}", definition.name())
-        } else {
-            format!("{definition}#{account_literal}")
-        };
-        Some(literal)
+        Some(asset.canonical_encoded())
     }
 
     #[allow(clippy::too_many_lines)]

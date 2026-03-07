@@ -7185,10 +7185,15 @@ fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: Stri
     if trimmed.contains("@") {
         throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
     }
-    let (address, format) = try AccountAddress.parseAny(
-        trimmed,
-        expectedPrefix: 0x02F1
-    )
+    let (address, format): (AccountAddress, AccountAddressFormat)
+    do {
+        (address, format) = try AccountAddress.parseEncoded(
+            trimmed,
+            expectedPrefix: 0x02F1
+        )
+    } catch {
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
+    }
     guard format == .ih58 else {
         throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
     }

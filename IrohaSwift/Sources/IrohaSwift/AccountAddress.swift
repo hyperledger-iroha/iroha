@@ -147,44 +147,9 @@ public struct AccountAddress {
     public static func fromCanonicalBytes(_ bytes: Data) throws -> AccountAddress {
         guard !bytes.isEmpty else { throw AccountAddressError.invalidLength }
         let header = try AddressHeader.decode(bytes[0])
-        var canonicalError: AccountAddressError?
-        do {
-            let (controller, cursor) = try ControllerPayload.decode(bytes: bytes, cursor: 1)
-            if cursor == bytes.count {
-                return AccountAddress(header: header, domain: .default, controller: controller)
-            }
-            canonicalError = .unexpectedTrailingBytes
-        } catch let error as AccountAddressError {
-            canonicalError = error
-        }
-
-        // Backward compatibility: legacy payloads may include explicit domain selector bytes.
-        do {
-            var cursor = 1
-            let (domain, domainCursor) = try DomainSelector.decode(bytes: bytes, cursor: cursor)
-            cursor = domainCursor
-            let (controller, controllerCursor) = try ControllerPayload.decode(bytes: bytes, cursor: cursor)
-            cursor = controllerCursor
-            if cursor != bytes.count {
-                throw AccountAddressError.unexpectedTrailingBytes
-            }
-            return AccountAddress(header: header, domain: domain, controller: controller)
-        } catch let error as AccountAddressError {
-            throw canonicalError ?? error
-        }
-    }
-
-    public static func fromCanonicalHex(_ encoded: String) throws -> AccountAddress {
-        let body: String
-        if encoded.lowercased().hasPrefix("0x") {
-            body = String(encoded.dropFirst(2))
-        } else {
-            body = encoded
-        }
-        guard let data = Data(hexString: body) else {
-            throw AccountAddressError.invalidHexAddress
-        }
-        return try AccountAddress.fromCanonicalBytes(data)
+        let (controller, cursor) = try ControllerPayload.decode(bytes: bytes, cursor: 1)
+        guard cursor == bytes.count else { throw AccountAddressError.unexpectedTrailingBytes }
+        return AccountAddress(header: header, domain: .default, controller: controller)
     }
 
     public static func fromIH58(_ encoded: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
@@ -216,7 +181,7 @@ public struct AccountAddress {
         return try AccountAddress.fromCanonicalBytes(canonical)
     }
 
-    public static func parseAny(_ input: String, expectedPrefix: UInt16? = nil) throws -> (AccountAddress, AccountAddressFormat) {
+    public static func parseEncoded(_ input: String, expectedPrefix: UInt16? = nil) throws -> (AccountAddress, AccountAddressFormat) {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
         let lowercased = trimmed.lowercased()
@@ -226,16 +191,18 @@ public struct AccountAddress {
         if containsCompressedAlphabetBeyondIh58(trimmed) {
             throw AccountAddressError.missingCompressedSentinel
         }
+        if lowercased.hasPrefix("0x") {
+            throw AccountAddressError.unsupportedAddressFormat
+        }
         if let bridged = try? NoritoNativeBridge.shared.parseAccountAddress(
             literal: trimmed,
             expectedPrefix: expectedPrefix
         ) {
+            guard bridged.format == .ih58 || bridged.format == .compressed else {
+                throw AccountAddressError.unsupportedAddressFormat
+            }
             let address = try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
             return (address, bridged.format)
-        }
-        if lowercased.hasPrefix("0x") {
-            let address = try fromCanonicalHex(trimmed)
-            return (address, .canonicalHex)
         }
         let address = try AccountAddress.fromIH58(trimmed, expectedPrefix: expectedPrefix)
         return (address, .ih58)

@@ -421,7 +421,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
                 let Ok(key) = key_raw.parse::<Name>() else {
                     continue;
                 };
-                match id_raw.parse::<AssetId>() {
+                match AssetId::parse_encoded(id_raw) {
                     Ok(id) => {
                         parsed = Some(AssetMetadataKey { id, key });
                         break;
@@ -501,7 +501,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("asset:") {
-            match rest.parse::<AssetId>() {
+            match AssetId::parse_encoded(rest) {
                 Ok(id) => canonical.push(CanonicalStateKey::Asset(id)),
                 Err(_) => return None,
             }
@@ -1627,7 +1627,7 @@ mod tests {
 
     #[test]
     fn access_set_hints_reject_unknown_keys() {
-        let reads = vec!["perm.account:alice@wonderland:can_transfer".to_owned()];
+        let reads = vec!["perm.account:legacy-scoped-literal:can_transfer".to_owned()];
         assert!(access_set_from_hint_keys(&reads, &[]).is_none());
     }
 
@@ -1866,7 +1866,7 @@ mod tests {
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
 
         let hints = AccessSetHints {
-            read_keys: vec!["perm.account:alice@wonderland:can_transfer".to_owned()],
+            read_keys: vec!["perm.account:legacy-scoped-literal:can_transfer".to_owned()],
             write_keys: Vec::new(),
         };
         let manifest = ContractManifest {

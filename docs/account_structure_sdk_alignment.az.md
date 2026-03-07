@@ -29,8 +29,7 @@ Fəaliyyət elementləri:
 2. **Qəbul edilmiş daxiletmələr:** təhlilçilər IH58 (üstünlük verilir), `sora` sıxılmış,
    və kanonik hex (yalnız `0x...`; çılpaq hex rədd edilir). Girişlər daşıya bilər
    marşrutlaşdırma göstərişləri üçün `@<domain>` şəkilçisi; `<label>@<domain>` ləqəbləri a tələb edir
-   həlledici. Raw `public_key@domain` (multihash hex) dəstəklənir.
-3. **Həlledicilər:** domensiz IH58/sora təhlili üçün domen seçicisi tələb olunur
+   həlledici.  3. **Həlledicilər:** domensiz IH58/sora təhlili üçün domen seçicisi tələb olunur
    seçici gizli defolt olmadıqda həlledici (konfiqurasiya edilmiş standartdan istifadə edin
    domen etiketi). UAID (`uaid:...`) və qeyri-şəffaf (`opaque:...`) hərfləri tələb edir
    həlledicilər.

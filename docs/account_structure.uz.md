@@ -78,7 +78,7 @@ Parse accepts:
   optional `@<domain>` suffixes for explicit routing hints.
 - `<label>@<domain>` aliases resolved through the account-alias resolver
   (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<public_key>@<domain>` where `public_key` is the canonical multihash string.
+- `<alias>@<domain>` for domain-scoped alias routing; account IDs themselves are canonical encoded literals (IH58 or compressed).
 - `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
@@ -156,9 +156,9 @@ qiymat qo‘shadi. Kanonik hex disk raskadrovka yordami bo'lib qolmoqda.
 - **Canonical hex** – kanonik baytni tuzatish uchun qulay `0x…` kodlash.
   konvert.
 
-`AccountAddress::parse_any` IH58 (afzal), siqilgan (`sora`, ikkinchi eng yaxshi) yoki kanonik olti burchakni avtomatik aniqlaydi
+`AccountAddress::parse_encoded` IH58 (afzal), siqilgan (`sora`, ikkinchi eng yaxshi) yoki kanonik olti burchakni avtomatik aniqlaydi
 (Faqat `0x...`; yalang'och o'n oltilik rad etiladi) dekodlangan foydali yukni va aniqlangan yukni kiritadi va qaytaradi
-`AccountAddressFormat`. Torii endi ISO 20022 qo'shimchasi uchun `parse_any` ni chaqiradi
+`AccountAddressFormat`. Torii endi ISO 20022 qo'shimchasi uchun `parse_encoded` ni chaqiradi
 kanonik olti burchakli shaklga murojaat qiladi va saqlaydi, shuning uchun metadata deterministik bo'lib qoladi
 asl vakillikdan qat'iy nazar.
 
@@ -330,7 +330,7 @@ Amalga oshirishning asosiy tafsilotlari:
   Buzilish: `0x02` sarlavhasi, `0x00` selektori (so'zsiz), `0x00` kontroller yorlig'i, `0x01` egri chizig'i identifikatori (Ed25519), I18NI00000027 tomonidan to'langan kalit, 2-to'liq kalit uzunligi.
 - **Mahalliy domen dayjesti (`treasury`, yadro bayti `0x01`)**  
   Kanonik olti burchakli: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
-  Ajratish: `0x02` sarlavhasi, selektor yorlig'i `0x01` plyus dayjest `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, undan keyin bitta kalitli foydali yuk (`0x00` teg, `0x01` egri chizig'i id 07-28, I18byte) Ed25519 kaliti).Birlik testlari (`account::address::tests::parse_any_accepts_all_formats`) quyidagi V1 vektorlarini `AccountAddress::parse_any` orqali tasdiqlaydi, bu asboblar olti burchakli, IH58 (afzal) va siqilgan (`sora`, ikkinchi eng yaxshi) shakllar bo'ylab kanonik foydali yukga tayanishi mumkinligini kafolatlaydi. `cargo run -p iroha_data_model --example address_vectors` bilan kengaytirilgan armatura to'plamini qayta tiklang.
+  Ajratish: `0x02` sarlavhasi, selektor yorlig'i `0x01` plyus dayjest `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, undan keyin bitta kalitli foydali yuk (`0x00` teg, `0x01` egri chizig'i id 07-28, I18byte) Ed25519 kaliti).Birlik testlari (`account::address::tests::parse_encoded_accepts_all_formats`) quyidagi V1 vektorlarini `AccountAddress::parse_encoded` orqali tasdiqlaydi, bu asboblar olti burchakli, IH58 (afzal) va siqilgan (`sora`, ikkinchi eng yaxshi) shakllar bo'ylab kanonik foydali yukga tayanishi mumkinligini kafolatlaydi. `cargo run -p iroha_data_model --example address_vectors` bilan kengaytirilgan armatura to'plamini qayta tiklang.
 
 | Domen | Urug' bayti | Kanonik hex | Siqilgan (`sora`) |
 |-------------|-----------|-----------------------------------------------------------------------------------------|------------|
@@ -378,7 +378,7 @@ oqimlar ularga so'zma-so'z tayanishi mumkin. `<address>@<domain>`-ni faqat aniq 
   asboblar zanjiri.
 - **Mashina yordamchilari:** Rust, TypeScript/JavaScript, Python uchun kodeklarni nashr qilish,
   va Kotlin IH58 va siqilgan formatlarni qamrab oladi (`AccountAddress::to_ih58`,
-  `AccountAddress::parse_any` va ularning SDK ekvivalentlari). CAIP-10 yordamchilari
+  `AccountAddress::parse_encoded` va ularning SDK ekvivalentlari). CAIP-10 yordamchilari
   kelajakdagi ish.
 
 #### 2.7 Deterministik IH58 taxallus
@@ -397,7 +397,7 @@ oqimlar ularga so'zma-so'z tayanishi mumkin. `<address>@<domain>`-ni faqat aniq 
 - **Kodlash:** `encode_ih58()` prefiks baytlarini kanonik bayt bilan birlashtiradi
   foydali yuk va Blake2b-512 dan olingan 16 bitli nazorat summasini o'zgarmas bilan qo'shadi
   prefiksi `IH58PRE` (`b"IH58PRE" || prefix || payload`). Natijada `bs58` orqali Base58-kodlangan.
-  CLI/SDK yordamchilari bir xil protsedurani ochib beradi va `AccountAddress::parse_any`
+  CLI/SDK yordamchilari bir xil protsedurani ochib beradi va `AccountAddress::parse_encoded`
   uni `decode_ih58` orqali o'zgartiradi.
 
 #### 2.8 Normativ matnli test vektorlari
@@ -623,7 +623,7 @@ ularning almashtirish chiptalari.
   o'zgarishi mumkin bo'lgan tavsiflovchi metama'lumotlar sifatida aniq belgilangan, IH58 esa
   barqaror manzil.
 - **Kirishni kanoniklashtirish:** Torii va SDKlar IH58 (afzal)/sora (ikkinchi-eng yaxshi)/0x ni qabul qiladi
-  manzillar plus `alias@domain`, `public_key@domain`, `uaid:…` va
+  manzillar plus `alias@domain`, `uaid:…` va
   `opaque:…` shakllari, keyin chiqish uchun IH58 ga kanoniklashtiriladi. yo'q
   qat'iy rejimni almashtirish; xom telefon/elektron pochta identifikatorlari kitobdan tashqarida saqlanishi kerak
   UAID/shaffof xaritalar orqali.
@@ -780,7 +780,7 @@ xabarlar va tavsiya etilgan tuzatish bo'yicha ko'rsatmalar.
 ## Keyingi qadamlar
 
 1. IH58 kodlash `iroha_data_model` (`AccountAddress::to_ih58`,
-   `parse_any`); armatura/sinovlarni har bir SDK ga ko'chirishni davom ettiring va har birini tozalang
+   `parse_encoded`); armatura/sinovlarni har bir SDK ga ko'chirishni davom ettiring va har birini tozalang
    Bech32m to'ldirgichlar.
 2. `chain_discriminant` bilan konfiguratsiya sxemasini kengaytiring va oqilona xulosa chiqaring
   mavjud test/dev sozlamalari uchun standart sozlamalar. **(Bajarildi: `common.chain_discriminant`

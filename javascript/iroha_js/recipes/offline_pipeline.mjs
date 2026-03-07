@@ -21,7 +21,7 @@ import process from "node:process";
 import {
   AccountAddress,
   ToriiClient,
-  buildMintAssetInstruction,
+  buildRegisterDomainInstruction,
   buildOfflineEnvelope,
   buildTransaction,
   hashSignedTransaction,
@@ -43,15 +43,16 @@ const AUTHORITY_ID =
 const OUT_DIR = process.env.OFFLINE_PIPELINE_OUT_DIR ?? path.join("artifacts", "js", "offline_pipeline");
 const USE_MOCK = (process.env.OFFLINE_PIPELINE_USE_MOCK ?? "1") !== "0";
 const SKIP_REPLAY = (process.env.OFFLINE_PIPELINE_SKIP_REPLAY ?? "0") === "1";
+const DOMAIN_ID = `offline_demo_${Date.now().toString(16)}`;
 
 function buildEnvelope() {
   const { signedTransaction, hash } = buildTransaction({
     chainId: "offline-demo",
     authority: AUTHORITY_ID,
     instructions: [
-      buildMintAssetInstruction({
-        assetId: `rose##${AUTHORITY_ID}`,
-        quantity: "10",
+      buildRegisterDomainInstruction({
+        domainId: DOMAIN_ID,
+        metadata: { source: "offline-pipeline" },
       }),
     ],
     metadata: { purpose: "offline-demo" },

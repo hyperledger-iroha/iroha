@@ -92,6 +92,39 @@ public final class MultisigSeedHelperTests {
     }
   }
 
+  @Test
+  public void deterministicSeedDerivationRejectsCanonicalHexSignatory() throws Exception {
+    final String domain = "legacy";
+    final byte[] signerKey = new byte[32];
+    java.util.Arrays.fill(signerKey, (byte) 0x31);
+    final String canonical = AccountAddress.fromAccount(domain, signerKey, "ed25519").canonicalHex();
+    final MultisigSpec spec =
+        MultisigSpec.builder()
+            .setQuorum(1)
+            .setTransactionTtlMs(1)
+            .addSignatory(canonical + "@" + domain, 1)
+            .build();
+
+    final Optional<byte[]> derived = MultisigSeedHelper.deriveDeterministicPublicKey(domain, spec);
+    assert derived.isEmpty() : "canonical-hex signatories must be rejected";
+  }
+
+  @Test
+  public void deterministicControllerCheckRejectsNestedDomainIdentifier() throws Exception {
+    final String domain = "legacy-nested";
+    final String signer = accountIdForSeed(domain, (byte) 7);
+    final MultisigSpec spec =
+        MultisigSpec.builder()
+            .setQuorum(1)
+            .setTransactionTtlMs(1)
+            .addSignatory(signer, 1)
+            .build();
+
+    final String nested = accountIdForSeed(domain, (byte) 8) + "@fallback";
+    assert !MultisigSeedHelper.isDeterministicDerivedControllerId(nested, spec)
+        : "nested-domain identifiers must be rejected";
+  }
+
   private static String accountIdForSeed(final String domain, final byte seed) throws Exception {
     final byte[] seedBytes = new byte[32];
     java.util.Arrays.fill(seedBytes, seed);

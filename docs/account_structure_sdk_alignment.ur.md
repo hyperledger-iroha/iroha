@@ -17,7 +17,7 @@
 2. **قابلِ قبول ان پٹس:** پارسرز کو IH58 (ترجیحی)، `sora` compressed، اور کینونیکل hex
    (صرف `0x...`؛ بغیر prefix کے hex کو مسترد کریں) قبول کرنا چاہیے۔ ان پٹس میں
    routing hints کے لیے `@<domain>` لاحقہ ہو سکتا ہے؛ `<label>@<domain>` aliases
-   کے لیے resolver درکار ہے۔ `public_key@domain` (multihash hex) بدستور سپورٹڈ ہے۔
+   کے لیے resolver درکار ہے۔ 
 3. **Resolvers:** selector-free domainless IH58/sora parsing configured default domain
    label پر direct bind کرتی ہے؛ domain-selector resolver canonical flows میں required نہیں۔
    Legacy selector-bearing literals کے لیے resolver/fallback اب بھی useful ہے، جبکہ

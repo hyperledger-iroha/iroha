@@ -5817,6 +5817,124 @@ mod nts_tests {
 
 // Note: endpoint behavior is covered by unit tests in ivm_cli and doc-sync tests.
 
+fn protected_contract_namespaces_from_custom_parameter(state: &CoreState) -> Vec<String> {
+    use iroha_data_model::{name::Name, parameter::CustomParameterId};
+
+    let world = state.world_view();
+    let params = world.parameters();
+    let Ok(name) = Name::from_str("gov_protected_namespaces") else {
+        return Vec::new();
+    };
+    let id = CustomParameterId(name);
+    params
+        .custom()
+        .get(&id)
+        .and_then(|custom| custom.payload().try_into_any_norito::<Vec<String>>().ok())
+        .unwrap_or_default()
+}
+
+fn lane_manifest_protected_namespaces(state: &CoreState, lane_id: LaneId) -> Vec<String> {
+    let manifests = state.lane_manifests.read().clone();
+    manifests
+        .status(lane_id)
+        .and_then(|status| status.rules())
+        .map(|rules| {
+            rules
+                .protected_namespaces
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn all_lane_manifest_protected_namespaces(state: &CoreState) -> Vec<String> {
+    let manifests = state.lane_manifests.read().clone();
+    let mut namespaces = BTreeSet::new();
+    for status in manifests.statuses() {
+        if let Some(rules) = status.rules() {
+            for namespace in &rules.protected_namespaces {
+                namespaces.insert(namespace.to_string());
+            }
+        }
+    }
+    namespaces.into_iter().collect()
+}
+
+fn protected_contract_namespaces(
+    state: &CoreState,
+    tx: &iroha_data_model::transaction::signed::SignedTransaction,
+) -> Vec<String> {
+    let accepted =
+        iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(tx));
+    let nexus = state.nexus.read().clone();
+    let routing = iroha_core::queue::evaluate_policy_with_catalog(
+        &nexus.routing_policy,
+        &nexus.lane_catalog,
+        &nexus.dataspace_catalog,
+        &accepted,
+    );
+
+    let mut namespaces = lane_manifest_protected_namespaces(state, routing.lane_id);
+    if namespaces.is_empty() {
+        namespaces = all_lane_manifest_protected_namespaces(state);
+    }
+    if namespaces.is_empty() {
+        return protected_contract_namespaces_from_custom_parameter(state);
+    }
+    namespaces
+}
+
+fn fallback_contract_registration_id(
+    manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
+) -> String {
+    manifest
+        .code_hash
+        .as_ref()
+        .map(|code_hash| {
+            let code_hash_hex = hex::encode(code_hash.as_ref());
+            format!("manifest_{}", &code_hash_hex[..16])
+        })
+        .unwrap_or_else(|| "manifest_registration".to_owned())
+}
+
+fn resolve_contract_registration_metadata(
+    requested_namespace: Option<&str>,
+    requested_contract_id: Option<&str>,
+    protected_namespaces: &[String],
+    manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
+) -> Option<(String, String)> {
+    let requested_namespace = requested_namespace
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let requested_contract_id = requested_contract_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    if requested_namespace.is_none()
+        && requested_contract_id.is_none()
+        && protected_namespaces.is_empty()
+    {
+        return None;
+    }
+
+    let namespace = requested_namespace.or_else(|| {
+        protected_namespaces.iter().find_map(|candidate| {
+            let trimmed = candidate.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            iroha_data_model::name::Name::from_str(trimmed).ok()?;
+            Some(trimmed.to_owned())
+        })
+    })?;
+    let contract_id =
+        requested_contract_id.unwrap_or_else(|| fallback_contract_registration_id(manifest));
+    Some((namespace, contract_id))
+}
+
 /// Submit RegisterSmartContractCode as a signed transaction.
 #[iroha_futures::telemetry_future]
 pub async fn handle_post_contract_code(
@@ -5826,20 +5944,118 @@ pub async fn handle_post_contract_code(
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<RegisterContractCodeDto>,
 ) -> Result<impl IntoResponse> {
-    use iroha_data_model::{isi::smart_contract_code, prelude as dm};
+    use iroha_data_model::{
+        isi::smart_contract_code, metadata::Metadata, name::Name, prelude as dm,
+    };
 
     // Build the ISI
     let isi = smart_contract_code::RegisterSmartContractCode {
         manifest: req.manifest.clone(),
     };
+    let mut tx_builder = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone())
+        .with_instructions(core::iter::once(dm::InstructionBox::from(isi)));
+    let preview_tx = tx_builder.clone().sign(&req.private_key.0);
+    let protected_namespaces = protected_contract_namespaces(&state, &preview_tx);
+    let mut metadata_attached = false;
+
+    if let Some((namespace, contract_id)) = resolve_contract_registration_metadata(
+        req.gov_namespace.as_deref(),
+        req.gov_contract_id.as_deref(),
+        &protected_namespaces,
+        &req.manifest,
+    ) {
+        let mut metadata = Metadata::default();
+        let gov_namespace_key =
+            Name::from_str("gov_namespace").expect("static metadata key `gov_namespace`");
+        metadata.insert(gov_namespace_key, IrohaJson::new(namespace.clone()));
+        let gov_contract_id_key =
+            Name::from_str("gov_contract_id").expect("static metadata key `gov_contract_id`");
+        metadata.insert(gov_contract_id_key, IrohaJson::new(contract_id.clone()));
+        let contract_namespace_key =
+            Name::from_str("contract_namespace").expect("static metadata key `contract_namespace`");
+        metadata.insert(contract_namespace_key, IrohaJson::new(namespace));
+        let contract_id_key =
+            Name::from_str("contract_id").expect("static metadata key `contract_id`");
+        metadata.insert(contract_id_key, IrohaJson::new(contract_id));
+        tx_builder = tx_builder.with_metadata(metadata);
+        metadata_attached = true;
+    }
+
     // Construct and sign a transaction
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone())
-        .with_instructions(core::iter::once(dm::InstructionBox::from(isi)))
-        .sign(&req.private_key.0);
+    let tx = if metadata_attached {
+        tx_builder.sign(&req.private_key.0)
+    } else {
+        preview_tx
+    };
 
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/contracts/code")
         .await
         .map(|_| (StatusCode::ACCEPTED, ()))
+}
+
+#[cfg(test)]
+mod contract_registration_metadata_tests {
+    use iroha_crypto::Hash;
+
+    use super::*;
+
+    fn manifest_with_code_hash(
+        code_hash: Option<Hash>,
+    ) -> iroha_data_model::smart_contract::manifest::ContractManifest {
+        iroha_data_model::smart_contract::manifest::ContractManifest {
+            code_hash,
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            kotoba: None,
+            provenance: None,
+        }
+    }
+
+    #[test]
+    fn registration_metadata_uses_first_valid_protected_namespace() {
+        let code_hash = Hash::new(b"manifest-test");
+        let manifest = manifest_with_code_hash(Some(code_hash));
+        let protected = vec![
+            "   ".to_owned(),
+            "not valid namespace".to_owned(),
+            "treasury".to_owned(),
+        ];
+
+        let resolved = resolve_contract_registration_metadata(None, None, &protected, &manifest)
+            .expect("metadata should resolve");
+
+        let expected_contract_id = format!("manifest_{}", &hex::encode(code_hash.as_ref())[..16]);
+        assert_eq!(resolved, ("treasury".to_owned(), expected_contract_id));
+    }
+
+    #[test]
+    fn registration_metadata_prefers_request_values() {
+        let manifest = manifest_with_code_hash(None);
+        let protected = vec!["treasury".to_owned()];
+
+        let resolved = resolve_contract_registration_metadata(
+            Some("  contracts  "),
+            Some("  demo.contract  "),
+            &protected,
+            &manifest,
+        )
+        .expect("metadata should resolve");
+
+        assert_eq!(
+            resolved,
+            ("contracts".to_owned(), "demo.contract".to_owned())
+        );
+    }
+
+    #[test]
+    fn registration_metadata_absent_without_request_or_protected_namespaces() {
+        let manifest = manifest_with_code_hash(None);
+        let resolved = resolve_contract_registration_metadata(None, None, &[], &manifest);
+        assert!(resolved.is_none());
+    }
 }
 
 /// Fetch on-chain contract manifest by code_hash.
@@ -7281,6 +7497,14 @@ pub struct RegisterContractCodeDto {
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Contract manifest to register on-chain
     pub manifest: iroha_data_model::smart_contract::manifest::ContractManifest,
+    /// Optional governance namespace metadata (`gov_namespace`).
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub gov_namespace: Option<String>,
+    /// Optional governance contract id metadata (`gov_contract_id`).
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub gov_contract_id: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -14016,41 +14240,14 @@ fn resolve_parsed_account_against_world(
         return Some(parsed.clone());
     }
 
-    let mut matches = world
-        .accounts_iter()
-        .filter_map(|entry| (entry.id().controller() == parsed.controller()).then(|| entry.id().clone()));
+    let mut matches = world.accounts_iter().filter_map(|entry| {
+        (entry.id().controller() == parsed.controller()).then(|| entry.id().clone())
+    });
     let first = matches.next()?;
     if matches.next().is_some() {
         return None;
     }
     Some(first)
-}
-
-#[cfg(feature = "app_api")]
-fn parse_legacy_account_literal_with_state(state: &CoreState, literal: &str) -> Option<AccountId> {
-    let trimmed = literal.trim();
-    let (head, tail) = trimmed.rsplit_once('@')?;
-    let head = head.trim();
-    let tail = tail.trim();
-    if head.is_empty() || tail.is_empty() {
-        return None;
-    }
-    let domain: DomainId = tail.parse().ok()?;
-
-    if let Ok(public_key) = PublicKey::from_str(head) {
-        return Some(AccountId::new(domain, public_key));
-    }
-
-    let label_name: Name = head.parse().ok()?;
-    let label = iroha_data_model::account::rekey::AccountLabel::new(domain.clone(), label_name);
-    let world = state.world_view();
-    if let Some(account_id) = world.account_aliases().get(&label) {
-        return Some(account_id.clone());
-    }
-    world
-        .account_rekey_records()
-        .get(&label)
-        .map(|record| AccountId::new(domain, record.active_signatory.clone()))
 }
 
 #[cfg(feature = "app_api")]
@@ -14070,12 +14267,6 @@ fn parse_account_literal_with_state(
             Ok((resolved.clone(), resolved.to_string()))
         }
         Err(base_err) => {
-            if let Some(legacy_account) = parse_legacy_account_literal_with_state(state, trimmed) {
-                let resolved = resolve_parsed_account_against_world(state, &legacy_account)
-                    .unwrap_or(legacy_account);
-                record_account_literal_accept(telemetry, context, &resolved);
-                return Ok((resolved.clone(), resolved.to_string()));
-            }
             record_account_literal_reject(telemetry, context, literal, base_err.reason());
             Err(base_err)
         }
@@ -14091,13 +14282,11 @@ pub(crate) fn parse_account_path_segment_with_state(
 ) -> Result<(iroha_data_model::account::AccountId, String), Error> {
     use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
-    parse_account_literal_with_state(state, literal, telemetry, endpoint)
-        .map_err(|err| {
-            Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
-                "invalid account_id `{literal}`: {}",
-                err.reason()
-            ))))
-        })
+    parse_account_literal_with_state(state, literal, telemetry, endpoint).map_err(|err| {
+        Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
+            format!("invalid account_id `{literal}`: {}", err.reason()),
+        )))
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -14155,6 +14344,28 @@ fn canonicalize_account_literal_value(
         }
         _ => Err(Error::Query(ValidationFail::TooComplex)),
     }
+}
+
+#[cfg(feature = "app_api")]
+fn scoped_accounts_for_subject_sorted(
+    world: &impl WorldReadOnly,
+    parsed_account: &AccountId,
+) -> Vec<AccountId> {
+    let subject = parsed_account.subject_id();
+    let mut accounts: Vec<AccountId> = world
+        .accounts_for_subject_iter(&subject)
+        .map(|entry| entry.id().clone())
+        .collect();
+    if accounts.is_empty() {
+        accounts.push(parsed_account.clone());
+    }
+    accounts.sort_by(|left, right| {
+        left.domain()
+            .cmp(right.domain())
+            .then_with(|| left.controller().cmp(right.controller()))
+    });
+    accounts.dedup();
+    accounts
 }
 
 #[cfg(feature = "app_api")]
@@ -14474,7 +14685,7 @@ mod address_metrics_tests {
         let telemetry = MaybeTelemetry::for_tests();
         let mut expr = FilterExpr::Eq(
             FieldPath("id".to_string()),
-            Value::String("alice@wonderland".into()),
+            Value::String("alias@invalid-domain".into()),
         );
 
         let result =
@@ -14558,15 +14769,11 @@ mod address_metrics_tests {
         }
     }
 
-    fn canonical_hex_literal(domain_label: &str) -> String {
+    fn ih58_literal(domain_label: &str) -> String {
         let domain: DomainId = domain_label.parse().expect("domain parses");
         let kp = KeyPair::random();
-        let account = AccountId::new(domain.clone(), kp.public_key().clone());
-        let canonical_hex = AccountAddress::from_account_id(&account)
-            .expect("address encodes")
-            .canonical_hex()
-            .expect("canonical hex");
-        format!("{canonical_hex}@{domain}")
+        let account = AccountId::new(domain, kp.public_key().clone());
+        account.to_string()
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -14574,7 +14781,7 @@ mod address_metrics_tests {
         let _guard = DefaultDomainGuard::set("wonderland");
         let telemetry = MaybeTelemetry::for_tests();
         let endpoint = TEST_CONTEXT;
-        let literal = canonical_hex_literal("wonderland");
+        let literal = ih58_literal("wonderland");
         let label = AddressDomainKind::Default.as_str();
 
         let before = {
@@ -15085,24 +15292,24 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     let start = Instant::now();
     let address_format = AddressFormatPreference::from_param(params.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_ACCOUNTS_TRANSACTIONS, address_format);
-    let (_, canonical_literal) = parse_account_path_segment_with_state(
+    let (account_id, _) = parse_account_path_segment_with_state(
         state.as_ref(),
         &account_id,
         &telemetry,
         ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
-    let canonical_account = Arc::<str>::from(canonical_literal);
     let asset_filter = params
         .asset_id
         .as_deref()
         .map(|raw| {
-            raw.parse::<AssetId>()
+            AssetId::parse_encoded(raw)
                 .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))
         })
         .transpose()?;
     let cap = app_query_page_cap(&state);
     let limits = app_query_limits();
     let committed_txs = committed_transactions_snapshot(state.as_ref());
+    let query_subject = account_id;
 
     let (items, total) = {
         let pagination = enforce_app_pagination(
@@ -15115,14 +15322,10 @@ pub async fn handle_v1_account_transactions_get_with_policy(
             .clamp_fetch_size(None)?
             .map(|v| v.min(pagination.cap));
         let filtered = committed_txs.iter().filter_map({
-            let canonical = canonical_account.clone();
+            let query_subject = query_subject.clone();
             let asset_filter = asset_filter.clone();
             move |tx| {
-                let include = match tx_field_value(tx, "authority") {
-                    Some(auth) => auth == canonical.as_ref(),
-                    None => true,
-                };
-                if !include {
+                if !tx_authority_matches_subject(tx, &query_subject) {
                     return None;
                 }
                 if let Some(expected) = asset_filter.as_ref() {
@@ -21693,13 +21896,10 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
 
     let relays = collect_kaigi_relays(&state)?;
     let relay_controller = relay_id.controller().clone();
-    let Some(snapshot) = relays
-        .into_iter()
-        .find(|entry| {
-            entry.registration.relay_id == relay_id
-                || entry.registration.relay_id.controller() == &relay_controller
-        })
-    else {
+    let Some(snapshot) = relays.into_iter().find(|entry| {
+        entry.registration.relay_id == relay_id
+            || entry.registration.relay_id.controller() == &relay_controller
+    }) else {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         )));
@@ -29024,19 +29224,22 @@ pub async fn handle_v1_account_permissions_with_policy(
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_PERMISSIONS)?;
 
     let world = state.world_view();
-    let permissions_iter: Box<dyn Iterator<Item = iroha_data_model::permission::Permission>> =
-        match world.account_permissions_iter(&account) {
-            Ok(iter) => Box::new(iter.cloned()),
-            Err(FindError::Account(_)) => Box::new(std::iter::empty()),
+    let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &account);
+    let mut permissions = BTreeSet::new();
+    for scoped_account in &scoped_accounts {
+        match world.account_permissions_iter(scoped_account) {
+            Ok(iter) => permissions.extend(iter.cloned()),
+            Err(FindError::Account(_)) => {}
             Err(err) => {
                 return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                     err.into(),
                 )));
             }
-        };
+        }
+    }
 
     let (items, total) = collect_page_streaming(
-        permissions_iter.map(|permission| {
+        permissions.into_iter().map(|permission| {
             let payload = permission
                 .payload()
                 .clone()
@@ -29120,7 +29323,7 @@ pub async fn handle_v1_account_assets_with_policy(
         .asset_id
         .as_deref()
         .map(|raw| {
-            raw.parse::<AssetId>().map_err(|err| {
+            AssetId::parse_encoded(raw).map_err(|err| {
                 conversion_error(format!(
                     "asset_id must be a valid asset id `{raw}`: {}",
                     err.reason()
@@ -29133,22 +29336,27 @@ pub async fn handle_v1_account_assets_with_policy(
     let fetch_cap = limits
         .clamp_fetch_size(None)?
         .map(|cap| cap.min(pagination.cap));
+    let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
+
+    let mut projected_assets = Vec::new();
+    for scoped_account in &scoped_accounts {
+        for asset in world.assets_in_account_iter(scoped_account) {
+            if let Some(expected) = asset_filter.as_ref()
+                && asset.id() != expected
+            {
+                continue;
+            }
+            projected_assets.push(AccountAssetListItem {
+                asset_id: asset.id().to_string(),
+                quantity: asset.value().clone().into_inner(),
+            });
+        }
+    }
 
     let (items, total) = collect_page_streaming(
-        world.assets_in_account_iter(&acct).filter_map(|asset| {
-            if let Some(expected) = asset_filter.as_ref() {
-                if asset.id() != expected {
-                    return None;
-                }
-            }
-            Some((
-                (),
-                AccountAssetListItem {
-                    asset_id: asset.id().to_string(),
-                    quantity: asset.value().clone().into_inner(),
-                },
-            ))
-        }),
+        projected_assets
+            .into_iter()
+            .map(|projected| ((), projected)),
         p.offset,
         Some(page_limit),
         fetch_cap,
@@ -30635,6 +30843,29 @@ fn account_from_world_entry(
 }
 
 #[cfg(feature = "app_api")]
+fn collect_subject_accounts(world: &impl WorldReadOnly) -> Vec<iroha_data_model::account::Account> {
+    use std::collections::{BTreeMap, btree_map::Entry};
+
+    let mut by_subject = BTreeMap::new();
+    for entry in world.accounts_iter() {
+        let account = account_from_world_entry(entry);
+        let subject = account.id().subject_id();
+        match by_subject.entry(subject) {
+            Entry::Vacant(slot) => {
+                slot.insert(account);
+            }
+            Entry::Occupied(mut slot) => {
+                if account.id().domain() < slot.get().id().domain() {
+                    slot.insert(account);
+                }
+            }
+        }
+    }
+
+    by_subject.into_values().collect()
+}
+
+#[cfg(feature = "app_api")]
 fn uaid_parse_error(reason: &'static str) -> Error {
     iroha_logger::warn!(
         target: "torii.uaid.parse",
@@ -30934,10 +31165,7 @@ pub async fn handle_v1_accounts(
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let world = state.world_view();
-    let accounts: Vec<_> = world
-        .accounts_iter()
-        .map(account_from_world_entry)
-        .collect();
+    let accounts = collect_subject_accounts(&world);
     drop(world);
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_account_sort_spec(&sort_spec);
@@ -31054,10 +31282,7 @@ pub async fn handle_v1_accounts_query(
     )?;
     let fetch_size = envelope.fetch_size;
     let world = state.world_view();
-    let accounts: Vec<_> = world
-        .accounts_iter()
-        .map(account_from_world_entry)
-        .collect();
+    let accounts = collect_subject_accounts(&world);
     drop(world);
 
     let (items, total) = if sort_spec.is_empty() {
@@ -31637,7 +31862,7 @@ fn filter_portfolio_by_asset_id(
 
 #[cfg(feature = "app_api")]
 fn portfolio_asset_id_literal(asset_id: &iroha_data_model::asset::AssetId) -> String {
-    format!("{}#{}", asset_id.definition(), asset_id.account())
+    asset_id.canonical_encoded()
 }
 
 #[cfg(feature = "app_api")]
@@ -35529,7 +35754,7 @@ impl OfflineAllowanceQueryFilters {
             .asset_id
             .as_deref()
             .map(|raw| {
-                raw.parse::<AssetId>()
+                AssetId::parse_encoded(raw)
                     .map_err(|_| Self::conversion_error("asset_id must be a valid asset id"))
             })
             .transpose()?;
@@ -35755,7 +35980,7 @@ impl OfflineTransferQueryFilters {
             .asset_id
             .as_deref()
             .map(|raw| {
-                raw.parse::<AssetId>()
+                AssetId::parse_encoded(raw)
                     .map_err(|_| Self::conversion_error("asset_id must be a valid asset id"))
             })
             .transpose()?;
@@ -37449,7 +37674,7 @@ pub async fn handle_v1_nexus_public_lane_rewards(
         })?;
     let asset_filter = match params.asset_id.as_deref() {
         Some(raw) => Some(
-            raw.parse::<AssetId>()
+            AssetId::parse_encoded(raw)
                 .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))?,
         ),
         None => None,
@@ -44700,13 +44925,16 @@ pub async fn handle_v1_account_assets_query_with_policy(
         ENDPOINT_ACCOUNTS_ASSETS_QUERY,
     )?;
     let world = state.world_view();
-    let projected_assets: Vec<_> = world
-        .assets_in_account_iter(&acct)
-        .map(|asset| AccountAssetListItem {
-            asset_id: asset.id().to_string(),
-            quantity: asset.value().clone().into_inner(),
-        })
-        .collect();
+    let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
+    let mut projected_assets = Vec::new();
+    for scoped_account in &scoped_accounts {
+        for asset in world.assets_in_account_iter(scoped_account) {
+            projected_assets.push(AccountAssetListItem {
+                asset_id: asset.id().to_string(),
+                quantity: asset.value().clone().into_inner(),
+            });
+        }
+    }
     drop(world);
     let crate::filter::QueryEnvelope {
         filter,
@@ -45017,10 +45245,11 @@ pub async fn handle_v1_asset_holders(
         .map(str::trim)
         .filter(|raw| !raw.is_empty())
         .map(|raw| {
-            raw.parse::<AssetId>()
+            AssetId::parse_encoded(raw)
                 .map(|asset| asset.to_string())
-                .unwrap_or_else(|_| raw.to_owned())
-        });
+                .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))
+        })
+        .transpose()?;
 
     let world = state.world_view();
     let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
@@ -45173,6 +45402,7 @@ pub async fn handle_v1_asset_holders_query(
         canonicalize_filter_account_literals(
             expr,
             "account_id",
+            None,
             &telemetry,
             ENDPOINT_ASSET_HOLDERS_QUERY,
         )?;
@@ -45238,23 +45468,7 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
         let Some(raw) = value.as_str() else {
             return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
         };
-        if raw.parse::<iroha_data_model::asset::AssetId>().is_ok() {
-            return Ok(());
-        }
-        let (definition_part, account_part) = raw
-            .rsplit_once('#')
-            .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
-        if account_part.is_empty() {
-            return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
-        }
-        if let Some(name_only) = definition_part.strip_suffix('#') {
-            return name_only
-                .parse::<iroha_data_model::prelude::Name>()
-                .map(|_| ())
-                .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex));
-        }
-        definition_part
-            .parse::<iroha_data_model::asset::id::AssetDefinitionId>()
+        raw.parse::<iroha_data_model::asset::AssetId>()
             .map(|_| ())
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
     };

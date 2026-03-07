@@ -252,7 +252,7 @@ mod tests {
         let domain: DomainId = "wonderland".parse().unwrap();
         let alice = AccountId::new(domain.clone(), KeyPair::random().public_key().clone());
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        let asset_id: AssetId = format!("rose##{alice}").parse().unwrap();
+        let asset_id = AssetId::new(asset_def.clone(), alice.clone());
         let nft_id: NftId = "nft0$wonderland".parse().unwrap();
         let trig_id: TriggerId = "trigger0".parse().unwrap();
         let key: Name = "color".parse().unwrap();
