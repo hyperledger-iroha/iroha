@@ -204,21 +204,7 @@ fn merge_declaration_metadata_into_record(
 }
 
 fn owner_literal_matches_authority(authority: &AccountId, literal: &str) -> bool {
-    if literal == authority.to_string() {
-        return true;
-    }
-    if let Some(signatory) = authority.try_signatory() {
-        let explicit = format!("{signatory}@{}", authority.domain());
-        if literal == explicit {
-            return true;
-        }
-    }
-    if let Ok(hex_literal) = authority.to_canonical_hex() {
-        if literal == hex_literal {
-            return true;
-        }
-    }
-    false
+    literal == authority.to_string()
 }
 
 fn enforce_provider_owner(
@@ -2681,25 +2667,25 @@ mod sorafs_tests {
     }
 
     pub(super) fn alice() -> AccountId {
-        AccountId::from_str(
-            "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland",
+        AccountId::new(
+            "wonderland".parse().expect("domain"),
+            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
+                .parse()
+                .expect("public key"),
         )
-        .expect("valid account id")
     }
 
     fn account_literal(account: &AccountId) -> String {
-        // Avoid implicit domain selector resolution in tests by keeping the domain explicit.
-        account
-            .try_signatory()
-            .map(|signatory| format!("{signatory}@{}", account.domain()))
-            .unwrap_or_else(|| account.to_string())
+        account.to_string()
     }
 
     pub(super) fn bob() -> AccountId {
-        AccountId::from_str(
-            "ed25519:ed01208D5C8358EA5B64A79653A76F516E436EB93E3EC7117B0C9DD861B029BEA0FC8B@wonderland",
+        AccountId::new(
+            "wonderland".parse().expect("domain"),
+            "ed01208D5C8358EA5B64A79653A76F516E436EB93E3EC7117B0C9DD861B029BEA0FC8B"
+                .parse()
+                .expect("public key"),
         )
-        .expect("valid account id")
     }
 
     #[test]
@@ -4525,10 +4511,12 @@ mod sorafs_tests {
     #[test]
     fn record_capacity_telemetry_requires_authorised_submitter() {
         let mut state = make_state();
-        let bob = AccountId::from_str(
-            "ed25519:ed01208B6BD94034D1145C0B149DB43A07F56977AF58C1871F43B6D54A4D3F33D5B451@wonderland",
-        )
-        .expect("valid account id");
+        let bob = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            "ed01208B6BD94034D1145C0B149DB43A07F56977AF58C1871F43B6D54A4D3F33D5B451"
+                .parse()
+                .expect("public key"),
+        );
         seed_sorafs_permissions(&mut state, &bob);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();

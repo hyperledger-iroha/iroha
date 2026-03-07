@@ -638,6 +638,12 @@ pub(crate) struct ExplorerTransactionsPage {
     pub items: Vec<ExplorerTransactionDto>,
 }
 
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerLatestTransactionsResponse {
+    pub sampled_at: String,
+    pub items: Vec<ExplorerTransactionDto>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExplorerInstructionKind {
     Register,
@@ -723,6 +729,19 @@ pub(crate) struct ExplorerInstructionDto {
 pub(crate) struct ExplorerInstructionsPage {
     pub pagination: ExplorerPaginationMeta,
     pub items: Vec<ExplorerInstructionDto>,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerLatestInstructionsResponse {
+    pub sampled_at: String,
+    pub items: Vec<ExplorerInstructionDto>,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerHealthDto {
+    pub head_height: u64,
+    pub head_created_at: Option<String>,
+    pub sampled_at: String,
 }
 
 pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstructionKind {
@@ -1109,6 +1128,12 @@ fn duration_to_rfc3339(duration: Duration) -> String {
         .unwrap_or(OffsetDateTime::UNIX_EPOCH)
         .format(&Rfc3339)
         .unwrap_or_else(|_| FALLBACK.to_string())
+}
+
+pub(crate) fn now_rfc3339() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 fn duration_ms(duration: Duration) -> u64 {

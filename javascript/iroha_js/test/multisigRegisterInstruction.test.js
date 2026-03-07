@@ -60,18 +60,18 @@ test("multisig register builder rejects controller domain drift", () => {
   const spec = new MultisigSpecBuilder()
     .setQuorum(1)
     .setTransactionTtlMs(10_000)
-    .addSignatory("alice@wonderland", 1)
+    .addSignatory("alice@fixture-domain", 1)
     .build();
 
   assert.throws(
     () =>
       buildRegisterMultisigInstruction({
-        accountId: "controller@narnia",
+        accountId: "controller@other-domain",
         spec,
       }),
     (error) =>
       error instanceof ValidationError &&
       error.code === ValidationErrorCode.INVALID_STRING &&
-      /domain narnia/.test(error.message),
+      /domain other-domain/.test(error.message),
   );
 });

@@ -152,7 +152,7 @@ regardless of the original representation.
 
 #### 2.1 Header byte layout (ADDR-1a)
 
-Every canonical payload is laid out as `header · domain selector · controller`. The
+Every canonical payload is laid out as `header · controller`. The
 `header` is a single byte that communicates which parser rules apply to the bytes that
 follow:
 
@@ -176,47 +176,48 @@ The Rust encoder writes `0x02` for single-key controllers (version 0, class 0,
 norm v1, extension flag cleared) and `0x0A` for multisig controllers (version 0,
 class 1, norm v1, extension flag cleared).
 
-#### 2.2 Domain selector encodings (ADDR-1a)
+#### 2.2 Legacy selector compatibility (decode-only)
 
-The domain selector immediately follows the header and is a tagged union:
+Newly encoded canonical payloads do not include a domain-selector segment. For
+backward compatibility, decoders still accept pre-cutover payloads where a
+selector segment appears between header and controller as a tagged union:
 
 | Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()`. |
+| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
 | `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
 | `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
 Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
 
 ```
-domain selector
+legacy selector segment
 ┌──────────┬──────────────────────────────────────────────┐
 │ tag (u8) │ payload (depends on selector kind, see table)│
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-The selector is immediately adjacent to the controller payload, so a decoder can walk
-the wire format in order: read the tag byte, read the tag-specific payload, then move on
-to the controller bytes.
+When present, the selector is immediately adjacent to the controller payload, so
+a decoder can walk the wire format in order: read the tag byte, read the
+tag-specific payload, then move on to the controller bytes.
 
-**Selector examples**
+**Legacy selector examples**
 
 - *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
   domain using the deterministic test key:
-  `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
+  `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
 - *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
   `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
 - *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
   that follow the payload are identical to the implicit-default case; the selector simply
   replaces the normalised domain string with a registry pointer. Example using
-  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
-  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.  
-  Breakdown: `0x02` header, `0x02` selector tag, `00 00 00 2A` registry id, `0x00`
-  controller tag, `0x01` curve id, `0x20` key length, 32-byte Ed25519 key payload.
+  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
+  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
 
 #### 2.3 Controller payload encodings (ADDR-1a)
 
-The controller payload is another tagged union appended after the domain selector:
+The controller payload is a tagged union appended immediately after the header in
+canonical payloads (or after the legacy selector segment when decoding pre-cutover payloads):
 
 | Tag | Controller | Layout | Notes |
 |-----|------------|--------|-------|
@@ -303,30 +304,30 @@ Key implementation details:
 
 #### 2.4 Failure rules (ADDR-1a)
 
-- Payloads shorter than the required header + selector or with leftover bytes emit `AccountAddressError::InvalidLength` or `AccountAddressError::UnexpectedTrailingBytes`.
+- Payloads shorter than the required canonical header+controller size (or malformed legacy selector-bearing payloads) emit `AccountAddressError::InvalidLength` or `AccountAddressError::UnexpectedTrailingBytes`.
 - Headers that set the reserved `ext_flag` or advertise unsupported versions/classes MUST be rejected using `UnexpectedExtensionFlag`, `InvalidHeaderVersion`, or `UnknownAddressClass`.
-- Unknown selector/controller tags raise `UnknownDomainTag` or `UnknownControllerTag`.
+- Unknown legacy selector/controller tags raise `UnknownDomainTag` or `UnknownControllerTag`.
 - Oversized or malformed key material raises `KeyPayloadTooLong` or `InvalidPublicKey`.
 - Multisig controllers exceeding 255 members raise `MultisigMemberOverflow`.
 - IME/NFKC conversions: half-width Sora kana can be normalised to their full-width forms without breaking decoding, but the ASCII `sora` sentinel and IH58 digits/letters MUST stay ASCII. Full-width or case-folded sentinels surface `ERR_MISSING_COMPRESSED_SENTINEL`, full-width ASCII payloads raise `ERR_INVALID_COMPRESSED_CHAR`, and checksum mismatches bubble up as `ERR_CHECKSUM_MISMATCH`. Property tests in `crates/iroha_data_model/src/account/address.rs` cover these paths so SDKs and wallets can rely on deterministic failures.
 - Torii and SDK parsing of `address@domain` aliases now emit the same `ERR_*` codes when IH58 (preferred)/sora (second-best) inputs fail before alias fallback (e.g., checksum mismatch, domain digest mismatch), so clients can relay structured reasons without guessing from prose strings.
 - Local selector payloads shorter than 12 bytes surface `ERR_LOCAL8_DEPRECATED`, preserving a hard cutover from legacy Local‑8 digests.
-- Domainless IH58 (preferred)/sora (second-best) literals resolve the embedded selector via the domain-selector resolver; if none is installed (or the selector cannot be resolved) parsing fails with `ERR_DOMAIN_SELECTOR_UNRESOLVED`. The implicit default selector resolves to the configured default domain label without requiring a resolver.
+- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
 
 #### 2.5 Normative binary vectors
 
-- **Implicit default domain (`default`, seed byte `0x00`)**  
-  Canonical hex: `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
-  Breakdown: `0x02` header, `0x00` selector (implicit default), `0x00` controller tag, `0x01` curve id (Ed25519), `0x20` key length, followed by the 32-byte key payload.
-- **Local domain digest (`treasury`, seed byte `0x01`)**  
-  Canonical hex: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
+- **Selector-free canonical payload (`default`, seed byte `0x00`)**  
+  Canonical hex: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
+  Breakdown: `0x02` header, `0x00` controller tag, `0x01` curve id (Ed25519), `0x20` key length, followed by the 32-byte key payload.
+- **Legacy local-domain digest payload (`treasury`, seed byte `0x01`, decode compatibility only)**  
+  Legacy canonical hex: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
   Breakdown: `0x02` header, selector tag `0x01` plus digest `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, followed by the single-key payload (`0x00` tag, `0x01` curve id, `0x20` length, 32-byte Ed25519 key).
 
-Unit tests (`account::address::tests::parse_any_accepts_all_formats`) assert the V1 vectors below via `AccountAddress::parse_any`, guaranteeing that tooling can rely on the canonical payload across hex, IH58 (preferred), and compressed (`sora`, second-best) forms. Regenerate the extended fixture set with `cargo run -p iroha_data_model --example address_vectors`.
+Unit tests (`account::address::tests::parse_any_accepts_all_formats`) assert the V1 vectors below via `AccountAddress::parse_any`, guaranteeing that tooling can parse both selector-free canonical payloads and legacy selector-bearing fixtures across hex, IH58 (preferred), and compressed (`sora`, second-best) forms. Regenerate the extended fixture set with `cargo run -p iroha_data_model --example address_vectors`.
 
-| Domain      | Seed byte | Canonical hex                                                                 | Compressed (`sora`) |
+| Domain      | Seed byte | Hex payload (selector-free canonical for `default`; legacy selector-bearing for non-default rows) | Compressed (`sora`) |
 |-------------|-----------|-------------------------------------------------------------------------------|------------|
-| default     | `0x00`    | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` |
+| default     | `0x00`    | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
 | treasury    | `0x01`    | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | wonderland  | `0x02`    | `0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394` | `sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS` |
 | iroha       | `0x03`    | `0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1` | `sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L` |
@@ -350,15 +351,17 @@ consistent textual forms for every canonical payload. Selected fixtures from
 `fixtures/account/address_vectors.json` (generated via
 `cargo xtask address-vectors`) are shown below for quick reference:
 
-| Account / selector | IH58 literal (prefix `0x02F1`) | Sora compressed (`sora`) literal |
+| Account / legacy note | IH58 literal (prefix `0x02F1`) | Sora compressed (`sora`) literal |
 |--------------------|--------------------------------|-------------------------|
-| `default` domain (implicit selector, seed `0x00`) | `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` (optional `@default` suffix when providing explicit routing hints) |
-| `treasury` (local digest selector, seed `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
-| Global registry pointer (`registry_id = 0x0000_002A`, equivalent to `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
+| `default` account (selector-free canonical payload, seed `0x00`) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
+| `treasury` account (selector-free canonical payload, seed `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
+| Legacy registry-selector alias (`registry_id = 0x0000_002A`, decode-only compatibility) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 These strings match the ones emitted by the CLI (`iroha tools address convert`), Torii
 responses (`address_format=ih58|compressed`), and SDK helpers, so UX copy/paste
-flows can rely on them verbatim. Append `<address>@<domain>` only when you need an explicit routing hint; the suffix is not part of the canonical output.
+flows can rely on them verbatim. Canonical IH58/compressed outputs are globally
+scoped and selector-free; optional `<address>@<domain>` suffixes are legacy routing
+hints only and are not part of canonical output.
 
 #### 2.6 Textual aliases for interoperability (planned)
 
@@ -382,8 +385,8 @@ flows can rely on them verbatim. Append `<address>@<domain>` only when you need 
   [`address_prefix_registry.md`](source/references/address_prefix_registry.md);
   SDKs MUST keep the matching JSON registry in sync to avoid collisions.
 - **Account material:** IH58 encodes the canonical payload built by
-  `AccountAddress::canonical_bytes()`—header byte, domain selector, and
-  controller payload. There is no additional hashing step; IH58 embeds the
+  `AccountAddress::canonical_bytes()`—header byte and controller payload.
+  Domain-selector bytes are not emitted in canonical payloads. There is no additional hashing step; IH58 embeds the
   binary controller payload (single key or multisig) as produced by the Rust
   encoder, not the CTAP2 map used for multisig policy digests.
 - **Encoding:** `encode_ih58()` concatenates the prefix bytes with the canonical
@@ -398,13 +401,13 @@ flows can rely on them verbatim. Append `<address>@<domain>` only when you need 
 literals for every canonical payload. Highlights:
 
 - **`addr-single-default-ed25519` (Sora Nexus, prefix `0x02F1`).**  
-  IH58 `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`, compressed (`sora`)
-  `sora2QG…U4N5E5`. Torii emits these exact strings from `AccountId`’s
+  IH58 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, compressed (`sora`)
+  `sorauﾛ1N…LJ5HSE`. Torii emits these exact strings from `AccountId`’s
   `Display` implementation (canonical IH58) and `AccountAddress::to_compressed_sora`.
-- **`addr-global-registry-002a` (registry selector → treasury).**  
+- **`addr-global-registry-002a` (legacy selector compatibility fixture).**  
   IH58 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`, compressed (`sora`)
-  `sorakX…CM6AEP`. Demonstrates that registry selectors still decode to
-  the same canonical payload as the corresponding local digest.
+  `sorakX…CM6AEP`. Demonstrates decode compatibility for pre-cutover selector-bearing
+  payloads; newly encoded addresses do not emit selector bytes.
 - **Failure case (`ih58-prefix-mismatch`).**  
   Parsing an IH58 literal encoded with prefix `NETWORK_PREFIX + 1` on a node
   expecting the default prefix yields
@@ -415,8 +418,8 @@ literals for every canonical payload. Highlights:
 #### 2.9 Compliance fixtures
 
 ADDR‑2 ships a replayable fixture bundle covering positive and negative
-scenarios across canonical hex, IH58 (preferred), compressed (`sora`, half-/full-width), implicit
-default selectors, global registry aliases, and multisignature controllers. The
+scenarios across canonical hex, IH58 (preferred), compressed (`sora`, half-/full-width),
+selector-free canonical payloads, legacy selector decode-compatibility aliases, and multisignature controllers. The
 canonical JSON lives in `fixtures/account/address_vectors.json` and can be
 regenerated with:
 
@@ -585,16 +588,15 @@ the change so the audit trail is reconstructable offline.
    `scripts/account_fixture_helper.py`) to capture the exact `digest_hex`.
    The CLI accepts IH58, `sora…`, and canonical `0x…` literals; append
    `@<domain>` only when you need to preserve a label for manifests.
-   The JSON summary surfaces that domain via the `input_domain` field, and
-   `--append-domain` replays the converted encoding as `<address>@<domain>` for
-   manifest diffs (this suffix is metadata, not a canonical account id).
-   For newline-oriented exports use
-   `iroha tools address normalize --input <file> --only-local` to mass-convert Local
-   selectors into canonical IH58 (preferred), compressed (`sora`, second-best), hex, or JSON forms while skipping
-   non-local rows. When auditors need spreadsheet-friendly evidence, run
-   `iroha tools address audit --input <file> --format csv` to emit a CSV summary
-   (`input,status,format,domain_kind,…`) that highlights Local selectors,
-   canonical encodings, and parse failures in the same file.
+  The JSON summary reports the parsed format/domain kind plus canonical
+  encodings (IH58, compressed, canonical hex) for each input.
+  For newline-oriented exports use
+  `iroha tools address normalize --input <file>` to rewrite newline-separated
+  address lists into canonical IH58 (preferred), compressed (`sora`, second-best), hex, or JSON forms.
+  When auditors need spreadsheet-friendly evidence, run
+  `iroha tools address audit --input <file> --format csv` to emit a CSV summary
+  (`input,status,format,domain_kind,…`) that highlights domain kind,
+  canonical encodings, and parse failures in the same file.
 3. **Append manifest entries.** Draft the `tombstone` record (and the follow-up
    `global_domain` record when migrating to the global registry) and validate
    the manifest with `cargo xtask address-vectors` before requesting signatures.
@@ -655,19 +657,18 @@ their change tickets.
   mappings remain future work).
 - **CLI tooling:** Provide a deterministic operator workflow via `iroha tools address convert`
   (see `crates/iroha_cli/src/address.rs`), which accepts IH58/`sora…`/`0x…` literals and
-  optional `<address>@<domain>` labels, defaults to IH58 output using the Sora Nexus prefix (`753`),
+  defaults to IH58 output using the Sora Nexus prefix (`753`),
   and only emits the Sora-only compressed alphabet when operators explicitly request it with
   `--format compressed` or the JSON summary mode. The command enforces prefix expectations on
-  parse, records the provided domain (`input_domain` in JSON), and the `--append-domain` flag
-  replays the converted encoding as `<address>@<domain>` so manifest diffs remain ergonomic.
+  parse, and rejects `@domain` suffixes so operator pipelines stay on canonical
+  address literals only.
 - **Wallet/explorer UX:** Follow the [address display guidelines](source/sns/address_display_guidelines.md)
   shipped with ADDR-6—offer dual copy buttons, keep IH58 as the QR payload, and warn
   users that the compressed `sora…` form is Sora-only and susceptible to IME rewrites.
 - **Torii integration:** Cache Nexus manifests respecting TTL, emit
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministically, and
-  expose `POST /v1/accounts/resolve` to canonicalize `alias@domain`,
-  `public_key@domain`, `uaid:`/`opaque:` literals, or encoded addresses into
-  IH58 while returning the resolved domain and source.
+  keep account-literal parsing encoded-only (`IH58` preferred, `sora…`
+  compressed accepted) with canonical IH58 output.
 
 ### Torii response formats
 
@@ -675,7 +676,7 @@ their change tickets.
   `POST /v1/accounts/query` accepts the same field inside the JSON envelope.
   Supported values are:
   - `ih58` (default) — responses emit canonical IH58 Base58 payloads (e.g.,
-    `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`).
+    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
   - `compressed` — responses emit the Sora-only `sora…` compressed view while
     keeping filters/path parameters canonical.
 - Invalid values return `400` (`QueryExecutionFail::Conversion`). This allows
@@ -713,7 +714,7 @@ messages, plus recommended remediation guidance.
 | Code | Failure | Recommended Remediation |
 |------|---------|-------------------------|
 | `ERR_INVALID_IH58_ENCODING` | IH58 string contains characters outside the alphabet. | Ensure the address uses the published IH58 alphabet and has not been truncated during copy/paste. |
-| `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size for the selector/controller. | Supply the full canonical payload for the selected domain selector and controller layout. |
+| `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size for header/controller (or legacy decode-compat selector variants). | Supply the full canonical payload emitted by the official encoder, or a complete legacy payload when decoding historical data. |
 | `ERR_CHECKSUM_MISMATCH` | IH58 (preferred) or compressed (`sora`, second-best) checksum validation failed. | Regenerate the address from a trusted source; this typically indicates a copy/paste error. |
 | `ERR_INVALID_IH58_PREFIX_ENCODING` | IH58 prefix bytes are malformed. | Re-encode the address with a compliant encoder; do not alter the leading Base58 bytes manually. |
 | `ERR_INVALID_HEX_ADDRESS` | Canonical hexadecimal form failed to decode. | Provide a `0x`-prefixed, even-length hex string produced by the official encoder. |

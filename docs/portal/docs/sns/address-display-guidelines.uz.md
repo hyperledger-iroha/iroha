@@ -152,7 +152,7 @@ Hamyon asboblari hujjatlar/testlarga ulanishi yoki joylashtirishi mumkin bo'lgan
 
 | Selektor turi | Kanonik hex |
 |-------------|---------------|
-| Yashirin sukut | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Yashirin sukut | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | Mahalliy dayjest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | Global registr (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -168,7 +168,7 @@ satrlar ADDR-5 ostida hujjatlashtirilgan CLI ish jarayoniga mos kelishi kerak:
    `kind`/`warning` maydonlariga ega ob'ekt va har qanday taqdim etilgan domen orqali aks sado beradi.
    `input_domain` maydoni. `kind` `local12` bo'lsa, CLI ogohlantirishni chop etadi.
    stderr va JSON xulosasi bir xil ko'rsatmalarni aks ettiradi, shuning uchun CI quvurlari va SDKlar
-   uni yuzaga keltirishi mumkin. Konvertatsiya qilishni xohlagan vaqtda `--append-domain` ga o'ting
+   uni yuzaga keltirishi mumkin. Konvertatsiya qilishni xohlagan vaqtda `legacy  suffix` ga o'ting
    kodlash `<ih58>@<domain>` sifatida takrorlandi.
 2. SDK JavaScript yordamchisi orqali bir xil ogohlantirish/xulosa chiqarishi mumkin:
 
@@ -196,19 +196,19 @@ satrlar ADDR-5 ostida hujjatlashtirilgan CLI ish jarayoniga mos kelishi kerak:
    yangi satr bilan ajratilgan harflarni o'qiydi (`#` bilan boshlangan izohlar e'tiborga olinmaydi va
    `--input -` yoki hech qanday bayroq STDIN ishlatmaydi), JSON hisobotini chiqaradi
    kanonik/afzal IH58/ikkinchi-eng yaxshi siqilgan (`sora`) har bir yozuv uchun xulosalar va ikkala tahlilni ham hisoblaydi
-   keraksiz qatorlarni o'z ichiga olgan axlatxonalar va `--fail-on-warning` bilan eshiklarni avtomatlashtirish
+   keraksiz qatorlarni o'z ichiga olgan axlatxonalar va `strict CI post-check` bilan eshiklarni avtomatlashtirish
    operatorlar CI-da Mahalliy selektorlarni bloklashga tayyor bo'lganda.
 6. Yangi satrdan yangi qatorga qayta yozish kerak bo'lganda, foydalaning
   Mahalliy tanlagichni tuzatish elektron jadvallari uchun foydalaning
   bir o'tishda kanonik kodlashlar, ogohlantirishlar va tahlil xatolarini ta'kidlaydigan `input,status,format,…` CSV ni eksport qilish.
    Yordamchi sukut bo'yicha Lokal bo'lmagan qatorlarni o'tkazib yuboradi, qolgan har bir yozuvni o'zgartiradi
    so'ralgan kodlashga (IH58 afzal/siqilgan (`sora`) ikkinchi eng yaxshi/hex/JSON) kiritadi va saqlaydi
-   `--append-domain` o'rnatilganda asl domen. Uni `--allow-errors` bilan bog'lang
+   `legacy  suffix` o'rnatilganda asl domen. Uni `--allow-errors` bilan bog'lang
    axlatda noto'g'ri shakllangan harflar bo'lsa ham skanerlashni davom ettirish.
 7. CI/lint avtomatizatsiyasi chiqaradigan `ci/check_address_normalize.sh`-ni ishga tushirishi mumkin.
    `fixtures/account/address_vectors.json` dan mahalliy selektorlar, o'zgartiradi
    ularni `iroha tools address normalize` orqali va qayta o'ynaydi
-   Relizlar endi chiqmasligini isbotlash uchun `iroha tools address audit --fail-on-warning`
+   Relizlar endi chiqmasligini isbotlash uchun `iroha tools address audit`
    Mahalliy hazm qilish.`torii_address_local8_total{endpoint}` plus
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
 `torii_address_collision_domain_total{endpoint,domain}` va
@@ -241,7 +241,7 @@ oldin talab qilinadigan 30 kunlik oyna uchun `domain_kind="local12"` nolda qolga
 Yuborilganda hamyon/tadqiqotchi relizlar qaydlariga quyidagi o‘qni qo‘shing
 kesish:
 
-> **Manzillar:** `iroha tools address normalize --only-local --append-domain` qo‘shildi
+> **Manzillar:** `iroha tools address normalize` qo‘shildi
 > yordamchi va uni CI (`ci/check_address_normalize.sh`) ga ulab qo'ydi, shuning uchun hamyon/explorer
 > Local-8/Local-12 asosiy tarmoqda bloklanishidan oldin. Har qanday maxsus eksportlarni yangilang
 > buyruqni bajaring va normallashtirilgan ro'yxatni chiqarish dalillari to'plamiga qo'shing.

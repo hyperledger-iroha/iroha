@@ -5,9 +5,15 @@ use iroha_data_model::prelude::*;
 use ivm::{
     IVM, PointerType,
     kotodama::compiler::Compiler,
-    mock_wsv::{AccountId as HostAccountId, MockWorldStateView, WsvHost},
+    mock_wsv::{MockWorldStateView, ScopedAccountId, WsvHost},
     validate_tlv_bytes,
 };
+
+fn parse_account_literal(literal: &str) -> AccountId {
+    AccountId::parse_encoded(literal)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("account literal must be canonical IH58 or sora compressed")
+}
 
 fn resolve_state_value(host: &WsvHost, base: &Name, key: i64) -> Option<Vec<u8>> {
     let expected_path = format!("{}/{}", base.as_ref(), key);
@@ -24,16 +30,15 @@ fn resolve_state_value(host: &WsvHost, base: &Name, key: i64) -> Option<Vec<u8>>
 
 #[test]
 fn pointer_map_default_roundtrip() {
-    const ACCOUNT_A: &str =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+    const ACCOUNT_A: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
     let src = r#"
         seiyaku PointerFFI {
             state Owners: Map<int, AccountId>;
             fn hajimari() {
-                let default_owner = account_id("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland");
+                let default_owner = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
                 let stored = get_or_insert_default(Owners, 7, default_owner);
                 assert(stored == default_owner);
-                let alt = account_id("ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland");
+                let alt = account_id("6cmzPVPX8dTmJWnCc8X5MpcZLb7UjrvR5Y1VdRmfj9pbb93hFbJfpLb");
                 let again = get_or_insert_default(Owners, 7, alt);
                 assert(again == default_owner);
             }
@@ -47,8 +52,12 @@ fn pointer_map_default_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&bytecode).expect("load program");
     let wsv = MockWorldStateView::new();
-    let authority: HostAccountId = ACCOUNT_A.parse().expect("authority account");
-    let host = WsvHost::new(wsv, authority, HashMap::new(), HashMap::new());
+    let authority: ScopedAccountId = parse_account_literal(ACCOUNT_A);
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&authority),
+        HashMap::new(),
+    );
     vm.set_host(host);
     vm.run().expect("execute hajimari");
 
@@ -65,7 +74,7 @@ fn pointer_map_default_roundtrip() {
 
     let decoded_account: AccountId =
         norito::decode_from_bytes(inner.payload).expect("decode account id");
-    let expected: AccountId = ACCOUNT_A.parse().expect("expected account");
+    let expected: AccountId = parse_account_literal(ACCOUNT_A);
     assert_eq!(decoded_account, expected);
 
     // Ensure payload hash matches expected data (sanity check).

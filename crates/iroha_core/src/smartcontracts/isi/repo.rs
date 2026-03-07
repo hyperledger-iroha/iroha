@@ -684,7 +684,7 @@ pub mod query {
 #[cfg(test)]
 mod tests {
     use hex::encode_upper;
-    use iroha_crypto::Hash;
+    use iroha_crypto::{Hash, KeyPair};
     use iroha_data_model::{
         account::{Account, AccountId},
         asset::{
@@ -815,7 +815,8 @@ mod tests {
 
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
-        let custodian_id: AccountId = "custodian@wonderland".parse().unwrap();
+        let custodian_id =
+            AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
         let custodian_account = Account::new(custodian_id.clone()).build(&ALICE_ID);
 
         let cash_def_id: AssetDefinitionId = "usd#wonderland".parse().unwrap();

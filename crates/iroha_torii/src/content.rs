@@ -821,8 +821,8 @@ mod tests {
             file_hash: [5; 32],
         };
         let creator =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                .parse()
+            AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+                .map(|parsed| parsed.into_account_id())
                 .expect("valid account id");
         let bundle = ContentBundleRecord {
             bundle_id: Hash::new(b"bundle"),

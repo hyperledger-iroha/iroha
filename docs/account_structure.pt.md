@@ -152,7 +152,7 @@ independentemente da representação original.
 
 #### 2.1 Layout de bytes de cabeçalho (ADDR-1a)
 
-Cada carga útil canônica é apresentada como `header · domain selector · controller`. O
+Cada carga útil canônica é apresentada como `header · controller`. O
 `header` é um único byte que comunica quais regras do analisador se aplicam aos bytes que
 siga:
 
@@ -176,43 +176,43 @@ O codificador Rust escreve `0x02` para controladores de chave única (versão 0,
 norma v1, sinalizador de extensão desmarcado) e `0x0A` para controladores multisig (versão 0,
 classe 1, norma v1, sinalizador de extensão desmarcado).
 
-#### 2.2 Codificações do seletor de domínio (ADDR-1a)
+#### 2.2 Legacy selector compatibility (decode-only)
 
-O seletor de domínio segue imediatamente o cabeçalho e é uma união marcada:
+Newly encoded canonical payloads do not include a domain-selector segment. For
+backward compatibility, decoders still accept pre-cutover payloads where a
+selector segment appears between header and controller as a tagged union:
 
-| Etiqueta | Significado | Carga útil | Notas |
+| Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | Domínio padrão implícito | nenhum | Corresponde ao `default_domain_name()` configurado. |
-| `0x01` | Resumo do domínio local | 12 bytes | Resumo = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
-| `0x02` | Entrada de registro global | 4 bytes | Big endian `registry_id`; reservado até que o registro global seja enviado. |
+| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
+| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
-Os rótulos de domínio são canonizados (UTS-46 + STD3 + NFC) antes do hash. Tags desconhecidas geram `AccountAddressError::UnknownDomainTag`. Ao validar um endereço em um domínio, seletores incompatíveis geram `AccountAddressError::DomainMismatch`.
+Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
 
 ```
-domain selector
+legacy selector segment
 ┌──────────┬──────────────────────────────────────────────┐
 │ tag (u8) │ payload (depends on selector kind, see table)│
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-O seletor fica imediatamente adjacente à carga útil do controlador, para que um decodificador possa caminhar
-o formato de ligação em ordem: leia o byte da tag, leia a carga útil específica da tag e siga em frente
-para os bytes do controlador.
+When present, the selector is immediately adjacent to the controller payload, so
+a decoder can walk the wire format in order: read the tag byte, read the
+tag-specific payload, then move on to the controller bytes.
 
-**Exemplos de seletores**
+**Legacy selector examples**
 
-- *Padrão implícito* (`tag = 0x00`). Sem carga útil. Exemplo de hexadecimal canônico para o padrão
-  domínio usando a chave de teste determinística:
-  `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
-- *Resumo local* (`tag = 0x01`). A carga útil é o resumo de 12 bytes. Exemplo (`treasury` semente
+- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
+  domain using the deterministic test key:
+  `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
+- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
   `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
-- *Registro global* (`tag = 0x02`). A carga útil é um big endian `registry_id:u32`. Os bytes
-  que seguem a carga útil são idênticos ao caso padrão implícito; o seletor simplesmente
-  substitui a sequência de domínio normalizada por um ponteiro de registro. Exemplo usando
-  `registry_id = 0x0000_002A` (decimal42) e o controlador padrão determinístico:
-  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.  
-  Divisão: `0x02` cabeçalho, `0x02` tag do seletor, `00 00 00 2A` ID do registro, `0x00`
-  tag do controlador, `0x01` ID da curva, `0x20` comprimento da chave, carga útil da chave Ed25519 de 32 bytes.
+- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
+  that follow the payload are identical to the implicit-default case; the selector simply
+  replaces the normalised domain string with a registry pointer. Example using
+  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
+  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
 
 #### 2.3 Codificações de carga útil do controlador (ADDR-1a)
 
@@ -311,12 +311,12 @@ Principais detalhes de implementação:
 - Conversões IME/NFKC: Sora kana de meia largura pode ser normalizado para seus formatos de largura total sem quebrar a decodificação, mas o ASCII `sora` sentinela e os dígitos/letras IH58 DEVEM permanecer ASCII. Superfícies sentinelas de largura total ou dobradas em caixa `ERR_MISSING_COMPRESSED_SENTINEL`, cargas úteis ASCII de largura total aumentam `ERR_INVALID_COMPRESSED_CHAR` e incompatibilidades de soma de verificação surgem como `ERR_CHECKSUM_MISMATCH`. Os testes de propriedade em `crates/iroha_data_model/src/account/address.rs` cobrem esses caminhos para que SDKs e carteiras possam contar com falhas determinísticas.
 - A análise Torii e SDK de aliases `address@domain` agora emite os mesmos códigos `ERR_*` quando as entradas IH58 (preferencial)/sora (segunda melhor) falham antes do substituto do alias (por exemplo, incompatibilidade de soma de verificação, incompatibilidade de resumo de domínio), para que os clientes possam retransmitir razões estruturadas sem adivinhar a partir de strings em prosa.
 - Cargas úteis do seletor local com menos de 12 bytes aparecem em `ERR_LOCAL8_DEPRECATED`, preservando uma transição rígida de resumos locais-8 legados.
-- Literais IH58 sem domínio (preferencial)/sora (segundo melhor) resolvem o seletor incorporado por meio do resolvedor do seletor de domínio; se nenhum estiver instalado (ou o seletor não puder ser resolvido), a análise falhará com `ERR_DOMAIN_SELECTOR_UNRESOLVED`. O seletor padrão implícito resolve o rótulo de domínio padrão configurado sem exigir um resolvedor.
+- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
 
 #### 2.5 Vetores binários normativos
 
 - **Domínio padrão implícito (`default`, byte inicial `0x00`)**  
-  Hex canônico: `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
+  Hex canônico: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
   Divisão: `0x02` cabeçalho, `0x00` seletor (padrão implícito), `0x00` tag do controlador, `0x01` ID da curva (Ed25519), `0x20` comprimento da chave, seguido pela carga útil da chave de 32 bytes.
 - **Resumo do domínio local (`treasury`, byte inicial `0x01`)**  
   Hex canônico: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
@@ -326,7 +326,7 @@ Os testes de unidade (`account::address::tests::parse_any_accepts_all_formats`) 
 
 | Domínio | Byte de semente | Hexágono canônico | Compactado (`sora`) |
 |-------------|-----------|------------------------------------------------------------------------------------------|------------|
-| padrão | `0x00` | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` |
+| padrão | `0x00` | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
 | tesouraria | `0x01` | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | país das maravilhas | `0x02` | `0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394` | `sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS` |
 | irha | `0x03` | `0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1` | `sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L` |
@@ -352,7 +352,7 @@ formas textuais consistentes para cada carga canônica. Jogos selecionados de
 
 | Conta/seletor | Literal IH58 (prefixo `0x02F1`) | Sora compactado (`sora`) literal |
 |--------------------|--------------------------------|-----------------------------------|
-| `default` domínio (seletor implícito, semente `0x00`) | `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` (sufixo `@default` opcional ao fornecer dicas de roteamento explícitas) |
+| `default` domínio (seletor implícito, semente `0x00`) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (sufixo `@default` opcional ao fornecer dicas de roteamento explícitas) |
 | `treasury` (seletor de resumo local, semente `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | Ponteiro de registro global (`registry_id = 0x0000_002A`, equivalente a `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
@@ -398,7 +398,7 @@ os fluxos podem confiar neles literalmente. Anexe `<address>@<domain>` somente q
 literais para cada carga canônica. Destaques:
 
 - **`addr-single-default-ed25519` (Sora Nexus, prefixo `0x02F1`).**  
-  IH58 `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`, compactado (`sora`)
+  IH58 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, compactado (`sora`)
   `sora2QG…U4N5E5`. Torii emite essas strings exatas de `AccountId`'s
   Implementação `Display` (IH58 canônico) e `AccountAddress::to_compressed_sora`.
 - **`addr-global-registry-002a` (seletor de registro → tesouraria).**  
@@ -586,10 +586,10 @@ a mudança para que a trilha de auditoria possa ser reconstruída off-line.
    A CLI aceita literais IH58, `sora…` e `0x…` canônicos; anexar
    `@<domain>` somente quando você precisar preservar um rótulo para manifestos.
    O resumo JSON mostra esse domínio por meio do campo `input_domain` e
-   `--append-domain` reproduz a codificação convertida como `<address>@<domain>` para
+   `legacy  suffix` reproduz a codificação convertida como `<address>@<domain>` para
    diferenças de manifesto (este sufixo é metadados, não um ID de conta canônico).
    Para exportações orientadas para nova linha, use
-   `iroha tools address normalize --input <file> --only-local` para conversão local em massa
+   `iroha tools address normalize --input <file> legacy-selector input mode` para conversão local em massa
    seletores em formatos canônicos IH58 (preferencial), compactado (`sora`, segundo melhor), hexadecimal ou JSON ao pular
    linhas não locais. Quando os auditores precisarem de evidências em planilhas, execute
    `iroha tools address audit --input <file> --format csv` para emitir um resumo CSV
@@ -658,16 +658,15 @@ seus bilhetes de mudança.
   rótulos opcionais `<address>@<domain>`, o padrão é a saída IH58 usando o prefixo Sora Nexus (`753`),
   e só emite o alfabeto compactado somente Sora quando os operadores o solicitam explicitamente com
   `--format compressed` ou o modo de resumo JSON. O comando impõe expectativas de prefixo em
-  analisar, registra o domínio fornecido (`input_domain` em JSON) e o sinalizador `--append-domain`
+  analisar, registra o domínio fornecido (`input_domain` em JSON) e o sinalizador `legacy  suffix`
   reproduz a codificação convertida como `<address>@<domain>` para que as diferenças do manifesto permaneçam ergonômicas.
 - **Wallet/explorer UX:** siga as [diretrizes de exibição de endereço](source/sns/address_display_guidelines.md)
   fornecido com ADDR-6 - oferece botões de cópia dupla, mantém IH58 como carga útil QR e avisa
   usuários que o formulário `sora…` compactado é somente Sora e suscetível a reescritas de IME.
 - **Integração Torii:** Cache Nexus manifesta respeitando TTL, emite
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministicamente, e
-  expor `POST /v1/accounts/resolve` para canonizar `alias@domain`,
-  `public_key@domain`, `uaid:`/`opaque:` literais ou endereços codificados em
-  IH58 ao retornar o domínio e a origem resolvidos.
+  keep account-literal parsing encoded-only (`IH58` preferred, `sora…`
+  compressed accepted) with canonical IH58 output.
 
 ### Formatos de resposta Torii
 
@@ -675,7 +674,7 @@ seus bilhetes de mudança.
   `POST /v1/accounts/query` aceita o mesmo campo dentro do envelope JSON.
   Os valores suportados são:
   - `ih58` (padrão) — as respostas emitem cargas úteis IH58 Base58 canônicas (por exemplo,
-    `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`).
+    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
   - `compressed` — as respostas emitem a visualização compactada `sora…` somente Sora enquanto
     mantendo filtros/parâmetros de caminho canônicos.
 - Valores inválidos retornam `400` (`QueryExecutionFail::Conversion`). Isso permite

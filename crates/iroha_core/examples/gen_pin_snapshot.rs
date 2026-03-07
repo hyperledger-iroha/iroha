@@ -1,6 +1,6 @@
 //! Utility to print the expected `SoraFS` pin registry snapshot fixture.
 
-use std::{convert::TryInto, fs, path::PathBuf, str::FromStr};
+use std::{convert::TryInto, fs, path::PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_core::{
@@ -13,7 +13,7 @@ use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     isi::sorafs::{
         ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
-        RegisterPinManifest,
+        RegisterPinManifest, RegisterProviderOwner,
     },
     prelude::*,
     sorafs::{
@@ -24,6 +24,11 @@ use iroha_data_model::{
             ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
         },
     },
+};
+use iroha_executor_data_model::permission::sorafs::{
+    CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
+    CanIssueSorafsReplicationOrder, CanRegisterSorafsPin, CanRegisterSorafsProviderOwner,
+    CanRetireSorafsPin,
 };
 use mv::storage::StorageReadOnly;
 use norito::{json, json::Value, to_bytes};
@@ -39,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = make_state();
     let mut block = state.block(default_block_header());
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
 
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
@@ -99,6 +105,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(PathBuf::from(FIXTURE_PATH), format!("{pretty}\n"))?;
     println!("{pretty}");
     Ok(())
+}
+
+fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
+    let alice = alice();
+    {
+        let world = &mut tx.world;
+        for perm in [
+            Permission::from(CanRegisterSorafsPin),
+            Permission::from(CanApproveSorafsPin),
+            Permission::from(CanRetireSorafsPin),
+            Permission::from(CanBindSorafsAlias),
+            Permission::from(CanIssueSorafsReplicationOrder),
+            Permission::from(CanCompleteSorafsReplicationOrder),
+            Permission::from(CanRegisterSorafsProviderOwner),
+        ] {
+            world.add_account_permission(&alice, perm);
+        }
+    }
+
+    for provider_id in [
+        ProviderId::new([0x51; 32]),
+        ProviderId::new([0x52; 32]),
+        ProviderId::new([0x53; 32]),
+        ProviderId::new([0x61; 32]),
+        ProviderId::new([0x62; 32]),
+        ProviderId::new([0x63; 32]),
+        ProviderId::new([0x71; 32]),
+        ProviderId::new([0x72; 32]),
+        ProviderId::new([0x73; 32]),
+    ] {
+        RegisterProviderOwner {
+            provider_id,
+            owner: alice.clone(),
+        }
+        .execute(&alice, tx)
+        .expect("register provider owner");
+    }
 }
 
 fn register_and_approve(
@@ -490,6 +533,10 @@ fn build_envelope(record: &PinManifestRecord, keypair: &KeyPair) -> Vec<u8> {
 }
 
 fn alice() -> AccountId {
-    AccountId::from_str("ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C")
-        .expect("valid account id")
+    AccountId::new(
+        "sora".parse().expect("domain"),
+        "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
+            .parse()
+            .expect("public key"),
+    )
 }

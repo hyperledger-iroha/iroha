@@ -405,7 +405,8 @@ impl TryFrom<RawPolicy> for PolicyConfig {
     fn try_from(raw: RawPolicy) -> Result<Self> {
         let mut allowed_operators = Vec::with_capacity(raw.allowed_operators.len());
         for literal in raw.allowed_operators {
-            let id = AccountId::from_str(&literal)
+            let id = AccountId::parse_encoded(&literal)
+                .map(|parsed| parsed.into_account_id())
                 .map_err(|err| eyre!("invalid policy operator `{literal}`: {err}"))?;
             allowed_operators.push(id);
         }

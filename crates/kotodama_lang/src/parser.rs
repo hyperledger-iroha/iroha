@@ -2462,7 +2462,7 @@ mod tests {
                 call run;
                 on time pre_commit;
                 repeats 3;
-                authority "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland";
+                authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
                 metadata { tag: "alpha"; count: 1; enabled: true; }
             }
         }
@@ -2481,9 +2481,7 @@ mod tests {
         assert!(matches!(trigger.filter, TriggerFilter::Time(_)));
         assert_eq!(
             trigger.authority.as_deref(),
-            Some(
-                "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-            )
+            Some("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
         );
         assert_eq!(trigger.metadata.len(), 3);
     }

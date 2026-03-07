@@ -35,6 +35,14 @@ const POSEIDON_FIXTURE_PATH: &str = concat!(
     "/tests/fixtures/axt_poseidon_constants.json"
 );
 
+fn encoded_account(public_key_hex: &str) -> String {
+    iroha_data_model::account::AccountId::new(
+        "wonderland".parse().expect("domain id"),
+        public_key_hex.parse().expect("public key"),
+    )
+    .to_string()
+}
+
 fn build_descriptor_fixture() -> Result<DescriptorFixture, Box<dyn Error>> {
     let descriptor = AxtDescriptorBuilder::new()
         .dataspace(DataSpaceId::new(7))
@@ -134,12 +142,19 @@ fn build_envelope_fixture(
         },
     ];
 
+    let alice =
+        encoded_account("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
+    let bob =
+        encoded_account("ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016");
+    let carol =
+        encoded_account("ed0120ED77765E503B45FF9C059A1C19BF1DDE82C60432B7C2D01F7FCD75F5F9F3C07C");
+
     let happy_handles = vec![
         AxtHandleFragment {
             handle: AssetHandle {
                 scope: vec!["transfer".to_string()],
                 subject: HandleSubject {
-                    account: "alice@wonderland".to_string(),
+                    account: alice.clone(),
                     origin_dsid: Some(dsid_one),
                 },
                 budget: HandleBudget {
@@ -162,19 +177,20 @@ fn build_envelope_fixture(
                 asset_dsid: dsid_one,
                 op: SpendOp {
                     kind: "transfer".to_string(),
-                    from: "alice@wonderland".to_string(),
-                    to: "bob@wonderland".to_string(),
+                    from: alice,
+                    to: bob.clone(),
                     amount: "2500".to_string(),
                 },
             },
             proof: Some(proof_one),
             amount: 2_500,
+            amount_commitment: None,
         },
         AxtHandleFragment {
             handle: AssetHandle {
                 scope: vec!["lock".to_string()],
                 subject: HandleSubject {
-                    account: "bob@wonderland".to_string(),
+                    account: bob.clone(),
                     origin_dsid: Some(dsid_seven),
                 },
                 budget: HandleBudget {
@@ -197,13 +213,14 @@ fn build_envelope_fixture(
                 asset_dsid: dsid_seven,
                 op: SpendOp {
                     kind: "lock".to_string(),
-                    from: "bob@wonderland".to_string(),
-                    to: "carol@wonderland".to_string(),
+                    from: bob,
+                    to: carol,
                     amount: "9001".to_string(),
                 },
             },
             proof: Some(proof_seven),
             amount: 9_001,
+            amount_commitment: None,
         },
     ];
 

@@ -10650,11 +10650,11 @@ exit 0
             .expect("slash_sink_account_id should be present");
 
         assert!(
-            stake_escrow.parse::<AccountId>().is_ok(),
+            AccountId::parse_encoded(stake_escrow).is_ok(),
             "stake_escrow_account_id must parse as AccountId; got {stake_escrow}"
         );
         assert!(
-            slash_sink.parse::<AccountId>().is_ok(),
+            AccountId::parse_encoded(slash_sink).is_ok(),
             "slash_sink_account_id must parse as AccountId; got {slash_sink}"
         );
     }

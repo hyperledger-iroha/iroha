@@ -30,6 +30,15 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn sample_account() -> AccountId {
+    AccountId::new(
+        "domain".parse().expect("domain id"),
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
+            .parse()
+            .expect("public key"),
+    )
+}
+
 #[test]
 fn debug_print_is_handled_by_default_host() {
     let mut vm = IVM::new(u64::MAX);
@@ -156,10 +165,7 @@ fn get_public_input_zero_pointer_errors() {
 fn add_signatory_syscall_accepts_account_and_json() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(ivm::host::DefaultHost::new());
-    let account: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
+    let account: AccountId = sample_account();
     let account_raw = account.to_string();
     let account_tlv = make_tlv(PointerType::AccountId as u16, account_raw.as_bytes());
     let account_ptr = vm.alloc_input_tlv(&account_tlv).expect("alloc account");
@@ -178,10 +184,7 @@ fn add_signatory_syscall_accepts_account_and_json() {
 fn remove_signatory_syscall_accepts_account_and_json() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(ivm::host::DefaultHost::new());
-    let account: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
+    let account: AccountId = sample_account();
     let account_raw = account.to_string();
     let account_tlv = make_tlv(PointerType::AccountId as u16, account_raw.as_bytes());
     let account_ptr = vm.alloc_input_tlv(&account_tlv).expect("alloc account");
@@ -200,10 +203,7 @@ fn remove_signatory_syscall_accepts_account_and_json() {
 fn set_account_quorum_accepts_nonzero() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(ivm::host::DefaultHost::new());
-    let account: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
+    let account: AccountId = sample_account();
     let account_raw = account.to_string();
     let account_tlv = make_tlv(PointerType::AccountId as u16, account_raw.as_bytes());
     let account_ptr = vm.alloc_input_tlv(&account_tlv).expect("alloc account");
@@ -218,10 +218,7 @@ fn set_account_quorum_accepts_nonzero() {
 fn set_account_quorum_rejects_zero() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(ivm::host::DefaultHost::new());
-    let account: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
+    let account: AccountId = sample_account();
     let account_raw = account.to_string();
     let account_tlv = make_tlv(PointerType::AccountId as u16, account_raw.as_bytes());
     let account_ptr = vm.alloc_input_tlv(&account_tlv).expect("alloc account");

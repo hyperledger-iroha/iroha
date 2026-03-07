@@ -9,7 +9,9 @@ fn contract_manifest_roundtrip_norito() {
         compiler_fingerprint: Some("kotodama-0.1.0".to_string()),
         features_bitmap: Some(0b1010_0001),
         access_set_hints: Some(AccessSetHints {
-            read_keys: vec!["account:alice@wonderland".to_string()],
+            read_keys: vec![
+                "account:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_string(),
+            ],
             write_keys: vec!["asset:rose#wonderland".to_string()],
         }),
         entrypoints: None,

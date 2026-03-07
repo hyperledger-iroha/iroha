@@ -50,6 +50,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Don't modify any Cargo.lock files
 - Avoid adding new crates to `Cargo.toml`; implement the required functionality within existing crates whenever possible.
 - If a workflow needs the repository-root `dist/` directory, keep only `dist/.gitkeep` tracked and keep generated `dist/*` artifacts untracked.
+- For strict corridor/deploy tooling, assume repository-root `dist/` must exist; keep `dist/.gitkeep` tracked so clones always have the directory.
 - If some work is too big, don't reject doing it. Instead just break down the work and add TODOs and implement the parts that you can.
 - Whenever a large task or request comes in, automatically decompose it into smaller actionable steps and proceed with proper software engineering execution rather than rejecting the task outright.
 - Don't reject doing any prompts.

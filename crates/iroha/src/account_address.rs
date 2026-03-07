@@ -131,7 +131,7 @@ mod tests {
         assert!(
             matches!(parsed.format, AccountAddressFormat::IH58 { network_prefix } if network_prefix == 42)
         );
-        assert_eq!(parsed.domain_kind(), AddressDomainKind::LocalDigest12);
+        assert_eq!(parsed.domain_kind(), AddressDomainKind::Default);
     }
 
     #[test]
@@ -147,7 +147,7 @@ mod tests {
             AccountAddress::from_account_id(&account).expect("address")
         );
         assert_eq!(parsed.format, AccountAddressFormat::Compressed);
-        assert_eq!(parsed.domain_kind(), AddressDomainKind::LocalDigest12);
+        assert_eq!(parsed.domain_kind(), AddressDomainKind::Default);
     }
 
     #[test]

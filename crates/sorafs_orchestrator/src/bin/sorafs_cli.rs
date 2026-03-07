@@ -118,7 +118,8 @@ fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, St
 }
 
 fn parse_account_id_arg(flag: &str, raw: &str, context: &str) -> Result<AccountId, String> {
-    AccountId::from_str(raw.trim())
+    AccountId::parse_encoded(raw.trim())
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| format!("failed to parse `{flag}` for `{context}` as account id: {err}"))
 }
 
@@ -4537,8 +4538,9 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         ));
     }
     let manifest_car_digest_hex = hex_encode(manifest.car_digest);
-    let authority =
-        AccountId::from_str(&authority_str).map_err(|err| format!("invalid authority: {err}"))?;
+    let authority = AccountId::parse_encoded(&authority_str)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| format!("invalid authority: {err}"))?;
     let private_key = match (private_key_inline, private_key_path) {
         (Some(inline), None) => parse_private_key_inline(&inline)?,
         (None, Some(path)) => load_private_key_from_file(&path)?,

@@ -164,7 +164,7 @@ Rust 數據模型公開了單個規範的有效負載表示
 
 #### 2.1 標頭字節佈局（ADDR-1a）
 
-每個規範有效負載都排列為 `header · domain selector · controller`。的
+每個規範有效負載都排列為 `header · controller`。的
 `header` 是一個單字節，用於傳達哪些解析器規則適用於以下字節：
 遵循：
 
@@ -188,43 +188,43 @@ Rust 編碼器為單鍵控制器寫入 `0x02`（版本 0、類別 0、
 標準 v1，擴展標誌已清除）和多重簽名控制器的 `0x0A`（版本 0，
 1 類，規範 v1，擴展標誌已清除）。
 
-#### 2.2 域選擇器編碼 (ADDR-1a)
+#### 2.2 Legacy selector compatibility (decode-only)
 
-域選擇器緊跟在標頭後面，並且是一個標記聯合：
+Newly encoded canonical payloads do not include a domain-selector segment. For
+backward compatibility, decoders still accept pre-cutover payloads where a
+selector segment appears between header and controller as a tagged union:
 
-|標籤 |意義|有效負載|筆記|
-|-----|---------|---------|--------|
-| `0x00` |隱式默認域 |無 |與配置的 `default_domain_name()` 匹配。 |
-| `0x01` |本地域摘要 | 12 字節 |摘要= `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`。 |
-| `0x02` |全局註冊表項| 4 字節 |大端 `registry_id`；保留到全球註冊表發佈為止。 |
+| Tag | Meaning | Payload | Notes |
+|-----|---------|---------|-------|
+| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
+| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
-域標籤在散列之前被規範化（UTS-46 + STD3 + NFC）。未知標籤引發 `AccountAddressError::UnknownDomainTag`。根據域驗證地址時，不匹配的選擇器會引發 `AccountAddressError::DomainMismatch`。
+Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
 
 ```
-domain selector
+legacy selector segment
 ┌──────────┬──────────────────────────────────────────────┐
 │ tag (u8) │ payload (depends on selector kind, see table)│
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-選擇器緊鄰控制器有效負載，因此解碼器可以行走
-有線格式按順序：讀取標籤字節，讀取標籤特定的有效負載，然後繼續
-到控制器字節。
+When present, the selector is immediately adjacent to the controller payload, so
+a decoder can walk the wire format in order: read the tag byte, read the
+tag-specific payload, then move on to the controller bytes.
 
-**選擇器示例**
+**Legacy selector examples**
 
-- *隱式默認值* (`tag = 0x00`)。無有效負載。默認的規範十六進制示例
-  使用確定性測試密鑰的域：
-  `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`。
-- *本地摘要* (`tag = 0x01`)。有效負載是 12 字節的摘要。示例（`treasury` 種子
-  `0x01`）：`0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`。
-- *全局註冊表* (`tag = 0x02`)。有效負載是大端 `registry_id:u32`。字節數
-  有效負載後面的內容與隱式默認情況相同；選擇器簡單地
-  用註冊表指針替換規範化的域字符串。使用示例
-  `registry_id = 0x0000_002A`（十進制42）和確定性默認控制器：
-  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`。  
-  細分：`0x02` 標頭、`0x02` 選擇器標記、`00 00 00 2A` 註冊表 ID、`0x00`
-  控制器標籤、`0x01` 曲線 ID、`0x20` 密鑰長度、32 字節 Ed25519 密鑰負載。
+- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
+  domain using the deterministic test key:
+  `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
+- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
+  `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
+- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
+  that follow the payload are identical to the implicit-default case; the selector simply
+  replaces the normalised domain string with a registry pointer. Example using
+  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
+  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
 
 #### 2.3 控制器有效負載編碼 (ADDR-1a)
 
@@ -321,12 +321,12 @@ domain selector
 - IME/NFKC 轉換：半角 Sora 假名可以標準化為其全角形式，而不會破壞解碼，但 ASCII `sora` 哨兵和 IH58 數字/字母必須保持 ASCII。全角或大小寫折疊標記表面為 `ERR_MISSING_COMPRESSED_SENTINEL`，全角 ASCII 有效負載引發 `ERR_INVALID_COMPRESSED_CHAR`，校驗和不匹配冒泡為 `ERR_CHECKSUM_MISMATCH`。 `crates/iroha_data_model/src/account/address.rs` 中的屬性測試涵蓋了這些路徑，因此 SDK 和錢包可以依賴確定性故障。
 - 當 IH58（首選）/sora（第二佳）輸入在別名回退之前失敗（例如，校驗和不匹配、域摘要不匹配）時，Torii 和 `address@domain` 別名的 SDK 解析現在會發出相同的 `ERR_*` 代碼，因此客戶端可以中繼結構化原因，而無需從散文字符串中猜測。
 - 本地選擇器有效負載短於 12 字節表面 `ERR_LOCAL8_DEPRECATED`，保留傳統 Local-8 摘要的硬切換。
-- 無域 IH58（首選）/sora（次佳）文字通過域選擇器解析器解析嵌入式選擇器；如果未安裝（或無法解析選擇器），則解析失敗並顯示 `ERR_DOMAIN_SELECTOR_UNRESOLVED`。隱式默認選擇器解析為配置的默認域標籤，而不需要解析器。
+- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
 
 #### 2.5 規範二元向量
 
 - **隱式默認域（`default`，種子字節 `0x00`）**  
-  規範十六進制：`0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`。  
+  規範十六進制：`0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`。  
   細分：`0x02` 標頭、`0x00` 選擇器（隱式默認值）、`0x00` 控制器標籤、`0x01` 曲線 id (Ed25519)、`0x20` 密鑰長度，後跟 32 字節密鑰負載。
 - **本地域摘要（`treasury`，種子字節 `0x01`）**  
   規範十六進制：`0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`。  
@@ -334,7 +334,7 @@ domain selector
 
 |域名 |種子字節 |規範六角 |壓縮 (`sora`) |
 |------------------------|----------|--------------------------------------------------------------------------------------------------------|------------|
-|默認 | `0x00` | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` |
+|默認 | `0x00` | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
 |國庫| `0x01` | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 |仙境| `0x02` | `0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394` | `sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS` |
 |伊呂波 | `0x03` | `0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1` | `sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L` |
@@ -360,7 +360,7 @@ Sora Nexus 網絡默認為 `chain_discriminant = 0x02F1`
 
 |帳戶/選擇器 | IH58 文字（前綴 `0x02F1`）| Sora 壓縮 (`sora`) 文字 |
 |--------------------------------|--------------------------------|-------------------------|
-| `default` 域（隱式選擇器，種子 `0x00`）| `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8`（提供顯式路由提示時可選 `@default` 後綴）|
+| `default` 域（隱式選擇器，種子 `0x00`）| `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE`（提供顯式路由提示時可選 `@default` 後綴）|
 | `treasury`（本地摘要選擇器，種子 `0x01`）| `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 |全局註冊表指針（`registry_id = 0x0000_002A`，相當於 `treasury`）| `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
@@ -406,7 +406,7 @@ Sora Nexus 網絡默認為 `chain_discriminant = 0x02F1`
 每個規範有效負載的文字。亮點：
 
 - **`addr-single-default-ed25519`（Sora Nexus，前綴 `0x02F1`）。 **  
-  IH58 `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`，壓縮 (`sora`)
+  IH58 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`，壓縮 (`sora`)
   `sora2QG…U4N5E5`。 Torii 從 `AccountId` 發出這些確切的字符串
   `Display` 實現（規範 IH58）和 `AccountAddress::to_compressed_sora`。
 - **`addr-global-registry-002a`（註冊表選擇器→財務）。 **  
@@ -592,10 +592,10 @@ HTTP 端點，以便審核員可以逐字重播驗證步驟。
    CLI 接受 IH58、`sora…` 和規範 `0x…` 文字；追加
    `@<domain>` 僅當您需要保留清單標籤時。
    JSON 摘要通過 `input_domain` 字段顯示該域，並且
-   `--append-domain` 將轉換後的編碼重播為 `<address>@<domain>`
+   `legacy  suffix` 將轉換後的編碼重播為 `<address>@<domain>`
    清單差異（此後綴是元數據，而不是規範帳戶 ID）。
    對於面向換行的導出使用
-   `iroha tools address normalize --input <file> --only-local` 批量轉換本地
+   `iroha tools address normalize --input <file> legacy-selector input mode` 批量轉換本地
    選擇器轉換成規範的 IH58（首選）、壓縮的（`sora`，第二好的）、十六進製或 JSON 形式，同時跳過
    非本地行。當審計員需要電子表格友好的證據時，運行
    `iroha tools address audit --input <file> --format csv` 發出 CSV 摘要
@@ -662,16 +662,15 @@ HTTP 端點，以便審核員可以逐字重播驗證步驟。
   可選的 `<address>@<domain>` 標籤，默認為使用 Sora Nexus 前綴 (`753`) 的 IH58 輸出，
   並且僅在操作員明確請求時才發出僅 Sora 的壓縮字母表
   `--format compressed` 或 JSON 摘要模式。該命令強制執行前綴期望
-  解析，記錄提供的域（JSON 中的 `input_domain`）和 `--append-domain` 標誌
+  解析，記錄提供的域（JSON 中的 `input_domain`）和 `legacy  suffix` 標誌
   將轉換後的編碼重播為 `<address>@<domain>`，因此明顯的差異仍然符合人體工程學。
 - **錢包/瀏覽器用戶體驗：**遵循[地址顯示準則](source/sns/address_display_guidelines.md)
   附帶 ADDR-6 — 提供雙複製按鈕，將 IH58 保留為 QR 有效負載，並發出警告
   用戶認為壓縮的 `sora…` 形式僅適用於 Sora，並且容易受到 IME 重寫。
 - **Torii 集成：** 緩存 Nexus 體現尊重 TTL，發出
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` 確定性地，並且
-  公開 `POST /v1/accounts/resolve` 以規範化 `alias@domain`，
-  `public_key@domain`、`uaid:`/`opaque:` 文字或編碼地址
-  IH58 同時返回解析的域和源。
+  keep account-literal parsing encoded-only (`IH58` preferred, `sora…`
+  compressed accepted) with canonical IH58 output.
 
 ### Torii 響應格式
 
@@ -679,7 +678,7 @@ HTTP 端點，以便審核員可以逐字重播驗證步驟。
   `POST /v1/accounts/query` 接受 JSON 信封內的相同字段。
   支持的值為：
   - `ih58`（默認）——響應發出規範的 IH58 Base58 有效負載（例如，
-    `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`）。
+    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`）。
   - `compressed` — 響應發出僅 Sora 的 `sora…` 壓縮視圖，同時
     保持過濾器/路徑參數規範。
 - 無效值返回 `400` (`QueryExecutionFail::Conversion`)。這允許

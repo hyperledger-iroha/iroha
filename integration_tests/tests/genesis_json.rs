@@ -8,7 +8,7 @@ use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_config::base::toml::WriteExt as _;
 use iroha_genesis::{GenesisBuilder, RawGenesisTransaction, init_instruction_registry};
-use iroha_primitives::numeric::NumericSpec;
+use iroha_primitives::{json::Json, numeric::NumericSpec};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use tempfile::NamedTempFile;
@@ -21,11 +21,34 @@ fn ivm_build_profile_exists() -> bool {
         .exists()
 }
 
+fn has_legacy_domain_scoped_permission_grants(raw: &RawGenesisTransaction) -> bool {
+    raw.instructions().any(|instruction| {
+        let Some(grant_box) = instruction.as_any().downcast_ref::<GrantBox>() else {
+            return false;
+        };
+        let GrantBox::Permission(grant) = grant_box else {
+            return false;
+        };
+        matches!(
+            grant.object().name(),
+            "CanRegisterAccount" | "CanRegisterAssetDefinition"
+        ) && grant.object().payload() == &Json::default()
+    })
+}
+
 fn load_raw_genesis_transaction() -> RawGenesisTransaction {
     let genesis_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../defaults/genesis.json");
     if ivm_build_profile_exists() && genesis_path.exists() {
         match RawGenesisTransaction::from_path(&genesis_path) {
-            Ok(raw) => return raw,
+            Ok(raw) => {
+                if has_legacy_domain_scoped_permission_grants(&raw) {
+                    eprintln!(
+                        "defaults/genesis.json contains legacy domain-scoped permission grants without payloads; falling back to synthetic genesis"
+                    );
+                } else {
+                    return raw;
+                }
+            }
             Err(err) => {
                 eprintln!(
                     "Failed to load defaults/genesis.json ({err:?}), falling back to synthetic genesis"
@@ -150,6 +173,33 @@ fn missing_genesis_file_fails() {
     init_instruction_registry();
     let path = PathBuf::from("this_file_should_not_exist.json");
     assert!(RawGenesisTransaction::from_path(path).is_err());
+}
+
+#[test]
+fn legacy_domain_scoped_permission_grants_are_detected() {
+    init_instruction_registry();
+
+    let chain = iroha_test_network::chain_id();
+    let legacy = GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
+        .append_instruction(Grant::account_permission(
+            Permission::new(
+                "CanRegisterAccount".parse().expect("permission name"),
+                Json::default(),
+            ),
+            ALICE_ID.clone(),
+        ))
+        .build_raw();
+    assert!(has_legacy_domain_scoped_permission_grants(&legacy));
+
+    let typed = GenesisBuilder::new_without_executor(chain, PathBuf::from("."))
+        .append_instruction(Grant::account_permission(
+            iroha_executor_data_model::permission::account::CanRegisterAccount {
+                domain: "wonderland".parse().expect("domain id"),
+            },
+            ALICE_ID.clone(),
+        ))
+        .build_raw();
+    assert!(!has_legacy_domain_scoped_permission_grants(&typed));
 }
 
 #[test]

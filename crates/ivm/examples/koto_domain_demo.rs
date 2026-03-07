@@ -2,9 +2,16 @@
 use std::collections::HashMap;
 
 use ivm::{
-    AccountId, IVM, MockWorldStateView, PermissionToken,
+    AccountId, IVM, MockWorldStateView, PermissionToken, ScopedAccountId,
     kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,
 };
+
+fn fixture_account(domain: &str, hex_public_key: &str) -> ScopedAccountId {
+    ScopedAccountId::new(
+        domain.parse().expect("domain id"),
+        hex_public_key.parse().expect("public key"),
+    )
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1) Compile the Kotodama sample to IVM bytecode
@@ -13,14 +20,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bytecode = compiler.compile_source(src).expect("compile domain_ops");
 
     // 2) Prepare a small world and grant domain permissions to the caller
-    let alice: AccountId = "alice@wonderland".parse()?;
+    let alice = fixture_account(
+        "wonderland",
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
+    let alice_subject = AccountId::from_account_id(&alice);
 
-    // No index maps needed for this sample (we pass pointers via TLVs)
-    let account_map: HashMap<u64, AccountId> = HashMap::new();
-    let asset_map = HashMap::new();
-    let host = WsvHost::new(wsv, alice.clone(), account_map, asset_map);
+    // No account index map needed for this sample (we pass pointers via TLVs)
+    let host = WsvHost::new_with_subject(wsv, alice_subject, HashMap::new());
 
     // 3) Create VM, attach host, load program
     let mut vm = IVM::new(1_000_000);

@@ -137,7 +137,7 @@ Voici quelques-unes des interfaces utilisateur et des SDK qui sont disponibles 
 
 | نوع المحدد | Hex قانوني |
 |--------------------|---------------|
-| افتراضي ضمني | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| افتراضي ضمني | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | résumé محلي (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | سجل عالمي (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -151,7 +151,7 @@ Utilisez la CLI pour ADDR-5 :1. `iroha tools address inspect` utilise JSON pour
    والـ hex القانوني. يتضمن الملخص ايضا كائن `domain` avec `kind`/`warning`
    ويعكس اي نطاق مقدم عبر الحقل `input_domain`. Pour `kind` et `local12`
    Utilisez CLI pour stderr et JSON pour utiliser CI et CI.
-   Les SDK sont disponibles. مرر `--append-domain` متى اردت اعادة تشغيل الترميز المحول
+   Les SDK sont disponibles. مرر `legacy  suffix` متى اردت اعادة تشغيل الترميز المحول
    Voir `<ih58>@<domain>`.
 2. Les SDK sont également compatibles avec JavaScript :
 
@@ -176,18 +176,18 @@ Utilisez la CLI pour ADDR-5 :1. `iroha tools address inspect` utilise JSON pour
    `--input -` et la version STDIN) et la version JSON
    قانونية/IH58/مضغوطة لكل ادخال، ويحسب اخطاء التحليل وتحذيرات نطاق Local. استخدم
    `--allow-errors` عند تدقيق dumps القديمة التي تحتوي صفوفا مهملة، واضبط
-   La clé `--fail-on-warning` est une clé pour la connexion locale à CI.
+   La clé `strict CI post-check` est une clé pour la connexion locale à CI.
 6. عندما تحتاج لاعادة كتابة سطر بسطر، استخدم
   لملفات الجداول الخاصة بمعالجة محددات Local, استخدم
   لتصدير CSV `input,status,format,...` يبرز الترميزات القانونية والتحذيرات
   واخفاقات التحليل في مرور واحد. يتخطى المساعد الصفوف غير المحلية افتراضيا،
   ويحول ادخال متبق الى الترميز المطلوب (IH58/مضغوط/hex/JSON) et ويحافظ على
-  La référence est `--append-domain`. اقرنه مع `--allow-errors`
+  La référence est `legacy  suffix`. اقرنه مع `--allow-errors`
   لمواصلة الفحص حتى عند وجود littéraux تالفة.
 7. يمكن لاتمتة CI/lint تشغيل `ci/check_address_normalize.sh` الذي يستخرج محددات
    Local من `fixtures/account/address_vectors.json`, ويحولها عبر
    `iroha tools address normalize`, ويعيد تشغيل
-   `iroha tools address audit --fail-on-warning` لاثبات ان الاصدارات لم تعد تصدر digestsLocale.
+   `iroha tools address audit` لاثبات ان الاصدارات لم تعد تصدر digestsLocale.
 
 `torii_address_local8_total{endpoint}` pour la lecture
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
@@ -218,7 +218,7 @@ Grafana (`dashboards/grafana/address_ingest.json`) est utilisé pour ADDR-7
 
 La transition vers le cutover est la suivante :
 
-> **العناوين:** تمت اضافة مساعد `iroha tools address normalize --only-local --append-domain`
+> **العناوين:** تمت اضافة مساعد `iroha tools address normalize`
 > وربطه في CI (`ci/check_address_normalize.sh`) حتى تتمكن مسارات المحفظة/المستكشف
 > من تحويل محدات Local القديمة الى صيغ IH58/مضغوطة قانونية قبل حظر Local-8/Local-12
 > على réseau principal. حدث اي عمليات تصدير مخصصة لتشغيل الامر وارفق القائمة المعيارية

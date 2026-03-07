@@ -533,9 +533,12 @@ mod tests {
         let action = LoadedAction {
             executable,
             repeats: Repeats::Exactly(3),
-            authority: "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland"
-                .parse()
-                .expect("valid account id"),
+            authority: AccountId::new(
+                "wonderland".parse().expect("domain id"),
+                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
+                    .parse()
+                    .expect("public key"),
+            ),
             filter: DataEventFilter::Any,
             metadata: Metadata::default(),
         };

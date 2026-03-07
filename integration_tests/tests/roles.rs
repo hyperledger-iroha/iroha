@@ -225,13 +225,13 @@ fn role_permissions_are_deduplicated() {
     let allow_alice_to_transfer_rose_1 = Permission::new(
         "CanTransferAsset".parse().unwrap(),
         iroha_primitives::json::Json::new(
-            norito::json::object([
-                (
-                    "asset",
-                    norito::json::to_value(&"rose#wonderland#ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland")
-                        .expect("serialize asset"),
-                ),
-            ])
+            norito::json::object([(
+                "asset",
+                norito::json::to_value(
+                    &"rose#wonderland#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                )
+                .expect("serialize asset"),
+            )])
             .expect("serialize permission payload"),
         ),
     );
@@ -240,13 +240,13 @@ fn role_permissions_are_deduplicated() {
     let allow_alice_to_transfer_rose_2 = Permission::new(
         "CanTransferAsset".parse().unwrap(),
         iroha_primitives::json::Json::new(
-            norito::json::object([
-                (
-                    "asset",
-                    norito::json::to_value(&"rose##ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland")
-                        .expect("serialize asset"),
-                ),
-            ])
+            norito::json::object([(
+                "asset",
+                norito::json::to_value(
+                    &"rose##6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                )
+                .expect("serialize asset"),
+            )])
             .expect("serialize permission payload"),
         ),
     );

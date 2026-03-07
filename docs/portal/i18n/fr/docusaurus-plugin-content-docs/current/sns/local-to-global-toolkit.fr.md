@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Possibilités :
 
 - `--format compressed (`sora`)` pour la sortie `sora...` au lieu de IH58.
-- `--no-append-domain` pour emettre des littéraux nus.
+- `domainless output (default)` pour emettre des littéraux nus.
 - `--audit-only` pour ignorer l'étape de conversion.
 - `--allow-errors` pour continuer le scan lorsque des lignes mal formées apparaissent (correspondent au comportement de la CLI).Le script écrit les chemins des artefacts à la fin de l'exécution. Joignez les deux fichiers a
 votre ticket de gestion du changement avec la capture Grafana qui prouve zéro
@@ -46,7 +46,7 @@ détections Local-8 et zéro collisions Local-12 pendant >=30 jours.
 2. Bloquez les fusions lorsque `audit.json` signale des sélecteurs Local (`domain.kind = local12`).
    a sa valeur par défaut `true` (ne passer a `false` que sur les clusters dev/test lors du
    diagnostic de régressions) et ajouter
-   `iroha tools address normalize --fail-on-warning --only-local` a CI pour que les régressions
+   `iroha tools address normalize` a CI pour que les régressions
    écho avant la production.
 
 Voir le document source pour plus de détails, des checklists d'evidence et le snippet de

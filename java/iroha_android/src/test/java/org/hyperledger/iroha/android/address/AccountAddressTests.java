@@ -161,11 +161,11 @@ public final class AccountAddressTests {
     final String ih58 = address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
     final String compressed = address.toCompressedSora();
 
-    assert canonical.equals("0x02000001200000000000000000000000000000000000000000000000000000000000000000")
+    assert canonical.equals("0x020001200000000000000000000000000000000000000000000000000000000000000000")
         : "canonical encoding mismatch";
-    assert ih58.equals("RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9")
+    assert ih58.equals("6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL")
         : "IH58 encoding mismatch";
-    assert compressed.equals("sora2QGﾈkﾀLWP9ﾑﾐUﾓYq96rKRｻヱAAUｸGSﾊﾒｸCｺヰﾅijtJoﾎﾇｷ69DQ7G")
+    assert compressed.equals("sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6")
         : "compressed encoding mismatch";
 
     final AccountAddress.ParseResult ih58Parsed =

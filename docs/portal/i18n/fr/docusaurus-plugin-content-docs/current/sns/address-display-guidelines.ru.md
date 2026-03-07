@@ -143,7 +143,7 @@ Les principes hexadécimaux canoniques, les instruments que les cocherkov peuven
 
 | Sélection de type | Hex canonique |
 |--------------------|---------------|
-| Nouveau projet | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Nouveau projet | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | Résumé local (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | Registre mondial (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -160,7 +160,7 @@ Si vous utilisez des touches, vous devez simplement sélectionner le fichier CLI
    Avec les polymères `kind`/`warning` et l'amour pour la maison précédente
    `input_domain`. Lorsque `kind` s'ouvre sur `local12`, la CLI est disponible avant la mise à jour
    stderr, la réponse JSON vous permet de télécharger les cartes CI et les SDK
-   ее показывать. Prenez le `--append-domain`, si vous êtes intéressé par votre projet.
+   ее показывать. Prenez le `legacy  suffix`, si vous êtes intéressé par votre projet.
    codage de conversion selon `<ih58>@<domain>`.
 2. Le SDK peut afficher l'avertissement/résumé de l'assistant JavaScript :```js
    import { inspectAccountId } from "@iroha/iroha-js";
@@ -184,18 +184,18 @@ Si vous utilisez des touches, vous devez simplement sélectionner le fichier CLI
    (`--input -` ou le drapeau standard utilisant STDIN), vous pouvez utiliser JSON
    canoniques/IH58/sжатыми резюме для каждой записи и считает ошибки парсинга
    и предупреждения Local домена. Utilisez `--allow-errors` pour auditer
-   `--fail-on-warning`, les opérateurs doivent sélectionner les sélecteurs locaux dans CI.
+   `strict CI post-check`, les opérateurs doivent sélectionner les sélecteurs locaux dans CI.
 6. Quand il faut commencer, utilisez
   Pour l'assainissement des tables, les sélectionneurs locaux utilisent
   Pour l'exportation CSV `input,status,format,...`, le contenu est canonique
   codes, pré-commandes et analyses possibles pour la procédure à suivre.
    Helper по умолчанию пропускает не-Local строки, конвертирует каждую оставшуюся
    Utilisez l'encodage automatique (IH58/сжатый/hex/JSON) et votre domaine d'activité
-   par `--append-domain`. Connectez-vous avec `--allow-errors` pour effectuer une analyse à partir de maintenant
+   par `legacy  suffix`. Connectez-vous avec `--allow-errors` pour effectuer une analyse à partir de maintenant
    если dump содержит поврежденные littéraux.7. L'automatisation CI/lint peut utiliser `ci/check_address_normalize.sh`, ici
    Utilisez les sélecteurs locaux `fixtures/account/address_vectors.json`,
    convertissez-le en `iroha tools address normalize` et installez-le automatiquement
-   `iroha tools address audit --fail-on-warning`, que vous avez téléchargé, que les réponses ne sont pas grandes
+   `iroha tools address audit`, que vous avez téléchargé, que les réponses ne sont pas grandes
    эмитят Résumés locaux.
 
 `torii_address_local8_total{endpoint}` est à votre disposition
@@ -229,7 +229,7 @@ garde-corps :- `AddressLocal8Resurgence` s'applique, ce contexte est lié à l'a
 
 Cliquez sur Bullet dans les notes de version pour le basculement :
 
-> **Adresse :** Ajout de l'assistant `iroha tools address normalize --only-local --append-domain`
+> **Adresse :** Ajout de l'assistant `iroha tools address normalize`
 > и подключен в CI (`ci/check_address_normalize.sh`), чтобы пайплайны кошелька/
 > Vous pouvez utiliser les sélecteurs locaux dans les canaux canoniques
 > IH58/Formulaires de blocage Local-8/Local-12 sur le réseau principal. Обновите любые

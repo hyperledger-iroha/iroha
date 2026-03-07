@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 اختیارات:
 
 - `--format compressed (`SORA`)` `sora...` سے باہر IH58 کی بجائے باہر نکلیں۔
-- `--no-append-domain` بغیر دائرہ کار کے لغوی جاری کرنا۔
+- `domainless output (default)` بغیر دائرہ کار کے لغوی جاری کرنا۔
 - تبادلوں کے قدم کو چھوڑنے کے لئے `--audit-only`۔
 - `--allow-errors` برقرار رکھنے کے لئے جب خراب قطاریں نمودار ہوتی ہیں (سی ایل آئی سلوک سے مماثل)۔
 
@@ -48,7 +48,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 2. بلاک ضم ہوجاتا ہے جب `audit.json` مقامی سلیکٹرز (`domain.kind = local12`) کی اطلاع دیتا ہے۔
    پہلے سے طے شدہ `true` (`false` میں صرف دیو/ٹیسٹ ماحول میں تبدیل ہوتا ہے جب
    رجعت پسندی کی تشخیص کریں) اور شامل کریں
-   `iroha tools address normalize --fail-on-warning --only-local` to CI جب تک یہ ناکام نہیں ہوتا ہے
+   `iroha tools address normalize` to CI جب تک یہ ناکام نہیں ہوتا ہے
    پیداوار تک پہنچنے سے پہلے واپس رول کرنے کی کوششیں۔
 
 مزید تفصیلات ، شواہد کی فہرستوں اور ریلیز نوٹ کے ٹکڑوں کے لئے ماخذ دستاویز دیکھیں

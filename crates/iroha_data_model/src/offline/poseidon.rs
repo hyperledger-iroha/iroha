@@ -542,7 +542,7 @@ fn pack_bytes(bytes: &[u8]) -> Vec<u64> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path, str::FromStr, sync::Arc};
+    use std::{fs, path::Path, str::FromStr};
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_crypto::{Algorithm, KeyPair, Signature};
@@ -551,8 +551,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        account::{AccountDomainSelector, AccountId},
-        account::{clear_account_domain_selector_resolver, set_account_domain_selector_resolver},
+        account::AccountId,
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
         metadata::Metadata,
@@ -682,6 +681,39 @@ mod tests {
         metadata
     }
 
+    fn fixture_account(value: &str) -> AccountId {
+        AccountId::parse_encoded(value)
+            .map(crate::account::ParsedAccountId::into_account_id)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "fixture account `{value}` must be an encoded account literal (IH58 or compressed): {err}"
+                )
+            })
+    }
+
+    fn fixture_asset(value: &str) -> AssetId {
+        if let Ok(asset) = AssetId::from_str(value) {
+            return asset;
+        }
+
+        let (definition_part, account_part) = value.rsplit_once('#').unwrap_or_else(|| {
+            panic!("fixture asset `{value}` must contain at least one `#` separator")
+        });
+        let account = fixture_account(account_part);
+        let domain_suffix = if definition_part.ends_with('#') {
+            account.domain().name().as_ref()
+        } else {
+            ""
+        };
+        let definition_literal = format!("{definition_part}{domain_suffix}");
+        let definition = AssetDefinitionId::from_str(&definition_literal).unwrap_or_else(|err| {
+            panic!(
+                "fixture asset `{value}` has invalid definition literal `{definition_literal}`: {err}"
+            )
+        });
+        AssetId::new(definition, account)
+    }
+
     fn fixture_receipt(
         entry: &Value,
         certificate: &OfflineWalletCertificate,
@@ -691,17 +723,17 @@ mod tests {
         let from = obj
             .get("from")
             .and_then(Value::as_str)
-            .and_then(|value| AccountId::from_str(value).ok())
+            .map(fixture_account)
             .expect("receipt from");
         let to = obj
             .get("to")
             .and_then(Value::as_str)
-            .and_then(|value| AccountId::from_str(value).ok())
+            .map(fixture_account)
             .expect("receipt to");
         let asset = obj
             .get("asset")
             .and_then(Value::as_str)
-            .and_then(|value| AssetId::from_str(value).ok())
+            .map(fixture_asset)
             .expect("receipt asset");
         let amount = obj
             .get("amount")
@@ -951,32 +983,8 @@ mod tests {
 
     #[test]
     fn aggregate_proof_fixture_matches_receipts_root() {
-        struct DomainSelectorResolverGuard;
-
-        impl Drop for DomainSelectorResolverGuard {
-            fn drop(&mut self) {
-                clear_account_domain_selector_resolver();
-            }
-        }
-
-        let resolver_guard = {
-            let candidates = ["wonderland", "treasury", "sora"];
-            let mappings: Vec<(AccountDomainSelector, DomainId)> = candidates
-                .iter()
-                .filter_map(|label| {
-                    let domain: DomainId = (*label).parse().ok()?;
-                    let selector = AccountDomainSelector::from_domain(&domain).ok()?;
-                    Some((selector, domain))
-                })
-                .collect();
-            set_account_domain_selector_resolver(Arc::new(move |selector| {
-                mappings
-                    .iter()
-                    .find(|(candidate, _)| candidate == selector)
-                    .map(|(_, domain)| domain.clone())
-            }));
-            DomainSelectorResolverGuard
-        };
+        let _default_domain_guard =
+            crate::account::address::default_domain_guard(Some("wonderland"));
 
         let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
@@ -1015,12 +1023,12 @@ mod tests {
         let asset = first_receipt
             .get("asset")
             .and_then(Value::as_str)
-            .and_then(|value| AssetId::from_str(value).ok())
+            .map(fixture_asset)
             .expect("fixture asset");
         let controller = first_receipt
             .get("from")
             .and_then(Value::as_str)
-            .and_then(|value| AccountId::from_str(value).ok())
+            .map(fixture_account)
             .expect("fixture controller");
         let certificate = fixture_certificate(&controller, &asset);
         let parsed_receipts: Vec<_> = receipts
@@ -1029,8 +1037,6 @@ mod tests {
             .collect();
         let computed_root = compute_receipts_root(&parsed_receipts).expect("root");
         assert_eq!(computed_root, expected_root);
-        drop(resolver_guard);
-
         let envelope = AggregateProofEnvelope::from_receipts(
             &parsed_receipts,
             proof_sum.clone(),

@@ -8,7 +8,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use iroha_crypto::{Algorithm, HashOf, KeyPair};
 use iroha_data_model::{
     account::{AccountId, address},
-    asset::{AssetDefinitionId, AssetId},
+    asset::AssetId,
     isi::{Burn, InstructionBox, Mint, Transfer},
     metadata::Metadata,
     name::Name,
@@ -88,9 +88,8 @@ impl PayloadSpec {
             .chain
             .parse()
             .map_err(|_| format!("invalid chain id '{}'", self.chain))?;
-        let authority = self
-            .authority
-            .parse()
+        let authority = AccountId::parse_encoded(&self.authority)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .map_err(|_| format!("invalid authority id '{}'", self.authority))?;
         let mut builder = TransactionBuilder::new(chain_id, authority);
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
@@ -170,8 +169,8 @@ impl InstructionSpec {
                 let quantity: Numeric = quantity
                     .parse()
                     .map_err(|err| format!("invalid quantity '{quantity}': {err}"))?;
-                let destination: AccountId = destination
-                    .parse()
+                let destination: AccountId = AccountId::parse_encoded(destination)
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .map_err(|_| format!("invalid destination account '{destination}'"))?;
                 Ok(Transfer::asset_numeric(asset_id, quantity, destination).into())
             }
@@ -223,24 +222,9 @@ impl InstructionSpec {
 }
 
 fn parse_asset_literal(value: &str) -> Result<AssetId, String> {
-    let parts: Vec<&str> = value.split('#').collect();
-    if parts.len() < 3 {
-        return Err(format!(
-            "asset literal '{value}' missing definition/account"
-        ));
-    }
-    let definition = format!("{}#{}", parts[0], parts[1]);
-    let account = parts[2..].join("#");
-    if account.is_empty() {
-        return Err(format!("asset literal '{value}' missing owner"));
-    }
-    let definition_id: AssetDefinitionId = definition
-        .parse()
-        .map_err(|_| format!("invalid asset definition id '{definition}'"))?;
-    let account_id: AccountId = account
-        .parse()
-        .map_err(|_| format!("invalid asset account id '{account}'"))?;
-    Ok(AssetId::new(definition_id, account_id))
+    value
+        .parse::<AssetId>()
+        .map_err(|err| format!("invalid asset literal '{value}': {err}"))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -392,12 +376,12 @@ fn run() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::domain::DomainId;
+    use iroha_data_model::{asset::AssetDefinitionId, domain::DomainId};
 
     use super::*;
 
-    fn account_with_domain(account: &AccountId) -> String {
-        format!("{}@{}", account, account.domain())
+    fn account_literal(account: &AccountId) -> String {
+        account.to_string()
     }
 
     #[test]
@@ -405,11 +389,15 @@ mod tests {
         let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
         let domain: DomainId = "wonderland".parse().expect("valid domain");
         let owner = AccountId::new(domain.clone(), keypair.public_key().clone());
+        let owner_literal = account_literal(&owner);
+        let expected_owner = AccountId::parse_encoded(&owner_literal)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("encoded owner account");
         let definition: AssetDefinitionId = "rose#wonderland".parse().expect("valid definition");
-        let asset_literal = format!("{definition}#{}", account_with_domain(&owner));
+        let asset_literal = format!("{definition}#{owner_literal}");
         let parsed = parse_asset_literal(&asset_literal).expect("parse asset literal");
         assert_eq!(parsed.definition, definition);
-        assert_eq!(parsed.account, owner);
+        assert_eq!(parsed.account, expected_owner);
     }
 
     #[test]
@@ -419,15 +407,15 @@ mod tests {
         let authority = AccountId::new(domain.clone(), keypair.public_key().clone());
         let destination = AccountId::new(domain, keypair.public_key().clone());
         let definition: AssetDefinitionId = "rose#wonderland".parse().expect("valid definition");
-        let asset_literal = format!("{definition}#{}", account_with_domain(&authority));
+        let asset_literal = format!("{definition}#{}", account_literal(&authority));
         let mut args = BTreeMap::new();
         args.insert("action".into(), "TransferAsset".into());
         args.insert("asset".into(), asset_literal);
         args.insert("quantity".into(), "1.2500".into());
-        args.insert("destination".into(), account_with_domain(&destination));
+        args.insert("destination".into(), account_literal(&destination));
         let payload = PayloadSpec {
             chain: "00000042".into(),
-            authority: account_with_domain(&authority),
+            authority: account_literal(&authority),
             creation_time_ms: 123,
             executable: {
                 let mut exec = Map::new();

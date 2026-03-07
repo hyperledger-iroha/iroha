@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 اختیارات:
 
 - `--format compressed` IH58 pour sortie `sora...` pour sortie
-- `--no-append-domain` تاکہ littéraux nus نکلیں۔
+- `domainless output (default)` تاکہ littéraux nus نکلیں۔
 - Étape de conversion `--audit-only`
 - `--allow-errors` lignes mal formées lors de l'analyse des lignes (comportement CLI ici)
 
@@ -45,7 +45,7 @@ ticket de gestion du changement
 ## CI انضمام1. Un travail dédié et un travail dédié aux sorties et aux sorties
 2. Le `audit.json` Sélecteurs locaux رپورٹ کرے (`domain.kind = local12`) et fusionne les sélecteurs locaux
    default `true` par défaut (pour les régressions de développement/test par défaut et `false` par défaut)
-   `iroha tools address normalize --fail-on-warning --only-local` et CI میں شامل کریں تاکہ
+   `iroha tools address normalize` et CI میں شامل کریں تاکہ
    production de régressions تک پہنچنے سے پہلے فیل ہوں۔
 
 Vous trouverez ci-dessous des listes de contrôle des preuves et un extrait de note de version plus tard.

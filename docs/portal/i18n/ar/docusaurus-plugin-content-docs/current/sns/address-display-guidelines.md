@@ -143,7 +143,7 @@ payload bit: │version  │ class  │  norm  │ext │
 
 | نوع المحدد | Hex قانوني |
 |---------------|---------------|
-| افتراضي ضمني | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| افتراضي ضمني | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | digest محلي (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | سجل عالمي (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -159,7 +159,7 @@ payload bit: │version  │ class  │  norm  │ext │
    والـ hex القانوني. يتضمن الملخص ايضا كائن `domain` مع حقول `kind`/`warning`
    ويعكس اي نطاق مقدم عبر الحقل `input_domain`. عندما يكون `kind` هو `local12`
    تطبع CLI تحذيرا على stderr ويعكس ملخص JSON نفس التوجيه حتى تتمكن خطوط CI و
-   SDKs من عرضه. مرر `--append-domain` متى اردت اعادة تشغيل الترميز المحول
+   SDKs من عرضه. مرر `legacy  suffix` متى اردت اعادة تشغيل الترميز المحول
    كـ `<ih58>@<domain>`.
 2. يمكن لـ SDKs عرض نفس التحذير/الملخص عبر مساعد JavaScript:
 
@@ -186,18 +186,18 @@ payload bit: │version  │ class  │  norm  │ext │
    `--input -` او عدم وجود علم يستخدم STDIN)، ويصدر تقرير JSON بملخصات
    قانونية/IH58/مضغوطة لكل ادخال، ويحسب اخطاء التحليل وتحذيرات نطاق Local. استخدم
    `--allow-errors` عند تدقيق dumps القديمة التي تحتوي صفوفا مهملة، واضبط
-   الاتمتة عبر `--fail-on-warning` حين يصبح المشغلون مستعدين لحظر محددات Local في CI.
+   الاتمتة عبر `strict CI post-check` حين يصبح المشغلون مستعدين لحظر محددات Local في CI.
 6. عندما تحتاج لاعادة كتابة سطر بسطر، استخدم
   لملفات الجداول الخاصة بمعالجة محددات Local، استخدم
   لتصدير CSV `input,status,format,...` يبرز الترميزات القانونية والتحذيرات
   واخفاقات التحليل في مرور واحد. يتخطى المساعد الصفوف غير المحلية افتراضيا،
   ويحول كل ادخال متبق الى الترميز المطلوب (IH58/مضغوط/hex/JSON)، ويحافظ على
-  النطاق الاصلي عندما يتم تعيين `--append-domain`. اقرنه مع `--allow-errors`
+  النطاق الاصلي عندما يتم تعيين `legacy  suffix`. اقرنه مع `--allow-errors`
   لمواصلة الفحص حتى عند وجود literals تالفة.
 7. يمكن لاتمتة CI/lint تشغيل `ci/check_address_normalize.sh` الذي يستخرج محددات
    Local من `fixtures/account/address_vectors.json`، ويحولها عبر
    `iroha tools address normalize`، ويعيد تشغيل
-   `iroha tools address audit --fail-on-warning` لاثبات ان الاصدارات لم تعد تصدر digests
+   `iroha tools address audit` لاثبات ان الاصدارات لم تعد تصدر digests
    Local.
 
 `torii_address_local8_total{endpoint}` بالاضافة الى
@@ -231,7 +231,7 @@ Grafana (`dashboards/grafana/address_ingest.json`) حتى يتمكن حزمة د
 
 ادرج النقطة التالية في ملاحظات اصدار المحفظة/المستكشف عند تنفيذ cutover:
 
-> **العناوين:** تمت اضافة مساعد `iroha tools address normalize --only-local --append-domain`
+> **العناوين:** تمت اضافة مساعد `iroha tools address normalize`
 > وربطه في CI (`ci/check_address_normalize.sh`) حتى تتمكن مسارات المحفظة/المستكشف
 > من تحويل محددات Local القديمة الى صيغ IH58/مضغوطة قانونية قبل حظر Local-8/Local-12
 > على mainnet. حدث اي عمليات تصدير مخصصة لتشغيل الامر وارفق القائمة المعيارية

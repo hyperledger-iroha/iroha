@@ -35,10 +35,13 @@ fn decode_state_payload(ptr: u64, vm: &IVM) -> Vec<u8> {
     tlv.payload.to_vec()
 }
 
-fn sample_account() -> ivm::mock_wsv::AccountId {
-    "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-        .parse()
-        .expect("parse account id")
+fn sample_account() -> ivm::mock_wsv::ScopedAccountId {
+    ivm::mock_wsv::ScopedAccountId::new(
+        "wonderland".parse().expect("domain id"),
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+            .parse()
+            .expect("public key"),
+    )
 }
 
 fn set_and_get_program() -> Vec<u8> {
@@ -64,10 +67,9 @@ fn overlay_stages_and_flushes_on_finish() {
     let program = set_and_get_program();
 
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new(
+    let host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        sample_account(),
-        HashMap::new(),
+        ivm::mock_wsv::AccountSubjectId::from(&sample_account()),
         HashMap::new(),
     );
     vm.set_host(host);
@@ -119,7 +121,11 @@ fn overlay_restores_snapshot_on_rollback() {
     wsv.sc_set("counter", initial).expect("seed durable state");
 
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new(wsv, sample_account(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&sample_account()),
+        HashMap::new(),
+    );
     vm.set_host(host);
     {
         let host = vm
@@ -180,7 +186,11 @@ fn overlay_flush_errors_surface_and_reset_overlay() {
     let wsv =
         MockWorldStateView::with_state_store(persist_path).expect("persisted mock WSV available");
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new(wsv, sample_account(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&sample_account()),
+        HashMap::new(),
+    );
     vm.set_host(host);
 
     let p_path = make_tlv(PointerType::Name, b"counter");

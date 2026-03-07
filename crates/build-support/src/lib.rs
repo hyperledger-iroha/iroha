@@ -2,9 +2,7 @@
 //! Shared build utilities for the Iroha workspace.
 
 use std::{
-    env,
-    error::Error,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
 };
 
@@ -13,16 +11,11 @@ const VERGEN_CARGO_FEATURES_ENV: &str = "VERGEN_CARGO_FEATURES";
 const VERGEN_CARGO_TARGET_TRIPLE_ENV: &str = "VERGEN_CARGO_TARGET_TRIPLE";
 
 /// Emit git and cargo-related metadata expected by workspace crates.
-///
-/// # Errors
-/// This function currently does not return errors, but keeps the fallible
-/// signature to preserve compatibility with existing build scripts.
-pub fn emit_git_info() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+pub fn emit_git_info() {
     emit_cargo_target_triple();
     emit_cargo_features();
     emit_git_sha();
     emit_git_rerun_hints();
-    Ok(())
 }
 
 fn emit_cargo_target_triple() {
@@ -204,7 +197,7 @@ mod tests {
 
     #[test]
     fn emit_git_info_runs() {
-        emit_git_info().unwrap();
+        emit_git_info();
     }
 
     #[test]

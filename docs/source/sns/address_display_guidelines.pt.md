@@ -142,8 +142,8 @@ arrays) without forcing operators to hand-normalize values ahead of time.
 When the selector targets the implicit default domain, clients may omit
 `@<domain>` entirely; Torii canonicalizes those preferred IH58 / second-best compressed (`sora`) inputs to
 canonical IH58 (no `@domain`) and emits the canonical string in responses + telemetry.
-Domainless literals for non-default domains still fail with
-`ERR_DOMAIN_SELECTOR_UNRESOLVED` so dashboards can detect misconfigurations.
+Domainless literals intended for non-default domains should carry an explicit `@<domain>` suffix (or resolve via alias/UAID context). Legacy selector-bearing literals without that context can still fail with
+`ERR_DOMAIN_SELECTOR_UNRESOLVED`, which dashboards can monitor during migration.
 
 ## Accessibility + implicit domain metadata
 
@@ -218,7 +218,7 @@ Canonical hex examples that wallet tooling can link or embed in docs/tests:
 
 | Selector kind | Canonical hex |
 |---------------|---------------|
-| Implicit default | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Implicit default | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | Local digest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` |
 | Global registry (`registry_id = 42`) | `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201` |
 
@@ -263,7 +263,7 @@ through the migration:
 1. Run `iroha tools address convert <address-or-account_id> --format json`. The payload now includes a
    `domain` object with `kind`/`warning` fields and echoes any provided domain via the `input_domain`
    field. When `kind` is `local12`, the CLI prints a warning to stderr and the JSON summary echoes the
-   same guidance so CI pipelines and SDKs can surface it. Pass `--append-domain` whenever you want the
+   same guidance so CI pipelines and SDKs can surface it. Pass `legacy  suffix` whenever you want the
    converted encoding replayed as `<ih58>@<domain>`.
 2. SDKs can surface the same warning/summary via the JavaScript helper:
 
@@ -287,14 +287,14 @@ through the migration:
 5. For bulk data sets, run `iroha tools address audit --input addresses.txt --network-prefix 753`. The command
    reads newline-separated literals (comments starting with `#` are ignored, and `--input -` or no flag uses STDIN),
    emits a JSON report with canonical/preferred IH58/second-best compressed (`sora`) summaries for every entry, and counts both parse errors
-   automation with `--fail-on-warning` once operators are ready to block Local selectors in CI.
+   automation with `strict CI post-check` once operators are ready to block Local selectors in CI.
 6. When you need a newline-to-newline rewrite, use
    The helper skips non-Local rows by default, converts every remaining entry into the requested encoding
-   (IH58 preferred/compressed (`sora`) second-best/hex/JSON), and preserves the original domain when `--append-domain` is set. Pair it with
+   (IH58 preferred/compressed (`sora`) second-best/hex/JSON), and preserves the original domain when `legacy  suffix` is set. Pair it with
    `--allow-errors` to keep scanning even when a dump contains malformed literals.
 7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts the Local selectors from
    `fixtures/account/address_vectors.json`, converts them via `iroha tools address normalize`, and replays
-   `iroha tools address audit --fail-on-warning` to prove releases no longer emit Local digests.
+   `iroha tools address audit` to prove releases no longer emit Local digests.
 
 `torii_address_local8_total{endpoint}` plus
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,

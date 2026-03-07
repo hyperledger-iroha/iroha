@@ -147,7 +147,7 @@ UIs e SDKs e seletores são os seguintes:
 
 | Seletor قسم | Hexágono canônico |
 |---------------|---------------|
-| ضمنی ڈیفالٹ | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| ضمنی ڈیفالٹ | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | Digerir o resumo (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | گلوبل رجسٹری (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |Selecione o seletor/estado ٹیبل کے لئے `docs/source/references/address_norm_v1.md`
 Diagrama de bytes کے لئے `docs/account_structure.md` دیکھیں۔
@@ -162,7 +162,7 @@ O fluxo de trabalho CLI do ADDR-5 é o seguinte:
    کرتا ہے۔ Use `kind` `local12` e CLI stderr para usar como JSON
    resumo وہی رہنمائی دہراتا ہے تاکہ Pipelines CI e SDKs اسے superfície کر سکیں۔
    جب بھی آپ convert شدہ codificação کو `<ih58>@<domain>` کی صورت میں replay کرنا
-   چاہیں ou `--append-domain` دیں۔
+   چاہیں ou `legacy  suffix` دیں۔
 2. SDKs اسی وارننگ/summary e JavaScript helper کے ذریعے دکھا سکتے ہیں:
 
    ```js
@@ -190,18 +190,18 @@ O fluxo de trabalho CLI do ADDR-5 é o seguinte:
    ہوتے ہیں, اور `--input -` یا کوئی فلیگ نہ ہو تو STDIN استعمال ہوتا ہے), ہر
    اندراج کے لئے resumos canônicos/IH58 (ترجیحی)/comprimidos (`sora`) (`sora`, segundo melhor) کے ساتھ JSON رپورٹ بناتی
    linhas ہوں تو `--allow-errors` استعمال کریں, اور جب آپریٹرز Seletores locais کو
-   CI میں بلاک کرنے کے لئے تیار ہوں تو `--fail-on-warning` سے آٹومیشن گیٹ کریں۔
+   CI میں بلاک کرنے کے لئے تیار ہوں تو `strict CI post-check` سے آٹومیشن گیٹ کریں۔
 6. Como reescrever nova linha para nova linha
   Planilhas de remediação do seletor local
   استعمال کریں تاکہ `input,status,format,...` CSV برآمد ہو جو codificações canônicas,
   avisos e falhas de análise ajudante ڈیفالٹ طور پر
   linhas não locais چھوڑ دیتا ہے، باقی entradas کو مطلوبہ codificação (IH58 ترجیحی/comprimido (`sora`) segundo melhor/hex/JSON)
-  میں بدلتا ہے، اور `--append-domain` پر اصل ڈومین محفوظ رکھتا ہے۔ `--allow-errors`
+  میں بدلتا ہے، اور `legacy  suffix` پر اصل ڈومین محفوظ رکھتا ہے۔ `--allow-errors`
   کے ساتھ جوڑیں تاکہ خراب literais e dumps پر بھی scan جاری رہے۔
 7. Automação CI/lint `ci/check_address_normalize.sh` چلا سکتی ہے، جو
    `fixtures/account/address_vectors.json` سے Seletores locais نکال کر
    `iroha tools address normalize` سے تبدیل کرتی ہے، اور
-   `iroha tools address audit --fail-on-warning` دوبارہ چلاتی ہے تاکہ ثابت ہو کہ
+   `iroha tools address audit` دوبارہ چلاتی ہے تاکہ ثابت ہو کہ
    lançamentos اب Resumos locais نہیں نکالتے۔`torii_address_local8_total{endpoint}` کے ساتھ
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
 Placa `torii_address_collision_domain_total{endpoint,domain}` e Grafana
@@ -233,7 +233,7 @@ seletores کو desativar کرے۔ Pacote Alertmanager
 
 cutover کے وقت والٹ/ایکسپلورر ریلیز نوٹس میں درج ذیل bullet شامل کریں:
 
-> **Endereços:** `iroha tools address normalize --only-local --append-domain` helper شامل
+> **Endereços:** `iroha tools address normalize` helper شامل
 > کیا گیا اور اسے CI (`ci/check_address_normalize.sh`) میں وائر کیا گیا تاکہ
 > میں تبدیل کر سکیں, قبل اس کے کہ Mainnet Local-8/Local-12 پر بلاک ہوں۔ کسی بھی
 > exportações personalizadas کو اپ ڈیٹ کریں تاکہ کمانڈ چلائی جائے اور lista normalizada کو

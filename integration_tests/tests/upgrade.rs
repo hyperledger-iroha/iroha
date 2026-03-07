@@ -27,9 +27,9 @@ const ADMIN_PRIVATE_KEY_MULTIHASH: &str =
 #[test]
 fn executor_upgrade_should_work() -> Result<()> {
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-    let admin_id: AccountId = format!("{ADMIN_PUBLIC_KEY_MULTIHASH}@admin")
-        .parse()
-        .unwrap();
+    let admin_id = AccountId::parse_encoded(&format!("{ADMIN_PUBLIC_KEY_MULTIHASH}@admin"))
+        .map(|parsed| parsed.into_account_id())
+        .expect("admin account literal should parse");
     let admin_private_key = ADMIN_PRIVATE_KEY_MULTIHASH
         .parse::<iroha::crypto::PrivateKey>()
         .unwrap();

@@ -60,21 +60,16 @@ use std::{
 };
 
 use iroha_crypto::{HashOf, KeyPair, MerkleTree, PublicKey};
-use iroha_data_model::account::address;
 #[cfg(feature = "bls")]
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
     ChainId, Identifiable,
-    account::{
-        AccountAddress, AccountController, AccountDomainSelector, AccountId, AccountLabel,
-        OpaqueAccountId,
-    },
+    account::{AccountController, AccountId},
     asset::{AssetDefinitionId, AssetId},
     block::{
         consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         *,
     },
-    common::split_nonempty,
     confidential::ConfidentialFeatureDigest,
     consensus::{ConsensusKeyRole, Qc},
     da::{
@@ -89,8 +84,7 @@ use iroha_data_model::{
     },
     nexus::{
         AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason,
-        DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob, UniversalAccountId,
-        proof_matches_manifest,
+        DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
     },
     peer::PeerId,
     permission::Permission,
@@ -774,111 +768,12 @@ fn conflict_rate_bps(vertices: u64, edges: u64) -> u64 {
 }
 
 pub(crate) fn parse_account_literal_with_world(
-    world: &impl WorldReadOnly,
+    _world: &impl WorldReadOnly,
     input: &str,
 ) -> Option<AccountId> {
-    const ERR_ACCOUNT_LITERAL_FORMAT: &str = "AccountId must be IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or `<alias|public_key>@<domain>`";
-
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    if let Some(rest) = strip_prefix_case_insensitive(trimmed, "uaid:") {
-        let uaid = UniversalAccountId::from_str(rest).ok()?;
-        return world.uaid_accounts().get(&uaid).cloned();
-    }
-
-    if let Some(rest) = strip_prefix_case_insensitive(trimmed, "opaque:") {
-        let opaque = OpaqueAccountId::from_str(rest).ok()?;
-        let uaid = *world.opaque_uaids().get(&opaque)?;
-        return world.uaid_accounts().get(&uaid).cloned();
-    }
-
-    if let Ok((address_part, domain_part)) = split_nonempty(
-        trimmed,
-        '@',
-        ERR_ACCOUNT_LITERAL_FORMAT,
-        "Empty `identifier` part in `<identifier>@<domain>`",
-        "Empty `domain` part in `<identifier>@<domain>`",
-    ) {
-        let domain: DomainId = domain_part.parse().ok()?;
-
-        let expected_prefix = address::chain_discriminant();
-        match AccountAddress::parse_any(address_part, Some(expected_prefix)) {
-            Ok((address, _format)) => {
-                return address.to_account_id(&domain).ok();
-            }
-            Err(
-                address::AccountAddressError::UnsupportedAddressFormat
-                | address::AccountAddressError::ChecksumMismatch,
-            ) => {}
-            Err(_) => return None,
-        }
-
-        if let Ok(label) = iroha_data_model::name::Name::from_str(address_part) {
-            let key = AccountLabel::new(domain.clone(), label);
-            if let Some(alias_account) = world.account_aliases().get(&key).cloned() {
-                if alias_account.domain() == &domain {
-                    return Some(alias_account);
-                }
-                return None;
-            }
-        }
-
-        let signatory: PublicKey = address_part.parse().ok()?;
-        return Some(AccountId::new(domain, signatory));
-    }
-
-    parse_account_address_literal_with_world(world, trimmed)
-}
-
-fn parse_account_address_literal_with_world(
-    world: &impl WorldReadOnly,
-    input: &str,
-) -> Option<AccountId> {
-    let expected_prefix = address::chain_discriminant();
-    let (address, _format) = AccountAddress::parse_any(input, Some(expected_prefix)).ok()?;
-    let selector = address.domain_selector();
-    let resolved = world
-        .domain_selectors()
-        .get(&selector)
-        .cloned()
-        .or_else(|| {
-            if matches!(selector, AccountDomainSelector::Default) {
-                address::default_domain_name().as_ref().parse().ok()
-            } else {
-                None
-            }
-        });
-    if let Some(domain) = resolved {
-        return address.to_account_id(&domain).ok();
-    }
-
-    // Fallback: match encoded addresses against existing accounts when selector registry is missing.
-    let target = address.canonical_hex().ok()?;
-    for (account_id, _) in world.accounts().iter() {
-        let Ok(candidate) = AccountAddress::from_account_id(account_id) else {
-            continue;
-        };
-        let Ok(candidate_hex) = candidate.canonical_hex() else {
-            continue;
-        };
-        if candidate_hex == target {
-            return Some(account_id.clone());
-        }
-    }
-
-    None
-}
-
-fn strip_prefix_case_insensitive<'a>(input: &'a str, prefix: &str) -> Option<&'a str> {
-    let head = input.get(..prefix.len())?;
-    if head.eq_ignore_ascii_case(prefix) {
-        Some(&input[prefix.len()..])
-    } else {
-        None
-    }
+    AccountId::parse_encoded(input.trim())
+        .ok()
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
 }
 
 fn parse_account_from_access_key(world: &impl WorldReadOnly, key: &str) -> Option<AccountId> {
@@ -986,7 +881,7 @@ mod prefetch_tests {
     }
 
     #[test]
-    fn parse_account_literal_accepts_ih58_with_domain_suffix() {
+    fn parse_account_literal_rejects_ih58_with_domain_suffix() {
         let alice: AccountId = (*ALICE_ID).clone();
         let domain = Domain::new(alice.domain().clone()).build(&alice);
         let account = Account::new(alice.clone()).build(&alice);
@@ -997,17 +892,17 @@ mod prefetch_tests {
         let literal = format!("{ih58}@{}", alice.domain());
         assert_eq!(
             parse_account_literal_with_world(&world_view, &literal),
-            Some(alice)
+            None
         );
     }
 
     #[test]
-    fn parse_account_literal_resolves_ih58_without_selector_registry() {
+    fn parse_account_literal_accepts_encoded_without_selector_registry() {
         let alice: AccountId = (*ALICE_ID).clone();
         let domain = Domain::new(alice.domain().clone()).build(&alice);
         let account = Account::new(alice.clone()).build(&alice);
         let mut world = World::with([domain], [account], []);
-        // Simulate missing selector index to ensure fallback resolution via existing accounts.
+        // Parsing should not depend on selector-index state.
         world.domain_selectors = Default::default();
         let world_view = world.view();
 
@@ -11556,6 +11451,10 @@ mod commit {
             state::{State, World},
         };
 
+        const ACCOUNT_FROM_LITERAL: &str =
+            "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+        const ACCOUNT_TO_LITERAL: &str = "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU";
+
         fn binding_for_descriptor(descriptor: &AxtDescriptor) -> AxtBinding {
             descriptor.binding().expect("descriptor binding")
         }
@@ -11571,7 +11470,7 @@ mod commit {
                 handle: AssetHandle {
                     scope: vec!["transfer".to_owned()],
                     subject: HandleSubject {
-                        account: "alice@wonderland".to_owned(),
+                        account: ACCOUNT_FROM_LITERAL.to_owned(),
                         origin_dsid: Some(dsid),
                     },
                     budget: HandleBudget {
@@ -11594,8 +11493,8 @@ mod commit {
                     asset_dsid: dsid,
                     op: SpendOp {
                         kind: "transfer".to_owned(),
-                        from: "alice@wonderland".to_owned(),
-                        to: "bob@wonderland".to_owned(),
+                        from: ACCOUNT_FROM_LITERAL.to_owned(),
+                        to: ACCOUNT_TO_LITERAL.to_owned(),
                         amount: "5".to_owned(),
                     },
                 },
@@ -11679,7 +11578,7 @@ mod commit {
                 handle: AssetHandle {
                     scope: vec!["transfer".to_owned()],
                     subject: HandleSubject {
-                        account: "alice@wonderland".to_owned(),
+                        account: ACCOUNT_FROM_LITERAL.to_owned(),
                         origin_dsid: Some(dsid),
                     },
                     budget: HandleBudget {
@@ -11702,8 +11601,8 @@ mod commit {
                     asset_dsid: dsid,
                     op: SpendOp {
                         kind: "transfer".to_owned(),
-                        from: "alice@wonderland".to_owned(),
-                        to: "bob@wonderland".to_owned(),
+                        from: ACCOUNT_FROM_LITERAL.to_owned(),
+                        to: ACCOUNT_TO_LITERAL.to_owned(),
                         amount: "5".to_owned(),
                     },
                 },

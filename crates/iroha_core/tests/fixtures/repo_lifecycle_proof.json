@@ -10,12 +10,12 @@
           "asset": "bond#wonderland",
           "quantity": "1100"
         },
-        "counterparty": "34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
+        "counterparty": "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
         "custodian": null,
         "haircut_bps": 1500,
         "id": "daily_repo",
         "initiated_offset_ms": 0,
-        "initiator": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+        "initiator": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
         "last_margin_offset_ms": 0,
         "margin_frequency_secs": 86400,
         "maturity_offset_ms": 0,
@@ -23,22 +23,22 @@
       },
       "assets": [
         {
-          "id": "bond##34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
+          "id": "bond##6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
           "present": true,
           "quantity": "1100"
         },
         {
-          "id": "usd##34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
+          "id": "usd##6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
           "present": true,
           "quantity": "1000"
         },
         {
-          "id": "bond##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+          "id": "bond##6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "present": true,
           "quantity": "400"
         },
         {
-          "id": "usd##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+          "id": "usd##6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "present": true,
           "quantity": "1000"
         }
@@ -55,12 +55,12 @@
           "asset": "bond#wonderland",
           "quantity": "1100"
         },
-        "counterparty": "34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
+        "counterparty": "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
         "custodian": null,
         "haircut_bps": 1500,
         "id": "daily_repo",
         "initiated_offset_ms": 0,
-        "initiator": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+        "initiator": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
         "last_margin_offset_ms": 86400000,
         "margin_frequency_secs": 86400,
         "maturity_offset_ms": 0,
@@ -68,22 +68,22 @@
       },
       "assets": [
         {
-          "id": "bond##34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
+          "id": "bond##6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
           "present": true,
           "quantity": "1100"
         },
         {
-          "id": "usd##34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
+          "id": "usd##6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
           "present": true,
           "quantity": "1000"
         },
         {
-          "id": "bond##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+          "id": "bond##6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "present": true,
           "quantity": "400"
         },
         {
-          "id": "usd##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+          "id": "usd##6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "present": true,
           "quantity": "1000"
         }
@@ -97,22 +97,22 @@
       },
       "assets": [
         {
-          "id": "bond##34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
+          "id": "bond##6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
           "present": false,
           "quantity": "0"
         },
         {
-          "id": "usd##34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
+          "id": "usd##6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
           "present": true,
           "quantity": "2000.138888888888888000"
         },
         {
-          "id": "bond##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+          "id": "bond##6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "present": true,
           "quantity": "1575"
         },
         {
-          "id": "usd##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+          "id": "usd##6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "present": false,
           "quantity": "0"
         }

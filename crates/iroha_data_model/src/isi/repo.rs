@@ -183,17 +183,21 @@ mod tests {
     use super::*;
     use crate::repo::RepoGovernance;
 
+    const INITIATOR: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const COUNTERPARTY: &str = "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV";
+    const CUSTODIAN: &str = "2CAE42qVd4hgS46pNUbsbgpK9UvsYSvnRkz15xzUiGc4QWLVzjpjhpg3KFuUyM3zDYfc7kc5QD3ct3BWmQgPDTa13kdC1k52T3Wgw7bUdccEKbhvMmX42d7tktNVdHSR8YjVJ3NyPN5jqBWWFCu6eefZ6E9nSw41JV4oRg";
+
+    fn parse_account(raw: &str) -> AccountId {
+        AccountId::parse_encoded(raw)
+            .expect("valid account")
+            .into_account_id()
+    }
+
     #[test]
     fn repo_instruction_roundtrip() {
         let agreement_id: RepoAgreementId = "daily_repo".parse().expect("id");
-        let initiator: AccountId =
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-                .parse()
-                .unwrap();
-        let counterparty: AccountId =
-            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
-                .parse()
-                .unwrap();
+        let initiator = parse_account(INITIATOR);
+        let counterparty = parse_account(COUNTERPARTY);
         let cash_leg = RepoCashLeg {
             asset_definition_id: "usd#wonderland".parse().unwrap(),
             quantity: 1_000u32.into(),
@@ -223,14 +227,8 @@ mod tests {
     #[test]
     fn repo_display_includes_identifier() {
         let agreement_id: RepoAgreementId = "daily_repo".parse().expect("id");
-        let initiator: AccountId =
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-                .parse()
-                .unwrap();
-        let counterparty: AccountId =
-            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
-                .parse()
-                .unwrap();
+        let initiator = parse_account(INITIATOR);
+        let counterparty = parse_account(COUNTERPARTY);
         let cash_leg = RepoCashLeg {
             asset_definition_id: "usd#wonderland".parse().unwrap(),
             quantity: 1_000u32.into(),
@@ -259,18 +257,9 @@ mod tests {
     #[test]
     fn repo_display_includes_custodian_when_present() {
         let agreement_id: RepoAgreementId = "daily_repo".parse().expect("id");
-        let initiator: AccountId =
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-                .parse()
-                .unwrap();
-        let counterparty: AccountId =
-            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
-                .parse()
-                .unwrap();
-        let custodian: AccountId =
-            "ed0120CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC@wonderland"
-                .parse()
-                .unwrap();
+        let initiator = parse_account(INITIATOR);
+        let counterparty = parse_account(COUNTERPARTY);
+        let custodian = parse_account(CUSTODIAN);
         let cash_leg = RepoCashLeg {
             asset_definition_id: "usd#wonderland".parse().unwrap(),
             quantity: 1_000u32.into(),
@@ -309,14 +298,8 @@ mod tests {
     #[test]
     fn reverse_repo_display_includes_timestamp() {
         let agreement_id: RepoAgreementId = "daily_repo".parse().expect("id");
-        let initiator: AccountId =
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-                .parse()
-                .unwrap();
-        let counterparty: AccountId =
-            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
-                .parse()
-                .unwrap();
+        let initiator = parse_account(INITIATOR);
+        let counterparty = parse_account(COUNTERPARTY);
         let cash_leg = RepoCashLeg {
             asset_definition_id: "usd#wonderland".parse().unwrap(),
             quantity: 1_000u32.into(),

@@ -3,8 +3,8 @@
   "governance": "parliament",
   "version": 1,
   "validators": [
-    "alice@wonderland",
-    "erin@wonderland"
+    "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"
   ],
   "quorum": 2,
   "protected_namespaces": [

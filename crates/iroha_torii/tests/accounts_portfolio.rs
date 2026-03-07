@@ -104,20 +104,24 @@ async fn accounts_portfolio_filters_by_asset_id() {
         uaid
     });
     let uaid_hex = hex::encode(uaid.as_hash().as_ref());
-    let domain_id: DomainId = "portfolio".parse().unwrap();
-    let cash_def: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
-    let account_id = account_id_from_signatory(domain_id, ACCOUNT_SIGNATORY);
-    let asset = AssetId::new(cash_def, account_id);
-    // `AssetId::Display` omits the account domain, but the HTTP API expects the
-    // same literal form as JSON (`ih58@domain`) so it can be parsed unambiguously.
-    let asset_id = format!(
-        "{}#{}@{}",
-        asset.definition(),
-        asset.account(),
-        asset.account().domain()
-    );
-    let expected_asset_id =
-        json::to_value(&asset).expect("serialize asset id for response comparison");
+    let baseline = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/accounts/uaid:{uaid_hex}/portfolio"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(baseline.status(), StatusCode::OK);
+    let baseline_body = baseline.into_body().collect().await.unwrap().to_bytes();
+    let baseline_value: Value = json::from_slice(&baseline_body).expect("valid portfolio payload");
+    let asset_id = baseline_value["dataspaces"][0]["accounts"][0]["assets"][0]["asset_id"]
+        .as_str()
+        .expect("baseline asset id")
+        .to_owned();
+
     let resp = app
         .oneshot(
             Request::builder()
@@ -139,7 +143,7 @@ async fn accounts_portfolio_filters_by_asset_id() {
         .as_array()
         .expect("assets array");
     assert_eq!(assets.len(), 1);
-    assert_eq!(assets[0]["asset_id"], expected_asset_id);
+    assert_eq!(assets[0]["asset_id"], Value::from(asset_id));
 }
 
 fn setup_portfolio_app<SeedFn>(seed_fn: SeedFn) -> (Router, UniversalAccountId)

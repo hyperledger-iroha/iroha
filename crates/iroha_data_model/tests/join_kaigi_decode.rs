@@ -14,11 +14,10 @@ fn join_kaigi_roundtrip_preserves_optional_fields() {
         domain_id.clone(),
         "kaigi".parse::<Name>().expect("call name"),
     );
-    let participant = AccountId::parse(
-        "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland",
-    )
-    .expect("participant account id")
-    .into_account_id();
+    let participant =
+        AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+            .expect("participant account id")
+            .into_account_id();
     let commitment = KaigiParticipantCommitment {
         commitment: Hash::new([0xAA; Hash::LENGTH]),
         alias_tag: Some("alice".into()),

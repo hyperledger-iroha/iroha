@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, PublicKey};
 use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
+    mock_wsv::{
+        AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost,
+    },
     syscalls,
 };
 use norito::to_bytes;
@@ -31,17 +33,28 @@ fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     make_tlv(PointerType::NoritoBytes as u16, &buf)
 }
 
+fn account(domain: &str, public_key: &str) -> ScopedAccountId {
+    let domain: DomainId = domain.parse().unwrap();
+    let public_key: PublicKey = public_key.parse().unwrap();
+    ScopedAccountId::new(domain, public_key)
+}
+
+fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
+    let buf = to_bytes(account).expect("encode account into Norito");
+    make_tlv(PointerType::AccountId as u16, &buf)
+}
+
 #[test]
 fn role_vs_direct_permission_for_mint() {
     // Setup: alice is caller; bob recipient; asset rose#wonder for mint tests.
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
-    let bob: AccountId =
-        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4@wonder"
-            .parse()
-            .unwrap();
+    let alice = account(
+        "domain",
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+    );
+    let bob = account(
+        "wonder",
+        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+    );
     let rose: AssetDefinitionId = "rose#wonder".parse().unwrap();
 
     let mut wsv = MockWorldStateView::new();
@@ -50,7 +63,11 @@ fn role_vs_direct_permission_for_mint() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -62,7 +79,7 @@ fn role_vs_direct_permission_for_mint() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    let acc = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -94,7 +111,7 @@ fn role_vs_direct_permission_for_mint() {
     vm.run().expect("create role");
 
     // Grant role to alice
-    let tlv_alice = make_tlv(PointerType::AccountId as u16, alice.to_string().as_bytes());
+    let tlv_alice = make_account_tlv(&alice);
     let rname = make_tlv(PointerType::Name as u16, b"minter");
     vm.memory
         .preload_input(0, &tlv_alice)
@@ -109,7 +126,7 @@ fn role_vs_direct_permission_for_mint() {
     vm.run().expect("grant role");
 
     // Mint via role → ok
-    let tlv_bob = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let tlv_bob = make_account_tlv(&bob);
     let tlv_rose = make_tlv(
         PointerType::AssetDefinitionId as u16,
         rose.to_string().as_bytes(),

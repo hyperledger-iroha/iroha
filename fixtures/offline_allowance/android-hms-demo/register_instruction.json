@@ -2,12 +2,12 @@
   "certificate": {
     "allowance": {
       "amount": "90",
-      "asset": "jpy#sora#34mSYnDgbaJM58rbLoif4Tkp7G5jowHzX2wpqErt5uNjSaXGjsQoTGzsyFsSZwxLQRwJhJgfu",
+      "asset": "jpy#sora#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
       "commitment_hex": "1224573F290A69CC4DEB201F4ABAF2C5C8AA0A2BD8515CFAC5FC306D4E06C365"
     },
     "attestation_nonce_hex": "3333333333333333333333333333333333333333333333333333333333333333",
     "attestation_report_b64": "zHfMdw==",
-    "controller": "34mSYnDgbaJM58rbLoif4Tkp7G5jowHzX2wpqErt5uNjSaXGjsQoTGzsyFsSZwxLQRwJhJgfu",
+    "controller": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
     "expires_at_ms": 1745900000000,
     "issued_at_ms": 1730314876000,
     "metadata": {
@@ -25,7 +25,7 @@
       ],
       "android.integrity.policy": "hms_safety_detect"
     },
-    "operator": "34mSYnDgbaJM58rbLoif4Tkp7G7VrmEx2UvM5oSfSY6GU46aEca41RKqHEBCLgaEgkuxPBX6W",
+    "operator": "6cmzPVPX8j6hZ4dceSGxHX65vr3iK4RG3em7w24HeJ9BbQXmKFVrykC",
     "operator_signature_hex": "322116E7791722383703A50F6A050D9B8427F3DEE7269D0E5BB2D8DBEB13310D104D9B531F1B93BE64AF4848D0939945E2AF2A482AA74179F62AE0022FAB550F",
     "policy": {
       "expires_at_ms": 1745900000000,

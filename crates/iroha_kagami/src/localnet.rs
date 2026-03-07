@@ -707,10 +707,6 @@ fn localnet_gas_account_id(genesis_public_key: &iroha_crypto::PublicKey) -> Resu
 }
 
 fn account_id_raw_string(account_id: &AccountId) -> String {
-    if let Some(signatory) = account_id.try_signatory() {
-        return format!("{signatory}@{}", account_id.domain());
-    }
-    // Use the encoded address when the controller is not single-signatory.
     account_id.to_string()
 }
 
@@ -4261,8 +4257,10 @@ mod tests {
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
         let gas_account_id = localnet_gas_account_id(&genesis_public_key).expect("gas account id");
         let encoded = account_id_raw_string(&gas_account_id);
-        let parsed: AccountId = encoded.parse().expect("account id parse");
-        assert_eq!(parsed, gas_account_id);
+        let parsed = AccountId::parse_encoded(&encoded)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("account id parse");
+        assert_eq!(parsed.to_string(), gas_account_id.to_string());
     }
 
     #[test]

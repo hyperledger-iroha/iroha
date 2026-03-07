@@ -114,7 +114,7 @@ impl Run for CodeBytesGetArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct DeployArgs {
-    /// Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+    /// Authority account identifier (IH58 (preferred) or sora compressed literal)
     #[arg(long)]
     pub authority: String,
     /// Hex-encoded private key for signing
@@ -153,7 +153,7 @@ impl Run for DeployArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct DeployActivateArgs {
-    /// Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+    /// Authority account identifier (IH58 (preferred) or sora compressed literal)
     #[arg(long)]
     pub authority: String,
     /// Governance namespace to bind (e.g., apps)
@@ -402,7 +402,7 @@ mod tests {
             key_pair.public_key().clone(),
         );
         let mut ctx = TestContext::new(authority.clone());
-        let authority_literal = format!("{}@{}", authority.signatory(), authority.domain());
+        let authority_literal = authority.to_string();
         let program = minimal_program();
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
         let private_key = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
@@ -506,7 +506,7 @@ mod tests {
 
 #[derive(clap::Args, Debug)]
 pub struct SimulateArgs {
-    /// Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+    /// Authority account identifier (IH58 (preferred) or sora compressed literal)
     #[arg(long)]
     pub authority: String,
     /// Hex-encoded private key used to sign the simulated transaction

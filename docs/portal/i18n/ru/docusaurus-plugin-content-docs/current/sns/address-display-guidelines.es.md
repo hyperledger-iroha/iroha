@@ -160,7 +160,7 @@ Ejemplos hex canonicos que las herramientas de billetera pueden enlazar o
 
 | Тип селектора | Шестнадцатеричный канонико |
 |---------------|---------------|
-| Неявно из-за дефекта | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Неявно из-за дефекта | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | Локальный дайджест (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | Глобальный реестр (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -177,7 +177,7 @@ Ejemplos hex canonicos que las herramientas de billetera pueden enlazar o
    `domain` с кампусом `kind`/`warning` и отражение cualquier dominio proporcionado
    через Эль Кампо `input_domain`. Если `kind` es `local12`, CLI будет открыт
    Объявление о стандартном сообщении и возобновлении JSON отображает неправильное сообщение для того, что вы хотите
-   Конвейеры CI и SDK могут быть заблокированы. Паса `--append-domain` когда-либо
+   Конвейеры CI и SDK могут быть заблокированы. Паса `legacy  suffix` когда-либо
    хотелось бы, чтобы преобразованная кодификация воспроизводилась как `<ih58>@<domain>`.
 2. SDK могут быть отправлены в виде объявления/возобновления с помощью помощника.
    JavaScript:
@@ -207,7 +207,7 @@ Ejemplos hex canonicos que las herramientas de billetera pueden enlazar o
    резюме canonicos/IH58/comprimidos для каждого входа, и ошибок
    анализ и реклама местного домена. США `--allow-errors` al Auditar дампы
    Heredados que contienen filas basura, и блокируется автоматизация
-   `--fail-on-warning`, когда эти списки заблокированы
+   `strict CI post-check`, когда эти списки заблокированы
    селекторы Local en CI.
 6. Когда необходима линия написания книги, США
   Для расчетов по восстановлению селекторов Местный, США
@@ -215,12 +215,12 @@ Ejemplos hex canonicos que las herramientas de billetera pueden enlazar o
   канонические, рекламные объявления и анализ в одном пасхальном номере.
    El helper опустите filas no Local из-за дефекта, convierte cada entrada restante
    по запросу кодификации (IH58/comprimido/hex/JSON) с сохранением владения
-   Оригинальный Cuando Se USA `--append-domain`. Комбинация с `--allow-errors` для
+   Оригинальный Cuando Se USA `legacy  suffix`. Комбинация с `--allow-errors` для
    Seguir escaneando incluso cuando un dump contiene literales bad formados.
 7. Автоматизация CI/lint может быть удалена `ci/check_address_normalize.sh`,
    какие дополнительные селекторы Local de `fixtures/account/address_vectors.json`,
    конвертируется через `iroha tools address normalize` и выводится из памяти
-   `iroha tools address audit --fail-on-warning`, чтобы продемонстрировать, какие релизы да нет
+   `iroha tools address audit`, чтобы продемонстрировать, какие релизы да нет
    Emiten дайджесты Local.
 
 `torii_address_local8_total{endpoint}` общий кон
@@ -259,7 +259,7 @@ ADDR-7 постоянно поддерживает `domain_kind="local12"` в т
 Включите следящую пулю в заметки о ланзамьенто-де-биллетере/эксплорадоре
 Аль публичное переключение:
 
-> **Направления:** Найдите помощника `iroha tools address normalize --only-local --append-domain`.
+> **Направления:** Найдите помощника `iroha tools address normalize`.
 > и подключитесь к CI (`ci/check_address_normalize.sh`) для обеспечения конвейеров
 > billetera/explorador puedan Convertir Selectores Местные наследники и формы
 > Canonicas IH58/comprimidas до того, как Local-8/Local-12 будет заблокирован в основной сети.

@@ -140,28 +140,28 @@ const usagePlan = {
 };
 
 await torii.createSubscriptionPlan({
-  authority: "aws@commerce",
+  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
   private_key: "provider-private-key-hex",
   plan_id: "aws_compute#commerce",
   plan: usagePlan,
 });
 
 await torii.createSubscription({
-  authority: "alice@users",
+  authority: "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC",
   private_key: "subscriber-private-key-hex",
   subscription_id: "sub-001",
   plan_id: "aws_compute#commerce",
 });
 
 await torii.recordSubscriptionUsage("sub-001", {
-  authority: "aws@commerce",
+  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
   private_key: "provider-private-key-hex",
   unit_key: "compute_ms",
   delta: "3600000",
 });
 
 await torii.chargeSubscriptionNow("sub-001", {
-  authority: "aws@commerce",
+  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
   private_key: "provider-private-key-hex",
 });
 ```
@@ -174,8 +174,8 @@ import { MultisigSpecBuilder, buildProposeMultisigInstruction } from "@iroha/iro
 const spec = new MultisigSpecBuilder()
   .setQuorum(3)
   .setTransactionTtlMs(86_400_000)
-  .addSignatory("alice@wonderland", 2)
-  .addSignatory("bob@wonderland", 1)
+  .addSignatory("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", 2)
+  .addSignatory("6cmzPVPX9CDKZ7zp4XqnygVMaXeKCZHvBaeZNTPuH1TvtP7SvKbSzxA", 1)
   .build();
 
 // Preview the effective TTL (clamped to the policy cap) and expiry time
@@ -184,7 +184,7 @@ console.log(preview.effectiveTtlMs, preview.expiresAtMs, preview.wasCapped);
 
 // Build a multisig proposal while enforcing the policy TTL cap client-side
 const propose = buildProposeMultisigInstruction({
-  accountId: "controller@wonderland",
+  accountId: "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC",
   spec,
   instructions: [{ Log: { Level: "INFO", message: "hello" } }],
   transactionTtlMs: 45_000, // throws if above spec.transaction_ttl_ms
@@ -193,8 +193,8 @@ const propose = buildProposeMultisigInstruction({
 // Register the multisig controller with an explicit (non-derived) account id
 const register = buildRegisterMultisigTransaction({
   chainId: "wonderland",
-  authority: "alice@wonderland",
-  accountId: "controller@wonderland",
+  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  accountId: "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC",
   spec,
   privateKey: generateKeyPair().privateKey, // controller key is NOT used for signing
 });
@@ -240,9 +240,9 @@ import {
 
 const { publicKey, privateKey } = generateKeyPair();
 const authorityInput =
-  "ed0120ce7fa46c9dce7ea4b125e2e36bdb63ea33073e7590ac92816ae1e861b7048b03@wonderland";
+  "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
 const newAccountIdInput =
-  "ed0120bc35289d74af3796470409268afd7adda7bb2a4627b10c24be17864d1116da31@wonderland";
+  "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W";
 const authority = normalizeAccountId(authorityInput);
 const newAccountId = normalizeAccountId(newAccountIdInput);
 const roseAssetId = normalizeAssetId(`rose##${authorityInput}`);
@@ -369,7 +369,7 @@ const nftPage = await torii.listNfts({
 });
 console.log("first nft page:", nftPage.items.map((it) => it.id));
 
-for await (const holding of torii.iterateAccountAssetsQuery("alice@wonderland", {
+for await (const holding of torii.iterateAccountAssetsQuery("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   requirePermissions: true,
   pageSize: 2,
   filter: { Gte: ["quantity", 1] },
@@ -462,17 +462,17 @@ const registerDomain = noritoEncodeInstruction(
   buildRegisterDomainInstruction({ domainId: "wonderland" }),
 );
 const registerAccount = buildRegisterAccountInstruction({
-  accountId: "alice@wonderland",
+  accountId: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
 });
 const transfer = buildTransferAssetInstruction({
-  sourceAssetId: "rose#wonderland#alice",
-  destinationAccountId: "bob@wonderland",
+  sourceAssetId: "rose##6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  destinationAccountId: "6cmzPVPX9CDKZ7zp4XqnygVMaXeKCZHvBaeZNTPuH1TvtP7SvKbSzxA",
   quantity: "5",
 });
 
 const transferTx = buildTransaction({
   chainId: "demo-chain",
-  authority: "alice@wonderland",
+  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
   instructions: [transfer],
   privateKey,
 });
@@ -864,7 +864,7 @@ pinned to the configured base.
   JavaScript floating-point pitfalls; the builders accept `string | number |
   bigint` but require plain decimal literals (no exponent), with up to 28
   fractional digits and a 512-bit mantissa.
-- Keep asset IDs fully qualified (`rose#wonderland#ed0120…`) when chaining mint
+- Keep asset IDs fully qualified (`rose##6cmz…`) when chaining mint
   and transfer steps. The helpers do not guess missing suffixes, ensuring all
   peers derive the same destination.
 - Reuse the exported `normalizeAccountId()` / `normalizeAssetId()` helpers when you
@@ -1230,7 +1230,7 @@ const pinResult = await torii.pinSorafsManifest({
 console.log(`manifest=${pinResult.manifest_id_hex} digest=${pinResult.payload_digest_hex}`);
 
 const registerRequest = {
-  authority: process.env.SORAFS_OPERATOR_ID ?? "alice@wonderland",
+  authority: process.env.SORAFS_OPERATOR_ID ?? "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
   privateKey: process.env.SORAFS_OPERATOR_KEY ?? "ed25519:deadbeef",
   manifestDigestHex: pinResult.manifest_id_hex,
   chunkDigestSha3_256Hex: process.env.SORAFS_CHUNK_DIGEST ?? "1".repeat(64),
@@ -1518,7 +1518,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "governance@sora",
+    authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     manifest,
     reason: "Rotation to attester set v2",
@@ -1528,7 +1528,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "governance@sora",
+    authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid: "uaid:c2b61dd6bb73e91ee6d0949508d491bbc1b2a347a3f41b5cd35d733c1e751111",
     dataspaceId: 11,
@@ -1816,9 +1816,9 @@ const settlement = buildPacs008Message({
   instigatingAgent: { bic: "DEUTDEFF", lei: "529900ODI3047E2LIV03" },
   instructedAgent: { bic: "COBADEFF" },
   debtorAccount: { iban: "DE89370400440532013000" },
-  creditorAccount: { otherId: "alice@wonderland" },
+  creditorAccount: { otherId: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT" },
   purposeCode: "SECU",
-  supplementaryData: { account_id: "alice@wonderland", leg: "delivery" },
+  supplementaryData: { account_id: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", leg: "delivery" },
 });
 
 const torii = new ToriiClient("http://localhost:8080");
@@ -1907,7 +1907,7 @@ const manifestTx = buildRegisterSmartContractCodeTransaction({
     abiHash: "hash:…",
     compilerFingerprint: "kotodama-1.2 rustc-1.79",
     accessSetHints: {
-      readKeys: ["account:alice@wonderland"],
+      readKeys: ["account:6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT"],
       writeKeys: ["contract:apps:ledger"],
     },
   },
@@ -2040,7 +2040,7 @@ const proposalTx = buildProposeDeployContractTransaction({
   privateKey,
 });
 
-const zkOwner = "ih58...@default"; // canonical IH58 account id for ZK public inputs
+const zkOwner = "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC"; // canonical IH58 account id for ZK public inputs
 
 const zkBallotTx = buildCastZkBallotTransaction({
   chainId: "test-chain",
@@ -2179,7 +2179,7 @@ const detail = await torii.getVerifyingKeyTyped("halo2/ipa", "vk_main");
 console.log(detail.record.status); // "Active"
 
 await torii.registerVerifyingKey({
-  authority: "alice@wonderland",
+  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
   private_key: "ed0120…",
   backend: "halo2/ipa",
   name: "vk_main",
@@ -2378,10 +2378,10 @@ import {
 
 const { signedTransaction } = buildTransaction({
   chainId: "offline-demo",
-  authority: "alice@wonderland",
+  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
   instructions: [
     buildMintAssetInstruction({
-      assetId: "rose#wonderland#alice",
+      assetId: "rose##6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
       quantity: "10",
     }),
   ],
@@ -2768,7 +2768,7 @@ without provisioning infrastructure.
 - `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"namespace":"apps","contractId":"calc.v1","entrypoint":"ping","payload":{"value":1},"gasLimit":50000}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.callContract`, waits for the resulting transaction status, and asserts success. The helper accepts camelCase keys plus overrides for `authority`, `privateKeyHex`, `gasAssetId`, and `gasLimit` (required).
 - `IROHA_TORII_INTEGRATION_GOV_BALLOT` — optional JSON object ({`referendumId`,`owner`,`amount`,`durationBlocks`,`direction`} are the common keys) submitted via `governanceSubmitPlainBallot` when `IROHA_TORII_INTEGRATION_MUTATE=1`. Missing fields default to the configured `authority`/`chainId`, so the env var only needs to override vote-specific fields.
 - `IROHA_TORII_INTEGRATION_CHAIN_ID` — optional override for the default devnet chain id (`00000000-0000-0000-0000-000000000000`).
-- `IROHA_TORII_INTEGRATION_ACCOUNT_ID` / `IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX` — optional overrides for the default signer (`defaults/client.toml`); the defaults target `ed0120CE…@wonderland`.
+- `IROHA_TORII_INTEGRATION_ACCOUNT_ID` / `IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX` — optional overrides for the default signer (`defaults/client.toml`); the defaults target the canonical encoded account id derived from `account.public_key`.
 - `IROHA_TORII_INTEGRATION_MUTATE` — set to `1` to enable mutation tests (registering disposable domains via the builder helpers). The docker harness described below enables this flag automatically.
 - `IROHA_TORII_INTEGRATION_STREAM_ENABLED` — set to `1` (alongside `IROHA_TORII_INTEGRATION_MUTATE=1`) to exercise the event-stream coverage that waits for a `Pipeline.Block` SSE and asserts the typed payload mirrors Torii’s stream schema. Leave unset when SSE endpoints are disabled or proxied away.
 - `IROHA_TORII_INTEGRATION_ISO_ENABLED` — set to `1` to exercise the ISO bridge smoke test (submits a tiny `pacs.008` payload and fetches its status). Leave unset/`0` to skip the ISO coverage when the bridge runtime is disabled.
@@ -3162,30 +3162,30 @@ const defs = await torii.queryAssetDefinitions({
 });
 console.log("filtered definitions", defs.items);
 
-const perms = await torii.listAccountPermissions("alice@wonderland", {
+const perms = await torii.listAccountPermissions("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   limit: 5,
 });
 console.log("direct permissions", perms.items.map((item) => item.name));
-for await (const perm of torii.iterateAccountPermissions("alice@wonderland", {
+for await (const perm of torii.iterateAccountPermissions("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   pageSize: 2,
 })) {
   console.log("paged permission", perm.name);
 }
 const nfts = await torii.listNfts({ limit: 10 });
 console.log("first NFT ids", nfts.items.map((nft) => nft.id));
-const balances = await torii.listAccountAssets("alice@wonderland", {
+const balances = await torii.listAccountAssets("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   limit: 3,
-  assetId: "rose#wonderland#alice@wonderland",
+  assetId: "rose##6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
 });
 console.log("alice balances", balances.items);
 const holders = await torii.listAssetHolders("rose#wonderland", {
   limit: 3,
-  assetId: "rose#wonderland#alice@wonderland",
+  assetId: "rose##6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
-const history = await torii.listAccountTransactions("alice@wonderland", {
+const history = await torii.listAccountTransactions("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   limit: 2,
-  assetId: "rose#wonderland#alice@wonderland",
+  assetId: "rose##6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
 });
 console.log(
   "recent hashes",
@@ -3194,13 +3194,13 @@ console.log(
 
 for await (const account of torii.iterateAccountsQuery({
   pageSize: 100,
-  filter: { Eq: ["id", "soraalicepayload@wonderland"] },
+  filter: { Eq: ["id", "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT"] },
   select: [{ Fields: ["id", "metadata.display_name"] }],
 })) {
   console.log("matching account", account.id);
 }
 
-for await (const balance of torii.iterateAccountAssetsQuery("alice@wonderland", {
+for await (const balance of torii.iterateAccountAssetsQuery("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   pageSize: 32,
   filter: { Eq: ["asset_id.definition_id", "rose#wonderland"] },
 })) {
@@ -3216,7 +3216,7 @@ for await (const instance of torii.iterateGovernanceInstances("apps", {
 
 for await (const trigger of torii.iterateTriggersQuery({
   pageSize: 50,
-  filter: { Eq: ["object.authority", "alice@wonderland"] },
+  filter: { Eq: ["object.authority", "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT"] },
 })) {
   console.log("trigger id:", trigger.id);
 }
@@ -3224,7 +3224,7 @@ for await (const trigger of torii.iterateTriggersQuery({
 // Or mirror the same calls from the runnable recipe:
 //   node ./recipes/nft_account_iteration.mjs \
 //     TORII_URL=http://127.0.0.1:8080 \
-//     ACCOUNT_ID=alice@wonderland \
+//     ACCOUNT_ID=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
 //     ASSET_DEFINITION_ID=rose#wonderland \
 //     NFT_DEFINITION_ID=art#wonderland
 ```
@@ -3239,13 +3239,13 @@ console.log(policy.suffix, policy.pricing.length);
 
 const registration = await torii.registerSnsName({
   selector: { suffix_id: 1, label: "demo" },
-  owner: "alice@wonderland",
+  owner: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
   payment: {
     asset_id: "xor#sora",
     gross_amount: 120,
     net_amount: 120,
     settlement_tx: { tx: "hash" },
-    payer: "alice@wonderland",
+    payer: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
     signature: "sig-json",
   },
 });
@@ -3303,7 +3303,7 @@ if (explorerMetrics) {
   console.log("explorer metrics disabled on this node");
 }
 
-const qr = await torii.getExplorerAccountQr("soraexampleaddress@wonderland", {
+const qr = await torii.getExplorerAccountQr("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   addressFormat: "compressed",
 });
 console.log(qr.literal); // compressed literal embedded in the QR SVG
@@ -3322,7 +3322,7 @@ for (const entry of recentBlocks.items) {
 
 // NFT and account-asset iteration mirrors the Torii JSON envelopes while handling pagination.
 const holdings = [];
-for await (const holding of torii.iterateAccountAssets("alice@wonderland", {
+for await (const holding of torii.iterateAccountAssets("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   pageSize: 2,
   maxItems: 5,
   sort: [{ key: "quantity", order: "desc" }],
@@ -3344,7 +3344,7 @@ for await (const nft of torii.iterateNftsQuery({
 console.log("matching NFTs", nftIds);
 
 const ownedNfts = [];
-for await (const nft of torii.iterateAccountNfts("alice@wonderland", {
+for await (const nft of torii.iterateAccountNfts("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   domainId: "wonderland",
   pageSize: 10,
 })) {
@@ -3433,7 +3433,7 @@ if (!ballot.accepted) {
   console.warn("ballot rejected:", ballot.reason);
 }
 
-const zkOwner = "ih58...@default"; // canonical IH58 account id for ZK public inputs
+const zkOwner = "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC"; // canonical IH58 account id for ZK public inputs
 await torii.governanceSubmitZkBallot({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",
@@ -3459,7 +3459,7 @@ const deriveResponse = await torii.governanceDeriveCouncilVrf({
   committeeSize: 2,
   candidates: [
     {
-      accountId: "validator@test",
+      accountId: "6cmzPVPX9CDKZ7zp4XqnygVMaXeKCZHvBaeZNTPuH1TvtP7SvKbSzxA",
       variant: "Normal",
       pk: validatorPublicKeyBytes,
       proof: validatorProofBytes,
@@ -3505,7 +3505,7 @@ console.log(`enact instructions=${enactDraft.tx_instructions.length}`);
 
 const registeredTriggers = await torii.listTriggers({
   namespace: "apps",
-  authority: "issuer@test",
+  authority: "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W",
   limit: 5,
 });
 registeredTriggers.items.forEach((trigger) => {
@@ -3521,7 +3521,7 @@ if (!trigger) {
       Mint: {
         Asset: {
           object: "rose#wonderland",
-          destination_id: "treasury@wonderland",
+          destination_id: "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W",
           value: "5",
         },
       },
@@ -3534,7 +3534,7 @@ if (!trigger) {
       Mint: {
         Asset: {
           object: "rose#wonderland",
-          destination_id: "treasury@wonderland",
+          destination_id: "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W",
           value: "5",
         },
       },
@@ -3562,7 +3562,7 @@ const timeAction = buildTimeTriggerAction({
   authority,
   instructions: [
     buildMintAssetInstruction({
-      assetId: "rose#wonderland#treasury@wonderland",
+      assetId: "rose##6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W",
       quantity: "250",
     }),
   ],

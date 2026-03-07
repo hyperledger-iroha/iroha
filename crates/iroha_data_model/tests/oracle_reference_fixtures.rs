@@ -4,20 +4,11 @@
 //! with the data model helpers and the deterministic hashing rules used by
 //! aggregators and connectors.
 
-use std::{
-    collections::BTreeMap,
-    fs,
-    num::NonZeroU64,
-    path::Path,
-    str::FromStr,
-    sync::{Arc, LazyLock, Mutex, MutexGuard},
-};
+use std::{collections::BTreeMap, fs, num::NonZeroU64, path::Path, str::FromStr};
 
 use iroha_crypto::{Hash, Signature, SignatureOf};
 use iroha_data_model::{
-    account::{AccountDomainSelectorResolver, clear_account_domain_selector_resolver},
-    account::{AccountId, address},
-    domain::DomainId,
+    account::AccountId,
     oracle::{
         AbsoluteOutlier, AggregationRule, ConnectorRequest, ConnectorRequestMethod, FeedConfig,
         FeedConfigVersion, FeedEvent, FeedId, KeyedHash, Observation, ObservationBody,
@@ -71,49 +62,9 @@ const FOLLOW_FEED_EVENT_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/oracle/feed_event_twitter_follow.json"
 ));
-const DOMAIN_LABEL_CANDIDATES: &[&str] = &[
-    "soracles",
-    "oracle",
-    "oracles",
-    "validators",
-    "sora",
-    "soranet",
-    "treasury",
-    "default",
-    "iroha",
-    "alpha",
-    "omega",
-    "governance",
-    "explorer",
-    "kitsune",
-    "da",
-    "council",
-];
-
-struct DomainSelectorResolverGuard {
-    _lock: MutexGuard<'static, ()>,
-}
-
-impl Drop for DomainSelectorResolverGuard {
-    fn drop(&mut self) {
-        clear_account_domain_selector_resolver();
-    }
-}
-
-fn guard_domain_selector_resolver() -> DomainSelectorResolverGuard {
-    static RESOLVER_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-    let lock = RESOLVER_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let resolver: Arc<AccountDomainSelectorResolver> =
-        Arc::new(|selector| resolve_fixture_domain(*selector));
-    iroha_data_model::account::set_account_domain_selector_resolver(resolver);
-    DomainSelectorResolverGuard { _lock: lock }
-}
 
 #[test]
 fn price_reference_fixtures_are_canonical() {
-    let _guard = guard_domain_selector_resolver();
     let providers = sample_providers();
     let feed_config = price_feed_config(&providers);
     let connector_request = price_connector_request(feed_config.feed_config_version);
@@ -174,7 +125,6 @@ fn price_reference_fixtures_are_canonical() {
 
 #[test]
 fn follow_reference_fixtures_are_canonical() {
-    let _guard = guard_domain_selector_resolver();
     let providers = sample_providers();
     let feed_config = follow_feed_config(&providers);
 
@@ -248,7 +198,6 @@ fn follow_reference_fixtures_are_canonical() {
 #[ignore = "regenerates oracle reference fixtures"]
 #[allow(clippy::too_many_lines)]
 fn regenerate_follow_reference_fixtures() {
-    let _guard = guard_domain_selector_resolver();
     let base = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
@@ -386,8 +335,8 @@ fn write_fixture<T: JsonSerialize>(path: &Path, value: &T) {
 
 fn sample_providers() -> Vec<AccountId> {
     [
-        "34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA",
-        "34mSYnLrmfrui7Ba2h9RbAPY1hHNEQje517tbXn44vUUkA7F8361DR6aQeHKSaNSKFruciKzA",
+        "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+        "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV",
     ]
     .into_iter()
     .map(parse_fixture_account)
@@ -395,35 +344,9 @@ fn sample_providers() -> Vec<AccountId> {
 }
 
 fn parse_fixture_account(literal: &str) -> AccountId {
-    let (address, _) =
-        address::AccountAddress::parse_any(literal, None).expect("fixture account address");
-    let selector = address.domain_selector();
-    let domain = resolve_fixture_domain(selector)
-        .unwrap_or_else(|| panic!("fixture selector {selector:?} is not mapped to a domain label"));
-    address.to_account_id(&domain).expect("fixture account id")
-}
-
-fn resolve_fixture_domain(selector: address::AccountDomainSelector) -> Option<DomainId> {
-    if matches!(selector, address::AccountDomainSelector::Default) {
-        return Some(
-            address::default_domain_name()
-                .as_ref()
-                .parse()
-                .expect("default domain parses"),
-        );
-    }
-
-    for label in DOMAIN_LABEL_CANDIDATES {
-        let domain: DomainId = (*label).parse().expect("candidate domain parses");
-        let Ok(candidate_selector) = address::AccountDomainSelector::from_domain(&domain) else {
-            continue;
-        };
-        if candidate_selector == selector {
-            return Some(domain);
-        }
-    }
-
-    None
+    AccountId::parse_encoded(literal)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("fixture account id")
 }
 
 fn price_feed_config(providers: &[AccountId]) -> FeedConfig {

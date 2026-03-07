@@ -148,7 +148,7 @@ Exemples hexadécimaux canoniques que les ferramentas de carteira peuvent lier o
 
 | Type de sélection | Hex canonique |
 |--------------------|---------------|
-| Implicite padrao | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Implicite padrao | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | Digest local (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | Registre mondial (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -165,7 +165,7 @@ les chaînes compressées doivent être développées pour suivre la CLI du flux
    `domain` avec les champs `kind`/`warning` et ecoa ququer dominio fornecido via o
    champ `input_domain`. Quand `kind` et `local12`, une CLI imprime un avis sur
    stderr et ou résumé JSON ecoa a mesma orientacao para que pipelines CI et SDK
-   possam exibi-la. Passe `--append-domain` semper que quiser reproduzir a
+   possam exibi-la. Passe `legacy  suffix` semper que quiser reproduzir a
    codificacao convertida como `<ih58>@<domain>`.
 2. Les SDK peuvent afficher votre avis/résumé via l'assistant JavaScript :```js
    import { inspectAccountId } from "@iroha/iroha-js";
@@ -190,19 +190,19 @@ les chaînes compressées doivent être développées pour suivre la CLI du flux
    ignorants, e `--input -` ou nenhum flag usa STDIN), émettent un rapport JSON
    avec CV canoniques/IH58/comprimés pour chaque entrée et avec les erreurs de
    analyser et avis de domaine local. Utiliser `--allow-errors` pour vérifier les dumps alternatifs
-   avec des lignes lixo, et voyagez en auto avec `--fail-on-warning` quand vous êtes
+   avec des lignes lixo, et voyagez en auto avec `strict CI post-check` quand vous êtes
    Les opérateurs sont prêts à bloquer les sélections locales sans CI.
 6. Quand vous précisez la réécriture d'une ligne, utilisez
   Para planilhas de remediacao de seletores Local, utilisation
   pour exporter un fichier CSV `input,status,format,...` qui doit être codifié
   canoniques, avis et fausses analyses dans une seule étape.
    O helper ignorer linhas nao Local por padrao, converte cada entrada restante
-   pour la codification sollicitée (IH58/comprimido/hex/JSON), et préserver le domaineoriginal quando `--append-domain` et défini. Combiner avec `--allow-errors`
+   pour la codification sollicitée (IH58/comprimido/hex/JSON), et préserver le domaineoriginal quando `legacy  suffix` et défini. Combiner avec `--allow-errors`
    pour continuer à varredura même quand un dump contem literais malformados.
 7. Un CI/lint automatique peut exécuter `ci/check_address_normalize.sh`, qui est supplémentaire
    sélecteurs locaux de `fixtures/account/address_vectors.json`, convertir via
    `iroha tools address normalize`, et réexécution
-   `iroha tools address audit --fail-on-warning` pour vérifier que les versions ne sont pas émises
+   `iroha tools address audit` pour vérifier que les versions ne sont pas émises
    mais digère Local.
 
 `torii_address_local8_total{endpoint}` avec com
@@ -238,7 +238,7 @@ prouver que `domain_kind="local12"` est permanent à zéro sur la demande du 30
 Inclut la balle suivante dans les notes de sortie de la carteira/explorateur à envoyer
 basculement :
 
-> **Enderecos :** Ajout de l'assistant `iroha tools address normalize --only-local --append-domain`
+> **Enderecos :** Ajout de l'assistant `iroha tools address normalize`
 > et connecté au CI (`ci/check_address_normalize.sh`) pour les pipelines de
 > Carteira/Explorador Possam Converter Seletores Alternatives locales pour les formes
 > canoniques IH58/comprimées avant Local-8/Local-12 seront bloquées à

@@ -142,7 +142,7 @@ payload bit: │version  │ class  │  norm  │ext │
 
 | סוג סלקטור | Hex קנוני |
 |---------------|---------------|
-| ברירת מחדל משתמעת | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| ברירת מחדל משתמעת | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | digest מקומי (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | רישום גלובלי (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -158,7 +158,7 @@ payload bit: │version  │ class  │  norm  │ext │
    קנוניים. התקציר כולל גם אובייקט `domain` עם שדות `kind`/`warning` ומחזיר כל
    דומיין שסופק דרך השדה `input_domain`. כאשר `kind` הוא `local12`, ה-CLI מדפיס
    אזהרה ל-stderr והתקציר משקף את אותה הנחיה כך שצינורות CI ו-SDKs יוכלו להציג
-   אותה. העבירו `--append-domain` בכל פעם שתרצו להשמיע את הקידוד המומר בתור
+   אותה. העבירו `legacy  suffix` בכל פעם שתרצו להשמיע את הקידוד המומר בתור
    `<ih58>@<domain>`.
 2. SDKs יכולים להציג את אותה אזהרה/תקציר דרך עוזר JavaScript:
 
@@ -185,18 +185,18 @@ payload bit: │version  │ class  │  norm  │ext │
    ללא דגל משתמש ב-STDIN), מפיקה דוח JSON עם תקצירים קנוניים/IH58/דחוסים לכל
    ערך, וסופרת שגיאות parse ואזהרות דומיין Local. השתמשו ב-`--allow-errors`
    כאשר אתם מבקרים dumps מורשתיים שמכילים שורות זבל, ונעלו אוטומציה עם
-   `--fail-on-warning` כאשר המפעילים מוכנים לחסום סלקטורים Local ב-CI.
+   `strict CI post-check` כאשר המפעילים מוכנים לחסום סלקטורים Local ב-CI.
 6. כאשר צריך שכתוב שורה-לשורה, השתמשו
   עבור גיליונות remediation של סלקטורים Local, השתמשו
   כדי לייצא CSV `input,status,format,...` שמדגיש קידודים קנוניים, אזהרות ושגיאות
   parse במעבר אחד. העוזר מדלג על שורות שאינן Local כברירת מחדל, ממיר כל ערך
   שנותר לקידוד המבוקש (IH58/דחוס/hex/JSON), ומשמר את הדומיין המקורי כאשר
-  `--append-domain` מוגדר. שלבו עם `--allow-errors` כדי להמשיך בסריקה גם כאשר
+  `legacy  suffix` מוגדר. שלבו עם `--allow-errors` כדי להמשיך בסריקה גם כאשר
   dump מכיל literals פגומים.
 7. אוטומציית CI/lint יכולה להריץ `ci/check_address_normalize.sh`, שמחלצת את
    הסלקטורים Local מתוך `fixtures/account/address_vectors.json`, ממירה אותם דרך
    `iroha tools address normalize`, ומריצה שוב
-   `iroha tools address audit --fail-on-warning` כדי להוכיח ששחרורים כבר לא מפיקים
+   `iroha tools address audit` כדי להוכיח ששחרורים כבר לא מפיקים
    digests Local.
 
 `torii_address_local8_total{endpoint}` יחד עם
@@ -230,7 +230,7 @@ mainnet מבטל את הסלקטורים הישנים. חבילת Alertmanager
 
 כללו את ה-bullet הבא בהערות השחרור של הארנק/מסייר בעת cutover:
 
-> **כתובות:** נוסף העוזר `iroha tools address normalize --only-local --append-domain`
+> **כתובות:** נוסף העוזר `iroha tools address normalize`
 > וחובר ל-CI (`ci/check_address_normalize.sh`) כך שצינורות ארנק/מסייר יוכלו להמיר
 > סלקטורים Local מורשתיים לצורות IH58/דחוסות קנוניות לפני ש-Local-8/Local-12
 > נחסמים ב-mainnet. עדכנו כל export מותאם להריץ את הפקודה ולצרף את הרשימה

@@ -8490,7 +8490,8 @@ impl MochiApp {
             return Err("Private key is required.".to_owned());
         }
 
-        AccountId::from_str(account)
+        AccountId::parse_encoded(account)
+            .map(|parsed| parsed.into_account_id())
             .map_err(|err| format!("Invalid account `{account}`: {err}"))?;
         PrivateKey::from_str(private_key).map_err(|err| format!("Invalid private key: {err}"))?;
 
@@ -8521,7 +8522,8 @@ impl MochiApp {
             if account_str.is_empty() {
                 return Err(format!("Signer `{label}` requires an account identifier."));
             }
-            let account = AccountId::from_str(account_str)
+            let account = AccountId::parse_encoded(account_str)
+                .map(|parsed| parsed.into_account_id())
                 .map_err(|err| format!("Invalid account `{account_str}`: {err}"))?;
             if entry.permissions.is_empty() {
                 return Err(format!(
@@ -8669,9 +8671,11 @@ impl MochiApp {
                 if account_raw.is_empty() {
                     return Err("Fee destination account is required.".to_owned());
                 }
-                let account = AccountId::from_str(&account_raw).map_err(|err| {
-                    format!("Invalid fee destination account `{account_raw}`: {err}")
-                })?;
+                let account = AccountId::parse_encoded(&account_raw)
+                    .map(|parsed| parsed.into_account_id())
+                    .map_err(|err| {
+                        format!("Invalid fee destination account `{account_raw}`: {err}")
+                    })?;
                 ImplicitAccountFeeDestination::Account(account)
             };
             Some(ImplicitAccountCreationFee {

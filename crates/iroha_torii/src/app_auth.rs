@@ -133,9 +133,6 @@ pub fn verify_canonical_request(
     body: &[u8],
     expected_account: Option<&AccountId>,
 ) -> Result<Option<AccountId>, crate::Error> {
-    #[cfg(test)]
-    crate::ensure_test_domain_selector_resolver();
-
     let account_hdr = headers.get(HEADER_ACCOUNT);
     let signature_hdr = headers.get(HEADER_SIGNATURE);
     let (Some(account_hdr), Some(signature_hdr)) = (account_hdr, signature_hdr) else {
@@ -153,11 +150,13 @@ pub fn verify_canonical_request(
             "X-Iroha-Account must be valid UTF-8".to_owned(),
         ))
     })?;
-    let account: AccountId = account_literal.trim().parse().map_err(|_| {
-        crate::Error::Query(ValidationFail::NotPermitted(
-            "invalid X-Iroha-Account value".to_owned(),
-        ))
-    })?;
+    let account: AccountId = AccountId::parse_encoded(account_literal.trim())
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|_| {
+            crate::Error::Query(ValidationFail::NotPermitted(
+                "invalid X-Iroha-Account value".to_owned(),
+            ))
+        })?;
 
     if let Some(expected) = expected_account {
         if expected != &account {
@@ -227,6 +226,8 @@ mod tests {
 
     use super::*;
 
+    const TEST_ACCOUNT_IH58: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+
     fn minimal_state_with_account(account: &AccountId) -> Arc<State> {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(account);
@@ -247,12 +248,12 @@ mod tests {
 
     #[test]
     fn canonical_message_includes_body_hash() {
-        let uri: Uri = "/v1/accounts/alice@wonderland/assets?limit=5"
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_IH58}/assets?limit=5")
             .parse()
             .expect("uri");
         let msg = canonical_request_message(&Method::GET, &uri, b"{\"foo\":1}");
         let rendered = String::from_utf8(msg).expect("utf8");
-        assert!(rendered.contains("/v1/accounts/alice@wonderland/assets"));
+        assert!(rendered.contains(&format!("/v1/accounts/{TEST_ACCOUNT_IH58}/assets")));
         assert!(rendered.contains("limit=5"));
         assert!(
             rendered.ends_with("37a76343c8e3c695feeaadfe52329673ff129c65f99f55ae6056c9254f4c481d")
@@ -268,7 +269,7 @@ mod tests {
         );
         let state = minimal_state_with_account(&account);
         let method = Method::GET;
-        let uri: Uri = "/v1/accounts/alice@wonderland/assets?limit=10"
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_IH58}/assets?limit=10")
             .parse()
             .expect("uri");
         let message = canonical_request_message(&method, &uri, &[]);
@@ -295,7 +296,7 @@ mod tests {
         );
         let state = minimal_state_with_account(&account);
         let method = Method::GET;
-        let uri: Uri = "/v1/accounts/alice@wonderland/assets?limit=1"
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_IH58}/assets?limit=1")
             .parse()
             .expect("uri");
         let bad_sig = Signature::new(KeyPair::random().private_key(), b"forged");
@@ -329,7 +330,7 @@ mod tests {
         );
         let state = minimal_state_with_account(&account);
         let method = Method::GET;
-        let uri: Uri = "/v1/accounts/alice@wonderland/assets?limit=1"
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_IH58}/assets?limit=1")
             .parse()
             .expect("uri");
         let message = canonical_request_message(&method, &uri, &[]);

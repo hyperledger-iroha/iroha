@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::proof::VerifyingKeyId;
 use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, IVMHost, Memory, PointerType,
     mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
+        AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost,
     },
     syscalls,
 };
@@ -36,6 +36,20 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn account(domain: &str, public_key: &str) -> ScopedAccountId {
+    let domain: DomainId = domain.parse().unwrap();
+    let public_key: PublicKey = public_key.parse().unwrap();
+    ScopedAccountId::new(domain, public_key)
+}
+
+fn canonical_account(account: ScopedAccountId) -> ScopedAccountId {
+    let value = norito::json::to_value(&account).expect("serialize account");
+    let literal = value.as_str().expect("account literal");
+    ScopedAccountId::parse_encoded(literal)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("canonical account id must parse")
+}
+
 fn execute_json_instruction(vm: &mut IVM, env: norito::json::Value, offset: u64, label: &str) {
     let bytes = norito::json::to_vec(&env).expect("serialize envelope");
     let tlv = make_tlv(PointerType::Json as u16, &bytes);
@@ -60,36 +74,24 @@ fn execute_json_instruction(vm: &mut IVM, env: norito::json::Value, offset: u64,
     vm.run().expect(label);
 }
 
-fn build_open_verify_envelope_bytes(k: u32) -> Vec<u8> {
-    use h2::norito_helpers as nh;
-    use iroha_zkp_halo2 as h2;
-    use iroha_zkp_halo2::backend::pallas::PallasBackend;
-    let params = h2::Params::new(k as usize).expect("params");
-    let coeffs: Vec<h2::PrimeField64> = vec![0u64.into(); params.n()];
-    let poly = h2::Polynomial::from_coeffs(coeffs);
-    let mut tr = h2::Transcript::new(ivm::host::LABEL_TRANSFER);
-    let p_g = poly.commit(&params).expect("commit");
-    let z = h2::PrimeField64::from(1u64);
-    let (proof, t) = poly.open(&params, &mut tr, z, p_g).expect("open");
-    let env = h2::OpenVerifyEnvelope {
-        params: nh::params_to_wire(&params),
-        public: nh::poly_open_public::<PallasBackend>(params.n(), z, t, p_g),
-        proof: nh::proof_to_wire(&proof),
-        transcript_label: ivm::host::LABEL_TRANSFER.to_string(),
-        vk_commitment: None,
-        public_inputs_schema_hash: None,
-        domain_tag: None,
-    };
+fn build_open_verify_envelope_bytes() -> Vec<u8> {
+    let env = iroha_data_model::zk::OpenVerifyEnvelope::new(
+        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+        ivm::host::LABEL_TRANSFER,
+        [0u8; 32],
+        vec![1, 2, 3],
+        vec![4, 5, 6],
+    );
     norito::to_bytes(&env).expect("encode env")
 }
 
 #[test]
 fn zk_register_shield_permissions_and_events() {
     // Setup caller and WSV with an asset definition and balance
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
+    let alice = canonical_account(account(
+        "wonderland",
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+    ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     let domain: DomainId = "domain".parse().unwrap();
@@ -108,7 +110,11 @@ fn zk_register_shield_permissions_and_events() {
     wsv.grant_permission(&alice, PermissionToken::Shield(ad.clone()));
     wsv.grant_permission(&alice, PermissionToken::Unshield(ad.clone()));
 
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -172,10 +178,10 @@ fn zk_register_shield_permissions_and_events() {
 
 #[test]
 fn unshield_requires_verify_even_with_permission() {
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
+    let alice = canonical_account(account(
+        "wonderland",
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+    ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     let domain: DomainId = "domain".parse().unwrap();
@@ -186,7 +192,11 @@ fn unshield_requires_verify_even_with_permission() {
     assert!(wsv.register_asset_definition(&alice, ad.clone(), ivm::mock_wsv::Mintable::Infinitely));
     // Grant permissions including Unshield
     wsv.grant_permission(&alice, PermissionToken::Unshield(ad.clone()));
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -239,10 +249,10 @@ fn unshield_requires_verify_even_with_permission() {
 
 #[test]
 fn zk_transfer_requires_matching_vk_reference() {
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
+    let alice = canonical_account(account(
+        "wonderland",
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+    ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     let domain: DomainId = "domain".parse().unwrap();
@@ -268,7 +278,11 @@ fn zk_transfer_requires_matching_vk_reference() {
         }
     ));
 
-    let mut host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let mut host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
 
     let proof_ref = iroha_data_model::proof::ProofAttachment::new_ref(
@@ -361,7 +375,7 @@ fn zk_transfer_requires_matching_vk_reference() {
     assert!(matches!(err, ivm::VMError::PermissionDenied));
 
     // Verify transfer envelope to arm latch
-    let env_bytes = build_open_verify_envelope_bytes(8);
+    let env_bytes = build_open_verify_envelope_bytes();
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
     let ptr_env = vm.alloc_input_tlv(&tlv_env).unwrap();
     let env_offset = ptr_env - Memory::INPUT_START;
@@ -370,7 +384,7 @@ fn zk_transfer_requires_matching_vk_reference() {
         .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
         .expect("verify");
     assert_eq!(gas, 0);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!((vm.register(10), vm.register(11)), (1, 0));
 
     // With matching vk_ref transfer succeeds
     let tlv = make_tlv(
@@ -385,7 +399,7 @@ fn zk_transfer_requires_matching_vk_reference() {
     assert_eq!(gas, 0);
 
     // Re-arm latch
-    let env_bytes = build_open_verify_envelope_bytes(8);
+    let env_bytes = build_open_verify_envelope_bytes();
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
     vm.memory
         .preload_input(env_offset, &tlv_env)
@@ -395,7 +409,7 @@ fn zk_transfer_requires_matching_vk_reference() {
         .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
         .expect("verify");
     assert_eq!(gas, 0);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!((vm.register(10), vm.register(11)), (1, 0));
 
     // Mismatched vk_ref is rejected
     let tlv = make_tlv(
@@ -410,7 +424,7 @@ fn zk_transfer_requires_matching_vk_reference() {
     assert!(matches!(err, ivm::VMError::PermissionDenied));
 
     // Re-arm latch again and reject proofs missing any verifying key material
-    let env_bytes = build_open_verify_envelope_bytes(8);
+    let env_bytes = build_open_verify_envelope_bytes();
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
     vm.memory
         .preload_input(env_offset, &tlv_env)
@@ -434,7 +448,7 @@ fn zk_transfer_requires_matching_vk_reference() {
     assert!(matches!(err, ivm::VMError::PermissionDenied));
 
     // Re-arm and allow inline verifying key with matching backend
-    let env_bytes = build_open_verify_envelope_bytes(8);
+    let env_bytes = build_open_verify_envelope_bytes();
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
     vm.memory
         .preload_input(env_offset, &tlv_env)
@@ -458,7 +472,7 @@ fn zk_transfer_requires_matching_vk_reference() {
     assert_eq!(gas, 0);
 
     // Inline with mismatched backend must be rejected
-    let env_bytes = build_open_verify_envelope_bytes(8);
+    let env_bytes = build_open_verify_envelope_bytes();
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
     vm.memory
         .preload_input(env_offset, &tlv_env)

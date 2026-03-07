@@ -164,7 +164,7 @@ pub struct Common {
 
 #### 2.1 མགོ་ཡིག་བང་སྒྲིག་ (ADDR-1a)
 
-ཚད་ལྡན་གྱི་ པེ་ལོཌ་ག་ར་ `header · domain selector · controller` ཟེར་བཀོད་དེ་ཡོདཔ་ཨིན། ཚིག༌ཕྲད
+ཚད་ལྡན་གྱི་ པེ་ལོཌ་ག་ར་ `header · controller` ཟེར་བཀོད་དེ་ཡོདཔ་ཨིན། ཚིག༌ཕྲད
 `header` འདི་ བརྡ་བཀོད་ལམ་ལུགས་ག་ཅི་ལུ་ བརྡ་སྤྲོད་འབད་མི་ བཱའིཊི་གཅིག་རྐྱངམ་ཅིག་ཨིན་ དེ་ཡང་ བཱའིཊི་ཚུ་ལུ་ བརྡ་བཀོད་འབདཝ་ཨིན།
 རྗེས་སུ་འབྲང་ནི:
 
@@ -188,48 +188,50 @@ payload bit: │version  │ class  │  norm  │ext │
 ནོར་མ་ཝི་༡, རྒྱ་བསྐྱེད་དར་ཆ་བསལ་ཡོདཔ་) དང་ སྣ་མང་སིག་ཚད་འཛིན་ (ཐོན་རིམ་༠,
 class 1, སྒྲིག་གཞི་ v1, རྒྱ་བསྐྱེད་དར་ཆ་བསལ་ཡོདཔ།).
 
-#### 2.2 མངའ་ཁོངས་འདེམས་བྱེད་ཀྱི་ཨེན་ཀོ་ཌིང་ (ADDR-1a)
+#### 2.2 Legacy selector compatibility (decode-only)
 
-མངའ་ཁོངས་འདེམས་བྱེད་འདི་གིས་ དེ་འཕྲོ་ལས་ མགོ་ཡིག་གི་རྗེས་སུ་འབྲངམ་ཨིནམ་དང་ ངོ་རྟགས་ཡོད་པའི་མཉམ་འབྲེལ་ཅིག་ཨིན།
+Newly encoded canonical payloads do not include a domain-selector segment. For
+backward compatibility, decoders still accept pre-cutover payloads where a
+selector segment appears between header and controller as a tagged union:
 
-| རྟགས་ | དོན་དག་ | གླ་ཆ་ | དྲན་ཐོ། |
-|--|-|---------------------------------------- |
-| `0x00` | སྔོན་སྒྲིག་མངའ་ཁོངས་ | ནོ་ | རིམ་སྒྲིག་འབད་ཡོད་པའི་ `default_domain_name()` དང་མཐུན་སྒྲིག་འབདཝ་ཨིན། |
-| `0x01` | ས་གནས་ཀྱི་མངའ་ཁོངས་བཞུ་ནི་ | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
-| `0x02` | འཛམ་གླིང་ཐོ་འགོད་ཐོ་འགོད། | 4 bytes | བིག་-ཨེན་ཊི་ཡན་ `registry_id`; འཛམ་གླིང་ཐོ་བཀོད་གྲུ་ཚུ་ཚུན་ཚོད་ བཀག་བཞག་ཡོདཔ་ཨིན། |
+| Tag | Meaning | Payload | Notes |
+|-----|---------|---------|-------|
+| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
+| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
-མངའ་ཁོངས་ཁ་ཡིག་ཚུ་ ཧ་ཤིང་མ་འབད་བའི་ཧེ་མ་ ཀེ་ནོ་ནི་ཀཱལ་ (UTS-46 + STD3 + NFC) ཨིན། མ་ཤེས་པའི་ངོ་རྟགས་ཚུ་གིས་ `AccountAddressError::UnknownDomainTag` ཡར་སེང་འབདཝ་ཨིན། མངའ་ཁོངས་ཅིག་གི་ཁ་བྱང་ཅིག་བདེན་དཔྱད་འབད་བའི་སྐབས་ མ་མཐུན་པའི་གདམ་ཁ་ཅན་ཚུ་གིས་ `AccountAddressError::DomainMismatch` ཡར་སེང་འབདཝ་ཨིན།
+Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
 
 ```
-domain selector
+legacy selector segment
 ┌──────────┬──────────────────────────────────────────────┐
 │ tag (u8) │ payload (depends on selector kind, see table)│
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-གདམ་འཐུ་འབད་མི་འདི་ དེ་འཕྲོ་ལས་ ཚད་འཛིན་པ་ པེ་ལོཌ་གི་ཉེ་འདབས་ལུ་ཡོདཔ་ལས་ ཌི་ཀོ་ཌར་ཅིག་གིས་ འགྱོ་ཚུགས།
-གོ་རིམ་བཞིན་དུ་ གློག་ཐག་རྩ་སྒྲིག་: ངོ་རྟགས་བཱའིཊི་ལྷག་ཞིནམ་ལས་ ངོ་རྟགས་དམིགས་བསལ་གྱི་ པེ་ལོཌི་ལྷག་ཞིནམ་ལས་ གུ་སྤོ་བཤུད་འབད།
-ཚད་འཛིན་བཱའིཊིསི་ལུ།
+When present, the selector is immediately adjacent to the controller payload, so
+a decoder can walk the wire format in order: read the tag byte, read the
+tag-specific payload, then move on to the controller bytes.
 
-**འདེམས་སྒྲུག་པའི་དཔེ་**།
+**Legacy selector examples**
 
-- *སྔོན་སྒྲིག་* (`tag = 0x00`). འབབ་ཁུངས་མེད། སྔོན་སྒྲིག་དོན་ལུ་དཔེ་རིས་ཀེ་ནོན་ཧེགསི།
-  གཏན་འབེབས་བརྟག་དཔྱད་ལྡེ་མིག་ལག་ལེན་འཐབ་སྟེ་ མངའ་ཁོངས།
-  `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
-- *ས་གནས་ཀྱི་བཞུ་ཁུ་* (`tag = 0x01`). Payload འདི་ 12-bygegest ཨིན། དཔེ་ (`treasury` ས་བོན་
+- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
+  domain using the deterministic test key:
+  `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
+- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
   `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
-- *འཛམ་གླིང་ཐོ་གཞུང་* (`tag = 0x02`). Payload འདི་ མཐའ་མེད་པའི་ `registry_id:u32` ཨིན། བྱག་ཕུག་ཚུ།
-  འདི་ཡང་ འབབ་ཁུངས་འདི་ བརྡ་སྟོན་གྱི་གནད་དོན་དང་ ཅོག་འཐདཔ་ཨིན། འདམ་ཁ་རྐྱབ་མི་འདི་ འཇམ་ཏོང་ཏོ་སྦེ་ཨིན།
-  གིས་ སྤྱིར་བཏང་བཟོ་ཡོད་པའི་མངའ་ཁོངས་ཡིག་རྒྱུན་འདི་ ཐོ་བཀོད་ཀྱི་དཔག་བྱེད་དང་གཅིག་ཁར་ ཚབ་བཙུགསཔ་ཨིན། དཔེར་བརྗོད།
-  `registry_id = 0x0000_002A` (decimal42) དང་གཏན་འབེབས་ཀྱི་སྔོན་སྒྲིག་ཚད་འཛིན་པ།
-  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.  
-  བརྡ་བཀོད་: I18NI0000143X མགོ་ཡིག་, `0x02` སེལ་འཐུའི་ངོ་རྟགས་, `00 00 00 2A` ཐོ་བཀོད་ཨའི་ཌི་, `0x00`
-  ཚད་འཛིན་ངོ་རྟགས་, `0x01` གུག་གུགཔ་ཨའི་ཌི་, `0x20` ལྡེ་མིག་རིང་ཚད་, 32-byte Ed2551 ལྡེ་མིག་པེ་ལོཌི།
+- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
+  that follow the payload are identical to the implicit-default case; the selector simply
+  replaces the normalised domain string with a registry pointer. Example using
+  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
+  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
 
 #### 2.3 ཚད་འཛིན་པེ་ལོཌི་ཨེན་ཀོ་ཌིང་ (ADDR-1a)
 
-ཚད་འཛིན་པེ་ལོསིཊི་འདི་ མངའ་ཁོངས་འདེམས་བྱེད་ཀྱི་ཤུལ་ལས་ མཐུན་སྒྲིག་འབད་ཡོད་པའི་ ངོ་རྟགས་མཐུན་པའི་ མཐུན་ཚོགས་ཨིན།| རྟགས་ | ཚད་འཛིན་ | བཀོད་སྒྲིག་ | དྲན་ཐོ། |
-|--|-|-|-------------------------------------- |
+ཚད་འཛིན་པེ་ལོསིཊི་འདི་ ཀེ་ནོ་ནིཀཱལ་ payload ནང་ header ཤུལ་ལས་ (legacy selector segment ཌི་ཀོཌི་འབད་བའི་སྐབས་དེའི་ཤུལ་ལས་) འོང་བའི་ tagged union ཅིག་ཨིན།
+
+| རྟགས་ | ཚད་འཛིན་ | བཀོད་སྒྲིག་ | དྲན་ཐོ། |
+|-----|------------|--------|-------|
 | `0x00` | གཅིག ལྡེ་མིག་ | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` ད་རིས་ Ed25519 ལུ་ས་ཁྲ་ཚུ་ཡོདཔ་ཨིན། `key_len` འདི་ `u8` ལུ་བཀག་ཆ་འབད་ཡོདཔ་ཨིན། གནས་གོང་སྦོམ་ཚུ་གིས་ `AccountAddressError::KeyPayloadTooLong` ཡར་སེང་འབདཝ་ཨིན་ (དེ་འབདཝ་ད་ >255 བཱའིཊི་ཚུ་ཨིན་མི་ ལྡེ་མིག་རྐྱང་པའི་ཨེམ་ཨེལ་ མི་མང་ལྡེ་མིག་ཚུ་ ཨིན་ཀོཌི་འབད་མི་བཏུབ་ དེ་ལས་ སྣ་མང་སིག་ལག་ལེན་འཐབ་དགོཔ་ཨིན།) |
 | `0x01` | སྣ་མང་སིག་ | · `threshold:u16` · `threshold:u16` · (I18NI000000000161X · I18NI0000162X · `key_len:u16` · `key_len:u16` · `key_bytes`)\ འཐུས་མི་༢༥༥ ཚུན་རྒྱབ་སྐྱོར་འབདཝ་ཨིན། (`CONTROLLER_MULTISIG_MEMBER_MAX`) མ་ཤེས་པའི་གུག་གུགཔ་ཚུ་གིས་ `AccountAddressError::UnknownCurve`; སྐྱོན་བརྗོད་ཀྱི་སྲིད་བྱུས་ཚུ་ `AccountAddressError::InvalidMultisigPolicy` སྦེ་ བརྡུང་ཡོདཔ་ཨིན། |
 
@@ -321,12 +323,12 @@ decoders ཉམས་སྲུང་འབད་ནི་ལུ་ `ERR_UNKNOWN_
 - IME5NFKC བསྒྱུར་བཅོས: ཕྱེད་ཀ་ སོ་ར་ཀ་ན་འདི་ ཌིཀ་མ་བཅད་པར་ ཁོང་རའི་ རྒྱ་ཚད་ཆ་ཚང་སྦེ་ སྤྱིར་བཏང་བཟོ་ཚུགས་ནི་ཨིན་རུང་ ཨེ་ཨེསི་སི་ཨའི་ `sora` sensinel དང་ IH58 ཨང་གྲངས་/ཡི་གུ་ཚུ་ ASCI ལུ་སྡོད་དགོ། རྒྱ་ཚད་ཡང་ན་ གནས་སྟངས་ཀྱིས་ བཀབ་ཡོད་པའི་ བརྡ་མཚོན་ཚུ་ ཁ་ཐོག་ལུ་ `ERR_MISSING_COMPRESSED_SENTINEL`, རྒྱ་ཚད་ཆ་ཚང་ ASCII གིས་ I18NI000000264X ཡར་སེང་འབདཝ་ཨིནམ་དང་ ཞིབ་དཔྱད་མ་མཐུནམ་ཚུ་ I18NI000000265X སྦེ་ ཡར་སེང་འབདཝ་ཨིན། `crates/iroha_data_model/src/account/address.rs` ནང་ རྒྱུ་དངོས་བརྟག་དཔྱད་ཚུ་གིས་ ལམ་འདི་ཚུ་ ཁྱབ་ཚུགསཔ་ལས་ SDKs དང་ དངུལ་ཁུག་ཚུ་ ཐག་བཅད་མ་ཚུགས་པའི་ འཐུས་ཤོར་ཚུ་ལུ་ བློ་གཏད་ཚུགས།
 - Torii དང་ I18NI000000267X གི་ IH58 (porder)/sora (secd-beest) ཨིན་པུཊི་ཚུ་ འདྲ་མཚུངས་སྦེ་ བཏོནམ་ཨིན། ༼དཔེར་ན་ མ་མཐུནམ་, dight digest digest༽ མཉེན་ཆས་ཚུ་ འབད་ཚུགས། བརྡ་དོན་གྱི་ཡིག་རྒྱུན་ཚུ་ལས་ ཕོ་ཚོད་དཔག་མ་དགོ་པར་ བཟོ་བཀོད་འབད་ཡོད་པའི་རྒྱུ་མཚན་ཚུ་ རི་ལེ་ཨིན།
 - ས་གནས་ཀྱི་འདེམས་སྒྲུག་འབད་མི་ཚུ་གིས་ བཱའིཊི་༡༢ ལས་ཐུང་ཀུ་སྦེ་ཡོད་མི་ `ERR_LOCAL8_DEPRECATED` གིས་ སྲོལ་རྒྱུན་ལས་ ཧརཌི་སིཊི་ཝར་ཅིག་ ཉམས་སྲུང་འབདཝ་ཨིན།
-- མངའ་ཁོངས་གདམ་ཁ་ཅན་གྱི་ཐབས་ཤེས་བརྒྱུད་དེ་ བཙུགས་ཡོད་པའི་འདེམས་ངོ་ཚུ་གིས་ ཌོ་མེན་ལེསི་ཨའི་ཨེཆ་༥༨ (དགའ་གདམ་)/སོ་ར་ (དྲག་ཤོས་གཉིས་པ) འདི་བསལ་དགོ། ག་ཡང་གཞི་བཙུགས་འབད་མ་ཚུགས་པ་ཅིན་ (ཡང་ན་ སེལ་འཐུ་འབད་མི་འདི་སེལ་མི་ཚུགས་) `ERR_DOMAIN_SELECTOR_UNRESOLVED` དང་གཅིག་ཁར་ མིང་དཔྱད་འབད་ནི་འདི་འཐུས་ཤོར་འབྱུང་འོང་། བརྡ་རྟགས་སྔོན་སྒྲིག་སེལ་འཐུ་འབད་མི་གིས་ རིམ་སྒྲིག་འབད་ཡོད་པའི་སྔོན་སྒྲིག་མངའ་ཁོངས་ཁ་ཡིག་འདི་ ཐག་གཅོད་འབད་མི་དགོ་པར་ ཐག་བཅདཔ་ཨིན།
+- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
 
 #### 2.5 རྒྱུན་སྐྱོང་གཉིས་ལྡན་བེག་ཊར་ཚུ།
 
 - **སྔོན་སྒྲིག་མངའ་ཁོངས་ (`default`, སོན་སོན་བཱའིཊི་ `0x00`)**  
-  ཀེ་ནོ་ནིག་ཧེགསི་: `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
+  ཀེ་ནོ་ནིག་ཧེགསི་: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
   བརྡ་བཀོད་: `0x02` མགོ་ཡིག་ `0x00` འདེམས་བྱེད་ (སྔོན་སྒྲིག་), `0x00` ཚད་འཛིན་ངོ་རྟགས་, I18NI000000277X གུག་རྟགས་གུག་གུགཔ་ཨའི་ཌི་ (Ed25519), `0x20` ལྡེ་མིག་རིང་ཚད་, འདི་གི་ཤུལ་ལས་ 32-byte ལྡེ་མིག་ཚུ། པེ་ལོཌ་.
 - **ས་གནས་མངའ་ཁོངས་ བཞུ་བཅོས་ (`treasury`, སོན་རིགས་བཱའིཊི་ `0x01`)**  
   ཀེ་ནོ་ནིག་ཧེགསི་: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
@@ -334,7 +336,7 @@ decoders ཉམས་སྲུང་འབད་ནི་ལུ་ `ERR_UNKNOWN_
 
 | ཌོ་མེན་ | ས་བོན་བཏེ | ཀེན་ནོ་ཀལ་ཧེགསི་ | བསྡམ་བཞག་ (`sora`) |
 |-------------|-----------|--------------------------------- ----------------------------------------------|------------|
-| སྔོན་སྒྲིག་ | I18NI0000293X | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` |
+| སྔོན་སྒྲིག་ | I18NI0000293X | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
 | བང་མཛོད་ | `0x01` | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | ཡ་མཚན་ཅན་གྱི་ས་ཆ་ | `0x02` | `0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394` | `sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS` |
 | iroha | `0x03` | `0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1` | `sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L` |
@@ -360,7 +362,7 @@ I18NI000000334X) གཤམ་གསལ་གྱི་མགྱོགས་དྲ
 
 | རྩིས་ཁྲ་ / འདེམས་སྒྲུག་ | IH58 ལི་ཊར་ (སྔོན་འཇུག་ `0x02F1`) | སོ་ར་བསྡམ་བཞག་ (`sora`) དངོས་ཡོད་ |
 | |
-| `default` མངའ་ཁོངས་ (plict སེལ་འཐུ་འབད་མི་, སོན་ I18NI000000338X) | `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` (གདམ་ཁ་ཅན་གྱི་ I18NI000000341X གསལ་སྟོན་ལམ་སྟོན་བརྡ་སྟོན་ཚུ་བྱིན་པའི་སྐབས་ རྗེས་འཇུག་) |
+| `default` མངའ་ཁོངས་ (plict སེལ་འཐུ་འབད་མི་, སོན་ I18NI000000338X) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (གདམ་ཁ་ཅན་གྱི་ I18NI000000341X གསལ་སྟོན་ལམ་སྟོན་བརྡ་སྟོན་ཚུ་བྱིན་པའི་སྐབས་ རྗེས་འཇུག་) |
 | `treasury` (ས་གནས་ཀྱི་བཞུ་ཁུའི་འདེམས་སྒྲུག་, སོན་ `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | འཛམ་གླིང་ཐོ་བཀོད་ཀྱི་དཔག་བྱེད་ (`registry_id = 0x0000_002A`, དང་འདྲན་འདྲ་ `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
@@ -406,7 +408,7 @@ I18NI000000369X ནང་ IH58 (དགའ་གདམ་) དང་ བསྡམ
 ཆ་རྐྱེན་རེ་རེ་གི་དོན་ལུ་ དངོས་གཞི། གཙོ་བསྟེན།
 
 - **I18NI0000371X (སོ་ར་ Nexus, སྔོན་སྒྲིག་ `0x02F1`,**  
-  IH58 IH58 `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`, བསྡམ་བཞག་ (`sora`)
+  IH58 IH58 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, བསྡམ་བཞག་ (`sora`)
   `sora2QG…U4N5E5`. Torii གིས་ `AccountId`’s ལས་ ཡིག་རྒྱུན་ངོ་མ་འདི་ཚུ་ བཏོནམ་ཨིན།
   `Display` ལག་ལེན་འཐབ་ (ཀེན་ནོ་ཀལ་ཨའི་ཨེཆ་༥༨) དང་ `AccountAddress::to_compressed_sora`.
 - **`addr-global-registry-002a` (ཐོ་བཀོད་འདེམས་སྒྲུག་ → བང་མཛོད་)**  
@@ -595,7 +597,7 @@ JSON གཟུགས་པོའི་སྦོམ། SoraFS ཡང་ན་ ལ
    I18NI000000457X གིས་ གཞི་བསྒྱུར་འབད་ཡོད་པའི་ ཨིན་ཀོ་ཌིང་འདི་ I18NI000000458X གི་དོན་ལུ་ བསྐྱར་རྩེད་འབདཝ་ཨིན།
    sound diffs (འདི་ རྗེས་འཇུག་འདི་ མེ་ཊ་ཌེ་ཊ་ཨིན་ ཀེ་ནོ་ནིག་རྩིས་ཐོ་ id མེན།)
    གྲལ་ཐིག་གསརཔ་ལུ་གཞི་བཞག་པའི་ཕྱིར་འདྲེན་ལག་ལེན་གྱི་དོན་ལུ།
-   `iroha tools address normalize --input <file> --only-local` མང་ཚོགས་-བསྒྱུར་བཅོས-གཞི་བསྒྱུར་ས་གནས་ལུ།
+   `iroha tools address normalize --input <file> legacy-selector input mode` མང་ཚོགས་-བསྒྱུར་བཅོས-གཞི་བསྒྱུར་ས་གནས་ལུ།
    སེལ་འཐུ་འབད་མི་ IH58 (དགའ་གདམ་) བསྡམ་བཞག་ཡོདཔ་ (I18NI000000460X, གཉིས་པ་) ཡང་ན་ ཧེགསི་ཡང་ན་ JSON འབྲི་ཤོག་ཚུ་ གོམ་བསྐྱོད་འབད་བའི་སྐབས་ཨིན།
    ས་མེད་ས་གནས་ཀྱི་གྲལ་ཐིག་ཚུ། རྩིས་ཞིབ་པ་ཚུ་ལུ་ ཤོག་ཁྲམ་མཐུན་སྒྲིག་ཅན་གྱི་སྒྲུབ་བྱེད་དགོཔ་ད་ གཡོག་བཀོལ།
    `iroha tools address audit --input <file> --format csv` གིས་ སི་ཨེསི་ཝི་བཅུད་བསྡུས་ཅིག་བཏོན་ནི།
@@ -662,16 +664,15 @@ JSON གཟུགས་པོའི་སྦོམ། SoraFS ཡང་ན་ ལ
   གདམ་ཁ་ཅན་ I18NI0000049X ཁ་ཡིག་ཚུ་, སོ་ར་ I18NT0000025X སྔོན་སྒྲིག་ (I18NI000000490X) ལག་ལེན་འཐབ་སྟེ་ IH58 ཐོན་འབྲས་ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན།
   དང་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ གསལ་ཏོག་ཏོ་སྦེ་ཞུ་བ་འབད་བའི་སྐབས་ སོ་ར་རྐྱངམ་ཅིག་བསྡམ་བཞག་ཡོད་པའི་ཡིག་འབྲུ་འདི་རྐྱངམ་ཅིག་ བཏོནམ་ཨིན།
   `--format compressed` ཡང་ན་ JSON བཅུད་དོན་ཐབས་ལམ་། བརྡ་བཀོད་ཀྱིས་ སྔོན་འཇུག་གི་རེ་བ་ཚུ་གུ་ བརྟན་བཞུགས་འབདཝ་ཨིན།
-  དབྱེ་དཔྱད་འབད་ཡོད་པའི་མངའ་ཁོངས་ (I18NI0000042X in JSON ནང་) དང་ `--append-domain` དར་ཆ་ཚུ་ཐོ་བཀོད་འབདཝ་ཨིན།
+  དབྱེ་དཔྱད་འབད་ཡོད་པའི་མངའ་ཁོངས་ (I18NI0000042X in JSON ནང་) དང་ `legacy  suffix` དར་ཆ་ཚུ་ཐོ་བཀོད་འབདཝ་ཨིན།
   བསྒྱུར་བཅོས་འབད་ཡོད་པའི་ཨེན་ཀོ་ཌིང་འདི་ `<address>@<domain>` སྦེ་ལོག་སྟེ་རྩེད་དོ་ཡོདཔ་ལས་ གསལ་སྟོན་འདི་ བརྟན་ཤུགས་སྦེ་རང་ ལུས་དོ་ཡོདཔ་ཨིན།
 - **Wallet/འཚོལ་ཞིབ་པ་ UX:** [ཁ་བྱང་བཀྲམ་སྟོན་ལམ་སྟོན་](I18NU0000071X) ལུ་རྗེས་སུ་འབྲང་།
   ADDR-6—འདྲ་བཤུས་གཉིས་ཀྱི་ཨེབ་རྟ་ཚུ་བྱིན་ཏེ་ IH58 འདི་ QR pappabased སྦེ་བཞག་ཞིནམ་ལས་ ཉེན་བརྡ་འབད།
   ལག་ལེན་པ་ཚུ་གིས་ `sora…` འབྲི་ཤོག་འདི་ Sora-only དང་ IME བསྐྱར་འབྲི་ཚུ་ལུ་ འཚོར་སྣང་བྱུང་ཚུགས།
 - **I18NT0000049X མཉམ་བསྡོམས་:** འདྲ་མཛོད་ Nexus གིས་ ཊི་ཊི་ཨེལ་ལུ་གུས་ཞབས་འབད་མི་ བཏོན་གཏང་།
   `ForeignDomain`/I18NI0000497X/`RegistryUnavailable` དང་ དེ་ལས་
-  `POST /v1/accounts/resolve` གིས་ I18NI000000500X, འདི་ གཟུགས་བརྙན་བཟོ་ནི་ལུ་ བཏོན་གཏང་།
-  I18NI000000501X, I18NI0000002X/`opaque:` ཡང་ན་ ཨིན་ཀོཌི་འབད་ཡོད་པའི་ཁ་བྱང་ཚུ་ ནང་ལུ།
-  ཐག་གཅོད་འབད་ཡོད་པའི་མངའ་ཁོངས་དང་འབྱུང་ཁུངས་འདི་སླར་ལོག་པའི་སྐབས།
+  keep account-literal parsing encoded-only (`IH58` preferred, `sora…`
+  compressed accepted) with canonical IH58 output.
 
 ### Torii ལན་འདེབས་རྩ་སྒྲིག་ཚུ།
 
@@ -679,7 +680,7 @@ JSON གཟུགས་པོའི་སྦོམ། SoraFS ཡང་ན་ ལ
   `POST /v1/accounts/query` གིས་ JSON ཡིག་ཤུབས་ནང་ན་ཡོད་པའི་ས་སྒོ་གཅིག་པ་ངོས་ལེན་འབདཝ་ཨིན།
   རྒྱབ་སྐྱོར་ཡོད་པའི་གནས་གོང་ཚུ་:
   - I18NI000000507X (སྔོན་སྒྲིག་) — ལན་འདེབས་ཚུ་ ཁྲིམས་མཐུན་གྱི་ IH58 Base58 གླ་ཆ་ (དཔེར་ན་,
-    `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`).
+    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
   - I18NI0000059X — ལན་འདེབས་ཚུ་གིས་ སོ་ར་རྐྱངམ་ཅིག་ `sora…` བསྡམ་བཞག་ཡོད་པའི་མཐོང་སྣང་འདི་ བཏོནམ་ཨིན།
     ཚགས་མ་/འགྲུལ་ལམ་ཚད་བཟུང་ཚུ་ ཀེ་ནོ་ནིཀ་བཞག་དོ་ཡོདཔ།
 - ནུས་མེད་གནས་གོང་ཚུ་ `400` སླར་ལོག་འབད་ (I18NI000000512X). འདི་གིས་ ཆོག་ཐམ་

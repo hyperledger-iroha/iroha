@@ -88,16 +88,16 @@ test("multisig propose builder propagates domain drift", () => {
   const spec = new MultisigSpecBuilder()
     .setQuorum(2)
     .setTransactionTtlMs(60_000)
-    .addSignatory("alice@wonderland", 1)
-    .addSignatory("bob@wonderland", 1)
+    .addSignatory("alice@fixture-domain", 1)
+    .addSignatory("bob@fixture-domain", 1)
     .build();
   assert.throws(
     () =>
       buildProposeMultisigInstruction({
-        accountId: "controller@narnia",
+        accountId: "controller@other-domain",
         instructions: [{ Log: { Level: "INFO", message: "hello" } }],
         spec,
       }),
-    (error) => error instanceof ValidationError && /domain narnia/.test(error.message),
+    (error) => error instanceof ValidationError && /domain other-domain/.test(error.message),
   );
 });

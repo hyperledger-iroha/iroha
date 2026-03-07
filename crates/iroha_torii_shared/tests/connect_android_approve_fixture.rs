@@ -1,6 +1,7 @@
 //! Interop fixture checks for Android-emitted Connect approve frames.
 
 use base64::Engine as _;
+use iroha_data_model::account::{AccountId, ParsedAccountId};
 use iroha_torii_shared::connect::{ConnectControlV1, FrameKind, decode_connect_frame_bare};
 
 #[test]
@@ -27,7 +28,15 @@ fn decodes_android_approve_frame_fixture() {
             assert_eq!(wallet_pk, [0x07u8; 32]);
             assert_eq!(
                 account_id,
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+                "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+            );
+            let parsed = AccountId::parse_encoded(&account_id)
+                .map(ParsedAccountId::into_account_id)
+                .expect("fixture account id should be encoded account literal");
+            assert_eq!(parsed.to_string(), account_id);
+            assert!(
+                !account_id.contains('@'),
+                "fixture must not use legacy account@domain literal"
             );
             assert_eq!(permissions, None);
             assert_eq!(proof, None);

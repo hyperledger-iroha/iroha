@@ -3,9 +3,16 @@ use std::collections::HashMap;
 
 use iroha_primitives::numeric::Numeric;
 use ivm::{
-    AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken,
+    AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken, ScopedAccountId,
     kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,
 };
+
+fn fixture_account(domain: &str, hex_public_key: &str) -> ScopedAccountId {
+    ScopedAccountId::new(
+        domain.parse().expect("domain id"),
+        hex_public_key.parse().expect("public key"),
+    )
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1) Compile the Kotodama sample to IVM bytecode
@@ -14,11 +21,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bytecode = compiler.compile_source(src).expect("compile dex_simple");
 
     // 2) Prepare a tiny world with Alice (trader), Pool account, and two assets
-    let alice: AccountId =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-            .parse()?;
-    let pool: AccountId =
-        "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4@genesis".parse()?;
+    let alice = fixture_account(
+        "wonderland",
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    );
+    let pool = fixture_account(
+        "genesis",
+        "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
+    );
     let asset_a: AssetDefinitionId = "usdc#wonderland".parse()?;
     let asset_b: AssetDefinitionId = "eth#wonderland".parse()?;
 
@@ -32,18 +42,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Grant permissions for caller (Alice) to transfer these assets
     wsv.grant_permission(&alice, PermissionToken::TransferAsset(asset_a.clone()));
     wsv.grant_permission(&alice, PermissionToken::TransferAsset(asset_b.clone()));
-    wsv.grant_permission(&alice, PermissionToken::ReadAccountAssets(alice.clone()));
-    wsv.grant_permission(&alice, PermissionToken::ReadAccountAssets(pool.clone()));
+    wsv.grant_permission(
+        &alice,
+        PermissionToken::ReadAccountAssets(AccountId::from_account_id(&alice)),
+    );
+    wsv.grant_permission(
+        &alice,
+        PermissionToken::ReadAccountAssets(AccountId::from_account_id(&pool)),
+    );
+    let alice_subject = AccountId::from_account_id(&alice);
 
-    // 3) Map small integers used by the program to real IDs in the host
+    // 3) Map small integers used by the program to account subjects in the host
     let mut account_map = HashMap::new();
-    account_map.insert(1u64, alice.clone());
-    account_map.insert(2u64, pool.clone());
+    account_map.insert(1u64, alice_subject.clone());
+    account_map.insert(2u64, AccountId::from_account_id(&pool));
     let mut asset_map = HashMap::new();
     asset_map.insert(1u64, asset_a.clone()); // input
     asset_map.insert(2u64, asset_b.clone()); // output
 
-    let host = WsvHost::new(wsv, alice.clone(), account_map, asset_map);
+    let host = WsvHost::new_with_subject_map(wsv, alice_subject, account_map, asset_map);
 
     // 4) Create the VM, attach host, load program
     let mut vm = IVM::new(1_000_000);

@@ -316,279 +316,7 @@ mod model {
             if custom.id != Self::parameter_id() {
                 return None;
             }
-            Self::parse_payload_compat(custom.payload().get())
-        }
-
-        fn parse_payload_compat(raw: &str) -> Option<Self> {
-            norito::json::from_str::<Self>(raw)
-                .ok()
-                .or_else(|| {
-                    let value = norito::json::parse_value(raw).ok()?;
-                    Self::parse_value_compat(value)
-                })
-                .or_else(|| Self::parse_payload_text_compat(raw))
-        }
-
-        fn parse_value_compat(value: norito::json::Value) -> Option<Self> {
-            if let Ok(parsed) = norito::json::from_value::<Self>(value.clone()) {
-                return Some(parsed);
-            }
-
-            if let Some(inner) = value.as_str() {
-                return Self::parse_payload_compat(inner);
-            }
-
-            let mut normalized = value;
-            Self::normalize_numeric_string_payload(&mut normalized);
-            if let Ok(parsed) = norito::json::from_value::<Self>(normalized.clone()) {
-                return Some(parsed);
-            }
-
-            Self::normalize_epoch_seed_hex_payload(&mut normalized);
-            norito::json::from_value(normalized).ok()
-        }
-
-        fn normalize_numeric_string_payload(value: &mut norito::json::Value) {
-            let Some(map) = value.as_object_mut() else {
-                return;
-            };
-
-            for field in Self::numeric_string_compat_fields() {
-                let Some(raw_value) = map.get_mut(*field) else {
-                    continue;
-                };
-                let Some(raw_string) = raw_value.as_str() else {
-                    continue;
-                };
-                if let Ok(parsed) = raw_string.parse::<u64>() {
-                    *raw_value = norito::json::Value::from(parsed);
-                }
-            }
-        }
-
-        fn normalize_epoch_seed_hex_payload(value: &mut norito::json::Value) {
-            let Some(map) = value.as_object_mut() else {
-                return;
-            };
-            let Some(seed_value) = map.get_mut("epoch_seed") else {
-                return;
-            };
-            let Some(seed_raw) = seed_value.as_str() else {
-                return;
-            };
-            let Some(seed_bytes) = Self::decode_epoch_seed_hex(seed_raw) else {
-                return;
-            };
-            *seed_value = norito::json::Value::String(Self::encode_epoch_seed_hex(seed_bytes));
-        }
-
-        fn parse_payload_text_compat(raw: &str) -> Option<Self> {
-            if let Some(parsed) = Self::parse_payload_text_object(raw) {
-                return Some(parsed);
-            }
-            let unescaped = Self::unescape_wrapped_json(raw.trim())?;
-            Self::parse_payload_text_object(&unescaped)
-        }
-
-        fn parse_payload_text_object(raw: &str) -> Option<Self> {
-            let raw = raw.trim();
-            if !raw.starts_with('{') || !raw.ends_with('}') {
-                return None;
-            }
-
-            let epoch_seed =
-                Self::decode_epoch_seed_hex(&Self::extract_string_field(raw, "epoch_seed")?)?;
-
-            let k_aggregators =
-                u16::try_from(Self::extract_u64_field(raw, "k_aggregators")?).ok()?;
-            let redundant_send_r =
-                u8::try_from(Self::extract_u64_field(raw, "redundant_send_r")?).ok()?;
-            let vrf_commit_window_blocks =
-                Self::extract_u64_field(raw, "vrf_commit_window_blocks")?;
-            let vrf_reveal_window_blocks =
-                Self::extract_u64_field(raw, "vrf_reveal_window_blocks")?;
-            let max_validators =
-                u32::try_from(Self::extract_u64_field(raw, "max_validators")?).ok()?;
-            let min_self_bond = Self::extract_u64_field(raw, "min_self_bond")?;
-            let min_nomination_bond = Self::extract_u64_field(raw, "min_nomination_bond")?;
-            let max_nominator_concentration_pct = u8::try_from(Self::extract_u64_field(
-                raw,
-                "max_nominator_concentration_pct",
-            )?)
-            .ok()?;
-            let seat_band_pct =
-                u8::try_from(Self::extract_u64_field(raw, "seat_band_pct")?).ok()?;
-            let max_entity_correlation_pct =
-                u8::try_from(Self::extract_u64_field(raw, "max_entity_correlation_pct")?).ok()?;
-            let finality_margin_blocks = Self::extract_u64_field(raw, "finality_margin_blocks")?;
-            let evidence_horizon_blocks = Self::extract_u64_field(raw, "evidence_horizon_blocks")?;
-            let activation_lag_blocks = Self::extract_u64_field(raw, "activation_lag_blocks")?;
-            let slashing_delay_blocks = Self::extract_u64_field(raw, "slashing_delay_blocks")?;
-            let epoch_length_blocks = Self::extract_u64_field(raw, "epoch_length_blocks")?;
-
-            Some(Self {
-                epoch_seed,
-                k_aggregators,
-                redundant_send_r,
-                vrf_commit_window_blocks,
-                vrf_reveal_window_blocks,
-                max_validators,
-                min_self_bond,
-                min_nomination_bond,
-                max_nominator_concentration_pct,
-                seat_band_pct,
-                max_entity_correlation_pct,
-                finality_margin_blocks,
-                evidence_horizon_blocks,
-                activation_lag_blocks,
-                slashing_delay_blocks,
-                epoch_length_blocks,
-            })
-        }
-
-        fn extract_u64_field(raw: &str, field: &str) -> Option<u64> {
-            let value = Self::field_value_slice(raw, field)?;
-            let value = value.trim_start();
-            let digits = if let Some(rest) = value.strip_prefix('"') {
-                rest.split('"').next()?
-            } else {
-                let end = value
-                    .find(|ch: char| !ch.is_ascii_digit())
-                    .unwrap_or(value.len());
-                &value[..end]
-            };
-            if digits.is_empty() {
-                return None;
-            }
-            digits.parse::<u64>().ok()
-        }
-
-        fn extract_string_field(raw: &str, field: &str) -> Option<String> {
-            let value = Self::field_value_slice(raw, field)?;
-            let value = value.trim_start();
-            let rest = value.strip_prefix('"')?;
-            let mut out = String::new();
-            let mut chars = rest.chars();
-            while let Some(ch) = chars.next() {
-                match ch {
-                    '"' => return Some(out),
-                    '\\' => {
-                        let escaped = chars.next()?;
-                        match escaped {
-                            '"' | '\\' | '/' => out.push(escaped),
-                            'b' => out.push('\u{0008}'),
-                            'f' => out.push('\u{000c}'),
-                            'n' => out.push('\n'),
-                            'r' => out.push('\r'),
-                            't' => out.push('\t'),
-                            'u' => {
-                                let mut scalar = 0_u32;
-                                for _ in 0..4 {
-                                    let hex = chars.next()?;
-                                    scalar = (scalar << 4) | hex.to_digit(16)?;
-                                }
-                                out.push(char::from_u32(scalar)?);
-                            }
-                            _ => return None,
-                        }
-                    }
-                    _ => out.push(ch),
-                }
-            }
-            None
-        }
-
-        fn field_value_slice<'a>(raw: &'a str, field: &str) -> Option<&'a str> {
-            let needle = format!("\"{field}\"");
-            let key_start = raw.find(&needle)?;
-            let after_key = &raw[key_start + needle.len()..];
-            let colon = after_key.find(':')?;
-            Some(&after_key[colon + 1..])
-        }
-
-        fn unescape_wrapped_json(raw: &str) -> Option<String> {
-            let raw = raw.trim();
-            let inner = raw.strip_prefix('"')?.strip_suffix('"')?;
-            let mut out = String::with_capacity(inner.len());
-            let mut chars = inner.chars();
-            while let Some(ch) = chars.next() {
-                if ch != '\\' {
-                    out.push(ch);
-                    continue;
-                }
-                let escaped = chars.next()?;
-                match escaped {
-                    '"' | '\\' | '/' => out.push(escaped),
-                    'b' => out.push('\u{0008}'),
-                    'f' => out.push('\u{000c}'),
-                    'n' => out.push('\n'),
-                    'r' => out.push('\r'),
-                    't' => out.push('\t'),
-                    'u' => {
-                        let mut scalar = 0_u32;
-                        for _ in 0..4 {
-                            let hex = chars.next()?;
-                            scalar = (scalar << 4) | hex.to_digit(16)?;
-                        }
-                        out.push(char::from_u32(scalar)?);
-                    }
-                    _ => return None,
-                }
-            }
-            Some(out)
-        }
-
-        fn decode_epoch_seed_hex(raw: &str) -> Option<[u8; 32]> {
-            let raw = raw.trim();
-            let raw = raw
-                .strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))
-                .unwrap_or(raw);
-            let hex = raw
-                .strip_prefix("0x")
-                .or_else(|| raw.strip_prefix("0X"))
-                .unwrap_or(raw);
-            if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                return None;
-            }
-
-            let mut out = [0_u8; 32];
-            for (idx, slot) in out.iter_mut().enumerate() {
-                let start = idx * 2;
-                let end = start + 2;
-                *slot = u8::from_str_radix(&hex[start..end], 16).ok()?;
-            }
-            Some(out)
-        }
-
-        fn encode_epoch_seed_hex(seed: [u8; 32]) -> String {
-            const HEX: &[u8; 16] = b"0123456789ABCDEF";
-            let mut out = String::with_capacity(64);
-            for byte in seed {
-                out.push(HEX[(byte >> 4) as usize] as char);
-                out.push(HEX[(byte & 0x0F) as usize] as char);
-            }
-            out
-        }
-
-        fn numeric_string_compat_fields() -> &'static [&'static str] {
-            &[
-                "k_aggregators",
-                "redundant_send_r",
-                "vrf_commit_window_blocks",
-                "vrf_reveal_window_blocks",
-                "max_validators",
-                "min_self_bond",
-                "min_nomination_bond",
-                "max_nominator_concentration_pct",
-                "seat_band_pct",
-                "max_entity_correlation_pct",
-                "finality_margin_blocks",
-                "evidence_horizon_blocks",
-                "activation_lag_blocks",
-                "slashing_delay_blocks",
-                "epoch_length_blocks",
-            ]
+            norito::json::from_str::<Self>(custom.payload().get()).ok()
         }
 
         /// Number of aggregators expected per round.
@@ -2696,18 +2424,19 @@ mod tests {
     }
 
     #[test]
-    fn sumeragi_npos_from_custom_parameter_accepts_string_wrapped_payload() {
+    fn sumeragi_npos_from_custom_parameter_rejects_string_wrapped_payload() {
         let expected = SumeragiNposParameters::default();
         let wrapped = Json::new(norito::json::to_json(&expected).expect("serialize npos payload"));
         let custom = CustomParameter::new(SumeragiNposParameters::parameter_id(), wrapped);
 
-        let decoded = SumeragiNposParameters::from_custom_parameter(&custom)
-            .expect("decode string-wrapped npos payload");
-        assert_eq!(decoded, expected);
+        assert!(
+            SumeragiNposParameters::from_custom_parameter(&custom).is_none(),
+            "string-wrapped compatibility payload must be rejected"
+        );
     }
 
     #[test]
-    fn sumeragi_npos_from_custom_parameter_accepts_numeric_string_payload() {
+    fn sumeragi_npos_from_custom_parameter_rejects_numeric_string_payload() {
         let expected = SumeragiNposParameters::default();
         let mut payload =
             norito::json::to_value(&expected).expect("serialize npos payload to json value");
@@ -2744,9 +2473,10 @@ mod tests {
             Json::from_norito_value_ref(&payload).expect("serialize compatibility payload"),
         );
 
-        let decoded = SumeragiNposParameters::from_custom_parameter(&custom)
-            .expect("decode numeric-string npos payload");
-        assert_eq!(decoded, expected);
+        assert!(
+            SumeragiNposParameters::from_custom_parameter(&custom).is_none(),
+            "numeric-string compatibility payload must be rejected"
+        );
     }
 
     #[test]
@@ -2778,7 +2508,7 @@ mod tests {
     }
 
     #[test]
-    fn sumeragi_npos_from_custom_parameter_accepts_epoch_seed_with_nested_quotes() {
+    fn sumeragi_npos_from_custom_parameter_rejects_epoch_seed_with_nested_quotes() {
         let expected = SumeragiNposParameters::default();
         let mut hex_seed = String::with_capacity(64);
         for byte in expected.epoch_seed() {
@@ -2800,9 +2530,10 @@ mod tests {
             SumeragiNposParameters::parameter_id(),
             Json::from_norito_value_ref(&payload).expect("serialize compatibility payload"),
         );
-        let decoded = SumeragiNposParameters::from_custom_parameter(&custom)
-            .expect("decode nested-quoted epoch seed payload");
-        assert_eq!(decoded, expected);
+        assert!(
+            SumeragiNposParameters::from_custom_parameter(&custom).is_none(),
+            "nested-quoted compatibility payload must be rejected"
+        );
     }
 
     #[test]
@@ -2821,15 +2552,15 @@ mod tests {
     }
 
     #[test]
-    fn sumeragi_npos_from_custom_parameter_accepts_trailing_comma_payload() {
+    fn sumeragi_npos_from_custom_parameter_rejects_trailing_comma_payload() {
         let payload = r#"{"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","k_aggregators":3,"redundant_send_r":3,"vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":1,"min_nomination_bond":1,"max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600,}"#;
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             Json::from_string_unchecked(payload.to_owned()),
         );
-        let parsed = SumeragiNposParameters::from_custom_parameter(&custom)
-            .expect("decode payload with trailing comma");
-        assert_eq!(parsed.k_aggregators(), 3);
-        assert_eq!(parsed.epoch_length_blocks(), 3600);
+        assert!(
+            SumeragiNposParameters::from_custom_parameter(&custom).is_none(),
+            "trailing-comma compatibility payload must be rejected"
+        );
     }
 }

@@ -1002,6 +1002,9 @@ fn manifest_root_array(handle: &AssetHandle) -> Result<[u8; 32], VMError> {
 mod tests {
     use super::*;
 
+    const ACCOUNT_FROM_LITERAL: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const ACCOUNT_TO_LITERAL: &str = "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU";
+
     #[test]
     fn expiry_slot_with_skew_respects_caps() {
         let slot = expiry_slot_with_skew(10, NonZeroU64::new(10).expect("slot length"), 5, Some(7));
@@ -1050,7 +1053,7 @@ mod tests {
         AssetHandle {
             scope: vec!["transfer".into()],
             subject: HandleSubject {
-                account: "alice@wonderland".into(),
+                account: ACCOUNT_FROM_LITERAL.into(),
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget { remaining, per_use },
@@ -1073,8 +1076,8 @@ mod tests {
             asset_dsid: dsid,
             op: SpendOp {
                 kind: "transfer".into(),
-                from: "alice@wonderland".into(),
-                to: "merchant@wonderland".into(),
+                from: ACCOUNT_FROM_LITERAL.into(),
+                to: ACCOUNT_TO_LITERAL.into(),
                 amount: amount.into(),
             },
         }

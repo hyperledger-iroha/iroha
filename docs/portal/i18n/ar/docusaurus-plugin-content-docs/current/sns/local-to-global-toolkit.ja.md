@@ -43,7 +43,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 الخيارات:
 
 - `--format compressed (`sora`)` لخروج `sora...` بدلا من IH58.
-- `--no-append-domain` لاصدار literals بدون نطاق.
+- `domainless output (default)` لاصدار literals بدون نطاق.
 - `--audit-only` لتخطي خطوة التحويل.
 - `--allow-errors` للاستمرار عند ظهور صفوف تالفة (مطابق لسلوك CLI).
 
@@ -57,7 +57,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 2. احظر عمليات الدمج عندما يبلغ `audit.json` عن Local selectors (`domain.kind = local12`).
    على القيمة الافتراضية `true` (قم بالتحويل الى `false` فقط على بيئات dev/test عند
    تشخيص التراجعات) واضف
-   `iroha tools address normalize --fail-on-warning --only-local` الى CI حتى تفشل
+   `iroha tools address normalize` الى CI حتى تفشل
    محاولات التراجع قبل الوصول الى production.
 
 راجع المستند المصدر لمزيد من التفاصيل وقوائم الادلة و release-note snippet

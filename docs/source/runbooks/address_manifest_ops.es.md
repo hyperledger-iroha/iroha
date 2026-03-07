@@ -98,7 +98,7 @@ Campos de encabezado de `manifest.json`:
    - Las entradas `local_alias` DEBEN incorporar el digest de 12 bytes producido
      por Norm v1 (use `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
      para confirmar; el resumen JSON refleja el dominio provisto vía `input_domain` y
-     `--append-domain` reproduce la codificación convertida como `<ih58>@<domain>` para manifiestos).
+     `legacy  suffix` reproduce la codificación convertida como `<ih58>@<domain>` para manifiestos).
    - Las entradas `tombstone` DEBEN referenciar el selector exacto a retirar e
      incluir los campos `reason_code`, `ticket` y `replaces_sequence`.
 

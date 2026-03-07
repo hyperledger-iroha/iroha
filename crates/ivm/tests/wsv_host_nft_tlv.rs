@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
+    mock_wsv::{AccountSubjectId, DomainId, MockWorldStateView, ScopedAccountId, WsvHost},
     syscalls,
 };
+use norito::to_bytes;
 
 mod common;
 use common::assemble_syscalls;
@@ -24,34 +25,49 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn account(domain: &str, public_key: &str) -> ScopedAccountId {
+    let domain: DomainId = domain.parse().unwrap();
+    let public_key: PublicKey = public_key.parse().unwrap();
+    ScopedAccountId::new(domain, public_key)
+}
+
+fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
+    let buf = to_bytes(account).expect("encode account into Norito");
+    make_tlv(PointerType::AccountId as u16, &buf)
+}
+
 #[test]
 fn create_transfer_set_nft_with_tlv() {
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
-    let bob: AccountId =
-        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4@domain"
-            .parse()
-            .unwrap();
-    let carol: AccountId =
-        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4@wonder"
-            .parse()
-            .unwrap();
+    let alice = account(
+        "domain",
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+    );
+    let bob = account(
+        "domain",
+        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+    );
+    let carol = account(
+        "wonder",
+        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+    );
 
     let mut wsv = MockWorldStateView::new();
     // Register accounts in mock
     wsv.add_account_unchecked(alice.clone());
     wsv.add_account_unchecked(bob.clone());
     wsv.add_account_unchecked(carol.clone());
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
     // Create NFT nft0 for alice
     let nft0 = "rose:uuid:0000$domain";
     let tlv_nft = make_tlv(PointerType::NftId as u16, nft0.as_bytes());
-    let tlv_owner = make_tlv(PointerType::AccountId as u16, alice.to_string().as_bytes());
+    let tlv_owner = make_account_tlv(&alice);
     vm.memory.preload_input(0, &tlv_nft).expect("preload input");
     vm.memory
         .preload_input(tlv_nft.len() as u64 + 8, &tlv_owner)
@@ -76,9 +92,9 @@ fn create_transfer_set_nft_with_tlv() {
     vm.run().expect("set nft data via tlv failed");
 
     // Transfer NFT to bob (caller=alice)
-    let tlv_from = make_tlv(PointerType::AccountId as u16, alice.to_string().as_bytes());
+    let tlv_from = make_account_tlv(&alice);
     let tlv_nft = make_tlv(PointerType::NftId as u16, nft0.as_bytes());
-    let tlv_to = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let tlv_to = make_account_tlv(&bob);
     vm.memory
         .preload_input(0, &tlv_from)
         .expect("preload input");
@@ -101,7 +117,7 @@ fn create_transfer_set_nft_with_tlv() {
     // Switch caller to an unrelated account before trying to mutate metadata again
     if let Some(any) = vm.host_mut_any() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");
-        host.caller = carol.clone();
+        host.set_caller_subject(AccountSubjectId::from(&carol));
     }
 
     // Set NFT data as non-owner/non-issuer should now fail (caller=carol, owner=bob, issuer=alice)

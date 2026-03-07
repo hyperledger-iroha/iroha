@@ -6,9 +6,9 @@ import CryptoKit
 
 final class OfflineReceiptChallengeTests: XCTestCase {
     private static let fixtureReceiverAccountId =
-        "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
     private static let fixtureAssetId =
-        "xor#sora#34mSYn6ySFTASoiVzNGuyBkedDbYTxqhobNmoDbzdhfaNtveqVrm8N49uoqtcRNvAUcapufe1"
+        "xor#sora#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
 
     func testEncodeRejectsEmptyChainId() {
         let nonce = sampleNonceHex()
@@ -79,8 +79,8 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         let result = try OfflineReceiptChallenge.encode(
             chainId: "testnet",
             invoiceId: "inv-swift-tests",
-            receiverAccountId: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
-            assetId: "xor#sora#34mSYn6ySFTASoiVzNGuyBkedDbYTxqhobNmoDbzdhfaNtveqVrm8N49uoqtcRNvAUcapufe1",
+            receiverAccountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            assetId: "xor#sora#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
             amount: "250",
             issuedAtMs: 1_700_000_000_000,
             senderCertificateIdHex: senderCertificateIdHex,
@@ -102,7 +102,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
 
     func testChallengePreimageCanonicalizesReceiverAccountId() throws {
         let publicKey = Data(repeating: 0x22, count: 32)
-        let domain = "wonderland"
+        let domain = AccountAddress.defaultDomainName
         let rawAccountId = AccountId.make(publicKey: publicKey, domain: domain)
         let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey, algorithm: "ed25519")
         let ih58 = try address.toIH58(networkPrefix: 0x02F1)

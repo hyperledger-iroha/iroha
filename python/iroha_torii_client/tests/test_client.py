@@ -22,7 +22,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     decode_pdp_commitment_header,
 )
 
-CANONICAL_OWNER = "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"
+CANONICAL_OWNER = "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
 
 
 class StubResponse(requests.Response):
@@ -311,8 +311,8 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     session.queue(
         StubResponse(
             payload={
-                "canonical_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
-                "literal": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+                "canonical_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+                "literal": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
                 "address_format": "ih58",
                 "network_prefix": 26,
                 "error_correction": "quartile",
@@ -324,11 +324,11 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    qr = client.get_explorer_account_qr("RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", address_format="compressed")
+    qr = client.get_explorer_account_qr("6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", address_format="compressed")
 
     assert qr == ExplorerAccountQr(
-        canonical_id="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
-        literal="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+        canonical_id="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+        literal="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
         address_format="ih58",
         network_prefix=26,
         error_correction="quartile",
@@ -339,7 +339,7 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     call = session.calls[0]
     assert call["method"] == "GET"
     assert call["url"].endswith(
-        "/v1/explorer/accounts/RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9/qr"
+        "/v1/explorer/accounts/6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL/qr"
     )
     assert call["params"] == {"address_format": "compressed"}
     assert call["headers"]["Accept"] == "application/json"
@@ -500,7 +500,7 @@ def test_list_runtime_upgrades_parses_records() -> None:
                                 "end_height": 20,
                             },
                             "status": {"ActivatedAt": 12},
-                            "proposer": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+                            "proposer": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
                             "created_height": 8,
                         },
                     },
@@ -619,7 +619,7 @@ def test_get_uaid_portfolio_parses_payload() -> None:
                         "dataspace_alias": "treasury",
                         "accounts": [
                             {
-                                "account_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+                                "account_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
                                 "label": "primary",
                                 "assets": [
                                     {
@@ -683,7 +683,7 @@ def test_get_uaid_bindings_applies_address_format() -> None:
                     {
                         "dataspace_id": 9,
                         "dataspace_alias": "alpha",
-                        "accounts": ["RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", " 34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r "],
+                        "accounts": ["6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", " 34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r "],
                     }
                 ],
             }
@@ -693,7 +693,7 @@ def test_get_uaid_bindings_applies_address_format() -> None:
 
     bindings = client.get_uaid_bindings(uaid_literal, address_format="compressed")
 
-    assert bindings.dataspaces[0].accounts == ["RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"]
+    assert bindings.dataspaces[0].accounts == ["6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"]
     assert session.calls[0]["params"] == {"address_format": "compressed"}
 
 
@@ -715,7 +715,7 @@ def test_get_uaid_manifests_parses_payload_and_filters() -> None:
                             "activated_epoch": 12,
                             "revocation": {"epoch": 44, "reason": "duplicate"},
                         },
-                        "accounts": ["RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"],
+                        "accounts": ["6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"],
                         "manifest": {
                             "version": "1.0",
                             "uaid": uaid_literal,
@@ -724,7 +724,7 @@ def test_get_uaid_manifests_parses_payload_and_filters() -> None:
                             "activation_epoch": 12,
                             "entries": [
                                 {
-                                    "scope": {"accounts": ["RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"]},
+                                    "scope": {"accounts": ["6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"]},
                                     "effect": {"action": "allow"},
                                     "notes": "demo",
                                 }
@@ -2005,8 +2005,8 @@ def test_list_offline_allowances_parses_payload() -> None:
                 "items": [
                     {
                         "certificate_id_hex": "cafebabe",
-                        "controller_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
-                        "controller_display": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+                        "controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+                        "controller_display": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
                         "asset_id": "rose#wonderland",
                         "registered_at_ms": 10,
                         "expires_at_ms": 20,
@@ -2019,7 +2019,7 @@ def test_list_offline_allowances_parses_payload() -> None:
                         "deadline_state": "warning",
                         "deadline_ms": 99,
                         "deadline_ms_remaining": -5,
-                        "record": {"certificate": {"controller": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"}},
+                        "record": {"certificate": {"controller": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"}},
                     }
                 ],
             }
@@ -2027,7 +2027,7 @@ def test_list_offline_allowances_parses_payload() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.list_offline_allowances(controller_id="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", include_expired=True)
+    page = client.list_offline_allowances(controller_id="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", include_expired=True)
 
     assert page.total == 1
     assert len(page.items) == 1
@@ -2036,9 +2036,9 @@ def test_list_offline_allowances_parses_payload() -> None:
     assert item.deadline is not None
     assert item.deadline.kind == "policy"
     assert item.deadline.ms_remaining == -5
-    assert item.record["certificate"]["controller"] == "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"
+    assert item.record["certificate"]["controller"] == "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
     assert session.calls[0]["params"] == {
-        "controller_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+        "controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
         "include_expired": True,
     }
 
@@ -2048,7 +2048,7 @@ def test_query_offline_allowances_posts_payload() -> None:
     session.queue(StubResponse(payload={"items": [], "total": 0}))
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.query_offline_allowances({"filter": {"controller_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"}})
+    page = client.query_offline_allowances({"filter": {"controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"}})
 
     assert page.total == 0
     call = session.calls[0]
@@ -2056,7 +2056,7 @@ def test_query_offline_allowances_posts_payload() -> None:
     assert call["url"].endswith("/v1/offline/allowances/query")
     assert call["headers"]["Content-Type"] == "application/json"
     assert json.loads(call["data"].decode("utf-8")) == {
-        "filter": {"controller_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"}
+        "filter": {"controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"}
     }
 
 
@@ -2293,8 +2293,8 @@ def test_list_offline_transfers_parses_payload() -> None:
                 "items": [
                     {
                         "bundle_id_hex": "bead",
-                        "controller_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
-                        "controller_display": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+                        "controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+                        "controller_display": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
                         "receiver_id": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
                         "receiver_display": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
                         "deposit_account_id": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
@@ -2369,8 +2369,8 @@ def test_list_offline_summaries_parses_payload() -> None:
                 "items": [
                     {
                         "certificate_id_hex": "c0de",
-                        "controller_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
-                        "controller_display": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+                        "controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+                        "controller_display": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
                         "summary_hash_hex": "f00d",
                         "apple_key_counters": {"k1": 1},
                         "android_series_counters": {"p0": 2},
@@ -2500,7 +2500,7 @@ def test_submit_zk_ballot_rejects_deprecated_public_inputs() -> None:
 
     with pytest.raises(RuntimeError, match="durationBlocks"):
         client.submit_zk_ballot(
-            authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+            authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
             chain_id="chain",
             election_id="election-1",
             proof_b64="AAAA",
@@ -2527,7 +2527,7 @@ def test_submit_zk_ballot_normalizes_public_inputs() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     client.submit_zk_ballot(
-        authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+        authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
         chain_id="chain",
         election_id="election-1",
         proof_b64="AAAA",
@@ -2553,7 +2553,7 @@ def test_submit_zk_ballot_rejects_invalid_hex_hints() -> None:
 
     with pytest.raises(RuntimeError, match="root_hint"):
         client.submit_zk_ballot(
-            authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+            authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
             chain_id="chain",
             election_id="election-1",
             proof_b64="AAAA",
@@ -2573,7 +2573,7 @@ def test_submit_zk_ballot_rejects_incomplete_lock_hints() -> None:
 
     with pytest.raises(RuntimeError, match="owner, amount, duration_blocks"):
         client.submit_zk_ballot(
-            authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+            authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
             chain_id="chain",
             election_id="election-1",
             proof_b64="AAAA",
@@ -2588,7 +2588,7 @@ def test_submit_zk_ballot_rejects_noncanonical_owner() -> None:
 
     with pytest.raises(RuntimeError, match="canonical account id"):
         client.submit_zk_ballot(
-            authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+            authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
             chain_id="chain",
             election_id="election-1",
             proof_b64="AAAA",
@@ -2607,7 +2607,7 @@ def test_submit_zk_ballot_v1_rejects_incomplete_lock_hints() -> None:
 
     with pytest.raises(RuntimeError, match="owner, amount, duration_blocks"):
         client.submit_zk_ballot_v1(
-            authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+            authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
             chain_id="chain",
             election_id="election-1",
             backend="halo2/ipa",
@@ -2623,7 +2623,7 @@ def test_submit_zk_ballot_v1_rejects_noncanonical_owner() -> None:
 
     with pytest.raises(RuntimeError, match="canonical account id"):
         client.submit_zk_ballot_v1(
-            authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+            authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
             chain_id="chain",
             election_id="election-1",
             backend="halo2/ipa",
@@ -2640,7 +2640,7 @@ def test_submit_zk_ballot_v1_normalizes_hex_hints() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     client.submit_zk_ballot_v1(
-        authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+        authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
         chain_id="chain",
         election_id="election-1",
         backend="halo2/ipa",
@@ -2661,7 +2661,7 @@ def test_submit_zk_ballot_v1_rejects_invalid_hex_hints() -> None:
 
     with pytest.raises(RuntimeError, match="root_hint"):
         client.submit_zk_ballot_v1(
-            authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+            authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
             chain_id="chain",
             election_id="election-1",
             backend="halo2/ipa",
@@ -2678,7 +2678,7 @@ def test_list_subscription_plans_encodes_params() -> None:
                 "items": [
                     {
                         "plan_id": "plan#subs",
-                        "plan": {"provider": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", "pricing": {"kind": "fixed"}},
+                        "plan": {"provider": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", "pricing": {"kind": "fixed"}},
                     }
                 ],
                 "total": 1,
@@ -2687,13 +2687,13 @@ def test_list_subscription_plans_encodes_params() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.list_subscription_plans(provider="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", limit=10, offset=5)
+    page = client.list_subscription_plans(provider="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", limit=10, offset=5)
 
     assert page.total == 1
     assert page.items[0].plan_id == "plan#subs"
-    assert page.items[0].plan["provider"] == "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"
+    assert page.items[0].plan["provider"] == "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
     assert session.calls[0]["params"] == {
-        "provider": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+        "provider": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
         "limit": 10,
         "offset": 5,
     }
@@ -2713,19 +2713,19 @@ def test_create_subscription_plan_posts_payload() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     result = client.create_subscription_plan(
-        authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+        authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
         private_key="ed25519:priv",
         plan_id="plan#subs",
-        plan={"provider": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"},
+        plan={"provider": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"},
     )
 
     assert result.ok is True
     assert result.plan_id == "plan#subs"
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["authority"] == "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"
+    assert payload["authority"] == "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
     assert payload["private_key"] == "ed25519:priv"
     assert payload["plan_id"] == "plan#subs"
-    assert payload["plan"]["provider"] == "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"
+    assert payload["plan"]["provider"] == "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
 
 
 def test_list_subscriptions_encodes_params() -> None:
@@ -2738,7 +2738,7 @@ def test_list_subscriptions_encodes_params() -> None:
                         "subscription_id": "sub-1$subscriptions",
                         "subscription": {"status": "active"},
                         "invoice": {"amount": "120"},
-                        "plan": {"provider": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"},
+                        "plan": {"provider": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"},
                     }
                 ],
                 "total": 1,
@@ -2749,7 +2749,7 @@ def test_list_subscriptions_encodes_params() -> None:
 
     page = client.list_subscriptions(
         owned_by="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
-        provider="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+        provider="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
         status="ACTIVE",
         limit=25,
         offset=0,
@@ -2760,7 +2760,7 @@ def test_list_subscriptions_encodes_params() -> None:
     assert page.items[0].subscription["status"] == "active"
     assert session.calls[0]["params"] == {
         "owned_by": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
-        "provider": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+        "provider": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
         "status": "active",
         "limit": 25,
         "offset": 0,
@@ -2818,7 +2818,7 @@ def test_get_subscription_encodes_path_and_parses_response() -> None:
             payload={
                 "subscription_id": "sub-1$subscriptions",
                 "subscription": {"status": "active"},
-                "plan": {"provider": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"},
+                "plan": {"provider": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"},
             }
         )
     )
@@ -2879,7 +2879,7 @@ def test_record_subscription_usage_posts_payload() -> None:
 
     result = client.record_subscription_usage(
         "sub-1",
-        authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+        authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
         private_key="ed25519:priv",
         unit_key="compute_ms",
         delta=3600,

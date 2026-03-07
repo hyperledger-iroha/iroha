@@ -148,7 +148,7 @@ payload bit: │version  │ class  │  norm  │ext │
 
 | نوع الاختيار | هيكس كانونيكو |
 |---------------|---------------|
-| الحدث الضمني | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| الحدث الضمني | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | الملخص المحلي (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | التسجيل العالمي (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -165,7 +165,7 @@ Veja `docs/source/references/address_norm_v1.md` للوحة كاملة
    `domain` مع المجالات `kind`/`warning` وecoa أي سلطة مطلوبة عبر o
    كامبو `input_domain`. عند `kind` و`local12`، تقوم CLI بتقديم المشورة إليك
    stderr واستكمال JSON يوجهان توجيهًا لخطوط الأنابيب CI وSDKs
-   possam exibi-la. انتقل إلى `--append-domain` واستمر في إعادة إنتاجه
+   possam exibi-la. انتقل إلى `legacy  suffix` واستمر في إعادة إنتاجه
    كوديفيكاكا كونفيرتيدا كومو `<ih58>@<domain>`.
 2. يمكن لأدوات تطوير البرامج (SDKs) عرض نفس الرسالة/الاستئناف عبر مساعد جافا سكريبت:```js
    import { inspectAccountId } from "@iroha/iroha-js";
@@ -190,19 +190,19 @@ Veja `docs/source/references/address_norm_v1.md` للوحة كاملة
    الجهلة، و`--input -` أو علامة STDIN الأمريكية)، وإصدار علاقة JSON
    com resumos canonicos/IH58/comprimidos para cada intrada e conta erros de
    التحليل ونصائح النطاق المحلي. استخدم `--allow-errors` لمقالب المدقق البديلة
-   com linhas lixo، e trave a automacao com `--fail-on-warning` quando os
+   com linhas lixo، e trave a automacao com `strict CI post-check` quando os
    يتم ضبط المشغلين بشكل مباشر لحظر المحددات المحلية في CI.
 6. عند الحاجة إلى كتابة هذا الكتاب، استخدمه
   للتخطيط لإصلاح المحددات المحلية، استخدم
   لتصدير ملف CSV `input,status,format,...` الذي يقوم بإزالة ملفات الترميز
   Canonicas و avisos و falhas de parse في مسار واحد.
    يا مساعد الجهل linhas nao Local بواسطة Padrao، قم بتحويل كل مدخل بقية
-   للتدوين المطلوب (IH58/comprimido/hex/JSON)، والحفاظ على السيادةالأصلي عند `--append-domain` وتم تحديده. الجمع بين كوم `--allow-errors`
+   للتدوين المطلوب (IH58/comprimido/hex/JSON)، والحفاظ على السيادةالأصلي عند `legacy  suffix` وتم تحديده. الجمع بين كوم `--allow-errors`
    لمواصلة التباين أثناء تفريغ المحتوى الأدبي المشوه.
 7. يمكن تنفيذ CI/lint تلقائيًا `ci/check_address_normalize.sh`، وهو أمر إضافي
    يتم تحديده محليًا بواسطة `fixtures/account/address_vectors.json`، ويتم التحويل عبره
    `iroha tools address normalize`، ويتم إعادة تنفيذه
-   `iroha tools address audit --fail-on-warning` لإثبات أنه لا يصدر أي عنصر
+   `iroha tools address audit` لإثبات أنه لا يصدر أي عنصر
    ما يهضم المحلية.
 
 `torii_address_local8_total{endpoint}` جونتو كوم
@@ -238,7 +238,7 @@ Automacao للحفاظ على التوازن مع معايير صيدا لخري
 قم بتضمين النقطة التالية في ملاحظات تحرير البطاقة/المستكشف عند إرسالها
 القطع:
 
-> **التفاصيل:** إضافة أو مساعد `iroha tools address normalize --only-local --append-domain`
+> **التفاصيل:** إضافة أو مساعد `iroha tools address normalize`
 > تم الاتصال بـ CI (`ci/check_address_normalize.sh`) لخطوط الأنابيب
 > خيارات تحويل بطاقة/مستكشف possam البدائل المحلية للأشكال
 > Canonicas IH58/comprimidas antes de Local-8/Local-12 محظورة تمامًا

@@ -150,7 +150,7 @@ Pul kisəsi alətlərinin sənədlərə/testlərə qoşula və ya daxil edə bil
 
 | Seçici növü | kanonik hex |
 |-------------|---------------|
-| Gizli defolt | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Gizli defolt | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | Yerli həzm (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | Qlobal reyestr (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -166,7 +166,7 @@ sətirlər ADDR-5 altında sənədləşdirilmiş CLI iş axınına əməl etməl
    `kind`/`warning` sahələri olan obyekt və hər hansı təqdim edilmiş domen vasitəsilə əks-səda verir.
    `input_domain` sahəsi. `kind` `local12` olduqda, CLI xəbərdarlıq çap edir.
    stderr və JSON xülasəsi eyni təlimatı əks etdirir, beləliklə CI boru kəmərləri və SDK-lar
-   üzə çıxara bilər. Dönüştürülməsini istədiyiniz zaman `--append-domain` keçirin
+   üzə çıxara bilər. Dönüştürülməsini istədiyiniz zaman `legacy  suffix` keçirin
    kodlaşdırma `<ih58>@<domain>` kimi təkrarlanır.
 2. SDK-lar JavaScript köməkçisi vasitəsilə eyni xəbərdarlıq/xülasə təqdim edə bilər:
 
@@ -194,19 +194,19 @@ sətirlər ADDR-5 altında sənədləşdirilmiş CLI iş axınına əməl etməl
    yeni sətirlə ayrılmış hərfi oxuyur (`#` ilə başlayan şərhlər nəzərə alınmır və
    `--input -` və ya heç bir bayraq STDIN istifadə etmir), JSON hesabatı verir
    kanonik/tercih edilən IH58/ikinci ən yaxşı sıxılmış (`sora`) hər giriş üçün xülasələr və hər iki təhlili hesablayır
-   lazımsız cərgələri ehtiva edən zibilxanalar və `--fail-on-warning` ilə darvazaların avtomatlaşdırılması
+   lazımsız cərgələri ehtiva edən zibilxanalar və `strict CI post-check` ilə darvazaların avtomatlaşdırılması
    operatorlar CI-də Lokal seçiciləri bloklamağa hazır olduqdan sonra.
 6. Yeni sətirdən yeni sətirə yenidən yazmağa ehtiyacınız olduqda, istifadə edin
   Yerli seçici düzəliş cədvəlləri üçün istifadə edin
   bir keçiddə kanonik kodlaşdırmaları, xəbərdarlıqları və təhlil uğursuzluqlarını vurğulayan `input,status,format,…` CSV-ni ixrac etmək.
    Köməkçi standart olaraq yerli olmayan sətirləri atlayır, qalan hər girişi çevirir
    tələb olunan kodlaşdırmaya (IH58 üstünlük verilir/sıxılmış (`sora`) ikinci ən yaxşı/hex/JSON) daxil edir və
-   `--append-domain` təyin edildikdə orijinal domen. Onu `--allow-errors` ilə birləşdirin
+   `legacy  suffix` təyin edildikdə orijinal domen. Onu `--allow-errors` ilə birləşdirin
    skan etməyə davam etmək, hətta zibildə düzgün olmayan hərflər olsa belə.
 7. CI/lint avtomatlaşdırması çıxaran `ci/check_address_normalize.sh`-i işlədə bilər.
    `fixtures/account/address_vectors.json`-dən yerli seçicilər, çevirir
    onları `iroha tools address normalize` vasitəsilə və təkrar oxuyur
-   `iroha tools address audit --fail-on-warning` buraxılışların artıq yayılmadığını sübut etmək üçün
+   `iroha tools address audit` buraxılışların artıq yayılmadığını sübut etmək üçün
    Yerli həzmlər.`torii_address_local8_total{endpoint}` plus
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
 `torii_address_collision_domain_total{endpoint,domain}` və
@@ -239,7 +239,7 @@ Grafana (`dashboards/grafana/address_ingest.json`) daxil edin, beləliklə, ADDR
 Göndərmə zamanı cüzdan/kəşfiyyatçı buraxılış qeydlərinə aşağıdakı güllə daxil edin
 kəsici:
 
-> **Ünvanlar:** `iroha tools address normalize --only-local --append-domain` əlavə edildi
+> **Ünvanlar:** `iroha tools address normalize` əlavə edildi
 > köməkçi və onu CI (`ci/check_address_normalize.sh`) ilə birləşdirin ki, pul kisəsi/kəşfiyyatçısı
 > Local-8/Local-12 əsas şəbəkədə bloklanmadan əvvəl. İstənilən fərdi ixracı yeniləyin
 > əmri işlədin və normallaşdırılmış siyahını buraxılış sübut paketinə əlavə edin.

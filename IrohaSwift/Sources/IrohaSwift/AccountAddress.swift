@@ -147,15 +147,31 @@ public struct AccountAddress {
     public static func fromCanonicalBytes(_ bytes: Data) throws -> AccountAddress {
         guard !bytes.isEmpty else { throw AccountAddressError.invalidLength }
         let header = try AddressHeader.decode(bytes[0])
-        var cursor = 1
-        let (domain, domainCursor) = try DomainSelector.decode(bytes: bytes, cursor: cursor)
-        cursor = domainCursor
-        let (controller, controllerCursor) = try ControllerPayload.decode(bytes: bytes, cursor: cursor)
-        cursor = controllerCursor
-        if cursor != bytes.count {
-            throw AccountAddressError.unexpectedTrailingBytes
+        var canonicalError: AccountAddressError?
+        do {
+            let (controller, cursor) = try ControllerPayload.decode(bytes: bytes, cursor: 1)
+            if cursor == bytes.count {
+                return AccountAddress(header: header, domain: .default, controller: controller)
+            }
+            canonicalError = .unexpectedTrailingBytes
+        } catch let error as AccountAddressError {
+            canonicalError = error
         }
-        return AccountAddress(header: header, domain: domain, controller: controller)
+
+        // Backward compatibility: legacy payloads may include explicit domain selector bytes.
+        do {
+            var cursor = 1
+            let (domain, domainCursor) = try DomainSelector.decode(bytes: bytes, cursor: cursor)
+            cursor = domainCursor
+            let (controller, controllerCursor) = try ControllerPayload.decode(bytes: bytes, cursor: cursor)
+            cursor = controllerCursor
+            if cursor != bytes.count {
+                throw AccountAddressError.unexpectedTrailingBytes
+            }
+            return AccountAddress(header: header, domain: domain, controller: controller)
+        } catch let error as AccountAddressError {
+            throw canonicalError ?? error
+        }
     }
 
     public static func fromCanonicalHex(_ encoded: String) throws -> AccountAddress {
@@ -235,7 +251,7 @@ public struct AccountAddress {
         }
         switch domain {
         case .default:
-            return canonical == AccountAddress.defaultDomainName
+            return !canonical.isEmpty
         case .local12(let digest):
             return computeLocalDigest(label: canonical) == digest
         case .global:
@@ -243,18 +259,10 @@ public struct AccountAddress {
         }
     }
 
-    /// Re-encodes this address with a domain selector derived from the provided domain label when this address currently
-    /// uses the `default` domain selector.
-    ///
-    /// Why this exists:
-    /// - Some Core API deployments return account IDs encoded with the default-domain selector (tag `0x00`), while Torii
-    ///   / explorer interactions require the local-domain selector (tag `0x01`) for a specific FI domain label.
-    /// - For first-release client standardization, wallets should converge on local-domain IH58 encodings for QR codes,
-    ///   transfers, and any chain-facing workflows.
+    /// This helper is retained for compatibility, but selector-free canonical payloads no longer rebase domain bytes.
     public func rebasedFromDefaultDomain(to domainLabel: String) throws -> AccountAddress {
-        guard case .default = domain else { return self }
-        let selector = try DomainSelector.from(domain: domainLabel)
-        return AccountAddress(header: header, domain: selector, controller: controller)
+        _ = try DomainSelector.canonicalizeLabel(domainLabel)
+        return self
     }
 
     private static func containsCompressedAlphabetBeyondIh58(_ literal: String) -> Bool {
@@ -271,7 +279,6 @@ public struct AccountAddress {
     public func canonicalBytes() throws -> Data {
         var bytes = Data()
         bytes.append(header.encode())
-        domain.encode(into: &bytes)
         try controller.encode(into: &bytes)
         return bytes
     }
@@ -496,11 +503,9 @@ private enum DomainSelector {
     }
 
     static func from(domain: String) throws -> DomainSelector {
-        let canonical = try canonicalizeLabel(domain)
-        if canonical == AccountAddress.defaultDomainName {
-            return .default
-        }
-        return .local12(computeLocalDigest(label: canonical))
+        _ = try canonicalizeLabel(domain)
+        // Canonical payloads are globally scoped and no longer encode domain selectors.
+        return .default
     }
 
     func encode(into buffer: inout Data) {

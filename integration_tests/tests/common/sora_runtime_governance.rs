@@ -31,7 +31,7 @@ use iroha_executor_data_model::permission::governance::{
     CanEnactGovernance, CanProposeContractDeployment, CanSubmitGovernanceBallot,
 };
 use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
+use iroha_test_samples::{ALICE_ID, gen_account_in};
 
 const CITIZEN_COUNT: usize = 20;
 const CITIZEN_FUND: u128 = 15_000;
@@ -55,6 +55,12 @@ const BALANCE_WAIT_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
+}
+
+fn governance_escrow_account_literal() -> String {
+    ALICE_ID
+        .canonical_ih58()
+        .expect("alice account id should encode to canonical ih58")
 }
 
 pub fn tune_client_timeouts(client: &mut Client) {
@@ -810,7 +816,6 @@ pub struct RuntimeGovernanceFixture {
     pub ready_peer_idx: usize,
     pub alice: Client,
     pub citizens: Vec<(AccountId, KeyPair)>,
-    pub council_members: Vec<AccountId>,
     pub asset_def_id: AssetDefinitionId,
     pub alice_asset_id: AssetId,
 }
@@ -823,11 +828,12 @@ pub struct RuntimeRoundOutcome {
 }
 
 pub fn governance_builder_for_runtime_resilience() -> NetworkBuilder {
-    let alice_escrow_account = format!("{}@wonderland", ALICE_KEYPAIR.public_key());
+    let alice_escrow_account = governance_escrow_account_literal();
     NetworkBuilder::new()
         .with_peers(4)
         .with_config_layer(move |layer| {
             layer
+                .write(["default_account_domain_label"], "wonderland")
                 .write(["gov", "voting_asset_id"], GOV_ASSET_ID)
                 .write(["gov", "citizenship_asset_id"], GOV_ASSET_ID)
                 .write(
@@ -1049,7 +1055,6 @@ pub async fn setup_runtime_governance_fixture(
         ready_peer_idx,
         alice,
         citizens,
-        council_members,
         asset_def_id,
         alice_asset_id,
     }))

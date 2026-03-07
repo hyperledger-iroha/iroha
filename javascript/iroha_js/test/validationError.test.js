@@ -164,8 +164,8 @@ test("normalizeAccountId bypasses canonical parsing for friendly identifiers", (
     );
   };
   try {
-    const normalized = normalizeAccountId("carol@wonderland", "accountId");
-    assert.equal(normalized, "carol@wonderland");
+    const normalized = normalizeAccountId("carol@legacy-domain", "accountId");
+    assert.equal(normalized, "carol@legacy-domain");
     assert.ok(parseCalls >= 1, "fallback path should attempt canonical parsing before accepting literal");
   } finally {
     AccountAddress.parseAny = originalParseAny;

@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Opcoes:
 
 - `--format compressed (`sora`)` لـ صيدا `sora...` em vez de IH58.
-- `--no-append-domain` لإصدار أدبي بدون ملكية.
+- `domainless output (default)` لإصدار أدبي بدون ملكية.
 - `--audit-only` لبدء المحادثة.
 - `--allow-errors` لمواصلة التباين عند ظهور تشوهات الخطوط (مثل سلوك CLI).يستخرج البرنامج النصي طريقتين من الأعمال الفنية في نهاية التنفيذ. Anexe os dois arquivos ao
 تذكرة gestao de mudancas الخاصة بك مع لقطة شاشة Grafana التي لا تتوصل إلى الصفر
@@ -46,7 +46,7 @@ Opcoes:
 2. يقوم Bloqueie بدمج محددات تقرير `audit.json` المحلية (`domain.kind = local12`).
    لا توجد شجاعة في `true` (لذا تم التغيير لـ `false` في مجموعات التطوير/الاختبار للتشخيص
    التراجعات) والإضافة
-   `iroha tools address normalize --fail-on-warning --only-local` ao CI للتراجع
+   `iroha tools address normalize` ao CI للتراجع
    falhem antes de chegar a producao.
 
 شاهد الخط المستند لمزيد من التفاصيل وقوائم الأدلة المرجعية ومقتطف من

@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Opciones:
 
 - `--format compressed (`sora`)` para decir `sora...` en vez de IH58.
-- `--no-append-domain` para emisión literaria sin dominio.
+- `domainless output (default)` para emisión literaria sin dominio.
 - `--audit-only` para iniciar una etapa de conversación.
 - `--allow-errors` para continuar a varredura cuando aparecen líneas malformadas (igual al comportamiento de CLI).O script escreve os caminhos dos artefatos al final da execucao. Anexe os dos archivos ao
 su ticket de gestao de mudancas junto con la captura de pantalla de Grafana que comprove zero
@@ -46,7 +46,7 @@ deteccoes Local-8 y cero colisoes Local-12 por >=30 dias.
 2. Bloqueie se fusiona cuando `audit.json` reporta selectores Local (`domain.kind = local12`).
    no valor padrao `true` (así que altere para `false` en clusters dev/test para diagnosticar
    regresos) y adición
-   `iroha tools address normalize --fail-on-warning --only-local` ao CI para que regreses
+   `iroha tools address normalize` ao CI para que regreses
    falhem antes de chegar a producao.
 
 Vea la fuente del documento para más detalles, listas de verificación de evidencia y fragmentos de

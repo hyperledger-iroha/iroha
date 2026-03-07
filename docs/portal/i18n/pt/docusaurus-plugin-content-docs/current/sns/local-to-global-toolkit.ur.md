@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Informações:
 
 - `--format compressed` IH58 کے بجائے Saída `sora...` کے لیے۔
-- `--no-append-domain` تاکہ literais simples نکلیں۔
+- `domainless output (default)` تاکہ literais simples نکلیں۔
 - Etapa de conversão `--audit-only` چھوڑنے کے لیے۔
 - `--allow-errors` تاکہ linhas malformadas پر بھی scan جاری رہے (comportamento CLI جیسا)۔
 
@@ -47,7 +47,7 @@ ticket de gerenciamento de alterações کے ساتھ منسلک کریں اور
 1. اسکرپٹ کو trabalho dedicado میں چلائیں اور saídas اپ لوڈ کریں۔
 2. جب `audit.json` Seletores locais رپورٹ کرے (`domain.kind = local12`) تو mescla روک دیں۔
    padrão `true` پر رکھیں (صرف dev/test میں regressões کی تشخیص کے وقت `false` کریں) اور
-   `iroha tools address normalize --fail-on-warning --only-local` کو CI میں شامل کریں تاکہ
+   `iroha tools address normalize` کو CI میں شامل کریں تاکہ
    produção de regressões
 
 Listas de verificação de evidências e trechos de notas de lançamento کے لیے سورس دستاویز

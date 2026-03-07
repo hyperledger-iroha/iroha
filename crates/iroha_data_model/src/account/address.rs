@@ -42,14 +42,11 @@ pub mod compliance_vectors;
 #[cfg(feature = "json")]
 pub mod vectors;
 
-/// Fallback default domain label used before configuration overrides.
 /// Built-in implicit domain label used when configuration does not override it.
 pub const DEFAULT_DOMAIN_NAME: &str = "default";
-/// Alias for [`DEFAULT_DOMAIN_NAME`] retained for transition while configuration wiring lands.
-pub const DEFAULT_DOMAIN_NAME_FALLBACK: &str = DEFAULT_DOMAIN_NAME;
 
 static DEFAULT_DOMAIN_LABEL: LazyLock<RwLock<Arc<str>>> =
-    LazyLock::new(|| RwLock::new(Arc::<str>::from(DEFAULT_DOMAIN_NAME_FALLBACK)));
+    LazyLock::new(|| RwLock::new(Arc::<str>::from(DEFAULT_DOMAIN_NAME)));
 
 #[derive(Default)]
 struct DefaultDomainLockState {
@@ -246,6 +243,8 @@ impl Drop for ChainDiscriminantGuard {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountAddress {
     header: AddressHeader,
+    /// Domain selector metadata carried alongside the canonical controller payload.
+    /// Canonical wire bytes always decode into [`DomainSelector::Default`].
     domain: DomainSelector,
     controller: ControllerPayload,
 }
@@ -356,7 +355,8 @@ impl AccountAddress {
     pub fn from_account_id(account: &AccountId) -> Result<Self, AccountAddressError> {
         let (class, controller) = ControllerPayload::from_account_controller(account.controller())?;
         let header = AddressHeader::new(HEADER_VERSION_V1, class, HEADER_NORM_VERSION_V1)?;
-        let domain = DomainSelector::from_domain(account.domain())?;
+        // Hard cut: IH58 payloads are globally scoped and no longer embed domain affinity.
+        let domain = DomainSelector::Default;
         Ok(Self {
             header,
             domain,
@@ -424,6 +424,9 @@ impl AccountAddress {
     }
 
     /// Classify the embedded domain selector.
+    ///
+    /// Canonical payloads do not encode domain selectors and always report
+    /// [`AddressDomainKind::Default`].
     #[must_use]
     pub const fn domain_kind(&self) -> AddressDomainKind {
         match &self.domain {
@@ -434,12 +437,17 @@ impl AccountAddress {
     }
 
     /// Return the canonical selector key embedded in this address.
+    ///
+    /// New canonical payloads do not encode selector bytes and therefore always
+    /// return [`AccountDomainSelector::Default`].
     #[must_use]
     pub fn domain_selector(&self) -> AccountDomainSelector {
         AccountDomainSelector::from_selector(self.domain)
     }
 
     /// Return the raw Local-12 selector digest when the address targets a non-default domain.
+    ///
+    /// Canonical payloads never include Local-12 data.
     #[must_use]
     pub fn local12_digest(&self) -> Option<[u8; 12]> {
         match &self.domain {
@@ -489,18 +497,14 @@ impl AccountAddress {
             return Err(AccountAddressError::InvalidLength);
         }
         let header = AddressHeader::decode(bytes[0])?;
-        let mut cursor = 1;
-        let domain = DomainSelector::decode(bytes, &mut cursor)?;
-        if matches!(domain, DomainSelector::Local12(_)) {
-            ensure_local_selector_boundary(bytes, cursor, header.class.controller_tag())?;
-        }
-        let controller = ControllerPayload::decode(bytes, &mut cursor)?;
-        if cursor != bytes.len() {
+        let mut controller_cursor = 1usize;
+        let controller = ControllerPayload::decode(bytes, &mut controller_cursor)?;
+        if controller_cursor != bytes.len() {
             return Err(AccountAddressError::UnexpectedTrailingBytes);
         }
         Ok(Self {
             header,
-            domain,
+            domain: DomainSelector::Default,
             controller,
         })
     }
@@ -545,15 +549,32 @@ impl AccountAddress {
         if trimmed.is_empty() {
             return Err(AccountAddressError::InvalidLength);
         }
-        if Self::strip_compressed_sentinel(trimmed).is_some() {
-            let address = Self::from_compressed_sora(trimmed)?;
-            return Ok((address, AccountAddressFormat::Compressed));
-        }
         if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
             let body = &trimmed[2..];
             let bytes = hex::decode(body).map_err(|_| AccountAddressError::InvalidHexAddress)?;
             let address = Self::from_canonical_bytes(&bytes)?;
             return Ok((address, AccountAddressFormat::CanonicalHex));
+        }
+        Self::parse_encoded(trimmed, expected_prefix)
+    }
+
+    /// Parse an address string in strict encoded form (IH58 or compressed only).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountAddressError`] if the input cannot be decoded as IH58 or
+    /// compressed (or if the IH58 prefix mismatches expectations).
+    pub fn parse_encoded(
+        input: &str,
+        expected_prefix: Option<u16>,
+    ) -> Result<(Self, AccountAddressFormat), AccountAddressError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Err(AccountAddressError::InvalidLength);
+        }
+        if Self::strip_compressed_sentinel(trimmed).is_some() {
+            let address = Self::from_compressed_sora(trimmed)?;
+            return Ok((address, AccountAddressFormat::Compressed));
         }
         if trimmed.len() > 1 {
             match decode_ih58(trimmed) {
@@ -586,10 +607,12 @@ impl AccountAddress {
     /// # Errors
     ///
     /// Returns [`AccountAddressError`] if encoding the controller payload fails.
+    ///
+    /// Canonical payloads are domain-agnostic and therefore do not include a
+    /// serialized domain selector segment.
     pub(crate) fn canonical_bytes(&self) -> Result<Vec<u8>, AccountAddressError> {
-        let mut bytes = Vec::with_capacity(1 + DOMAIN_SELECTOR_MAX_LEN + CONTROLLER_MAX_LEN);
+        let mut bytes = Vec::with_capacity(1 + CONTROLLER_MAX_LEN);
         bytes.push(self.header.encode());
-        self.domain.encode_into(&mut bytes);
         self.controller.encode_into(&mut bytes)?;
         Ok(bytes)
     }
@@ -709,16 +732,10 @@ impl JsonDeserialize for AccountAddress {
     }
 }
 
-const LOCAL_SELECTOR_DIGEST_LEN: usize = 12;
-const DOMAIN_SELECTOR_MAX_LEN: usize = 1 + LOCAL_SELECTOR_DIGEST_LEN;
 const CONTROLLER_MAX_LEN: usize = 1024;
 const CONTROLLER_SINGLE_KEY_TAG: u8 = 0x00;
 const CONTROLLER_MULTISIG_TAG: u8 = 0x01;
 const CONTROLLER_MULTISIG_MEMBER_MAX: usize = 255;
-
-const fn is_valid_controller_tag(byte: u8) -> bool {
-    matches!(byte, CONTROLLER_SINGLE_KEY_TAG | CONTROLLER_MULTISIG_TAG)
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AddressHeader {
@@ -780,15 +797,6 @@ enum AddressClass {
     MultiSig = 1,
 }
 
-impl AddressClass {
-    const fn controller_tag(self) -> u8 {
-        match self {
-            Self::SingleKey => CONTROLLER_SINGLE_KEY_TAG,
-            Self::MultiSig => CONTROLLER_MULTISIG_TAG,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DomainSelector {
     Default,
@@ -815,55 +823,6 @@ impl DomainSelector {
         }
     }
 
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        match self {
-            Self::Default => out.push(0x00),
-            Self::Local12(bytes) => {
-                out.push(0x01);
-                out.extend_from_slice(bytes);
-            }
-            Self::Global { registry_id } => {
-                out.push(0x02);
-                out.extend_from_slice(&registry_id.to_be_bytes());
-            }
-        }
-    }
-
-    fn decode(bytes: &[u8], cursor: &mut usize) -> Result<Self, AccountAddressError> {
-        let tag = *bytes
-            .get(*cursor)
-            .ok_or(AccountAddressError::InvalidLength)?;
-        *cursor += 1;
-        match tag {
-            0x00 => Ok(Self::Default),
-            0x01 => {
-                let remaining = bytes.len().saturating_sub(*cursor);
-                if remaining < 12 {
-                    return Err(AccountAddressError::LocalDigestTooShort {
-                        expected: 12,
-                        found: remaining,
-                    });
-                }
-                let digest = bytes
-                    .get(*cursor..*cursor + 12)
-                    .ok_or(AccountAddressError::InvalidLength)?;
-                *cursor += 12;
-                let mut buf = [0u8; 12];
-                buf.copy_from_slice(digest);
-                Ok(Self::Local12(buf))
-            }
-            0x02 => {
-                let raw = bytes
-                    .get(*cursor..*cursor + 4)
-                    .ok_or(AccountAddressError::InvalidLength)?;
-                *cursor += 4;
-                let registry_id = u32::from_be_bytes(raw.try_into().unwrap());
-                Ok(Self::Global { registry_id })
-            }
-            other => Err(AccountAddressError::UnknownDomainTag(other)),
-        }
-    }
-
     fn matches_domain(&self, domain: &DomainId) -> bool {
         let Ok(canonical) = Self::canonical_domain(domain) else {
             return false;
@@ -875,43 +834,6 @@ impl DomainSelector {
             // let higher-level code (or on-chain existence checks) validate the final AccountId.
             Self::Local12(expected) => compute_local_digest(&canonical) == *expected,
             Self::Default | Self::Global { .. } => true,
-        }
-    }
-}
-
-fn ensure_local_selector_boundary(
-    bytes: &[u8],
-    controller_cursor: usize,
-    expected_controller_tag: u8,
-) -> Result<(), AccountAddressError> {
-    match bytes.get(controller_cursor) {
-        Some(&tag) if is_valid_controller_tag(tag) => Ok(()),
-        Some(_) => {
-            if controller_cursor >= 4
-                && bytes.get(controller_cursor - 4) == Some(&expected_controller_tag)
-            {
-                let mut legacy_cursor = controller_cursor - 4;
-                if ControllerPayload::decode(bytes, &mut legacy_cursor).is_ok()
-                    && legacy_cursor == bytes.len()
-                {
-                    return Err(AccountAddressError::LocalDigestTooShort {
-                        expected: LOCAL_SELECTOR_DIGEST_LEN,
-                        found: LOCAL_SELECTOR_DIGEST_LEN - 4,
-                    });
-                }
-            }
-            Ok(())
-        }
-        None => {
-            let digest_start = controller_cursor.saturating_sub(LOCAL_SELECTOR_DIGEST_LEN);
-            let found = bytes
-                .len()
-                .saturating_sub(digest_start)
-                .min(LOCAL_SELECTOR_DIGEST_LEN);
-            Err(AccountAddressError::LocalDigestTooShort {
-                expected: LOCAL_SELECTOR_DIGEST_LEN,
-                found,
-            })
         }
     }
 }
@@ -1247,8 +1169,6 @@ pub enum AccountAddressErrorCode {
     UnexpectedNetworkPrefix,
     /// Unknown address class encountered.
     UnknownAddressClass,
-    /// Unknown domain selector tag encountered.
-    UnknownDomainTag,
     /// Reserved extension flag set unexpectedly.
     UnexpectedExtensionFlag,
     /// Unknown controller payload tag encountered.
@@ -1271,8 +1191,6 @@ pub enum AccountAddressErrorCode {
     InvalidCompressedBase,
     /// Digit outside compressed alphabet bounds.
     InvalidCompressedDigit,
-    /// Local-domain digest shorter than the required 12-byte selector.
-    LocalDigestTooShort,
     /// Address string format unsupported.
     UnsupportedAddressFormat,
     /// Multisig controller declares too many members.
@@ -1300,7 +1218,6 @@ impl AccountAddressErrorCode {
             Self::InvalidDomainLabel => "ERR_INVALID_DOMAIN_LABEL",
             Self::UnexpectedNetworkPrefix => "ERR_UNEXPECTED_NETWORK_PREFIX",
             Self::UnknownAddressClass => "ERR_UNKNOWN_ADDRESS_CLASS",
-            Self::UnknownDomainTag => "ERR_UNKNOWN_DOMAIN_TAG",
             Self::UnexpectedExtensionFlag => "ERR_UNEXPECTED_EXTENSION_FLAG",
             Self::UnknownControllerTag => "ERR_UNKNOWN_CONTROLLER_TAG",
             Self::InvalidPublicKey => "ERR_INVALID_PUBLIC_KEY",
@@ -1312,7 +1229,6 @@ impl AccountAddressErrorCode {
             Self::InvalidCompressedChar => "ERR_INVALID_COMPRESSED_CHAR",
             Self::InvalidCompressedBase => "ERR_INVALID_COMPRESSED_BASE",
             Self::InvalidCompressedDigit => "ERR_INVALID_COMPRESSED_DIGIT",
-            Self::LocalDigestTooShort => "ERR_LOCAL8_DEPRECATED",
             Self::UnsupportedAddressFormat => "ERR_UNSUPPORTED_ADDRESS_FORMAT",
             Self::MultisigMemberOverflow => "ERR_MULTISIG_MEMBER_OVERFLOW",
             Self::InvalidMultisigPolicy => "ERR_INVALID_MULTISIG_POLICY",
@@ -1369,9 +1285,6 @@ pub enum AccountAddressError {
     /// Encountered an unknown address class.
     #[error("unknown address class: {0}")]
     UnknownAddressClass(u8),
-    /// Encountered an unknown domain selector tag.
-    #[error("unknown domain selector tag: {0}")]
-    UnknownDomainTag(u8),
     /// Address header sets the reserved extension flag.
     #[error("address header reserves extension flag but it was set")]
     UnexpectedExtensionFlag,
@@ -1407,14 +1320,6 @@ pub enum AccountAddressError {
     /// Encountered a digit value outside of the compressed alphabet size.
     #[error("invalid compressed digit value: {0}")]
     InvalidCompressedDigit(u8),
-    /// Local-domain selector digest shorter than the 12-byte requirement.
-    #[error("local domain digest too short: expected {expected} bytes, found {found}")]
-    LocalDigestTooShort {
-        /// Required digest length (always 12 bytes for Norm v1).
-        expected: usize,
-        /// Actual digest length recovered from the payload.
-        found: usize,
-    },
     /// Address string is not in a recognised format.
     #[error("unsupported account address format")]
     UnsupportedAddressFormat,
@@ -1458,7 +1363,6 @@ impl AccountAddressError {
                 AccountAddressErrorCode::UnexpectedNetworkPrefix
             }
             Self::UnknownAddressClass(_) => AccountAddressErrorCode::UnknownAddressClass,
-            Self::UnknownDomainTag(_) => AccountAddressErrorCode::UnknownDomainTag,
             Self::UnexpectedExtensionFlag => AccountAddressErrorCode::UnexpectedExtensionFlag,
             Self::UnknownControllerTag(_) => AccountAddressErrorCode::UnknownControllerTag,
             Self::InvalidPublicKey => AccountAddressErrorCode::InvalidPublicKey,
@@ -1472,7 +1376,6 @@ impl AccountAddressError {
             Self::InvalidCompressedChar(_) => AccountAddressErrorCode::InvalidCompressedChar,
             Self::InvalidCompressedBase => AccountAddressErrorCode::InvalidCompressedBase,
             Self::InvalidCompressedDigit(_) => AccountAddressErrorCode::InvalidCompressedDigit,
-            Self::LocalDigestTooShort { .. } => AccountAddressErrorCode::LocalDigestTooShort,
             Self::UnsupportedAddressFormat => AccountAddressErrorCode::UnsupportedAddressFormat,
             Self::MultisigMemberOverflow(_) => AccountAddressErrorCode::MultisigMemberOverflow,
             Self::InvalidMultisigPolicy(_) => AccountAddressErrorCode::InvalidMultisigPolicy,
@@ -1867,41 +1770,42 @@ mod tests {
     }
 
     #[test]
-    fn local8_payloads_emit_dedicated_error_code() {
-        let account = AccountId::new(domain("wonderland"), ed25519_pk());
-        let mut canonical = AccountAddress::from_account_id(&account)
-            .expect("account encodes")
-            .canonical_bytes()
-            .expect("canonical bytes");
+    fn legacy_local8_payloads_are_rejected() {
+        let mut canonical =
+            hex::decode("0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c")
+                .expect("legacy local-12 fixture");
         let digest_start = 2; // header (0) + tag (1) + digest payload
         canonical.drain(digest_start + 8..digest_start + 12);
 
-        let err = AccountAddress::from_canonical_bytes(&canonical)
-            .expect_err("short digest payload must be rejected");
-        assert!(matches!(
-            err,
-            AccountAddressError::LocalDigestTooShort {
-                expected: 12,
-                found: 8
-            }
-        ));
-
-        let literal = format!("0x{}@wonderland", hex::encode(&canonical));
-        let parse_err = AccountId::parse(&literal).expect_err("account parsing fails");
-        assert_eq!(
-            parse_err.reason(),
-            AccountAddressErrorCode::LocalDigestTooShort.as_str()
-        );
+        let err =
+            AccountAddress::from_canonical_bytes(&canonical).expect_err("legacy payload rejected");
+        let literal = format!("0x{}", hex::encode(&canonical));
+        let parse_err = AccountId::parse_encoded(&literal).expect_err("account parsing fails");
+        assert_eq!(parse_err.reason(), err.code_str());
     }
 
     #[test]
-    fn local12_digest_is_exposed_for_non_default_domains() {
-        let account = AccountId::new(domain("wonderland"), ed25519_pk());
-        let address = AccountAddress::from_account_id(&account).expect("account encodes");
-        let digest = address
-            .local12_digest()
-            .expect("non-default domain must surface a digest");
-        assert_eq!(digest, compute_local_digest("wonderland"));
+    fn legacy_local8_payloads_without_controller_tag_are_rejected() {
+        let mut canonical =
+            hex::decode("0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c")
+                .expect("legacy local-12 fixture");
+        canonical.drain(10..15);
+
+        let err =
+            AccountAddress::from_canonical_bytes(&canonical).expect_err("legacy payload rejected");
+        let literal = format!("0x{}", hex::encode(&canonical));
+        let parse_err = AccountId::parse_encoded(&literal).expect_err("account parsing fails");
+        assert_eq!(parse_err.reason(), err.code_str());
+    }
+
+    #[test]
+    fn legacy_selector_prefixed_payloads_are_rejected() {
+        let canonical = hex::decode(
+            "0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        )
+        .expect("legacy local-12 fixture");
+        AccountAddress::from_canonical_bytes(&canonical)
+            .expect_err("selector-prefixed legacy payload must be rejected");
     }
 
     #[test]
@@ -1950,82 +1854,22 @@ mod tests {
         let _reset = Reset(original.clone());
         set_default_domain_name("default").expect("restore default label");
 
-        let vectors: [(&str, u8, &str, &str); 12] = [
-            (
-                "default",
-                0,
-                "0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
-                "sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
-            ),
-            (
-                "treasury",
-                1,
-                "0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-                "sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU",
-            ),
-            (
-                "wonderland",
-                2,
-                "0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
-                "sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS",
-            ),
-            (
-                "iroha",
-                3,
-                "0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
-                "sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L",
-            ),
-            (
-                "alpha",
-                4,
-                "0x020146be2154ae86826a3fef0ec0000120ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c",
-                "sora5ｻ9JヱﾈｿuwU6ｴpﾔﾂﾈRqRTds1HﾃﾐｶLVﾍｳ9ﾔhｾNｵVｷyucEﾒGﾈﾏﾍ9sKeﾉDzrｷﾆ742WG1",
-            ),
-            (
-                "omega",
-                5,
-                "0x0201390d946885bc8416b3d30c9d0001206e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1",
-                "sora5ｻ3zrﾌuﾚﾄJﾑXQhｸTyN8pzwRkWxmjVﾗbﾚﾕヰﾈoｽｦｶtEEﾊﾐ6GPｿﾓﾊｾEhvPｾｻ3XAJ73F",
-            ),
-            (
-                "governance",
-                6,
-                "0x0201989eb45a80940d187e2c908f0001208a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f17",
-                "sora5ｻiｵﾁyVﾕｽbFpDHHuﾇﾉdﾗｲﾓﾄRﾋAW3frUCｾ5ｷﾘTwdﾚnｽtQiLﾏｼｶﾅXgｾZmﾒヱH58H4KP",
-            ),
-            (
-                "validators",
-                7,
-                "0x0201e4ffa58704c69afaeb7cc2d7000120ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
-                "sora5ｻﾀLDH6VYﾑNAｾgﾉVﾜtxﾊRXLｹﾍﾔﾌLd93GﾔGeｴﾄYrs1ﾂHｸkYxｹwｿyZﾗxyﾎZoXT1S4N",
-            ),
-            (
-                "explorer",
-                8,
-                "0x02013b35422c65c2a83c99c523ad0001201398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93ca",
-                "sora5ｻ4nmｻaﾚﾚPvNLgｿｱv6MHDeEyﾀovﾉJcpvrﾖ6ﾈCQcCNﾇﾜhﾚﾖyFdTwｸｶHEｱ9rWU8FMB",
-            ),
-            (
-                "soranet",
-                9,
-                "0x0201047d9ea7f5d5dbec3f7bfc58000120fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618",
-                "sora5ｱｸヱVQﾂcﾁヱRﾓcApｲﾁﾅﾒvﾌﾏfｾNnﾛRJsｿDhﾙuHaﾚｺｦﾌﾍﾈeﾆﾎｺN1UUDｶ6ﾎﾄﾛoRH8JUL",
-            ),
-            (
-                "kitsune",
-                10,
-                "0x0201e91933de397fd7723dc9a76c00012043a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-                "sora5ｻﾚｺヱkfFJfSﾁｼJwﾉLvbpSｷﾔMWFMrbｳｸｲｲyヰKGJﾉｻ4ｹﾕrｽhｺｽzSDヰXAN62AD7RGNS",
-            ),
-            (
-                "da",
-                11,
-                "0x02016838cf5bb0ce0f3d4f380e1c00012066be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
-                "sora5ｻNﾒ5SﾐRﾉﾐﾃ62ｿ1ｶｷWFKyF1BcAﾔvｼﾐHqﾙﾐPﾏｴヰ5tｲﾕvnﾙT6ﾀW7mﾔ7ﾇﾗﾂｳ25CXS93",
-            ),
+        let vectors = [
+            ("default", 0_u8),
+            ("treasury", 1_u8),
+            ("wonderland", 2_u8),
+            ("iroha", 3_u8),
+            ("alpha", 4_u8),
+            ("omega", 5_u8),
+            ("governance", 6_u8),
+            ("validators", 7_u8),
+            ("explorer", 8_u8),
+            ("soranet", 9_u8),
+            ("kitsune", 10_u8),
+            ("da", 11_u8),
         ];
 
-        for (label, seed_byte, expected_canonical, expected_compressed) in vectors {
+        for (label, seed_byte) in vectors {
             let account = AccountId::new(domain(label), ed25519_pk_with(seed_byte));
             let address = AccountAddress::from_account_id(&account).expect("address encoding");
             let canonical = address
@@ -2034,37 +1878,48 @@ mod tests {
             let compressed = address
                 .to_compressed_sora()
                 .expect("compressed encoding must succeed");
-            assert_eq!(
-                canonical, expected_canonical,
-                "label={label} seed={seed_byte}"
+            assert!(
+                canonical.starts_with("0x020001"),
+                "canonical payloads must not include a domain selector byte: label={label} seed={seed_byte} canonical={canonical}"
             );
+            let decoded =
+                AccountAddress::from_compressed_sora(&compressed).expect("compressed decode");
             assert_eq!(
-                compressed, expected_compressed,
+                decoded.canonical_hex().expect("canonical"),
+                canonical,
                 "label={label} seed={seed_byte}"
             );
         }
     }
 
     #[test]
-    fn default_domain_selector_is_zero() {
+    fn canonical_payload_omits_domain_selector_bytes() {
         let _guard = guard_default_label();
         let account = AccountId::new(default_domain_id(), ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let canonical = address.canonical_bytes().expect("bytes");
         assert_eq!(canonical[0] >> 5, HEADER_VERSION_V1);
-        assert_eq!(canonical[1], 0x00);
+        assert_eq!(canonical[1], CONTROLLER_SINGLE_KEY_TAG);
+        let mut legacy = canonical.clone();
+        legacy.insert(1, 0x00);
+        AccountAddress::from_canonical_bytes(&legacy)
+            .expect_err("legacy selector-prefixed payloads are rejected");
     }
 
     #[test]
-    fn non_default_domain_uses_local_digest() {
+    fn non_default_domain_address_bytes_match_default_domain_bytes() {
         let _guard = guard_default_label();
-        let account = AccountId::new(domain("treasury"), ed25519_pk());
-        let address = AccountAddress::from_account_id(&account).expect("encode");
-        let canonical = address.canonical_bytes().expect("bytes");
-        assert_eq!(canonical[1], 0x01);
-        let mut expected = [0u8; 12];
-        expected.copy_from_slice(&canonical[2..14]);
-        assert_eq!(expected, compute_local_digest("treasury"));
+        let key = ed25519_pk();
+        let default_account = AccountId::new(default_domain_id(), key.clone());
+        let local_account = AccountId::new(domain("treasury"), key);
+        let default_address = AccountAddress::from_account_id(&default_account).expect("encode");
+        let local_address = AccountAddress::from_account_id(&local_account).expect("encode");
+        assert_eq!(
+            default_address.canonical_bytes().expect("default bytes"),
+            local_address.canonical_bytes().expect("local bytes"),
+            "domain must not influence canonical address bytes"
+        );
+        assert!(local_address.local12_digest().is_none());
     }
 
     #[test]
@@ -2078,10 +1933,7 @@ mod tests {
         let local_account = AccountId::new(domain("treasury"), ed25519_pk_with(9));
         let local_address =
             AccountAddress::from_account_id(&local_account).expect("encode local domain");
-        assert_eq!(
-            local_address.domain_kind(),
-            AddressDomainKind::LocalDigest12
-        );
+        assert_eq!(local_address.domain_kind(), AddressDomainKind::Default);
     }
 
     #[test]
@@ -2114,7 +1966,7 @@ mod tests {
         let account = AccountId::new(domain(canonical.as_ref()), ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let canonical_bytes = address.canonical_bytes().expect("bytes");
-        assert_eq!(canonical_bytes[1], 0x00);
+        assert_eq!(canonical_bytes[1], CONTROLLER_SINGLE_KEY_TAG);
     }
 
     #[test]
@@ -2163,7 +2015,11 @@ mod tests {
         assert_eq!(roundtrip, account);
 
         let other_domain = domain("garden");
-        assert!(address.to_account_id(&other_domain).is_err());
+        let projected = address
+            .to_account_id(&other_domain)
+            .expect("global selector should project to arbitrary domain");
+        assert_eq!(projected.domain(), &other_domain);
+        assert_eq!(projected.signatory(), account.signatory());
     }
 
     #[test]
@@ -2412,15 +2268,15 @@ mod tests {
 
         assert_eq!(
             canonical,
-            "0x020000012027c96646f2d4632d4fc241f84cbc427fbc3ecaa95becba55088d6c7b81fc5bbf"
+            "0x0200012027c96646f2d4632d4fc241f84cbc427fbc3ecaa95becba55088d6c7b81fc5bbf"
         );
         assert_eq!(
             ih58,
-            "364YxF5WtB9F5aThpqnyEsc9xijgc965zbfRvY4vL7VFo2Hzxb37Gat"
+            "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN"
         );
         assert_eq!(
             compressed,
-            "sora2QGﾈkﾀqｴeｺﾏQD31PZｾgｷﾁzﾗﾔｿ4ｺQbｳﾍｽkogﾙﾏmpGZEhﾊ3BMK8R"
+            "sorauﾛ1NﾄヰTN8ﾘﾀGGKM6ｶsﾅ6ｻ8Zgｿﾂ3hﾔLUyｻypvｽU1ヰﾒｺUA526E"
         );
 
         let (decoded_ih58, fmt_ih58) =
@@ -2452,6 +2308,30 @@ mod tests {
     fn parse_any_rejects_unknown_format() {
         let err = AccountAddress::parse_any("alice@wonderland", None)
             .expect_err("alias literal rejected");
+        assert!(matches!(err, AccountAddressError::UnsupportedAddressFormat));
+    }
+
+    #[test]
+    fn parse_encoded_accepts_only_ih58_and_compressed() {
+        let _guard = guard_default_label();
+        let account = AccountId::new(domain(DEFAULT_DOMAIN_NAME), ed25519_pk());
+        let address = AccountAddress::from_account_id(&account).expect("encode");
+        let ih58 = address.to_ih58(42).expect("ih58");
+        let compressed = address.to_compressed_sora().expect("compressed");
+        let canonical = address.canonical_hex().expect("canonical");
+
+        let (_, ih58_format) = AccountAddress::parse_encoded(&ih58, Some(42)).expect("parse ih58");
+        assert_eq!(
+            ih58_format,
+            AccountAddressFormat::IH58 { network_prefix: 42 }
+        );
+
+        let (_, compressed_format) =
+            AccountAddress::parse_encoded(&compressed, None).expect("parse compressed");
+        assert_eq!(compressed_format, AccountAddressFormat::Compressed);
+
+        let err = AccountAddress::parse_encoded(&canonical, None)
+            .expect_err("canonical must be rejected");
         assert!(matches!(err, AccountAddressError::UnsupportedAddressFormat));
     }
 
@@ -2564,11 +2444,6 @@ mod tests {
             AccountAddressError::UnknownAddressClass(7),
             UnknownAddressClass,
             "ERR_UNKNOWN_ADDRESS_CLASS"
-        );
-        assert_code!(
-            AccountAddressError::UnknownDomainTag(9),
-            UnknownDomainTag,
-            "ERR_UNKNOWN_DOMAIN_TAG"
         );
         assert_code!(
             AccountAddressError::UnexpectedExtensionFlag,

@@ -24,7 +24,6 @@ use eyre::Result;
 use hex;
 pub use iroha_data_model::prelude::*;
 use iroha_data_model::{
-    account::address::AccountAddress as IrohaAccountAddress,
     fraud::types::FraudAssessment,
     isi::error::Mismatch,
     isi::{
@@ -2245,31 +2244,15 @@ fn collect_manifest_approvals(
                 "`gov_manifest_approvers` metadata entries must not be blank",
             ));
         }
-        let canonical = if let Ok(account) = AccountId::from_str(trimmed) {
-            account.canonical_ih58().map_err(|err| {
+        let canonical = AccountId::parse_encoded(trimmed)
+            .map_err(|err| {
                 reject_lane_policy(
                     alias,
                     format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
                 )
             })?
-        } else {
-            let prefix = iroha_data_model::account::address::chain_discriminant();
-            let (address, _) =
-                IrohaAccountAddress::parse_any(trimmed, Some(prefix)).map_err(|err| {
-                    reject_lane_policy(
-                        alias,
-                        format!(
-                            "invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"
-                        ),
-                    )
-                })?;
-            address.to_ih58(prefix).map_err(|err| {
-                reject_lane_policy(
-                    alias,
-                    format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
-                )
-            })?
-        };
+            .canonical()
+            .to_owned();
         approvals.insert(canonical);
     }
     Ok(approvals)
@@ -4103,7 +4086,9 @@ pub mod tests {
         let role_id: RoleId = format!(
             "MULTISIG_SIGNATORY/{}/{}",
             authority_id.domain(),
-            authority_id.signatory()
+            authority_id
+                .canonical_ih58()
+                .expect("authority account IH58 literal")
         )
         .parse()
         .expect("static multisig role must parse");
@@ -7314,8 +7299,6 @@ pub mod tests {
     pub type AccountBalance = std::collections::BTreeMap<&'static str, u64>;
     /// Mapping from account short name to its credentials (ID and key).
     pub type AccountMap = std::collections::BTreeMap<&'static str, Credential>;
-    /// Mapping from account identifier to its short alias.
-    pub type AccountAliasMap = std::collections::BTreeMap<AccountId, &'static str>;
 
     /// Domain used for all sandbox entities.
     pub const DOMAIN_STR: &str = "wonderland";
@@ -7372,14 +7355,6 @@ pub mod tests {
             })
             .collect()
     });
-    /// Reverse lookup from account identifier to its sandbox alias.
-    pub static ACCOUNT_ALIAS_BY_ID: LazyLock<AccountAliasMap> = LazyLock::new(|| {
-        ACCOUNT
-            .iter()
-            .map(|(alias, cred)| (cred.id.clone(), *alias))
-            .collect()
-    });
-
     #[test]
     fn sandbox_accounts_are_deterministic() {
         for (name, public, _) in SANDBOX_ACCOUNT_KEYS {
@@ -7557,16 +7532,7 @@ pub mod tests {
     }
 
     fn format_asset_id_for_snapshot(asset_id: &AssetId) -> String {
-        let account = asset_id.account();
-        let account_str = ACCOUNT_ALIAS_BY_ID.get(account).map_or_else(
-            || format!("{}@{}", account.signatory(), account.domain()),
-            |alias| format!("{alias}@{}", account.domain()),
-        );
-        if asset_id.definition().domain() == account.domain() {
-            format!("{}##{}", asset_id.definition().name(), account_str)
-        } else {
-            format!("{}#{}", asset_id.definition(), account_str)
-        }
+        format!("{}#{}", asset_id.definition(), asset_id.account())
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]

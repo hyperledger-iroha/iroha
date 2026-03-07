@@ -346,7 +346,11 @@ fn consensus_guard() -> MutexGuard<'static, ()> {
 
 fn valid_missing_account_literal() -> String {
     let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    format!("{}@wonderland", key_pair.public_key())
+    AccountId::new(
+        "wonderland".parse().expect("domain"),
+        key_pair.public_key().clone(),
+    )
+    .to_string()
 }
 
 fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId) -> axum::Router {

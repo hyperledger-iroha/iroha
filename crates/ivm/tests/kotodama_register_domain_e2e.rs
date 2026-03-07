@@ -1,9 +1,16 @@
 use std::collections::HashMap;
 
+use iroha_crypto::PublicKey;
 use ivm::{
     IVM, KotodamaCompiler,
-    mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
+    mock_wsv::{DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost},
 };
+
+fn account(domain: &str, public_key: &str) -> ScopedAccountId {
+    let domain: DomainId = domain.parse().unwrap();
+    let public_key: PublicKey = public_key.parse().unwrap();
+    ScopedAccountId::new(domain, public_key)
+}
 
 #[test]
 fn kotodama_register_domain_e2e() {
@@ -17,15 +24,19 @@ fn kotodama_register_domain_e2e() {
     let program = compiler.compile_source(src).expect("compile kotodama");
 
     // Set up a mock WSV with an authority having RegisterDomain permission.
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
+    let alice = account(
+        "domain",
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
 
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 

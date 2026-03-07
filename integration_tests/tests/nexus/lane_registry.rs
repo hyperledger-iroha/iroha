@@ -19,8 +19,6 @@ fn fixtures_path(relative: &str) -> PathBuf {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
-    let _alias_guard = install_fixture_alias_resolver();
-
     let lane_catalog = LaneCatalog::new(
         nonzero!(3_u32),
         vec![
@@ -152,52 +150,4 @@ fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
     );
 
     Ok(())
-}
-
-struct AliasResolverGuard;
-
-impl Drop for AliasResolverGuard {
-    fn drop(&mut self) {
-        iroha_data_model::account::clear_account_alias_resolver();
-    }
-}
-
-fn install_fixture_alias_resolver() -> AliasResolverGuard {
-    use std::{collections::BTreeMap, sync::Arc};
-
-    use iroha_data_model::account::{self, AccountId};
-
-    let mut entries: BTreeMap<String, AccountId> = BTreeMap::new();
-    entries.insert("alice".into(), iroha_test_samples::ALICE_ID.clone());
-    entries.insert("bob".into(), iroha_test_samples::BOB_ID.clone());
-    entries.insert("charlie".into(), seeded_account(0x11));
-    entries.insert("dana".into(), seeded_account(0x22));
-    entries.insert("erin".into(), seeded_account(0x33));
-    entries.insert("frank".into(), seeded_account(0x44));
-
-    let table = Arc::new(entries);
-    account::clear_account_alias_resolver();
-    account::set_account_alias_resolver(Arc::new(move |label, domain| {
-        let key = label.to_ascii_lowercase();
-        table.get(&key).and_then(|account| {
-            if account.domain() == domain {
-                Some(account.clone())
-            } else {
-                None
-            }
-        })
-    }));
-
-    AliasResolverGuard
-}
-
-fn seeded_account(seed: u8) -> iroha_data_model::account::AccountId {
-    use std::str::FromStr;
-
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{account::AccountId, domain::DomainId};
-
-    let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-    let domain = DomainId::from_str("wonderland").expect("fixture domain");
-    AccountId::new(domain, key_pair.public_key().clone())
 }

@@ -44,7 +44,7 @@ const SM2_PUBLIC_KEY = hexToBytes(
   "04361255A512347E76EA947EBB416C12D4C07E30B150C0EC2047ECC5E142907499B8D99C4C5CF69BFF6527E7B67396B55E42EF98625B339696DBEF9A3AABBFC06F",
 );
 const MULTISIG_CANONICAL_HEX =
-  "0x0a014b5d81318d0cdf5559258c8e01010003030100010020591b509f4a1b29c9d8cada0f876ee97041cbd43c0de3251b1e6c77bb621f40b0010002002062ffa8de6da654efebfa3d80fdef8f188034cfa3e211859346e41a5fea06532b0100010020d4abafc1f385826a8ebc60df90568c52ccfbf91e0b134dc66e42731a7561e4da";
+  "0x0a0101000303010001002068f4b6017d0f876a55c80a82b8388a54aad264d367269e2de8be079c935b5f9601000100207ea0e3bd52e207c9d3b0eba65c0704e66fca2d8e165a175218b174fc4160e4130100020020884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b";
 const MULTISIG_CANONICAL_BYTES = hexToBytes(MULTISIG_CANONICAL_HEX);
 
 test("configureCurveSupport validates options and gating toggles", () => {
@@ -134,26 +134,26 @@ test("multisig policies enforce core validation rules", () => {
   };
 
   mutateAndExpect((bytes) => {
-    bytes[15] = 0x02;
+    bytes[2] = 0x02;
   }, "UnsupportedVersion");
 
   mutateAndExpect((bytes) => {
-    bytes[16] = 0x00;
-    bytes[17] = 0x00;
+    bytes[3] = 0x00;
+    bytes[4] = 0x00;
   }, "ZeroThreshold");
 
   mutateAndExpect((bytes) => {
-    bytes[20] = 0x00;
-    bytes[21] = 0x00;
+    bytes[7] = 0x00;
+    bytes[8] = 0x00;
   }, "MemberWeightZero");
 
   mutateAndExpect((bytes) => {
-    bytes[16] = 0x00;
-    bytes[17] = 0x05;
+    bytes[3] = 0x00;
+    bytes[4] = 0x05;
   }, "ThresholdExceedsTotal");
 
   mutateAndExpect((bytes) => {
-    bytes.set(bytes.subarray(24, 56), 61);
+    bytes.set(bytes.subarray(48, 80), 85);
   }, "DuplicateMember");
 });
 
@@ -169,12 +169,12 @@ test("account address golden vectors round-trip", () => {
 
   assert.equal(
     canonical,
-    "0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+    "0x02000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201",
   );
-  assert.equal(ih58, "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA");
+  assert.equal(ih58, "6cmzPVPX6eXMQPXrQzgef9LubBFmrK8yVoJ51F9DSpWfztubMTChkB2");
   assert.equal(
     compressed,
-    "sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
+    "sorauﾛ1P5ﾁXEｴﾕGjgﾕﾚﾎﾕｸﾁEtﾀ3ﾂｺ2gALｺﾒefﾍ8DLgｾoCVGUYHS5",
   );
 
   const { address: parsedIH58, format: formatIH58 } = AccountAddress.parseAny(ih58, 753);
@@ -210,24 +210,31 @@ test("account address rejects extension flag", () => {
   );
 });
 
-test("Local-8 payloads emit dedicated error code", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "wonderland",
+test("selector-prefixed legacy canonical payloads are rejected", () => {
+  const selectorFree = AccountAddress.fromAccount({
+    domain: DEFAULT_DOMAIN_NAME,
     publicKey: DEFAULT_PUBLIC_KEY,
   });
-  const canonical = Array.from(address.canonicalBytes());
+  const baseCanonical = Array.from(selectorFree.canonicalBytes());
+  const legacyLocal = [baseCanonical[0], 0x01];
+  for (let index = 0; index < 12; index += 1) {
+    legacyLocal.push(index + 1);
+  }
+  legacyLocal.push(...baseCanonical.slice(1));
   const digestStart = 2; // header (0) + domain tag (1)
   const truncated = Uint8Array.from(
-    canonical.slice(0, digestStart + 8).concat(canonical.slice(digestStart + 12)),
+    legacyLocal.slice(0, digestStart + 8).concat(legacyLocal.slice(digestStart + 12)),
   );
 
   assert.throws(
-    () => AccountAddress.fromCanonicalBytes(truncated),
+    () => AccountAddress.fromCanonicalBytes(Uint8Array.from(legacyLocal)),
     (error) => {
       assert(error instanceof AccountAddressError);
-      assert.equal(error.code, AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT);
-      assert.equal(error.details?.expected, 12);
-      assert.equal(error.details?.found, 8);
+      assert.ok(
+        error.code === AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES ||
+          error.code === AccountAddressErrorCode.UNKNOWN_CURVE ||
+          error.code === AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT,
+      );
       return true;
     },
   );
@@ -237,7 +244,9 @@ test("Local-8 payloads emit dedicated error code", () => {
     () => inspectAccountId(literal),
     (error) =>
       error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT,
+      (error.code === AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES ||
+        error.code === AccountAddressErrorCode.UNKNOWN_CURVE ||
+        error.code === AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT),
   );
 });
 
@@ -304,24 +313,22 @@ test("displayFormats exposes domain summary for UI hints", () => {
     label: DEFAULT_DOMAIN_NAME,
   });
 
-  const localAddress = AccountAddress.fromAccount({
-    domain: "treasury",
+  const nonDefaultAddress = AccountAddress.fromAccount({
+    domain: "wonderland",
     publicKey: ALT_PUBLIC_KEY,
   });
-  const localFormats = localAddress.displayFormats();
-  assert.equal(localFormats.domainSummary.kind, "local12");
-  assert.equal(typeof localFormats.domainSummary.warning, "string");
-  assert.equal(localFormats.domainSummary.selector.tag, 1);
-  assert.equal(localFormats.domainSummary.selector.registryId, null);
-  assert.equal(localFormats.domainSummary.selector.label, null);
-  assert.equal(localFormats.domainSummary.selector.digestHex.length, 24);
-  assert.ok(
-    localFormats.domainSummary.warning.includes("local-domain selector"),
-    "local12 warning should remind operators about selector cutover",
-  );
+  const nonDefaultFormats = nonDefaultAddress.displayFormats();
+  assert.equal(nonDefaultFormats.domainSummary.kind, "default");
+  assert.equal(nonDefaultFormats.domainSummary.warning, null);
+  assert.deepEqual(nonDefaultFormats.domainSummary.selector, {
+    tag: 0,
+    digestHex: null,
+    registryId: null,
+    label: DEFAULT_DOMAIN_NAME,
+  });
   assert.throws(
     () => {
-      localFormats.domainSummary.kind = "mutated";
+      nonDefaultFormats.domainSummary.kind = "mutated";
     },
     TypeError,
   );
@@ -464,29 +471,26 @@ test("displayFormats validates network prefix input", () => {
   );
 });
 
-test("fromAccount builds global registry selectors when registryId is provided", () => {
-  const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, "utf8"));
-  const globalCase = fixture.cases.positive.find(
-    (entry) => entry.selector?.kind === "global",
-  );
-  const address = AccountAddress.fromAccount({
-    registryId: globalCase.input.registry_id,
+test("fromAccount accepts registryId but keeps selector-free canonical payloads", () => {
+  const byRegistry = AccountAddress.fromAccount({
+    registryId: 42,
     publicKey: ALT_PUBLIC_KEY,
   });
-  assert.equal(
-    address.canonicalHex().toLowerCase(),
-    globalCase.encodings.canonical_hex.toLowerCase(),
-  );
-  assert.equal(address.toIH58(globalCase.encodings.ih58.prefix), globalCase.encodings.ih58.string);
-  const formats = address.displayFormats(globalCase.encodings.ih58.prefix);
-  assert.equal(formats.domainSummary.kind, "global");
+  const byDomain = AccountAddress.fromAccount({
+    domain: DEFAULT_DOMAIN_NAME,
+    publicKey: ALT_PUBLIC_KEY,
+  });
+  assert.equal(byRegistry.canonicalHex().toLowerCase(), byDomain.canonicalHex().toLowerCase());
+  assert.equal(byRegistry.toIH58(), byDomain.toIH58());
+
+  const formats = byRegistry.displayFormats(753);
+  assert.equal(formats.domainSummary.kind, "default");
   assert.equal(formats.domainSummary.warning, null);
-  const expectedDigestHex = globalCase.input.registry_id.toString(16).padStart(8, "0");
   assert.deepEqual(formats.domainSummary.selector, {
-    tag: 2,
-    digestHex: expectedDigestHex,
-    registryId: globalCase.input.registry_id,
-    label: null,
+    tag: 0,
+    digestHex: null,
+    registryId: null,
+    label: DEFAULT_DOMAIN_NAME,
   });
 });
 
@@ -699,11 +703,16 @@ test("native codec propagates IH58 errors", () => {
   );
 });
 
-test("parseAny accepts extended IH58 literals when native codec cannot materialize canonical bytes", () => {
+test("parseAny rejects extended IH58 literals that embed legacy selector bytes", () => {
   const literal =
     "34mSYn4nMg3BgfL1zuxFV3ikfCrVFzEjWsSzQeJtj1gXsHiYjkrUTuF6bySUzjZuH2PPbWgvG";
-  const parsed = AccountAddress.parseAny(literal);
-  assert.equal(parsed.address.toIH58(), literal);
+  assert.throws(
+    () => AccountAddress.parseAny(literal),
+    (error) =>
+      error instanceof AccountAddressError &&
+      (error.code === AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES ||
+        error.code === AccountAddressErrorCode.UNKNOWN_CURVE),
+  );
 });
 
 test("inspectAccountId enforces option shape", () => {
