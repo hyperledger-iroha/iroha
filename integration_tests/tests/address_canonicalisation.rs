@@ -2,6 +2,7 @@
 //! Roadmap ADDR-5 coverage ensuring Torii surfaces canonical IH58 account IDs.
 
 use std::{
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
     str::FromStr,
@@ -241,15 +242,37 @@ fn with_offline_allowance_genesis(
     mut builder: NetworkBuilder,
     certificate: &OfflineWalletCertificate,
 ) -> NetworkBuilder {
-    let asset_definition_id = certificate.allowance.asset.definition().clone();
-    let asset_domain = asset_definition_id.domain().clone();
     let genesis_domain = iroha_genesis::GENESIS_DOMAIN_ID.clone();
     let wonderland_domain: DomainId = "wonderland"
         .parse()
         .expect("default wonderland domain should parse");
-    if asset_domain != genesis_domain && asset_domain != wonderland_domain {
-        builder = builder.with_genesis_instruction(Register::domain(Domain::new(asset_domain)));
+
+    // Seed every domain touched by the fixture so genesis mint/register steps can resolve
+    // controller/operator/asset-owner scopes even when they use non-wonderland domains.
+    let mut required_domains = BTreeSet::new();
+    required_domains.insert(certificate.allowance.asset.definition().domain().clone());
+    required_domains.insert(certificate.allowance.asset.account().domain().clone());
+    required_domains.insert(certificate.controller.domain().clone());
+    required_domains.insert(certificate.operator.domain().clone());
+    for domain in required_domains {
+        if domain != genesis_domain && domain != wonderland_domain {
+            builder = builder.with_genesis_instruction(Register::domain(Domain::new(domain)));
+        }
     }
+
+    // Seed accounts used by the fixture before minting/registering the allowance.
+    // Default sample genesis already contains these identities, so skip to avoid duplicates.
+    let mut required_accounts = BTreeSet::new();
+    required_accounts.insert(certificate.allowance.asset.account().clone());
+    required_accounts.insert(certificate.controller.clone());
+    required_accounts.insert(certificate.operator.clone());
+    for account in required_accounts {
+        if account != *SAMPLE_GENESIS_ACCOUNT_ID && account != *ALICE_ID && account != *BOB_ID {
+            builder = builder.with_genesis_instruction(Register::account(Account::new(account)));
+        }
+    }
+
+    let asset_definition_id = certificate.allowance.asset.definition().clone();
     let scale = certificate.allowance.amount.scale();
     let asset_definition =
         AssetDefinition::new(asset_definition_id, NumericSpec::fractional(scale));

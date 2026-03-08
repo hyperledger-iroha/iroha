@@ -10,6 +10,18 @@ Last updated: 2026-03-08
   - `../pk-deploy/scripts/deploy-sbp-aed-pkr-interceptor.sh` no longer performs prior-layout trigger cleanup loops.
 - Wallet docs describe only current QR modes in neutral terms.
 
+## 2026-03-08 Integration Failures: CBDC Rollout + DA Kura Eviction
+- Fixed CBDC rollout fixture validation to accept canonical validator identifiers used by fixtures:
+  - `ci/check_cbdc_rollout.sh` now accepts either `name@domain`-style identifiers or non-empty encoded identifiers (without whitespace), instead of requiring `@` unconditionally.
+- Stabilized DA-backed Kura eviction integration coverage in multi-lane storage layouts:
+  - `integration_tests/tests/sumeragi_da.rs` now discovers the evicted block via `da_blocks/*.norito` paths and derives the matching lane `blocks.index`/`blocks.hashes` paths from that location.
+  - The test still verifies that the selected `blocks.index` entry is marked evicted (`u64::MAX`) and that the queried rehydrated block hash matches `blocks.hashes`.
+
+### Validation Matrix (CBDC + DA Eviction Fix)
+- `cargo fmt --all`
+- `cargo test -p integration_tests nexus::cbdc_rollout_bundle::cbdc_rollout_fixture_passes_validator -- --nocapture`
+- `cargo test -p integration_tests sumeragi_da::sumeragi_da_kura_eviction_rehydrates_from_da_store -- --nocapture`
+
 ## 2026-03-08 Telemetry Test Helper Duplication
 - Removed a duplicate async helper definition in `crates/iroha_telemetry/src/ws.rs` that caused
   `error[E0428]` for `broadcast_lag_does_not_stop_client_with_suite`.

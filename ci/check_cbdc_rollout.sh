@@ -60,8 +60,25 @@ validators = data.get("validators")
 if not isinstance(validators, list) or len(validators) < 3:
     raise SystemExit(f"[cbdc] manifest {path} must list ≥3 validators")
 for validator in validators:
-    if not isinstance(validator, str) or "@" not in validator:
+    if not isinstance(validator, str):
         raise SystemExit(f"[cbdc] manifest {path} validator '{validator}' malformed")
+    literal = validator.strip()
+    if not literal:
+        raise SystemExit(f"[cbdc] manifest {path} validator '{validator}' malformed")
+    if any(ch.isspace() for ch in literal):
+        raise SystemExit(
+            f"[cbdc] manifest {path} validator '{validator}' must not contain whitespace"
+        )
+    if "@" in literal:
+        left, right = literal.split("@", 1)
+        if not left or not right:
+            raise SystemExit(
+                f"[cbdc] manifest {path} validator '{validator}' malformed account identifier"
+            )
+    elif len(literal) < 16:
+        raise SystemExit(
+            f"[cbdc] manifest {path} validator '{validator}' must be a full validator identifier"
+        )
 
 quorum = data.get("quorum")
 if not isinstance(quorum, int) or quorum < 2:
