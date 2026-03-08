@@ -451,7 +451,7 @@ fn parse_fee_sponsor(
 }
 
 fn parse_account_id_literal(world: &impl WorldReadOnly, literal: &str) -> Option<AccountId> {
-    crate::block::parse_account_literal_with_world(world, literal)
+    crate::block::parse_account_literal_with_world(world, literal).or_else(|| literal.parse().ok())
 }
 
 /// Parse optional `gas_limit` from transaction metadata.
@@ -881,6 +881,7 @@ impl Executor {
             &state_transaction.world,
             &cfg.fee_sink_account_id,
         )
+        .or_else(|| cfg.fee_sink_account_id.parse().ok())
         .ok_or_else(|| {
             let reason =
                 "invalid nexus fee sink account id; expected account identifier".to_owned();
@@ -1907,16 +1908,21 @@ impl Executor {
             ));
         };
 
-        let domain = init.trim_matches(DELIMITER).parse().map_err(|_| {
-            ValidationFail::NotPermitted("violates multisig role name format".to_owned())
-        })?;
-        let parsed = AccountId::parse_encoded(last).map_err(|_| {
-            ValidationFail::NotPermitted("violates multisig role name format".to_owned())
-        })?;
-        Ok(Some(AccountId {
-            domain,
-            controller: parsed.account_id().controller().clone(),
-        }))
+        let domain_hint = init.trim_matches(DELIMITER);
+        if let Ok(account) = last.parse::<AccountId>() {
+            if account.domain().to_string() != domain_hint {
+                return Err(ValidationFail::NotPermitted(
+                    "violates multisig role name format".to_owned(),
+                ));
+            }
+            return Ok(Some(account));
+        }
+        format!("{last}@{domain_hint}")
+            .parse()
+            .map(Some)
+            .map_err(|_| {
+                ValidationFail::NotPermitted("violates multisig role name format".to_owned())
+            })
     }
 
     #[allow(clippy::too_many_lines, clippy::items_after_statements)]

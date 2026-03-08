@@ -5,7 +5,7 @@
         "Account": {
           "Asset": {
             "Removed": {
-              "asset": "rose#wonderland#6cmzPVPXA9wQAqZuZTNQr7fWhci8nVVkG6zQBHnHVK7RPo2Dfe1WG9B",
+              "asset": "rose##alice@wonderland",
               "amount": "50"
             }
           }
@@ -19,7 +19,7 @@
         "Account": {
           "Asset": {
             "Added": {
-              "asset": "rose#wonderland#6cmzPVPX4dvqvHwePuzkRqyn6qVMHNkGgjHcFLict547HbtMBuPBdWY",
+              "asset": "rose##bob@wonderland",
               "amount": "50"
             }
           }
@@ -39,7 +39,7 @@
         "Account": {
           "Asset": {
             "Removed": {
-              "asset": "rose#wonderland#6cmzPVPX4dvqvHwePuzkRqyn6qVMHNkGgjHcFLict547HbtMBuPBdWY",
+              "asset": "rose##bob@wonderland",
               "amount": "50"
             }
           }
@@ -53,7 +53,7 @@
         "Account": {
           "Asset": {
             "Added": {
-              "asset": "rose#wonderland#6cmzPVPX9B7h2rNZVMCzqF25QrAj3SBLMKGxR9NpAjvP8ADSLu4zYd4",
+              "asset": "rose##carol@wonderland",
               "amount": "50"
             }
           }
@@ -73,7 +73,7 @@
         "Account": {
           "Asset": {
             "Removed": {
-              "asset": "rose#wonderland#6cmzPVPX9B7h2rNZVMCzqF25QrAj3SBLMKGxR9NpAjvP8ADSLu4zYd4",
+              "asset": "rose##carol@wonderland",
               "amount": "50"
             }
           }
@@ -87,7 +87,7 @@
         "Account": {
           "Asset": {
             "Added": {
-              "asset": "rose#wonderland#6cmzPVPX6o9w4osmzvfiAAa1wQkn8DPBds3ix2aK48TeZ92RndPmGmF",
+              "asset": "rose##dave@wonderland",
               "amount": "50"
             }
           }
@@ -107,7 +107,7 @@
         "Account": {
           "Asset": {
             "Removed": {
-              "asset": "rose#wonderland#6cmzPVPX6o9w4osmzvfiAAa1wQkn8DPBds3ix2aK48TeZ92RndPmGmF",
+              "asset": "rose##dave@wonderland",
               "amount": "50"
             }
           }
@@ -121,7 +121,7 @@
         "Account": {
           "Asset": {
             "Added": {
-              "asset": "rose#wonderland#6cmzPVPX5rDvkRUZYtbNtLVjUNLzvwRCFvqzDcnxakCFEVJYXEE6hDU",
+              "asset": "rose##eve@wonderland",
               "amount": "50"
             }
           }
