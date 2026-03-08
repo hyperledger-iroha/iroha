@@ -156,7 +156,7 @@ iroha app gov vote --referendum-id r1 --proof-b64 BASE64_PROOF \
 For plain (non-ZK) referenda provide the required fields explicitly:
 
 ```bash
-iroha app gov vote --referendum-id r1 --mode plain --owner 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn \
+iroha app gov vote --referendum-id r1 --mode plain --owner alice@domain \
   --amount 1000 --duration-blocks 6000 --direction Aye
 ```
 
@@ -229,7 +229,7 @@ Register a verifying key (provide either `vk_bytes` as base64 or `commitment_hex
 ```bash
 cat >vk_register.json <<'JSON'
 {
-  "authority": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+  "authority": "alice@wonderland",
   "private_key": {"algorithm":"ed25519","payload":"..."},
   "backend": "halo2/ipa",
   "name": "vk_add",
@@ -247,7 +247,7 @@ Update an existing verifying key (version must increase). You may supply only th
 ```bash
 cat >vk_update.json <<'JSON'
 {
-  "authority": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+  "authority": "alice@wonderland",
   "private_key": {"algorithm":"ed25519","payload":"..."},
   "backend": "halo2/ipa",
   "name": "vk_add",
@@ -271,7 +271,7 @@ Deprecate a VK (removes the record in v1):
 ```bash
 cat >vk_deprecate.json <<'JSON'
 {
-  "authority": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+  "authority": "alice@wonderland",
   "private_key": {"algorithm":"ed25519","payload":"..."},
   "backend": "halo2/ipa",
   "name": "vk_add"
@@ -315,7 +315,7 @@ iroha app zk attachments cleanup --content-type application/json --before-ms 172
 Shield public funds (append a shielded note commitment):
 
 ```
-iroha app zk shield --asset rose#wonderland --from 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn \
+iroha app zk shield --asset rose#wonderland --from alice@wonderland \
   --amount 1000 --note-commitment 0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD
 ```
 
@@ -345,7 +345,7 @@ cat > fuzz/attachments/zk/unshield_proof.sample.json <<'JSON'
 }
 JSON
 
-iroha app zk unshield --asset rose#wonderland --to 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn --amount 1000 \
+iroha app zk unshield --asset rose#wonderland --to alice@wonderland --amount 1000 \
   --inputs DEADBEEF...CAFE,0123ABCD...ABCD --proof-json fuzz/attachments/zk/unshield_proof.sample.json
 
 ### Register a ZK-capable asset (Hybrid)
@@ -505,10 +505,10 @@ iroha ledger domain register --id "Soramitsu"
 
 ### Create new Account
 
-To create an account, specify the entity type (`account`) and the command (`register`). Then define the value of the `id` argument using an encoded account address literal (IH58 preferred, sora compressed also accepted):
+To create an account, specify the entity type (`account`) and the command (`register`). Then define the value of the `id` argument using an account alias in the `alias@domain` format, where the alias is the account's public key in multihash representation:
 
 ```bash
-iroha ledger account register --id "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+iroha ledger account register --id "ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu"
 ```
 
 ### Mint Asset to Account
@@ -517,20 +517,20 @@ To add assets to the account, you must first register an Asset Definition. Speci
 
 ```bash
 iroha ledger asset register --id "XOR#Soramitsu" --type Numeric
-iroha ledger asset mint --id "norito:<asset-id-hex>" --quantity 1010
+iroha ledger asset mint --id "XOR##ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu" --quantity 1010
 ```
 
-With this, you created `XOR#Soramitsu`, an asset of type `Numeric`, and then gave `1010` units of this asset to the account `6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn`.
+With this, you created `XOR#Soramitsu`, an asset of type `Numeric`, and then gave `1010` units of this asset to the account `ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu`.
 
 ### Query Account Assets Quantity
 
 You can use Query API to check that your instructions were applied and the _world_ is in the desired state. For example, to know how many units of a particular asset an account has, use `asset get` with the specified account and asset:
 
 ```bash
-iroha ledger asset get --id "norito:<asset-id-hex>"
+iroha ledger asset get --id "XOR##ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu"
 ```
 
-This query returns the quantity of `XOR#Soramitsu` asset for the `6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn` account.
+This query returns the quantity of `XOR#Soramitsu` asset for the `ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu` account.
 
 You can also filter based on either account, asset or domain id by using the filtering API provided by the Iroha client CLI. Generally, filtering follows the `iroha ledger ENTITY list filter PREDICATE` pattern, where ENTITY is asset, account or domain and PREDICATE is condition used for filtering serialized using JSON (check `iroha::data_model::predicate::value::ValuePredicate` type).
 

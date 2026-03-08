@@ -1,5 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_crypto::KeyPair;
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_data_model::account::AccountId;
 
 /// Create new account from a random keypair in the given domain

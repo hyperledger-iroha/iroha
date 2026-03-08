@@ -1371,10 +1371,8 @@ mod tests {
             {
                 let mut tx = block.transaction();
                 let trigger_id: TriggerId = "time_trigger".parse().expect("valid id");
-                let authority = AccountId::new(
-                    "wonderland".parse().expect("domain"),
-                    KeyPair::random().public_key().clone(),
-                );
+                let authority: AccountId =
+                    "alice@wonderland".parse().expect("authority must parse");
                 let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
                 let executable = Executable::Instructions(ConstVec::from(vec![instruction]));
                 let mut action = SpecializedAction::new(
@@ -1443,10 +1441,8 @@ mod tests {
             {
                 let mut tx = block.transaction();
                 let trigger_id: TriggerId = "time_trigger_disabled".parse().expect("valid id");
-                let authority = AccountId::new(
-                    "wonderland".parse().expect("domain"),
-                    KeyPair::random().public_key().clone(),
-                );
+                let authority: AccountId =
+                    "alice@wonderland".parse().expect("authority must parse");
                 let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
                 let executable = Executable::Instructions(ConstVec::from(vec![instruction]));
                 let mut action = SpecializedAction::new(
@@ -1500,10 +1496,8 @@ mod tests {
             {
                 let mut tx = block.transaction();
                 let trigger_id: TriggerId = "time_trigger_missing_meta".parse().expect("valid id");
-                let authority = AccountId::new(
-                    "wonderland".parse().expect("domain"),
-                    KeyPair::random().public_key().clone(),
-                );
+                let authority: AccountId =
+                    "alice@wonderland".parse().expect("authority must parse");
                 let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
                 let executable = Executable::Instructions(ConstVec::from(vec![instruction]));
                 let action = SpecializedAction::new(

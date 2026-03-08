@@ -222,22 +222,16 @@ fn role_permissions_are_deduplicated() {
     };
     let test_client = network.client();
 
-    let rose_asset = AssetId::new("rose#wonderland".parse().unwrap(), ALICE_ID.clone());
-    let canonical_asset = rose_asset.canonical_encoded();
-    let uppercase_asset = format!(
-        "NORITO:{}",
-        canonical_asset
-            .trim_start_matches("norito:")
-            .to_ascii_uppercase()
-    );
-
     let allow_alice_to_transfer_rose_1 = Permission::new(
         "CanTransferAsset".parse().unwrap(),
         iroha_primitives::json::Json::new(
-            norito::json::object([(
-                "asset",
-                norito::json::to_value(&canonical_asset).expect("serialize asset"),
-            )])
+            norito::json::object([
+                (
+                    "asset",
+                    norito::json::to_value(&"rose#wonderland#ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland")
+                        .expect("serialize asset"),
+                ),
+            ])
             .expect("serialize permission payload"),
         ),
     );
@@ -246,10 +240,13 @@ fn role_permissions_are_deduplicated() {
     let allow_alice_to_transfer_rose_2 = Permission::new(
         "CanTransferAsset".parse().unwrap(),
         iroha_primitives::json::Json::new(
-            norito::json::object([(
-                "asset",
-                norito::json::to_value(&uppercase_asset).expect("serialize asset"),
-            )])
+            norito::json::object([
+                (
+                    "asset",
+                    norito::json::to_value(&"rose##ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland")
+                        .expect("serialize asset"),
+                ),
+            ])
             .expect("serialize permission payload"),
         ),
     );

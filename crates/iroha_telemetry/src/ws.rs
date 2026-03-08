@@ -738,6 +738,58 @@ mod tests {
         );
     }
 
+    async fn broadcast_lag_does_not_stop_client_with_suite(suite: Suite) {
+        let Suite {
+            telemetry_sender,
+            mut message_receiver,
+            ..
+        } = suite;
+
+        telemetry_sender.send(system_connected_telemetry()).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Drain the initialization message so subsequent assertions focus on interval telemetry.
+        let _ = message_receiver.next().await.unwrap();
+
+        // Flood the channel faster than the client can drain it to trigger lag handling.
+        for peers in 0..200_u64 {
+            telemetry_sender
+                .send(system_interval_telemetry(peers))
+                .unwrap();
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        telemetry_sender
+            .send(system_interval_telemetry(777))
+            .unwrap();
+
+        // Ensure the latest update still arrives even after the lag burst.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        let mut received_latest = false;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_millis(100), message_receiver.next()).await {
+                Ok(Some(Message::Binary(bytes))) => {
+                    let map: Map = norito::json::from_slice(&bytes).unwrap();
+                    let Some(Value::Object(payload)) = map.get("payload") else {
+                        continue;
+                    };
+                    if payload.get("msg").and_then(Value::as_str) == Some("system.interval")
+                        && payload.get("peers").and_then(Value::as_u64) == Some(777)
+                    {
+                        received_latest = true;
+                        break;
+                    }
+                }
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => break,
+            }
+        }
+
+        assert!(
+            received_latest,
+            "expected telemetry to continue after broadcast lag"
+        );
+    }
+
     macro_rules! test_with_suite {
         ($ident:ident, $future:ident) => {
             #[tokio::test]

@@ -13,11 +13,11 @@ __Example usage:__
 
 ```bash
 iroha ledger multisig register \
---account 6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw \
+--account ed01203EB45C199FD3998A18FCA1E567F5F228C714BFF5203FEFF00FF06230836BAD22@domain \
 --signatories \
-6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw \
-6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV \
-94X2J6c3bebCHta4nT6Xmw2k2qUKWxAA4L17gSqYMgfEaiK55yDsiCS7eNNS98GKkGNinkEpHvNjM7X2n48HpEuKGYA9PdsVT3C9QQ11UKq2WshWSt6 \
+ed01203EB45C199FD3998A18FCA1E567F5F228C714BFF5203FEFF00FF06230836BAD22@domain \
+ed01206D75010256E96805161387608125326DD0068F29B4D4FC6755C98E5DA5413EC5@domain \
+ed01201F8E7213A3064DF569776E2ED861D21E574BED93EE5BC41B5540593E70182F8B@domain \
 --weights 1 2 3 \
 --quorum 3 \
 --transaction-ttl "1y 6M 2w 3d 12h 30m 30s"
@@ -66,10 +66,10 @@ __Example usage:__
 
 ```bash
 echo '"congratulations"' | iroha -o ledger account meta set \
---id 6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV \
+--id ed0120987EE8092B2CE4622B4F66D6FE87F5D61575F0D0DFCB2D6B2E8905FE68F685B6@domain \
 --key success_marker \
 | iroha ledger multisig propose \
---account 6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV
+--account ed0120987EE8092B2CE4622B4F66D6FE87F5D61575F0D0DFCB2D6B2E8905FE68F685B6@domain
 ```
 
 __Explanation:__
@@ -99,7 +99,7 @@ __Example output:__
       {
         "SetKeyValue": {
           "Account": {
-            "object": "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV",
+            "object": "ed0120987EE8092B2CE4622B4F66D6FE87F5D61575F0D0DFCB2D6B2E8905FE68F685B6@domain",
             "key": "success_marker",
             "value": "congratulations"
           }
@@ -109,7 +109,7 @@ __Example output:__
     "proposed_at": "2025-02-06T19:59:58Z",
     "expires_in": "1year 6months 17days 12h 26m 39s",
     "approval_path": [
-      "2 -> [1/3] 6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV"
+      "2 -> [1/3] ed0120987EE8092B2CE4622B4F66D6FE87F5D61575F0D0DFCB2D6B2E8905FE68F685B6@domain"
     ]
   }
 }
@@ -135,7 +135,7 @@ __Example usage:__
 
 ```bash
 iroha ledger multisig approve \
---account 6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV \
+--account ed0120987EE8092B2CE4622B4F66D6FE87F5D61575F0D0DFCB2D6B2E8905FE68F685B6@domain \
 --instructions-hash FB8AEBB405236A9B4CCD26BBA4988D0B8E03957FDC52DD2A1F9F0A6953079989
 ```
 
