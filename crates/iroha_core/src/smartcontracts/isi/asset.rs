@@ -606,7 +606,9 @@ pub mod query {
 
             match field {
                 "account" | "account_id" | "owner" => {
-                    if let Ok(account_id) = raw.parse() {
+                    if let Ok(account_id) = AccountId::parse_encoded(raw)
+                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    {
                         self.accounts.insert(account_id);
                     }
                 }

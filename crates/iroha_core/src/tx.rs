@@ -24,7 +24,6 @@ use eyre::Result;
 use hex;
 pub use iroha_data_model::prelude::*;
 use iroha_data_model::{
-    account::address::AccountAddress as IrohaAccountAddress,
     fraud::types::FraudAssessment,
     isi::error::Mismatch,
     isi::{
@@ -2245,31 +2244,12 @@ fn collect_manifest_approvals(
                 "`gov_manifest_approvers` metadata entries must not be blank",
             ));
         }
-        let canonical = if let Ok(account) = AccountId::from_str(trimmed) {
-            account.canonical_ih58().map_err(|err| {
-                reject_lane_policy(
-                    alias,
-                    format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
-                )
-            })?
-        } else {
-            let prefix = iroha_data_model::account::address::chain_discriminant();
-            let (address, _) =
-                IrohaAccountAddress::parse_any(trimmed, Some(prefix)).map_err(|err| {
-                    reject_lane_policy(
-                        alias,
-                        format!(
-                            "invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"
-                        ),
-                    )
-                })?;
-            address.to_ih58(prefix).map_err(|err| {
-                reject_lane_policy(
-                    alias,
-                    format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
-                )
-            })?
-        };
+        let canonical = AccountId::canonicalize(trimmed).map_err(|err| {
+            reject_lane_policy(
+                alias,
+                format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
+            )
+        })?;
         approvals.insert(canonical);
     }
     Ok(approvals)
