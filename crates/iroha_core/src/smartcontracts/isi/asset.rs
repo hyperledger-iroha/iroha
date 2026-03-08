@@ -606,9 +606,7 @@ pub mod query {
 
             match field {
                 "account" | "account_id" | "owner" => {
-                    if let Ok(account_id) = AccountId::parse_encoded(raw)
-                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                    {
+                    if let Ok(account_id) = raw.parse() {
                         self.accounts.insert(account_id);
                     }
                 }
@@ -623,7 +621,7 @@ pub mod query {
                     }
                 }
                 "id" => {
-                    if let Ok(asset_id) = AssetId::parse_encoded(raw) {
+                    if let Ok(asset_id) = raw.parse::<AssetId>() {
                         self.accounts.insert(asset_id.account().clone());
                         self.definitions.insert(asset_id.definition().clone());
                         self.domains.insert(asset_id.account().domain().clone());
