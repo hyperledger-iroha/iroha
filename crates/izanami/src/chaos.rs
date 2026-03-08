@@ -59,24 +59,22 @@ const IZANAMI_COLLECTORS_K: u16 = 4;
 const IZANAMI_REDUNDANT_SEND_R: u8 = 4;
 const IZANAMI_PACING_FACTOR_BPS: u32 = 10_000;
 // Shared-host soak profile: bias towards deterministic progress over peak throughput.
-const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 3;
-const IZANAMI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 2;
-const IZANAMI_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 1_000;
+const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 1;
+const IZANAMI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 1;
+const IZANAMI_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 750;
 const IZANAMI_FUTURE_HEIGHT_WINDOW: i64 = 2;
 const IZANAMI_FUTURE_VIEW_WINDOW: i64 = 2;
-const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 150;
-const IZANAMI_NPOS_COMMIT_TIME_MS: i64 = 240;
+const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 120;
+const IZANAMI_NPOS_COMMIT_TIME_MS: i64 = 180;
 const IZANAMI_RECOVERY_HEIGHT_ATTEMPT_CAP: i64 = 24;
-const IZANAMI_RECOVERY_HEIGHT_WINDOW_MS: i64 = 6_000;
-const IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 3_000;
-const IZANAMI_RECOVERY_NO_ROSTER_FALLBACK_VIEWS: i64 = 2;
-const IZANAMI_RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW: i64 = 2;
-const IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 6_000;
+const IZANAMI_RECOVERY_HEIGHT_WINDOW_MS: i64 = 3_000;
+const IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 1_500;
+const IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 3_000;
 const IZANAMI_RECOVERY_MISSING_BLOCK_HEIGHT_TTL_MS: i64 = IZANAMI_RECOVERY_HEIGHT_WINDOW_MS;
 const IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: i64 = 2;
 const IZANAMI_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: i64 = 1;
 const IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER: i64 = 3;
-const IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS: i64 = 20_000;
+const IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS: i64 = 8_000;
 const IZANAMI_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: i64 = 2;
 const IZANAMI_NPOS_TIMEOUT_PROPOSE_MIN_MS: u64 = 40;
 const IZANAMI_NPOS_TIMEOUT_PREVOTE_MIN_MS: u64 = 60;
@@ -105,6 +103,7 @@ const IZANAMI_INGRESS_STATUS_TIMEOUT_MS: u64 = 20_000;
 const IZANAMI_INGRESS_QUEUE_PRESSURE_COOLDOWN_MAX_SHIFT: u32 = 4;
 const IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS: u32 = 2;
 const IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS: u64 = 250;
+const IZANAMI_QUEUE_TIMEOUT_ENDPOINT_BACKPRESSURE_RETRY_MULTIPLIER: u32 = 4;
 const IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 const IZANAMI_WORKER_FAILURE_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
 const IZANAMI_PEER_LOG_BASE_LEVEL: &str = "WARN";
@@ -227,26 +226,54 @@ impl IngressStats {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IngressEndpointState {
+    Healthy,
+    LaggingExcluded,
+    QueuePressureCooldown {
+        streak: u32,
+        next_probe_window: Instant,
+    },
+    UnhealthyRetryable {
+        next_probe_window: Instant,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct EndpointHealthState {
     consecutive_failures: u32,
     consecutive_queue_pressure_failures: u32,
     unhealthy_until: Option<Instant>,
     last_probe_at: Option<Instant>,
     sticky_unhealthy_until: Option<Instant>,
+    endpoint_state: IngressEndpointState,
+}
+
+impl Default for EndpointHealthState {
+    fn default() -> Self {
+        Self {
+            consecutive_failures: 0,
+            consecutive_queue_pressure_failures: 0,
+            unhealthy_until: None,
+            last_probe_at: None,
+            sticky_unhealthy_until: None,
+            endpoint_state: IngressEndpointState::Healthy,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 struct IngressLagSnapshot {
     quorum_min_height: u64,
-    endpoint_heights: Vec<Option<u64>>,
-    sampled_at: Instant,
+    peer_heights: Vec<Option<u64>>,
+    observed_at: Instant,
 }
 
 #[derive(Clone)]
 struct EndpointHealthPool {
     labels: Arc<Vec<String>>,
     state: Arc<StdMutex<Vec<EndpointHealthState>>>,
+    all_unhealthy_probe_at: Arc<StdMutex<Option<Instant>>>,
     lag_snapshot: Arc<StdMutex<Option<IngressLagSnapshot>>>,
     cursor: Arc<AtomicU64>,
     config: IngressEndpointPoolConfig,
@@ -263,6 +290,7 @@ impl EndpointHealthPool {
         Self {
             labels: Arc::new(labels),
             state: Arc::new(StdMutex::new(vec![EndpointHealthState::default(); len])),
+            all_unhealthy_probe_at: Arc::new(StdMutex::new(None)),
             lag_snapshot: Arc::new(StdMutex::new(None)),
             cursor: Arc::new(AtomicU64::new(0)),
             config,
@@ -360,22 +388,39 @@ impl EndpointHealthPool {
         }
     }
 
-    fn attempt_order_at(&self, now: Instant) -> Vec<usize> {
-        let len = self.labels.len();
-        if len == 0 {
-            return Vec::new();
+    fn probe_due_at(&self, state: &EndpointHealthState, now: Instant) -> bool {
+        state
+            .last_probe_at
+            .is_none_or(|last| now.saturating_duration_since(last) >= self.config.reprobe_interval)
+    }
+
+    fn all_unhealthy_probe_slot_available(&self, now: Instant, reserve: bool) -> bool {
+        let Ok(mut guard) = self.all_unhealthy_probe_at.lock() else {
+            return true;
+        };
+        let due = guard
+            .is_none_or(|last| now.saturating_duration_since(last) >= self.config.reprobe_interval);
+        if due && reserve {
+            *guard = Some(now);
         }
+        due
+    }
+
+    fn lagging_flags_at(&self, now: Instant, len: usize) -> Vec<bool> {
         let lag_snapshot = self
             .lag_snapshot
             .lock()
             .ok()
             .and_then(|guard| (*guard).clone())
-            .filter(|snapshot| snapshot.endpoint_heights.len() == len);
-        let lagging_flags = lag_snapshot
+            .filter(|snapshot| snapshot.peer_heights.len() == len);
+        let _lag_snapshot_age = lag_snapshot
+            .as_ref()
+            .map(|snapshot| now.saturating_duration_since(snapshot.observed_at));
+        lag_snapshot
             .as_ref()
             .map(|snapshot| {
                 snapshot
-                    .endpoint_heights
+                    .peer_heights
                     .iter()
                     .map(|height| {
                         height.is_some_and(|height| {
@@ -385,30 +430,36 @@ impl EndpointHealthPool {
                     })
                     .collect::<Vec<_>>()
             })
-            .unwrap_or_else(|| vec![false; len]);
-        let _lag_snapshot_age = lag_snapshot
-            .as_ref()
-            .map(|snapshot| now.saturating_duration_since(snapshot.sampled_at));
+            .unwrap_or_else(|| vec![false; len])
+    }
+
+    fn attempt_order_with_state(
+        &self,
+        state: &mut [EndpointHealthState],
+        lagging_flags: &[bool],
+        now: Instant,
+        base_idx: usize,
+        mark_probe_timestamps: bool,
+    ) -> Vec<usize> {
+        let len = state.len();
         let has_non_lagging_endpoint = lagging_flags.iter().any(|flag| !flag);
-        let base = self.cursor.fetch_add(1, Ordering::Relaxed);
-        let base_idx_u64 = base % u64::try_from(len).unwrap_or(1);
-        let base_idx = usize::try_from(base_idx_u64).unwrap_or(0);
         let mut healthy = Vec::with_capacity(len);
         let mut probes = Vec::new();
         let mut sticky_probe_candidates = Vec::new();
         let mut lagging_fallback_healthy = Vec::new();
         let mut lagging_fallback_unhealthy = Vec::new();
         let mut forced_probe: Option<(usize, Instant)> = None;
-        let mut guard = self
-            .state
-            .lock()
-            .expect("endpoint health state mutex should not be poisoned");
         for offset in 0..len {
             let idx = (base_idx + offset) % len;
             let excluded_by_lag = has_non_lagging_endpoint && lagging_flags[idx];
-            let state = &mut guard[idx];
-            let still_unhealthy = state.unhealthy_until.is_some_and(|until| now < until);
+            let endpoint_state = &mut state[idx];
+            let still_unhealthy = endpoint_state
+                .unhealthy_until
+                .is_some_and(|until| now < until);
             if excluded_by_lag {
+                if !still_unhealthy {
+                    endpoint_state.endpoint_state = IngressEndpointState::LaggingExcluded;
+                }
                 if still_unhealthy {
                     lagging_fallback_unhealthy.push(idx);
                 } else {
@@ -417,26 +468,34 @@ impl EndpointHealthPool {
                 continue;
             }
             if !still_unhealthy {
-                state.unhealthy_until = None;
-                state.sticky_unhealthy_until = None;
+                endpoint_state.unhealthy_until = None;
+                endpoint_state.sticky_unhealthy_until = None;
+                endpoint_state.endpoint_state = IngressEndpointState::Healthy;
                 healthy.push(idx);
                 continue;
             }
-            let probe_due = state.last_probe_at.is_none_or(|last| {
-                now.saturating_duration_since(last) >= self.config.reprobe_interval
-            });
-            if probe_due {
-                let sticky_active = state
+            if self.probe_due_at(endpoint_state, now) {
+                let sticky_active = endpoint_state
                     .sticky_unhealthy_until
                     .is_some_and(|until| now < until);
                 if sticky_active {
+                    if let Some(next_probe_window) = endpoint_state.sticky_unhealthy_until {
+                        endpoint_state.endpoint_state =
+                            IngressEndpointState::QueuePressureCooldown {
+                                streak: endpoint_state.consecutive_queue_pressure_failures.max(1),
+                                next_probe_window,
+                            };
+                    }
                     sticky_probe_candidates.push(idx);
                 } else {
-                    state.last_probe_at = Some(now);
+                    if let Some(next_probe_window) = endpoint_state.unhealthy_until {
+                        endpoint_state.endpoint_state =
+                            IngressEndpointState::UnhealthyRetryable { next_probe_window };
+                    }
                     probes.push(idx);
                 }
             }
-            if let Some(unhealthy_until) = state.unhealthy_until {
+            if let Some(unhealthy_until) = endpoint_state.unhealthy_until {
                 let should_replace = forced_probe
                     .map(|(_, current_until)| unhealthy_until < current_until)
                     .unwrap_or(true);
@@ -446,10 +505,10 @@ impl EndpointHealthPool {
             }
         }
         if healthy.is_empty() {
-            for idx in sticky_probe_candidates {
-                if let Some(state) = guard.get_mut(idx) {
-                    state.last_probe_at = Some(now);
-                }
+            if !probes.is_empty() {
+                // Keep exactly one unhealthy probe candidate per ordering pass.
+                probes.truncate(1);
+            } else if let Some(idx) = sticky_probe_candidates.first().copied() {
                 probes.push(idx);
             }
         }
@@ -457,34 +516,141 @@ impl EndpointHealthPool {
             if let Some(idx) = lagging_fallback_healthy.first().copied() {
                 probes.push(idx);
             } else if let Some(idx) = lagging_fallback_unhealthy.first().copied() {
-                if let Some(state) = guard.get_mut(idx) {
-                    state.last_probe_at = Some(now);
+                let probe_due = state
+                    .get(idx)
+                    .is_some_and(|endpoint_state| self.probe_due_at(endpoint_state, now));
+                if probe_due {
+                    probes.push(idx);
                 }
-                probes.push(idx);
             } else if let Some((idx, _)) = forced_probe {
-                if let Some(state) = guard.get_mut(idx) {
-                    state.last_probe_at = Some(now);
+                let probe_due = state
+                    .get(idx)
+                    .is_some_and(|endpoint_state| self.probe_due_at(endpoint_state, now));
+                if probe_due {
+                    probes.push(idx);
                 }
-                probes.push(idx);
+            }
+        }
+        if healthy.is_empty()
+            && !probes.is_empty()
+            && !self.all_unhealthy_probe_slot_available(now, mark_probe_timestamps)
+        {
+            probes.clear();
+        }
+        if mark_probe_timestamps {
+            for idx in &probes {
+                if let Some(endpoint_state) = state.get_mut(*idx) {
+                    endpoint_state.last_probe_at = Some(now);
+                }
             }
         }
         healthy.extend(probes);
         healthy
     }
 
+    fn attempt_order_preview_at(&self, now: Instant) -> Vec<usize> {
+        let len = self.labels.len();
+        if len == 0 {
+            return Vec::new();
+        }
+        let lagging_flags = self.lagging_flags_at(now, len);
+        let base = self.cursor.load(Ordering::Relaxed);
+        let base_idx_u64 = base % u64::try_from(len).unwrap_or(1);
+        let base_idx = usize::try_from(base_idx_u64).unwrap_or(0);
+        let state = self
+            .state
+            .lock()
+            .expect("endpoint health state mutex should not be poisoned")
+            .clone();
+        let mut preview_state = state;
+        self.attempt_order_with_state(
+            preview_state.as_mut_slice(),
+            &lagging_flags,
+            now,
+            base_idx,
+            false,
+        )
+    }
+
+    fn submission_backpressure_delay_at(&self, now: Instant) -> Option<Duration> {
+        if !self.attempt_order_preview_at(now).is_empty() {
+            return None;
+        }
+        let guard = self
+            .state
+            .lock()
+            .expect("endpoint health state mutex should not be poisoned");
+        let mut next_delay: Option<Duration> = None;
+        for endpoint_state in guard.iter() {
+            if let Some(last_probe_at) = endpoint_state.last_probe_at {
+                let elapsed = now.saturating_duration_since(last_probe_at);
+                if elapsed < self.config.reprobe_interval {
+                    let remaining = self.config.reprobe_interval.saturating_sub(elapsed);
+                    next_delay =
+                        Some(next_delay.map_or(remaining, |current| current.min(remaining)));
+                }
+            }
+            if let Some(unhealthy_until) = endpoint_state.unhealthy_until
+                && now < unhealthy_until
+            {
+                let remaining = unhealthy_until.saturating_duration_since(now);
+                next_delay = Some(next_delay.map_or(remaining, |current| current.min(remaining)));
+            }
+        }
+        Some(
+            next_delay
+                .unwrap_or_else(|| Duration::from_millis(IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS))
+                .max(Duration::from_millis(1)),
+        )
+    }
+
+    fn attempt_order_at(&self, now: Instant) -> Vec<usize> {
+        let len = self.labels.len();
+        if len == 0 {
+            return Vec::new();
+        }
+        let lagging_flags = self.lagging_flags_at(now, len);
+        let base = self.cursor.fetch_add(1, Ordering::Relaxed);
+        let base_idx_u64 = base % u64::try_from(len).unwrap_or(1);
+        let base_idx = usize::try_from(base_idx_u64).unwrap_or(0);
+        let mut guard = self
+            .state
+            .lock()
+            .expect("endpoint health state mutex should not be poisoned");
+        self.attempt_order_with_state(guard.as_mut_slice(), &lagging_flags, now, base_idx, true)
+    }
+
     fn mark_success_at(&self, endpoint_idx: usize, now: Instant) {
         if let Ok(mut guard) = self.state.lock() {
+            let all_endpoints_unhealthy = guard
+                .iter()
+                .all(|state| state.unhealthy_until.is_some_and(|until| now < until));
             if let Some(state) = guard.get_mut(endpoint_idx) {
                 if state
                     .sticky_unhealthy_until
                     .is_some_and(|until| now < until)
                 {
+                    if all_endpoints_unhealthy {
+                        state.consecutive_failures = 0;
+                        state.consecutive_queue_pressure_failures = 0;
+                        state.unhealthy_until = None;
+                        state.sticky_unhealthy_until = None;
+                        state.endpoint_state = IngressEndpointState::Healthy;
+                        return;
+                    }
+                    if let Some(next_probe_window) = state.sticky_unhealthy_until {
+                        state.endpoint_state = IngressEndpointState::QueuePressureCooldown {
+                            streak: state.consecutive_queue_pressure_failures.max(1),
+                            next_probe_window,
+                        };
+                    }
                     return;
                 }
                 state.consecutive_failures = 0;
                 state.consecutive_queue_pressure_failures = 0;
                 state.unhealthy_until = None;
                 state.sticky_unhealthy_until = None;
+                state.endpoint_state = IngressEndpointState::Healthy;
             }
         }
     }
@@ -536,8 +702,18 @@ impl EndpointHealthPool {
         let was_unhealthy = state.unhealthy_until.is_some_and(|until| now < until);
         let unhealthy_until = now.checked_add(cooldown).unwrap_or(now);
         state.unhealthy_until = Some(unhealthy_until);
-        state.sticky_unhealthy_until =
-            matches!(failure_class, IngressFailureClass::QueuePressure).then_some(unhealthy_until);
+        if matches!(failure_class, IngressFailureClass::QueuePressure) {
+            state.sticky_unhealthy_until = Some(unhealthy_until);
+            state.endpoint_state = IngressEndpointState::QueuePressureCooldown {
+                streak: state.consecutive_queue_pressure_failures.max(1),
+                next_probe_window: unhealthy_until,
+            };
+        } else {
+            state.sticky_unhealthy_until = None;
+            state.endpoint_state = IngressEndpointState::UnhealthyRetryable {
+                next_probe_window: unhealthy_until,
+            };
+        }
         !was_unhealthy
     }
 
@@ -608,18 +784,18 @@ impl IngressEndpointPool {
         sampled_heights: &[(PeerId, u64)],
         sampled_at: Instant,
     ) {
-        let mut endpoint_heights = vec![None; self.endpoints.len()];
+        let mut peer_heights = vec![None; self.endpoints.len()];
         for (peer_id, height) in sampled_heights {
             if let Some(endpoint_idx) = self.endpoint_index_by_peer.get(peer_id)
-                && let Some(slot) = endpoint_heights.get_mut(*endpoint_idx)
+                && let Some(slot) = peer_heights.get_mut(*endpoint_idx)
             {
                 *slot = Some(*height);
             }
         }
         self.health.update_lag_snapshot(IngressLagSnapshot {
             quorum_min_height,
-            endpoint_heights,
-            sampled_at,
+            peer_heights,
+            observed_at: sampled_at,
         });
     }
 
@@ -635,6 +811,10 @@ impl IngressEndpointPool {
                     .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
                 operation(&endpoint.peer)
             })
+    }
+
+    fn submission_backpressure_delay(&self, now: Instant) -> Option<Duration> {
+        self.health.submission_backpressure_delay_at(now)
     }
 }
 
@@ -669,6 +849,10 @@ fn is_ingress_queue_pressure_message(message: &str) -> bool {
         || message.contains("haven't got tx confirmation within")
 }
 
+fn is_ingress_endpoint_backpressure_message(message: &str) -> bool {
+    message.contains("no ingress endpoints available for operation")
+}
+
 fn classify_ingress_failure(error: &color_eyre::Report) -> IngressFailureClass {
     let message = ingress_error_message(error);
     if is_ingress_queue_pressure_message(&message) {
@@ -687,52 +871,113 @@ fn classify_ingress_failure(error: &color_eyre::Report) -> IngressFailureClass {
     }
 }
 
+#[cfg(test)]
 fn is_ingress_failover_retryable(error: &color_eyre::Report) -> bool {
     classify_ingress_failure(error).is_retryable()
 }
 
 fn is_ingress_queue_timeout_retryable(error: &color_eyre::Report) -> bool {
-    is_ingress_queue_pressure_message(&ingress_error_message(error))
+    let message = ingress_error_message(error);
+    is_ingress_queue_pressure_message(&message)
+        || is_ingress_endpoint_backpressure_message(&message)
 }
 
-fn run_with_queue_timeout_retry<F>(plan_label: &'static str, submit: F) -> Result<()>
-where
-    F: FnMut() -> Result<()>,
-{
-    run_with_queue_timeout_retry_with_policy(
-        plan_label,
-        IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS,
-        Duration::from_millis(IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS),
-        submit,
-    )
+fn queue_timeout_retry_delay(
+    backoff: Duration,
+    endpoint_backpressure: bool,
+    dynamic_backpressure_delay: Option<Duration>,
+) -> Duration {
+    if endpoint_backpressure {
+        backoff.max(
+            dynamic_backpressure_delay
+                .unwrap_or_else(|| Duration::from_millis(IZANAMI_INGRESS_REPROBE_INTERVAL_MS)),
+        )
+    } else {
+        backoff
+    }
 }
 
+#[cfg(test)]
 fn run_with_queue_timeout_retry_with_policy<F>(
     plan_label: &'static str,
     max_retry_attempts: u32,
     initial_backoff: Duration,
-    mut submit: F,
+    submit: F,
 ) -> Result<()>
 where
     F: FnMut() -> Result<()>,
 {
+    run_with_queue_timeout_retry_with_policy_and_delay(
+        plan_label,
+        max_retry_attempts,
+        initial_backoff,
+        || None,
+        submit,
+    )
+}
+
+fn run_with_queue_timeout_retry_with_policy_and_delay<F, G>(
+    plan_label: &'static str,
+    max_retry_attempts: u32,
+    initial_backoff: Duration,
+    mut no_endpoint_backpressure_delay: G,
+    mut submit: F,
+) -> Result<()>
+where
+    F: FnMut() -> Result<()>,
+    G: FnMut() -> Option<Duration>,
+{
     let mut backoff = initial_backoff;
-    for attempt in 0..=max_retry_attempts {
+    let mut retryable_attempts = 0_u32;
+    let mut endpoint_backpressure_retries = 0_u32;
+    let max_endpoint_backpressure_retries = max_retry_attempts
+        .saturating_mul(IZANAMI_QUEUE_TIMEOUT_ENDPOINT_BACKPRESSURE_RETRY_MULTIPLIER)
+        .max(4);
+    loop {
         match submit() {
             Ok(()) => return Ok(()),
-            Err(err)
-                if is_ingress_queue_timeout_retryable(&err) && attempt < max_retry_attempts =>
-            {
-                let retry_in = backoff;
-                let next_attempt = attempt.saturating_add(2);
+            Err(err) if is_ingress_queue_timeout_retryable(&err) => {
+                let error_message = ingress_error_message(&err);
+                let endpoint_backpressure =
+                    is_ingress_endpoint_backpressure_message(&error_message);
+                let retry_budget_available = if endpoint_backpressure {
+                    endpoint_backpressure_retries < max_endpoint_backpressure_retries
+                } else {
+                    retryable_attempts < max_retry_attempts
+                };
+                if !retry_budget_available {
+                    return Err(err);
+                }
+                let dynamic_backpressure_delay = if endpoint_backpressure {
+                    no_endpoint_backpressure_delay()
+                } else {
+                    None
+                };
+                if endpoint_backpressure {
+                    endpoint_backpressure_retries = endpoint_backpressure_retries.saturating_add(1);
+                } else {
+                    retryable_attempts = retryable_attempts.saturating_add(1);
+                }
+                let retry_in = queue_timeout_retry_delay(
+                    backoff,
+                    endpoint_backpressure,
+                    dynamic_backpressure_delay,
+                );
+                let next_attempt = retryable_attempts
+                    .saturating_add(endpoint_backpressure_retries)
+                    .saturating_add(1);
                 warn!(
                     target: "izanami::workload",
                     plan = plan_label,
                     next_attempt,
-                    max_attempts = max_retry_attempts.saturating_add(1),
+                    max_attempts = max_retry_attempts
+                        .saturating_add(max_endpoint_backpressure_retries)
+                        .saturating_add(1),
+                    endpoint_backpressure,
+                    ?dynamic_backpressure_delay,
                     ?retry_in,
                     ?err,
-                    "submission queue timeout observed; retrying plan submission"
+                    "submission ingress backpressure observed; retrying plan submission"
                 );
                 if !retry_in.is_zero() {
                     std::thread::sleep(retry_in);
@@ -742,7 +987,6 @@ where
             Err(err) => return Err(err),
         }
     }
-    Err(eyre!("submission retry loop exhausted without a result"))
 }
 
 fn contains_http_5xx_status(message: &str) -> bool {
@@ -1177,14 +1421,6 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
                 recovery_profile.missing_qc_reacquire_window_ms,
             )
             .write(
-                ["sumeragi", "recovery", "no_roster_fallback_views"],
-                IZANAMI_RECOVERY_NO_ROSTER_FALLBACK_VIEWS,
-            )
-            .write(
-                ["sumeragi", "recovery", "no_roster_refresh_retry_per_view"],
-                IZANAMI_RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW,
-            )
-            .write(
                 ["sumeragi", "recovery", "deferred_qc_ttl_ms"],
                 recovery_profile.deferred_qc_ttl_ms,
             )
@@ -1421,6 +1657,7 @@ impl IzanamiRunner {
                 target_blocks,
                 self.config.progress_interval,
                 self.config.progress_timeout,
+                self.config.latency_p95_threshold,
                 &run_control,
                 Some(ingress_pool.as_ref()),
             )
@@ -1587,6 +1824,21 @@ impl IzanamiRunner {
                 }
                 if run_control.should_stop() {
                     break;
+                }
+                if let Some(retry_after) =
+                    ingress_pool.submission_backpressure_delay(Instant::now())
+                {
+                    debug!(
+                        target: "izanami::ingress",
+                        ?retry_after,
+                        "deferring workload submit while ingress endpoints remain in cooldown"
+                    );
+                    tokio::select! {
+                        () = time::sleep(retry_after) => {},
+                        () = stop_notify.notified() => break,
+                        () = time::sleep_until(deadline.into()) => break,
+                    }
+                    continue;
                 }
                 let plan = match workload.next_plan(&mut load_rng).await {
                     Ok(plan) => plan,
@@ -1764,18 +2016,88 @@ impl ProgressState {
         }
     }
 
-    fn update(&mut self, now: Instant, height: u64) -> bool {
+    fn update(&mut self, now: Instant, height: u64) -> Option<(u64, Duration)> {
         if height > self.last_height {
+            let blocks_advanced = height.saturating_sub(self.last_height);
+            let elapsed = now.duration_since(self.last_progress_at);
             self.last_height = height;
             self.last_progress_at = now;
-            true
+            Some((blocks_advanced, elapsed))
         } else {
-            false
+            None
         }
     }
 
     fn stalled(&self, now: Instant, timeout: Duration) -> bool {
         now.duration_since(self.last_progress_at) >= timeout
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WeightedIntervalSample {
+    interval_ms: u64,
+    weight: u64,
+}
+
+#[derive(Default)]
+struct BlockIntervalTracker {
+    samples: Vec<WeightedIntervalSample>,
+    total_weight: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BlockIntervalSummary {
+    p50_ms: u64,
+    p95_ms: u64,
+    samples: u64,
+}
+
+impl BlockIntervalTracker {
+    fn record(&mut self, blocks_advanced: u64, elapsed: Duration) -> Option<u64> {
+        if blocks_advanced == 0 {
+            return None;
+        }
+        let elapsed_ms = u64::try_from(elapsed.as_millis())
+            .unwrap_or(u64::MAX)
+            .max(1);
+        let interval_ms = elapsed_ms.div_ceil(blocks_advanced);
+        self.samples.push(WeightedIntervalSample {
+            interval_ms,
+            weight: blocks_advanced,
+        });
+        self.total_weight = self.total_weight.saturating_add(blocks_advanced);
+        Some(interval_ms)
+    }
+
+    fn summary(&self) -> Option<BlockIntervalSummary> {
+        if self.total_weight == 0 {
+            return None;
+        }
+        Some(BlockIntervalSummary {
+            p50_ms: self.quantile_ms(0.50),
+            p95_ms: self.quantile_ms(0.95),
+            samples: self.total_weight,
+        })
+    }
+
+    fn quantile_ms(&self, quantile: f64) -> u64 {
+        debug_assert!((0.0..=1.0).contains(&quantile));
+        if self.total_weight == 0 {
+            return 0;
+        }
+        let mut sorted = self.samples.clone();
+        sorted.sort_unstable_by_key(|sample| sample.interval_ms);
+        let rank = ((self.total_weight as f64) * quantile)
+            .ceil()
+            .clamp(1.0, self.total_weight as f64) as u64;
+        let mut cumulative = 0u64;
+        for sample in sorted {
+            cumulative = cumulative.saturating_add(sample.weight);
+            if cumulative >= rank {
+                return sample.interval_ms;
+            }
+        }
+        0
     }
 }
 
@@ -1818,12 +2140,16 @@ async fn wait_for_target_blocks(
     target_blocks: u64,
     progress_interval: Duration,
     progress_timeout: Duration,
+    latency_p95_threshold: Option<Duration>,
     run_control: &RunControl,
     ingress_pool: Option<&IngressEndpointPool>,
 ) -> Result<()> {
     let start = Instant::now();
     let mut progress = ProgressState::new(start);
+    let mut strict_progress = ProgressState::new(start);
     let mut divergence = HeightDivergenceState::new();
+    let mut block_intervals = BlockIntervalTracker::default();
+    let mut strict_block_intervals = BlockIntervalTracker::default();
     let tolerated_failures = tolerated_peer_failures(peers.len());
     let strict_divergence_window =
         Duration::from_secs(IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_WINDOW_SECS);
@@ -1897,24 +2223,97 @@ async fn wait_for_target_blocks(
             ));
         }
         if min_height >= target_blocks {
-            info!(
-                target: "izanami::progress",
-                quorum_min_height = min_height,
-                strict_min_height,
-                tolerated_failures,
-                target_blocks,
-                elapsed = ?now.duration_since(start),
-                "target block height reached"
-            );
+            let strict_summary = strict_block_intervals.summary();
+            if let Some(summary) = block_intervals.summary() {
+                info!(
+                    target: "izanami::progress",
+                    quorum_min_height = min_height,
+                    strict_min_height,
+                    tolerated_failures,
+                    target_blocks,
+                    interval_p50_ms = summary.p50_ms,
+                    interval_p95_ms = summary.p95_ms,
+                    interval_samples = summary.samples,
+                    strict_interval_p50_ms = strict_summary.map(|item| item.p50_ms),
+                    strict_interval_p95_ms = strict_summary.map(|item| item.p95_ms),
+                    strict_interval_samples = strict_summary.map(|item| item.samples),
+                    elapsed = ?now.duration_since(start),
+                    "target block height reached"
+                );
+                if let Some(threshold) = latency_p95_threshold {
+                    let threshold_ms = u64::try_from(threshold.as_millis()).unwrap_or(u64::MAX);
+                    if summary.p95_ms > threshold_ms {
+                        return Err(eyre!(
+                            "quorum p95 block interval {}ms exceeded threshold {}ms (samples {}, target {}, elapsed {:?})",
+                            summary.p95_ms,
+                            threshold_ms,
+                            summary.samples,
+                            target_blocks,
+                            now.duration_since(start)
+                        ));
+                    }
+                    if let Some(strict_summary) = strict_summary
+                        && strict_summary.p95_ms > threshold_ms
+                    {
+                        return Err(eyre!(
+                            "strict p95 block interval {}ms exceeded threshold {}ms (samples {}, target {}, elapsed {:?})",
+                            strict_summary.p95_ms,
+                            threshold_ms,
+                            strict_summary.samples,
+                            target_blocks,
+                            now.duration_since(start)
+                        ));
+                    }
+                }
+            } else {
+                info!(
+                    target: "izanami::progress",
+                    quorum_min_height = min_height,
+                    strict_min_height,
+                    tolerated_failures,
+                    target_blocks,
+                    elapsed = ?now.duration_since(start),
+                    "target block height reached"
+                );
+            }
             return Ok(());
         }
-        if progress.update(now, min_height) {
+
+        if let Some((blocks_advanced, elapsed)) = strict_progress.update(now, strict_min_height) {
+            let interval_ms = strict_block_intervals
+                .record(blocks_advanced, elapsed)
+                .unwrap_or_default();
+            info!(
+                target: "izanami::progress",
+                strict_min_height,
+                target_blocks,
+                blocks_advanced,
+                interval_ms,
+                "strict block height advanced"
+            );
+        } else if strict_progress.stalled(now, progress_timeout) {
+            return Err(eyre!(
+                "no strict block height progress for {:?} (strict min height {}, quorum min height {}, target {}, tolerated_failures {})",
+                progress_timeout,
+                strict_min_height,
+                min_height,
+                target_blocks,
+                tolerated_failures
+            ));
+        }
+
+        if let Some((blocks_advanced, elapsed)) = progress.update(now, min_height) {
+            let interval_ms = block_intervals
+                .record(blocks_advanced, elapsed)
+                .unwrap_or_default();
             info!(
                 target: "izanami::progress",
                 quorum_min_height = min_height,
                 strict_min_height,
                 tolerated_failures,
                 target_blocks,
+                blocks_advanced,
+                interval_ms,
                 "block height advanced"
             );
         } else if progress.stalled(now, progress_timeout) {
@@ -2155,24 +2554,32 @@ async fn submit_plan(
         expect_success,
         Arc::clone(&metrics),
         move || {
-            run_with_queue_timeout_retry(plan_label, || {
-                ingress_pool_for_submit.run_with_failover(
-                    "submit_all_blocking_with_metadata",
-                    |peer| {
-                        let client = tune_ingress_client(peer.client_for(
-                            &signer_for_submit.id,
-                            signer_for_submit.key_pair.private_key().clone(),
-                        ));
-                        let metadata = submission_metadata(submission_counter_for_submit.as_ref());
-                        client
-                            .submit_all_blocking_with_metadata(
-                                instructions_for_submit.clone(),
-                                metadata,
-                            )
-                            .map(|_| ())
-                    },
-                )
-            })
+            let ingress_pool_for_retry_delay = Arc::clone(&ingress_pool_for_submit);
+            run_with_queue_timeout_retry_with_policy_and_delay(
+                plan_label,
+                IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS,
+                Duration::from_millis(IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS),
+                move || ingress_pool_for_retry_delay.submission_backpressure_delay(Instant::now()),
+                || {
+                    ingress_pool_for_submit.run_with_failover(
+                        "submit_all_blocking_with_metadata",
+                        |peer| {
+                            let client = tune_ingress_client(peer.client_for(
+                                &signer_for_submit.id,
+                                signer_for_submit.key_pair.private_key().clone(),
+                            ));
+                            let metadata =
+                                submission_metadata(submission_counter_for_submit.as_ref());
+                            client
+                                .submit_all_blocking_with_metadata(
+                                    instructions_for_submit.clone(),
+                                    metadata,
+                                )
+                                .map(|_| ())
+                        },
+                    )
+                },
+            )
         },
     )
     .await;
@@ -2423,6 +2830,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn progress_state_update_reports_advanced_blocks_and_elapsed() {
+        let start = Instant::now();
+        let mut progress = ProgressState::new(start);
+        assert_eq!(progress.update(start, 0), None);
+        let advanced = progress
+            .update(start + Duration::from_millis(120), 3)
+            .expect("height increase should report progress");
+        assert_eq!(advanced.0, 3);
+        assert!(advanced.1 >= Duration::from_millis(120));
+    }
+
+    #[test]
+    fn block_interval_tracker_reports_weighted_quantiles() {
+        let mut tracker = BlockIntervalTracker::default();
+        assert_eq!(tracker.summary(), None);
+        assert_eq!(tracker.record(1, Duration::from_millis(100)), Some(100));
+        assert_eq!(tracker.record(4, Duration::from_millis(2_000)), Some(500));
+        let summary = tracker.summary().expect("tracker should have samples");
+        assert_eq!(
+            summary,
+            BlockIntervalSummary {
+                p50_ms: 500,
+                p95_ms: 500,
+                samples: 5,
+            }
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn npos_network_progresses() -> Result<()> {
         if !allow_net_for_tests() {
@@ -2441,6 +2877,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: Some(42),
             tps: 1.0,
             max_inflight: 4,
@@ -2506,6 +2943,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: Some(7),
             tps: 1.0,
             max_inflight: 1,
@@ -2574,6 +3012,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: Some(7),
             tps: 1.0,
             max_inflight: 1,
@@ -2641,6 +3080,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: Some(7),
             tps: 1.0,
             max_inflight: 1,
@@ -2672,6 +3112,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: Some(7),
             tps: 1.0,
             max_inflight: 1,
@@ -2715,6 +3156,7 @@ mod tests {
             target_blocks: Some(3_600),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
             seed: Some(7),
             tps: 5.0,
             max_inflight: 8,
@@ -2799,6 +3241,7 @@ mod tests {
             target_blocks: Some(3_600),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
             seed: Some(17),
             tps: 3.0,
             max_inflight: 6,
@@ -2834,6 +3277,7 @@ mod tests {
             target_blocks: Some(600),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
             seed: Some(9),
             tps: 5.0,
             max_inflight: 8,
@@ -2866,6 +3310,7 @@ mod tests {
             target_blocks: Some(1_200),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
             seed: Some(12),
             tps: 5.0,
             max_inflight: 8,
@@ -2896,6 +3341,7 @@ mod tests {
             target_blocks: Some(600),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
             seed: Some(15),
             tps: 5.0,
             max_inflight: 8,
@@ -2923,6 +3369,7 @@ mod tests {
             target_blocks: Some(1_200),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
             seed: Some(27),
             tps: 5.0,
             max_inflight: 8,
@@ -3011,6 +3458,7 @@ mod tests {
             target_blocks: Some(3_600),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
             seed: Some(11),
             tps: 5.0,
             max_inflight: 8,
@@ -3045,6 +3493,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: Some(7),
             tps: 1.0,
             max_inflight: 4,
@@ -3190,6 +3639,56 @@ mod tests {
     }
 
     #[test]
+    fn run_with_queue_timeout_retry_retries_on_no_endpoint_backpressure() {
+        let attempts = AtomicU64::new(0);
+        let result = run_with_queue_timeout_retry_with_policy(
+            "retry_no_endpoint_backpressure",
+            2,
+            Duration::ZERO,
+            || {
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+                if attempt == 0 {
+                    Err(eyre!(
+                        "no ingress endpoints available for operation `submit_all_blocking_with_metadata`"
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(
+            result.is_ok(),
+            "temporary no-endpoint backpressure should be retried"
+        );
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            2,
+            "helper should perform one retry before succeeding after no-endpoint backpressure"
+        );
+    }
+
+    #[test]
+    fn queue_timeout_retry_delay_uses_dynamic_floor_for_no_endpoint_backpressure() {
+        let backoff = Duration::from_millis(250);
+        let dynamic = Duration::from_secs(3);
+        assert_eq!(
+            queue_timeout_retry_delay(backoff, true, Some(dynamic)),
+            dynamic,
+            "no-endpoint backpressure should honor the pool-derived cooldown floor"
+        );
+        assert_eq!(
+            queue_timeout_retry_delay(backoff, true, None),
+            Duration::from_millis(IZANAMI_INGRESS_REPROBE_INTERVAL_MS),
+            "no-endpoint backpressure without a pool delay should fall back to reprobe floor"
+        );
+        assert_eq!(
+            queue_timeout_retry_delay(backoff, false, Some(dynamic)),
+            backoff,
+            "non-endpoint retryable failures should keep exponential backoff pacing"
+        );
+    }
+
+    #[test]
     fn run_with_queue_timeout_retry_stops_on_non_retryable_error() {
         let attempts = AtomicU64::new(0);
         let result = run_with_queue_timeout_retry_with_policy(
@@ -3215,6 +3714,17 @@ mod tests {
         assert!(
             is_ingress_failover_retryable(&err),
             "queue timeout errors should trigger endpoint failover"
+        );
+    }
+
+    #[test]
+    fn ingress_queue_timeout_retryable_for_no_endpoint_backpressure() {
+        let err = eyre!(
+            "no ingress endpoints available for operation `submit_all_blocking_with_metadata`"
+        );
+        assert!(
+            is_ingress_queue_timeout_retryable(&err),
+            "no-endpoint ingress backpressure should be retryable for submit helper"
         );
     }
 
@@ -3398,8 +3908,8 @@ mod tests {
         let now = Instant::now();
         pool.update_lag_snapshot(IngressLagSnapshot {
             quorum_min_height: 220,
-            endpoint_heights: vec![Some(180), Some(220), Some(221)],
-            sampled_at: now,
+            peer_heights: vec![Some(180), Some(220), Some(221)],
+            observed_at: now,
         });
 
         let mut attempts = Vec::new();
@@ -3452,8 +3962,8 @@ mod tests {
         }
         pool.update_lag_snapshot(IngressLagSnapshot {
             quorum_min_height: 300,
-            endpoint_heights: vec![Some(250), Some(300), Some(301)],
-            sampled_at: start,
+            peer_heights: vec![Some(250), Some(300), Some(301)],
+            observed_at: start,
         });
 
         let mut attempts = Vec::new();
@@ -3517,6 +4027,162 @@ mod tests {
     }
 
     #[test]
+    fn ingress_fsm_excludes_lagging_when_healthy_alternative_exists() {
+        ingress_pool_excludes_lagging_endpoint_when_healthy_alternatives_exist();
+    }
+
+    #[test]
+    fn ingress_fsm_forced_probe_when_all_excluded_or_unhealthy() {
+        ingress_pool_forced_probe_when_all_endpoints_excluded_or_unhealthy();
+    }
+
+    #[test]
+    fn ingress_queue_pressure_exponential_cooldown_blocks_early_reprobe() {
+        queue_pressure_sticky_cooldown_blocks_early_reprobe();
+    }
+
+    #[test]
+    fn ingress_submission_backpressure_defers_when_all_endpoints_recently_probed_and_unhealthy() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:91".to_string(),
+                "http://127.0.0.1:92".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 2,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(10),
+                reprobe_interval: Duration::from_secs(2),
+            },
+            ingress_stats,
+        );
+        let start = Instant::now();
+        assert!(pool.mark_failure_at(0, start, IngressFailureClass::QueuePressure));
+        assert!(pool.mark_failure_at(1, start, IngressFailureClass::Retryable));
+        {
+            let mut guard = pool
+                .state
+                .lock()
+                .expect("endpoint health state mutex should not be poisoned");
+            for endpoint_state in guard.iter_mut() {
+                endpoint_state.last_probe_at = Some(start);
+            }
+        }
+
+        let now = start + Duration::from_millis(100);
+        let attempt_order = pool.attempt_order_at(now);
+        assert!(
+            attempt_order.is_empty(),
+            "no endpoint should be reprobed before reprobe interval elapses"
+        );
+        let backpressure = pool
+            .submission_backpressure_delay_at(now)
+            .expect("backpressure should be active while all endpoints are cooling down");
+        assert!(
+            backpressure >= Duration::from_millis(1),
+            "backpressure delay should be bounded and positive"
+        );
+        assert!(
+            backpressure <= Duration::from_secs(2),
+            "backpressure should be bounded by reprobe interval under cooldown saturation"
+        );
+    }
+
+    #[test]
+    fn all_unhealthy_pool_promotes_successful_probe_to_healthy_endpoint() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:111".to_string(),
+                "http://127.0.0.1:112".to_string(),
+                "http://127.0.0.1:113".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 3,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(30),
+                reprobe_interval: Duration::from_secs(2),
+            },
+            ingress_stats,
+        );
+        let start = Instant::now();
+        assert!(pool.mark_failure_at(0, start, IngressFailureClass::QueuePressure));
+        assert!(pool.mark_failure_at(1, start, IngressFailureClass::QueuePressure));
+        assert!(pool.mark_failure_at(2, start, IngressFailureClass::QueuePressure));
+
+        let mut first_attempts = Vec::new();
+        let first: Result<&'static str> =
+            pool.run_with_failover_at("submit", start + Duration::from_secs(1), |idx, _| {
+                first_attempts.push(idx);
+                Ok("probe")
+            });
+        assert_eq!(first.expect("first unhealthy probe should run"), "probe");
+        assert_eq!(
+            first_attempts.len(),
+            1,
+            "all-unhealthy path should probe only one endpoint per interval"
+        );
+
+        let mut second_attempts = Vec::new();
+        let second: Result<&'static str> =
+            pool.run_with_failover_at("submit", start + Duration::from_secs(1), |idx, _| {
+                second_attempts.push(idx);
+                Ok("recovered")
+            });
+        assert_eq!(
+            second.expect("successful probe should recover one endpoint immediately"),
+            "recovered"
+        );
+        assert_eq!(
+            second_attempts.len(),
+            1,
+            "after successful probe promotion, a single healthy endpoint should serve follow-up requests"
+        );
+
+        let mut third_attempts = Vec::new();
+        let third: Result<&'static str> =
+            pool.run_with_failover_at("submit", start + Duration::from_secs(3), |idx, _| {
+                third_attempts.push(idx);
+                Ok("probe")
+            });
+        assert_eq!(
+            third.expect("probe should reopen after reprobe interval"),
+            "probe"
+        );
+        assert_eq!(
+            third_attempts.len(),
+            1,
+            "reopened all-unhealthy interval should still probe exactly one endpoint"
+        );
+    }
+
+    #[test]
+    fn ingress_submission_backpressure_is_disabled_when_endpoint_is_ready() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:93".to_string(),
+                "http://127.0.0.1:94".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 2,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(10),
+                reprobe_interval: Duration::from_secs(2),
+            },
+            ingress_stats,
+        );
+        let now = Instant::now();
+        assert!(pool.mark_failure_at(0, now, IngressFailureClass::QueuePressure));
+        assert!(
+            pool.submission_backpressure_delay_at(now + Duration::from_millis(100))
+                .is_none(),
+            "healthy endpoint availability should disable submit backpressure"
+        );
+    }
+
+    #[test]
     fn endpoint_pool_queue_timeout_marks_unhealthy_on_first_failure() {
         let ingress_stats = Arc::new(IngressStats::default());
         let pool = EndpointHealthPool::new(
@@ -3546,7 +4212,8 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_pool_queue_timeout_sticky_cooldown_not_cleared_by_early_success() {
+    fn endpoint_pool_queue_timeout_sticky_cooldown_clears_on_success_when_all_endpoints_unhealthy()
+    {
         let ingress_stats = Arc::new(IngressStats::default());
         let pool = EndpointHealthPool::new(
             vec!["http://127.0.0.1:41".to_string()],
@@ -3581,10 +4248,8 @@ mod tests {
         );
         let state_after_early_success = pool.endpoint_state(0);
         assert!(
-            state_after_early_success
-                .unhealthy_until
-                .is_some_and(|until| until == cooldown_until),
-            "sticky queue-timeout cooldown should not clear before expiry"
+            state_after_early_success.unhealthy_until.is_none(),
+            "successful probe should immediately clear sticky cooldown when all endpoints were unhealthy"
         );
 
         let after_expiry = cooldown_until + Duration::from_millis(1);
@@ -3670,9 +4335,9 @@ mod tests {
         let start = Instant::now();
         let mut state = ProgressState::new(start);
         assert!(!state.stalled(start, Duration::from_secs(5)));
-        assert!(!state.update(start, 0));
+        assert!(state.update(start, 0).is_none());
         assert!(!state.stalled(start + Duration::from_secs(2), Duration::from_secs(5)));
-        assert!(state.update(start + Duration::from_secs(3), 2));
+        assert!(state.update(start + Duration::from_secs(3), 2).is_some());
         assert!(!state.stalled(start + Duration::from_secs(6), Duration::from_secs(5)));
         assert!(state.stalled(start + Duration::from_secs(9), Duration::from_secs(5)));
     }
@@ -3934,6 +4599,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: Some(9),
             tps: 1.0,
             max_inflight: 4,
@@ -3979,6 +4645,7 @@ mod tests {
             2,
             Duration::from_millis(200),
             Duration::from_secs(5),
+            None,
             &run_control,
             None,
         )
@@ -3999,6 +4666,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: Some(5),
             tps: 0.1,
             max_inflight: 1,
@@ -4096,6 +4764,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: Some(17),
             tps: 1.0,
             max_inflight: 4,
@@ -4353,14 +5022,6 @@ mod tests {
             Some(IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS)
         );
         assert_eq!(
-            lookup(&["sumeragi", "recovery", "no_roster_fallback_views"]),
-            Some(IZANAMI_RECOVERY_NO_ROSTER_FALLBACK_VIEWS)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "recovery", "no_roster_refresh_retry_per_view"]),
-            Some(IZANAMI_RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW)
-        );
-        assert_eq!(
             lookup(&["sumeragi", "recovery", "deferred_qc_ttl_ms"]),
             Some(IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS)
         );
@@ -4470,6 +5131,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: Some(19),
             tps: 1.0,
             max_inflight: 4,
@@ -4545,6 +5207,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: Some(19),
             tps: 1.0,
             max_inflight: 4,
@@ -4626,6 +5289,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: Some(13),
             tps: 0.5,
             max_inflight: 2,
@@ -4670,6 +5334,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: Some(23),
             tps: 1.0,
             max_inflight: 4,

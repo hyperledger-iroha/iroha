@@ -447,6 +447,13 @@ pub struct FetchPendingBlock {
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     pub priority: Option<FetchPendingBlockPriority>,
+    /// Optional signal that requester already has verifiable roster proof for this block round.
+    ///
+    /// Responders may use this to allow hintless block-sync payload recovery paths that otherwise
+    /// require roster hints.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub requester_roster_proof_known: Option<bool>,
 }
 
 #[cfg(test)]
@@ -577,6 +584,7 @@ mod tests {
             height: 1,
             view: 0,
             priority: None,
+            requester_roster_proof_known: None,
         });
         assert_eq!(fetch.priority(), iroha_p2p::Priority::High);
     }

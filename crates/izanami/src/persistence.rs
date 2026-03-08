@@ -41,6 +41,8 @@ struct StoredArgs {
     progress_interval_ms: u64,
     #[norito(default = "default_progress_timeout_ms")]
     progress_timeout_ms: u64,
+    #[norito(default)]
+    latency_p95_threshold_ms: Option<u64>,
 }
 
 fn workload_profile_to_u8(profile: WorkloadProfile) -> u8 {
@@ -88,6 +90,8 @@ impl StoredArgs {
         let pipeline_time_ms = maybe_duration_to_ms(args.pipeline_time, "pipeline time")?;
         let progress_interval_ms = duration_to_ms(args.progress_interval, "progress interval")?;
         let progress_timeout_ms = duration_to_ms(args.progress_timeout, "progress timeout")?;
+        let latency_p95_threshold_ms =
+            maybe_duration_to_ms(args.latency_p95_threshold, "latency p95 threshold")?;
         let max_inflight = u32::try_from(args.max_inflight).map_err(|_| {
             eyre!(
                 "max_inflight {} exceeds persistence limits",
@@ -115,6 +119,7 @@ impl StoredArgs {
             target_blocks: args.target_blocks,
             progress_interval_ms,
             progress_timeout_ms,
+            latency_p95_threshold_ms,
         })
     }
 
@@ -131,6 +136,7 @@ impl StoredArgs {
             target_blocks: self.target_blocks,
             progress_interval: Duration::from_millis(self.progress_interval_ms),
             progress_timeout: Duration::from_millis(self.progress_timeout_ms),
+            latency_p95_threshold: self.latency_p95_threshold_ms.map(Duration::from_millis),
             seed: self.seed,
             tps: self.tps,
             max_inflight: self.max_inflight as usize,
@@ -342,6 +348,7 @@ mod tests {
             target_blocks: Some(42),
             progress_interval: Duration::from_secs(7),
             progress_timeout: Duration::from_secs(55),
+            latency_p95_threshold: Some(Duration::from_millis(900)),
             seed: Some(123),
             tps: 12.5,
             max_inflight: 64,
@@ -370,6 +377,7 @@ mod tests {
         assert_eq!(loaded.target_blocks, args.target_blocks);
         assert_eq!(loaded.progress_interval, args.progress_interval);
         assert_eq!(loaded.progress_timeout, args.progress_timeout);
+        assert_eq!(loaded.latency_p95_threshold, args.latency_p95_threshold);
         assert_eq!(loaded.seed, args.seed);
         assert_eq!(loaded.tps, args.tps);
         assert_eq!(loaded.max_inflight, args.max_inflight);
@@ -438,6 +446,7 @@ mod tests {
         assert_eq!(loaded.target_blocks, None);
         assert_eq!(loaded.progress_interval, DEFAULT_PROGRESS_INTERVAL);
         assert_eq!(loaded.progress_timeout, DEFAULT_PROGRESS_TIMEOUT);
+        assert_eq!(loaded.latency_p95_threshold, None);
 
         let _ = fs::remove_dir_all(&dir);
         Ok(())

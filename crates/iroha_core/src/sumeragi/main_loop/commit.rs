@@ -1458,13 +1458,11 @@ impl Actor {
                 #[cfg(feature = "telemetry")]
                 let block_sync_start = Instant::now();
                 let sync_block: SignedBlock = committed_block.as_ref().clone();
-                let mut sync_update = block_sync_update_with_roster(
+                let mut sync_update = block_sync_update_with_certified_roster(
                     &sync_block,
                     &self.state,
                     &self.kura,
                     self.config.consensus_mode,
-                    self.common_config.trusted_peers.value(),
-                    self.common_config.peer.id(),
                     &self.roster_validation_cache,
                 );
                 let expected_epoch = self.epoch_for_height(pending_height);
@@ -2198,7 +2196,7 @@ impl Actor {
             "finalizing pending block with commit topology"
         );
         if commit_topology.is_empty() {
-            let _ = self.handle_empty_commit_topology_recovery(
+            let _ = self.handle_roster_unavailable_recovery(
                 pending_height,
                 pending_view,
                 Some(block_hash),
@@ -2656,11 +2654,20 @@ impl Actor {
             let commit_topology =
                 self.roster_for_vote_with_mode(hash, pending_height, pending_view, consensus_mode);
             if commit_topology.is_empty() {
+                let _ = self.handle_roster_unavailable_recovery(
+                    pending_height,
+                    pending_view,
+                    Some(hash),
+                    self.queue.queued_len(),
+                    now,
+                    ProposalDeferWarningKind::EmptyCommitTopologyFinalize,
+                    "commit_pipeline_empty_commit_topology",
+                );
                 warn!(
                     height = pending_height,
                     view = pending_view,
                     block = %hash,
-                    "skipping pending block: empty commit roster"
+                    "deferring pending block: empty commit roster"
                 );
                 continue;
             }
@@ -3274,44 +3281,18 @@ impl Actor {
                     "sending block sync update to commit topology after emitting local precommit vote"
                 );
             } else {
-                match self.decide_no_roster_fallback_or_fail_closed(
-                    vote.height,
-                    vote.view,
-                    vote.block_hash,
-                    ViewChangeCause::MissingPayload,
-                    "local_precommit_no_roster",
-                ) {
-                    super::NoRosterFallbackDecision::AllowFallback => {
-                        self.broadcast_block_created_for_block_sync(
-                            super::message::BlockCreated::from(&pending.block),
-                            &topology_peers,
-                        );
-                        iroha_logger::info!(
-                            height = vote.height,
-                            view = vote.view,
-                            block = %vote.block_hash,
-                            signer = vote.signer,
-                            targets = topology_peers.len(),
-                            "sending BlockCreated payload to commit topology (no verifiable roster snapshot)"
-                        );
-                    }
-                    super::NoRosterFallbackDecision::BootstrapPending => {
-                        iroha_logger::debug!(
-                            height = vote.height,
-                            view = vote.view,
-                            block = %vote.block_hash,
-                            "deferring BlockCreated fallback broadcast while no-roster bootstrap is pending"
-                        );
-                    }
-                    super::NoRosterFallbackDecision::FailClosed => {
-                        iroha_logger::warn!(
-                            height = vote.height,
-                            view = vote.view,
-                            block = %vote.block_hash,
-                            "skipping BlockCreated fallback broadcast after no-roster fail-closed escalation"
-                        );
-                    }
-                }
+                self.broadcast_block_created_for_block_sync(
+                    super::message::BlockCreated::from(&pending.block),
+                    &topology_peers,
+                );
+                iroha_logger::info!(
+                    height = vote.height,
+                    view = vote.view,
+                    block = %vote.block_hash,
+                    signer = vote.signer,
+                    targets = topology_peers.len(),
+                    "sending BlockCreated payload fallback to active targets while roster proof is unavailable"
+                );
             }
         } else {
             iroha_logger::trace!(
@@ -3439,6 +3420,15 @@ impl Actor {
         pending_roots: Option<(Hash, Hash)>,
     ) -> bool {
         if self.is_observer() {
+            return false;
+        }
+        if self.round_liveness_isolated() {
+            debug!(
+                height,
+                view,
+                block = ?block_hash,
+                "skipping precommit vote while round liveness catch-up isolation is active"
+            );
             return false;
         }
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
@@ -3691,6 +3681,16 @@ impl Actor {
         topology: &super::network_topology::Topology,
     ) -> bool {
         if self.is_observer() {
+            return false;
+        }
+        if self.round_liveness_isolated() {
+            debug!(
+                height,
+                view,
+                highest_height = highest_qc.height,
+                highest_view = highest_qc.view,
+                "skipping NEW_VIEW vote while round liveness catch-up isolation is active"
+            );
             return false;
         }
         let epoch = self.epoch_for_height(height);
@@ -4742,13 +4742,11 @@ impl Actor {
             .and_then(|height| self.kura.get_block(height));
         if let Some(block) = block_from_kura {
             let block_height = block.header().height().get();
-            let mut update = block_sync_update_with_roster(
+            let mut update = block_sync_update_with_certified_roster(
                 block.as_ref(),
                 self.state.as_ref(),
                 self.kura.as_ref(),
                 self.config.consensus_mode,
-                self.common_config.trusted_peers.value(),
-                self.common_config.peer.id(),
                 &self.roster_validation_cache,
             );
             let expected_epoch = qc.epoch;
@@ -5484,11 +5482,29 @@ impl Actor {
             .forced_view_after_timeout
             .filter(|(forced_height, _)| *forced_height > height);
         let now = Instant::now();
+        self.prune_lock_rejected_block_sinks(now);
         self.prune_stale_missing_requests_for_committed_height(height, now);
         self.clear_missing_block_recovery_for_height(height, now);
         self.clear_sidecar_mismatch_for_height(height);
         self.prune_missing_block_recovery_state(now);
         self.refresh_p2p_topology();
+        if let Some(baseline_roster) = self.recovery_pending_baseline_restore.remove(&height) {
+            if let Err(err) = self.install_elected_roster(&baseline_roster) {
+                warn!(
+                    ?err,
+                    height,
+                    roster_len = baseline_roster.len(),
+                    "failed to restore baseline roster after temporary recovery shrink"
+                );
+            } else {
+                let _ = self.refresh_commit_topology_state(&baseline_roster);
+                info!(
+                    height,
+                    roster_len = baseline_roster.len(),
+                    "restored baseline roster after temporary recovery shrink"
+                );
+            }
+        }
         let commit_topology = self.effective_commit_topology();
         match self.refresh_commit_topology_state(&commit_topology) {
             CommitTopologyChange::None => {}
@@ -5948,6 +5964,7 @@ impl Actor {
         self.vote_validation_cache.clear();
         self.deferred_votes.clear();
         self.consensus_recovery.clear();
+        self.recovery_pending_baseline_restore.clear();
         self.deferred_qcs.clear();
         self.deferred_qc_roster_state.clear();
         self.deferred_missing_payload_qcs.clear();
@@ -5955,6 +5972,7 @@ impl Actor {
         self.vote_roster_cache.clear();
         self.qc_cache.clear();
         self.qc_signer_tally.clear();
+        self.lock_rejected_block_sinks.clear();
         self.block_signer_cache.clear();
         self.voting_block = None;
         if !preserve_proposals_seen {
@@ -5992,6 +6010,7 @@ impl Actor {
         self.block_sync_fetch_log.clear();
         self.block_sync_warning_log.clear();
         self.qc_insufficient_warning_log.clear();
+        self.round_recovery_bundle_window_gates.clear();
         let now = Instant::now();
         self.tick_lag_last_progress_at = now;
         self.tick_lag_last_progress_height = self.state.committed_height();

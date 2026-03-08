@@ -1981,6 +1981,19 @@ impl Actor {
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_pacemaker_propose_ready(&mut self, now: Instant) -> bool {
         trace!(?now, "pacemaker evaluating NEW_VIEW gating");
+        if self.round_liveness_isolated() {
+            self.subsystems.propose.pacemaker.next_deadline = now
+                .checked_add(
+                    self.subsystems
+                        .propose
+                        .pacemaker
+                        .propose_interval
+                        .max(Duration::from_millis(1)),
+                )
+                .unwrap_or(now);
+            debug!("suppressing proposal path while round liveness catch-up isolation is active");
+            return false;
+        }
         let prev_attempt = self.subsystems.propose.last_pacemaker_attempt.replace(now);
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
@@ -2037,7 +2050,7 @@ impl Actor {
             .drop_below_height(tracked_height);
 
         if topology_peers.is_empty() {
-            let _ = self.handle_empty_commit_topology_recovery(
+            let _ = self.handle_roster_unavailable_recovery(
                 tracked_height,
                 tracked_view,
                 tip_hash,
@@ -2684,19 +2697,30 @@ impl Actor {
                         );
                     }
                     if highest_missing {
-                        iroha_logger::info!(
-                            ?reason,
-                            height,
-                            view = view_idx,
-                            queue_len = pending_queue_len,
-                            highest_hash = ?highest_qc.subject_block_hash,
-                            locked_hash = ?locked_hash,
-                            "highest QC block missing locally; deferring proposal"
-                        );
-                        if self
-                            .mark_highest_qc_missing_defer_for_round(height, view_idx, highest_qc)
-                        {
+                        let first_defer_in_round = self
+                            .mark_highest_qc_missing_defer_for_round(height, view_idx, highest_qc);
+                        if first_defer_in_round {
                             self.observe_new_view_highest_qc(highest_qc);
+                        }
+                        if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
+                            ProposalDeferWarningKind::HighestQcMissing,
+                            height,
+                            view_idx,
+                            highest_qc.subject_block_hash,
+                            now,
+                            Duration::from_secs(5),
+                        ) {
+                            iroha_logger::warn!(
+                                ?reason,
+                                height,
+                                view = view_idx,
+                                queue_len = pending_queue_len,
+                                highest_hash = ?highest_qc.subject_block_hash,
+                                locked_hash = ?locked_hash,
+                                suppressed_since_last,
+                                first_defer_in_round,
+                                "highest QC block missing locally; deferring proposal"
+                            );
                         }
                         return false;
                     }
@@ -2812,7 +2836,7 @@ impl Actor {
 
         let proposal_roster = active_topology_peers;
         if proposal_roster.is_empty() {
-            let _ = self.handle_empty_commit_topology_recovery(
+            let _ = self.handle_roster_unavailable_recovery(
                 height,
                 view_idx,
                 Some(highest_qc.subject_block_hash),

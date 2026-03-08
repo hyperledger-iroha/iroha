@@ -735,9 +735,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 ),
                 max_forced_proposal_attempts_per_view:
                     defaults::sumeragi::RECOVERY_MAX_FORCED_PROPOSAL_ATTEMPTS_PER_VIEW,
-                no_roster_fallback_views: defaults::sumeragi::RECOVERY_NO_ROSTER_FALLBACK_VIEWS,
-                no_roster_refresh_retry_per_view:
-                    defaults::sumeragi::RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW,
                 rotate_after_reacquire_exhausted:
                     defaults::sumeragi::RECOVERY_ROTATE_AFTER_REACQUIRE_EXHAUSTED,
                 missing_block_signer_fallback_attempts:
