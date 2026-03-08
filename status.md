@@ -1,6 +1,21 @@
 # Status
 
 Last update: 2026-03-08
+- Latest sync (2026-03-08 roster-unavailability FSM simplification + hang fix):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - Changes:
+    - simplified the roster-unavailability FSM by removing `EscalateEpoch` and reducer-only noop/escalation events, keeping the recovery flow finite around `Steady`, `AcquireDependencies`, `ReelectRoster`, `WaitCandidates`, and `RotateView`,
+    - changed `AcquireDependencies + DependencyTimeout` to transition directly to `RotateView`,
+    - fixed a liveness hang where `ReelectRoster` could stall indefinitely after consuming the single deterministic election attempt key `(height, view, latest_committed_hash)`: consumed-attempt paths now deterministically move to `RotateView`,
+    - kept `WaitCandidates` non-rotating and candidate-driven, preserving one-attempt-per-key behavior while guaranteeing deterministic progress out of `ReelectRoster`.
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core --lib roster_recovery_ -- --nocapture` (ok; 2 passed)
+    - `cargo test -p iroha_core --lib roster_unavailable_recovery_ -- --nocapture` (ok; 3 passed)
+    - `cargo test -p iroha_core --lib deterministic_roster_election_is_order_invariant_for_permissioned_and_npos -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib roster_unavailability_candidate_source_matches_consensus_mode -- --nocapture` (ok)
 - Latest sync (2026-03-08 roster-unavailability anti-loop FSM alignment pass):
   - Implemented in:
     - `crates/iroha_core/src/sumeragi/main_loop.rs`

@@ -11054,7 +11054,7 @@ mod tests {
             b"pepper-social-test",
             b"handle-social",
         );
-        let sender: AccountId = "alice@wonderland".parse().expect("account id");
+        let (sender, _sender_keypair) = gen_account_in("wonderland");
         let escrow = ViralEscrowRecord {
             binding_hash: binding.clone(),
             sender,

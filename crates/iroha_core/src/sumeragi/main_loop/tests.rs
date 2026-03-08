@@ -18999,6 +18999,77 @@ async fn roster_unavailable_recovery_enters_wait_candidates_without_rotation_whe
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn roster_unavailable_recovery_does_not_hang_when_attempt_key_is_already_consumed() {
+    let _view_change_guard = status::view_change_cause_test_guard();
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    status::reset_view_change_cause_counters_for_tests();
+
+    let height = u64::try_from(actor.state.committed_height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(3);
+    let view = 0_u64;
+    let latest_committed_hash = actor.state.latest_block_hash_fast().unwrap_or_else(|| {
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]))
+    });
+    let recovery_key = super::RosterRecoveryEpisodeKey {
+        height,
+        latest_committed_hash,
+    };
+    let attempt_key = super::RosterElectionAttemptKey {
+        height,
+        view,
+        latest_committed_hash,
+    };
+    let now = Instant::now();
+    actor.consensus_recovery.insert(
+        recovery_key,
+        super::RosterRecoveryEntry {
+            state: super::RosterRecoveryState::ReelectRoster,
+            first_seen: now
+                .checked_sub(actor.commit_quorum_timeout().max(Duration::from_millis(1)))
+                .unwrap_or(now),
+            state_entered_at: now,
+            last_attempt: now,
+            last_view: view,
+            dependency_requested_at: None,
+            last_observed_dependency_seq: actor.dependency_event_seq,
+            election_attempts: BTreeSet::from([attempt_key]),
+            dwell_ms: BTreeMap::new(),
+        },
+    );
+
+    let before = status::snapshot();
+    assert!(
+        actor.handle_roster_unavailable_recovery(
+            height,
+            view,
+            None,
+            1,
+            now + Duration::from_millis(1),
+            super::ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+            "test_roster_unavailable_attempt_consumed",
+        ),
+        "consumed deterministic attempt key should still make progress by rotating view"
+    );
+    let after = status::snapshot();
+    assert!(
+        !actor.consensus_recovery.contains_key(&recovery_key),
+        "recovery slot should be cleared after deterministic rotation"
+    );
+    assert_eq!(
+        after.view_change_causes.roster_unavailable_total,
+        before
+            .view_change_causes
+            .roster_unavailable_total
+            .saturating_add(1),
+        "consumed attempt key must still produce a single recovery rotation"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_vote_drops_stale_height() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
@@ -40411,7 +40482,6 @@ fn roster_recovery_transitions_are_total_and_finite() {
         State::AcquireDependencies,
         State::ReelectRoster,
         State::WaitCandidates,
-        State::EscalateEpoch,
         State::RotateView,
     ];
     for state in states {
@@ -40434,35 +40504,27 @@ fn roster_recovery_transitions_are_total_and_finite() {
     );
     assert_eq!(
         super::step_roster_recovery_state(State::AcquireDependencies, Event::DependencyTimeout),
-        State::EscalateEpoch
+        State::RotateView
     );
     assert_eq!(
         super::step_roster_recovery_state(State::AcquireDependencies, Event::RosterUnavailable),
         State::ReelectRoster
     );
     assert_eq!(
-        super::step_roster_recovery_state(State::ReelectRoster, Event::CandidatesChanged),
+        super::step_roster_recovery_state(State::ReelectRoster, Event::CandidatesAvailable),
         State::RotateView
-    );
-    assert_eq!(
-        super::step_roster_recovery_state(State::ReelectRoster, Event::CandidatesNoop),
-        State::EscalateEpoch
     );
     assert_eq!(
         super::step_roster_recovery_state(State::ReelectRoster, Event::CandidatesEmpty),
         State::WaitCandidates
     );
     assert_eq!(
-        super::step_roster_recovery_state(State::WaitCandidates, Event::CandidatesChanged),
+        super::step_roster_recovery_state(State::WaitCandidates, Event::CandidatesAvailable),
         State::ReelectRoster
     );
     assert_eq!(
         super::step_roster_recovery_state(State::WaitCandidates, Event::RoundAdvanced),
         State::Steady
-    );
-    assert_eq!(
-        super::step_roster_recovery_state(State::EscalateEpoch, Event::EscalationReady),
-        State::RotateView
     );
     assert_eq!(
         super::step_roster_recovery_state(State::RotateView, Event::DependencyMissing),
