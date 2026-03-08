@@ -75,7 +75,7 @@ unites de `coffee#wonderland` dans `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \
-  --id coffee#wonderland##${ADMIN_ACCOUNT} \
+  --id norito:4e52543000000002 \
   --quantity 250
 ```
 
@@ -90,7 +90,7 @@ ou, pour cibler seulement le nouvel actif :
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${ADMIN_ACCOUNT}\"}" \
+  "{\"id\":\"norito:4e52543000000002\"}" \
   --limit 1 | jq .
 ```
 
@@ -100,7 +100,7 @@ Deplacez 50 unites du compte operateur vers `$RECEIVER_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
-  --id coffee#wonderland##${ADMIN_ACCOUNT} \
+  --id norito:4e52543000000002 \
   --to ${RECEIVER_ACCOUNT} \
   --quantity 50
 ```
@@ -110,10 +110,10 @@ pour verifier les nouveaux soldes :
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${ADMIN_ACCOUNT}\"}" --limit 1 | jq .
+  "{\"id\":\"norito:4e52543000000002\"}" --limit 1 | jq .
 
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
+  "{\"id\":\"norito:4e52543000000003\"}" --limit 1 | jq .
 ```
 
 ## 5. Verifier les preuves du ledger

@@ -74,8 +74,8 @@ let sdk = IrohaSDK(baseURL: torii.baseURL)
 
 // Generate Ed25519 keypair (CryptoKit)
 let kp = try Keypair.generate()
-let accountId = AccountId.make(publicKey: kp.publicKey, domain: "wonderland")
-let assetId = "rose#wonderland#\(accountId)"
+let accountId = AccountId.make(publicKey: kp.publicKey)
+let assetId = "norito:<hex-encoded-asset-id>"
 
 // Fetch balances
 sdk.getAssets(accountId: accountId, assetId: assetId) { result in
@@ -93,7 +93,7 @@ let transfer = TransferRequest(
     authority: accountId,
     assetDefinitionId: "jpy#xst",
     quantity: "1.23",
-    destination: "ed0120...@wonderland",
+    destination: "<destination_account_ih58>",
     description: "demo",
     ttlMs: 60_000
 )
@@ -152,7 +152,7 @@ let plan: ToriiSubscriptionPlan = [
 ]
 
 let planRequest = ToriiSubscriptionPlanCreateRequest(
-    authority: "aws@commerce",
+    authority: "<provider_account_ih58>",
     privateKey: "provider-private-key-hex",
     planId: "aws_compute#commerce",
     plan: plan
@@ -160,7 +160,7 @@ let planRequest = ToriiSubscriptionPlanCreateRequest(
 try await torii.createSubscriptionPlan(planRequest)
 
 let subscriptionRequest = ToriiSubscriptionCreateRequest(
-    authority: "alice@users",
+    authority: "<subscriber_account_ih58>",
     privateKey: "subscriber-private-key-hex",
     subscriptionId: "sub-001",
     planId: "aws_compute#commerce"
@@ -168,7 +168,7 @@ let subscriptionRequest = ToriiSubscriptionCreateRequest(
 try await torii.createSubscription(subscriptionRequest)
 
 let usageRequest = ToriiSubscriptionUsageRequest(
-    authority: "aws@commerce",
+    authority: "<provider_account_ih58>",
     privateKey: "provider-private-key-hex",
     unitKey: "compute_ms",
     delta: "3600000"
@@ -176,7 +176,7 @@ let usageRequest = ToriiSubscriptionUsageRequest(
 try await torii.recordSubscriptionUsage(subscriptionId: "sub-001", requestBody: usageRequest)
 
 let actionRequest = ToriiSubscriptionActionRequest(
-    authority: "aws@commerce",
+    authority: "<provider_account_ih58>",
     privateKey: "provider-private-key-hex"
 )
 try await torii.chargeSubscriptionNow(subscriptionId: "sub-001", requestBody: actionRequest)
@@ -201,7 +201,7 @@ headers.forEach { key, value in
 }
 ```
 
-> **Roadmap ADDR-5a:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and the matching `IrohaSDK` shortcuts) now accept canonical, IH58 (preferred), or compressed (`sora`, second-best) literals and percent-encode the `/v1/accounts/{account_id}/…` segments automatically, so wallets can forward whatever selector they surface without manually escaping `@` or trimming input.
+> **Hard-cut account parser:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept only encoded account IDs (IH58 preferred, compressed `sora…` accepted). `@domain` suffixes and other legacy literals are rejected.
 
 ### Explorer instruction history
 
@@ -213,7 +213,7 @@ if #available(iOS 15.0, macOS 12.0, *) {
     let params = ToriiExplorerInstructionsParams(page: 1,
                                                  perPage: 50,
                                                  kind: "Transfer",
-                                                 assetId: "rose#wonderland#<account_ih58>")
+                                                 assetId: "norito:<hex-encoded-asset-id>")
     let transfers = try await torii.getExplorerTransfers(params: params,
                                                          matchingAccount: "<account_ih58>")
     for record in transfers {
@@ -338,7 +338,7 @@ Combine users can call `accountTransferHistoryPublisher` for the same flow.
 ### Account addresses
 
 ```swift
-let address = try AccountAddress.fromAccount(domain: "default", publicKey: Data(repeating: 0, count: 32))
+let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0, count: 32))
 print(try address.canonicalHex())
 print(try address.toIH58(networkPrefix: 753))
 print(try address.toCompressedSora())
@@ -746,7 +746,7 @@ let payload = try ConfidentialEncryptedPayload(
 
 let request = try ShieldRequest(
     chainId: chainId,
-    authority: AccountId.make(publicKey: keypair.publicKey, domain: "wonderland"),
+    authority: AccountId.make(publicKey: keypair.publicKey),
     assetDefinitionId: "rose#wonderland",
     fromAccountId: "<account_ih58>",
     amount: "42",
@@ -775,9 +775,9 @@ let proof = try ProofAttachment(
 
 let request = try UnshieldRequest(
     chainId: chainId,
-    authority: AccountId.make(publicKey: keypair.publicKey, domain: "wonderland"),
+    authority: AccountId.make(publicKey: keypair.publicKey),
     assetDefinitionId: "rose#wonderland",
-    toAccountId: "bob@wonderland",
+    toAccountId: "<recipient_account_ih58>",
     publicAmount: "50",
     inputs: [Data(repeating: 0x10, count: 32)],
     proof: proof,
@@ -802,8 +802,8 @@ let specBuilder = MultisigSpecBuilder()
     .setQuorum(3)
     .setTransactionTtl(milliseconds: 86_400_000) // 1 day
     .addSignatory(accountId: "<account_ih58>", weight: 2)
-    .addSignatory(accountId: "bob@wonderland", weight: 1)
-    .addSignatory(accountId: "carol@wonderland", weight: 1)
+    .addSignatory(accountId: "<signatory_b_ih58>", weight: 1)
+    .addSignatory(accountId: "<signatory_c_ih58>", weight: 1)
 
 let specPayload = try specBuilder.build()
 let specJSON = try specBuilder.encodeJSON(prettyPrinted: true)
@@ -811,8 +811,8 @@ let specJSON = try specBuilder.encodeJSON(prettyPrinted: true)
 
 `MultisigSpecBuilder` enforces the 255-member limit, rejects zero-length TTLs, and ensures
 the quorum can actually be met (total signatory weight ≥ quorum). The resulting
-`MultisigSpecPayload` encodes signatories as the canonical `{ "account@domain": weight }`
-map that Rust/CLI pipelines expect. Feed the JSON blob directly into your transaction
+`MultisigSpecPayload` encodes signatories as `{ "<encoded_account_id>": weight }`.
+Feed the JSON blob directly into your transaction
 builder or store it alongside governance approvals for reproducibility. Use
 `specPayload.previewProposalExpiry(requestedTtlMs:now:)` to surface the effective TTL
 and approximate expiry for proposal/relayer flows; it clamps overrides to the policy cap
@@ -825,8 +825,8 @@ Submit the registration via the new Norito-backed transaction builders:
 ```swift
 let request = MultisigRegisterRequest(
     chainId: "sora-mainnet",
-    authority: "council@sora",
-    accountId: "council-multisig@sora",
+    authority: "<authority_account_ih58>",
+    accountId: "<multisig_account_ih58>",
     spec: specPayload,
     ttlMs: 120_000
 )

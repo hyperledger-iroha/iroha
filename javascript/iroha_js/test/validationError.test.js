@@ -69,7 +69,7 @@ test("normalizeAccountId rejects canonical hex account literals", () => {
     (error) =>
       error instanceof ValidationError &&
       error.code === ValidationErrorCode.INVALID_ACCOUNT_ID &&
-      /IH58 \(preferred\)\/sora \(second-best\)/i.test(error.message),
+      /IH58 \(preferred\) or sora compressed/i.test(error.message),
   );
 });
 

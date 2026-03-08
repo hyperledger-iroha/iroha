@@ -1247,8 +1247,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         guard let publicKey = Data(hexString: "8A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C") else {
             throw OfflineReceiptBuilderError.invalidAccountId(field: "receiver", value: "sample-key")
         }
-        let address = try AccountAddress.fromAccount(domain: "wonderland",
-                                                     publicKey: publicKey)
+        let address = try AccountAddress.fromAccount(publicKey: publicKey)
         let ih58 = try address.toIH58(networkPrefix: 0x02F1)
         return ih58
     }

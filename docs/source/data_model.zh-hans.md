@@ -35,7 +35,7 @@ translator: machine-google-reviewed
 - `IdBox`：任何支持的 ID 的求和型信封（`DomainId`、`AccountId`、`AssetDefinitionId`、`AssetId`、`NftId`、`PeerId`、 `TriggerId`、`RoleId`、`Permission`、`CustomParameterId`）。对于通用流和 Norito 编码作为单一类型很有用。
 - `ChainId`：用于交易中重放保护的不透明链标识符。ID 的字符串形式（可与 `Display`/`FromStr` 进行往返）：
 - `DomainId`：`name`（例如，`wonderland`）。
-- `AccountId`：通过 `AccountAddress` 编码的规范标识符，公开 IH58、Sora 压缩 (`sora…`) 和规范十六进制编解码器 (`AccountAddress::to_ih58`、`to_compressed_sora`、`canonical_hex`、 `parse_encoded`）。 IH58是首选账户格式； `sora…` 形式对于仅 Sora 的 UX 来说是第二好的。人性化的路由别名 `alias@domain` 保留用于 UX，但不再被视为权威标识符。 Torii 通过 `AccountAddress::parse_encoded` 规范传入的字符串。帐户 ID 支持单密钥和多重签名控制器。
+- `AccountId`：通过 `AccountAddress` 编码的规范标识符，公开 IH58、Sora 压缩 (`sora…`) 和规范十六进制编解码器 (`AccountAddress::to_ih58`、`to_compressed_sora`、`canonical_hex`、 `parse_encoded`）。 IH58是首选账户格式； `sora…` 形式对于仅 Sora 的 UX 来说是第二好的。人性化的路由别名 `alias` (rejected legacy form) 保留用于 UX，但不再被视为权威标识符。 Torii 通过 `AccountAddress::parse_encoded` 规范传入的字符串。帐户 ID 支持单密钥和多重签名控制器。
 - `AssetDefinitionId`：`asset#domain`（例如，`xor#soramitsu`）。
 - `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`：`nft$domain`（例如，`rose$garden`）。

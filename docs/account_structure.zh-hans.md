@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 
 ## 动机
 
-如今，钱包和链下工具依赖于原始 `alias@domain` 路由别名。这个
+如今，钱包和链下工具依赖于原始 `alias@domain` (rejected legacy form) 路由别名。这个
 有两个主要缺点：
 
 1. **无网络绑定。** 该字符串没有校验和或链前缀，因此用户
@@ -74,12 +74,8 @@ AccountId {
 
 Display: canonical IH58 literal (no `@domain` suffix)
 Parse accepts:
-- IH58 (preferred), `sora` compressed, or canonical hex (`0x...`) inputs, with
-  optional `@<domain>` suffixes for explicit routing hints.
-- `<label>@<domain>` aliases resolved through the account-alias resolver
-  (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<alias>@<domain>` for domain-scoped alias routing; account IDs themselves are canonical encoded literals (IH58 or compressed).
-- `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
+- Encoded account identifiers only: IH58 (preferred) and `sora` compressed.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
@@ -319,7 +315,7 @@ tag-specific payload, then move on to the controller bytes.
 - 过大或畸形的密钥材料会引发 `KeyPayloadTooLong` 或 `InvalidPublicKey`。
 - 超过 255 个成员的多重签名控制器筹集了 `MultisigMemberOverflow`。
 - IME/NFKC 转换：半角 Sora 假名可以标准化为其全角形式，而不会破坏解码，但 ASCII `sora` 哨兵和 IH58 数字/字母必须保持 ASCII。全角或大小写折叠标记表面为 `ERR_MISSING_COMPRESSED_SENTINEL`，全角 ASCII 有效负载引发 `ERR_INVALID_COMPRESSED_CHAR`，校验和不匹配冒泡为 `ERR_CHECKSUM_MISMATCH`。 `crates/iroha_data_model/src/account/address.rs` 中的属性测试涵盖了这些路径，因此 SDK 和钱包可以依赖确定性故障。
-- 当 IH58（首选）/sora（第二佳）输入在别名回退之前失败（例如，校验和不匹配、域摘要不匹配）时，Torii 和 `address@domain` 别名的 SDK 解析现在会发出相同的 `ERR_*` 代码，因此客户端可以中继结构化原因，而无需从散文字符串中猜测。
+- 当 IH58（首选）/sora（第二佳）输入在别名回退之前失败（例如，校验和不匹配、域摘要不匹配）时，Torii 和 `address@domain` (rejected legacy form) 别名的 SDK 解析现在会发出相同的 `ERR_*` 代码，因此客户端可以中继结构化原因，而无需从散文字符串中猜测。
 - 本地选择器有效负载短于 12 字节表面 `ERR_LOCAL8_DEPRECATED`，保留传统 Local-8 摘要的硬切换。
 - Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
 
@@ -366,7 +362,7 @@ Sora Nexus 网络默认为 `chain_discriminant = 0x02F1`
 
 这些字符串与 CLI (`iroha tools address convert`)、Torii 发出的字符串匹配
 响应 (`address_format=ih58|compressed`) 和 SDK 帮助程序，因此 UX 复制/粘贴
-流量可以逐字依赖它们。仅当您需要显式路由提示时才附加 `<address>@<domain>`；后缀不是规范输出的一部分。
+流量可以逐字依赖它们。仅当您需要显式路由提示时才附加 `<address>@<domain>` (rejected legacy form)；后缀不是规范输出的一部分。
 
 #### 2.6 用于互操作性的文本别名（计划）
 
@@ -592,7 +588,7 @@ HTTP 端点，以便审核员可以逐字重播验证步骤。
    CLI 接受 IH58、`sora…` 和规范 `0x…` 文字；追加
    `@<domain>` 仅当您需要保留清单标签时。
    JSON 摘要通过 `input_domain` 字段显示该域，并且
-   `legacy  suffix` 将转换后的编码重播为 `<address>@<domain>`
+   `legacy  suffix` 将转换后的编码重播为 `<address>@<domain>` (rejected legacy form)
    清单差异（此后缀是元数据，而不是规范帐户 ID）。
    对于面向换行的导出使用
    `iroha tools address normalize --input <file> legacy-selector input mode` 批量转换本地
@@ -623,7 +619,7 @@ HTTP 端点，以便审核员可以逐字重播验证步骤。
   明确标记为可能更改的描述性元数据，而 IH58 是
   稳定的地址。
 - **输入规范化：** Torii 和 SDK 接受 IH58（首选）/sora（次佳）/0x
-  地址加上 `alias@domain`、`uaid:…` 和
+  地址加上 `alias@domain` (rejected legacy form)、`uaid:…` 和
   `opaque:…` 形式，然后规范化为 IH58 进行输出。没有
   严格模式切换；原始电话/电子邮件标识符必须保留在账本之外
   通过 UAID/不透明映射。
@@ -659,11 +655,11 @@ HTTP 端点，以便审核员可以逐字重播验证步骤。
   映射仍然是未来的工作）。
 - **CLI 工具：** 通过 `iroha tools address convert` 提供确定性操作员工作流程
   （参见 `crates/iroha_cli/src/address.rs`），它接受 IH58/`sora…`/`0x…` 文字和
-  可选的 `<address>@<domain>` 标签，默认为使用 Sora Nexus 前缀 (`753`) 的 IH58 输出，
+  可选的 `<address>@<domain>` (rejected legacy form) 标签，默认为使用 Sora Nexus 前缀 (`753`) 的 IH58 输出，
   并且仅在操作员明确请求时才发出仅 Sora 的压缩字母表
   `--format compressed` 或 JSON 摘要模式。该命令强制执行前缀期望
   解析，记录提供的域（JSON 中的 `input_domain`）和 `legacy  suffix` 标志
-  将转换后的编码重播为 `<address>@<domain>`，因此明显的差异仍然符合人体工程学。
+  将转换后的编码重播为 `<address>@<domain>` (rejected legacy form)，因此明显的差异仍然符合人体工程学。
 - **钱包/浏览器用户体验：**遵循[地址显示准则](source/sns/address_display_guidelines.md)
   附带 ADDR-6 — 提供双复制按钮，将 IH58 保留为 QR 有效负载，并发出警告
   用户认为压缩的 `sora…` 形式仅适用于 Sora，并且容易受到 IME 重写。

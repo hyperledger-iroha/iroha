@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.nexus;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.hyperledger.iroha.android.address.AssetIdLiteral;
 
 /** Query parameters for `/v1/accounts/{uaid}/portfolio`. */
 public final class UaidPortfolioQuery {
@@ -35,7 +36,7 @@ public final class UaidPortfolioQuery {
     private Builder() {}
 
     public Builder setAssetId(final String assetId) {
-      this.assetId = assetId;
+      this.assetId = AssetIdLiteral.normalizeEncoded(assetId, "assetId");
       return this;
     }
 

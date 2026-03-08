@@ -16,12 +16,12 @@ set -euo pipefail
 #
 # Env vars:
 #   - CLI_CONFIG: optional path to client config TOML (passed via --config)
-#   - AUTHORITY: AccountId for VK ops (e.g., alice@wonderland)
+#   - AUTHORITY: AccountId for VK ops (e.g., 6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9)
 #   - PRIVATE_KEY: ExposedPrivateKey for AUTHORITY
 #   - BACKEND: proof backend (default: halo2/ipa)
-#   - ASSET_ID: AssetDefinitionId (default: rose#wonderland)
-#   - FROM: debit account for shield (default: alice@wonderland)
-#   - TO: credit account for unshield (default: alice@wonderland)
+#   - ASSET_ID: encoded AssetId (default: norito:4e52543000000001)
+#   - FROM: debit account for shield (default: 6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9)
+#   - TO: credit account for unshield (default: 6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9)
 #   - AMOUNT: amount for shield/unshield (default: 1000)
 #   - NOTE_COMMITMENT_HEX: 64-hex for shield (default: 32 zero bytes)
 #   - VK_TRANSFER_NAME: name for transfer VK (default: vk_transfer)
@@ -39,12 +39,12 @@ if [[ -n "${CLI_CONFIG:-}" ]]; then
   CONFIG_FLAG=(--config "$CLI_CONFIG")
 fi
 
-AUTHORITY="${AUTHORITY:-alice@wonderland}"
+AUTHORITY="${AUTHORITY:-6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9}"
 PRIVATE_KEY="${PRIVATE_KEY:-ed0120...}"
 BACKEND="${BACKEND:-halo2/ipa}"
-ASSET_ID="${ASSET_ID:-rose#wonderland}"
-FROM="${FROM:-alice@wonderland}"
-TO="${TO:-alice@wonderland}"
+ASSET_ID="${ASSET_ID:-norito:4e52543000000001}"
+FROM="${FROM:-6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9}"
+TO="${TO:-6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9}"
 AMOUNT="${AMOUNT:-1000}"
 NOTE_COMMITMENT_HEX="${NOTE_COMMITMENT_HEX:-0000000000000000000000000000000000000000000000000000000000000000}"
 VK_TRANSFER_NAME="${VK_TRANSFER_NAME:-vk_transfer}"
@@ -102,4 +102,3 @@ else
 fi
 
 echo "Done."
-

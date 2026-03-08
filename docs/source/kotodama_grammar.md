@@ -140,7 +140,7 @@ register_trigger wake {
   call run;
   on time pre_commit;
   repeats 2;
-  authority "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland";
+  authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
   metadata { tag: "alpha"; count: 1; enabled: true; }
 }
 ```

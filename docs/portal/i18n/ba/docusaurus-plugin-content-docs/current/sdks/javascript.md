@@ -115,12 +115,12 @@ const defs = await torii.queryAssetDefinitions({
 });
 console.log("filtered definitions", defs.items);
 
-const assetId = "rose#wonderland#alice@test";
-const balances = await torii.listAccountAssets("alice@test", {
+const assetId = "norito:4e52543000000001";
+const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("alice@test", {
+const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
   limit: 5,
   assetId,
 });

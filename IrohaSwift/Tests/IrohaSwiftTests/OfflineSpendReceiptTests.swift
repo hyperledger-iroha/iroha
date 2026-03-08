@@ -66,7 +66,7 @@ final class OfflineSpendReceiptTests: XCTestCase {
     func testSigningBytesCanonicalizeAccountIds() throws {
         let publicKey = Data(repeating: 0x11, count: 32)
         let domain = "wonderland"
-        let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey, algorithm: "ed25519")
+        let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: "ed25519")
         let rawAccountId = try address.toCompressedSora()
         let canonicalAccountId = try address.toIH58(networkPrefix: 0x02F1)
         let rawAssetId = try makeNoritoAssetId(name: "xor", domain: domain, accountId: rawAccountId)

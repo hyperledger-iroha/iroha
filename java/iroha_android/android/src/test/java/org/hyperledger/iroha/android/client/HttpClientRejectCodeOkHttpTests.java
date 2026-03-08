@@ -55,7 +55,7 @@ public final class HttpClientRejectCodeOkHttpTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", seed))
-            .setAuthority("reject@wonderland")
+            .setAuthority("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
             .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)

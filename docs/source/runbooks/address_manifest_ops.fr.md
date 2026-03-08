@@ -134,8 +134,8 @@ Champs d'en‑tête de `manifest.json` :
 2. **Dériver les payloads canoniques.** Pour chaque alias mis à jour, exécutez :
 
    ```bash
-   iroha tools address convert sora...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .input_domain' /tmp/alias.json
+   iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
+   jq '.canonical_hex, .ih58' /tmp/alias.json
    ```
 
 3. **Rédiger l'entrée de manifeste.** Ajoutez un enregistrement JSON comme :

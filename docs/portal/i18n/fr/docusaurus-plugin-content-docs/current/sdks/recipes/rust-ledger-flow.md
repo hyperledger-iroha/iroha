@@ -122,6 +122,6 @@ Si la définition d’actif existe déjà, l’appel d’enregistrement renvoie 
 ## Vérifier les hashes et la parité
 
 - Utilisez `iroha --config defaults/client.toml transaction get --hash <hash>` pour inspecter les transactions soumises par le SDK.
-- Vérifiez les soldes avec `iroha --config defaults/client.toml asset list all --table` ou `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- Vérifiez les soldes avec `iroha --config defaults/client.toml asset list all --table` ou `asset list filter '{"id":"norito:4e52543000000002"}'`.
 - Répétez le même flux via le parcours CLI pour confirmer que les deux surfaces produisent les mêmes payloads Norito et statuts de transaction.
 

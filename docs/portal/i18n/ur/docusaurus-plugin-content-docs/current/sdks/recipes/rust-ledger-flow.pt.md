@@ -136,5 +136,5 @@ Se a definição do ativo já existir, a chamada de registro retorna `Validation
 ## Verifique hashes e paridade
 
 - Use `iroha --config defaults/client.toml transaction get --hash <hash>` para inspecionar as transações enviadas pelo SDK.
-- Confira os saldos com `iroha --config defaults/client.toml asset list all --table` ou `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- Confira os saldos com `iroha --config defaults/client.toml asset list all --table` ou `asset list filter '{"id":"norito:4e52543000000002"}'`.
 - Repita o mesmo fluxo no walkthrough da CLI para confirmar que ambas as superfícies produzem os mesmos payloads Norito e estados de transação.

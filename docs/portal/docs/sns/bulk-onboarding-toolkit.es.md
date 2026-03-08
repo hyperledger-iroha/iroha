@@ -36,7 +36,7 @@ El parser requiere la siguiente fila de encabezado (el orden es flexible):
 |---------|-----------|-------------|
 | `label` | Si | Etiqueta solicitada (se acepta mayus/minus; la herramienta normaliza segun Norm v1 y UTS-46). |
 | `suffix_id` | Si | Identificador numerico de sufijo (decimal o `0x` hex). |
-| `owner` | Si | Cadena AccountId (IH58 literal; optional @domain hint) para el propietario del registro. |
+| `owner` | Si | Cadena AccountId (domainless encoded AccountId literal (IH58 preferred, compressed accepted; no @domain suffix)) para el propietario del registro. |
 | `term_years` | Si | Entero `1..=255`. |
 | `payment_asset_id` | Si | Activo de settlement (por ejemplo `xor#sora`). |
 | `payment_gross` / `payment_net` | Si | Enteros sin signo que representan unidades nativas del activo. |

@@ -621,19 +621,36 @@ fn ensure_account_literal(literal: &str, field: &str, prefix: &str, errors: &mut
             "{prefix}: {field} `{literal}` must not contain whitespace"
         ));
     }
-    if let Some((head, tail)) = trimmed.split_once('@')
-        && (head.is_empty() || tail.is_empty() || trimmed.matches('@').count() != 1)
-    {
+    if trimmed.contains('@') {
         errors.push(format!(
-            "{prefix}: {field} `{literal}` must be IH58/uaid/opaque or `<alias|public_key>@domain`"
+            "{prefix}: {field} `{literal}` must be an encoded account id (IH58 preferred, compressed `sora...` accepted) and must not include `@domain`"
+        ));
+        return;
+    }
+    if let Err(err) = iroha_data_model::account::AccountId::parse_encoded(trimmed) {
+        errors.push(format!(
+            "{prefix}: {field} `{literal}` must be an encoded account id (IH58 preferred, compressed `sora...` accepted): {err}"
         ));
     }
 }
 
 fn ensure_asset_literal(literal: &str, field: &str, prefix: &str, errors: &mut Vec<String>) {
-    if !literal.contains('#') {
+    let trimmed = literal.trim();
+    if trimmed.is_empty() {
         errors.push(format!(
-            "{prefix}: {field} `{literal}` must be definition#domain"
+            "{prefix}: {field} must be a non-empty asset identifier"
+        ));
+        return;
+    }
+    if trimmed.chars().any(char::is_whitespace) {
+        errors.push(format!(
+            "{prefix}: {field} `{literal}` must not contain whitespace"
+        ));
+        return;
+    }
+    if let Err(err) = iroha_data_model::asset::AssetId::parse_encoded(trimmed) {
+        errors.push(format!(
+            "{prefix}: {field} `{literal}` must be an encoded asset id (`norito:<hex>`): {err}"
         ));
     }
 }
@@ -2530,12 +2547,14 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod catalog_verify_tests {
     use super::*;
 
+    const SAMPLE_ASSET_ID: &str = "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c3000000000000000141b40d658cbfbb00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323043453746413436433944434537454134423132354532453336424442363345413333303733453735393041433932383136414531453836314237303438423033320000000000000017000000000000000f00000000000000070000000000000064656661756c740b000000000000000300000000000000786f72";
+
     fn sample_pricing() -> PricingTier {
         PricingTier {
             tier_id: 0,
             label_regex: "^[a-z]{3,}$".into(),
             base_price: AssetAmount {
-                asset_id: "xor#sora".into(),
+                asset_id: SAMPLE_ASSET_ID.into(),
                 amount: 120,
             },
             auction_kind: "vickrey_commit_reveal".into(),
@@ -2550,9 +2569,9 @@ mod catalog_verify_tests {
             suffix: ".sora".into(),
             suffix_id: 1,
             status: "active".into(),
-            steward_account: "steward@sns".into(),
-            fund_splitter_account: "steward@sns".into(),
-            payment_asset_id: "xor#sora".into(),
+            steward_account: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".into(),
+            fund_splitter_account: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".into(),
+            payment_asset_id: SAMPLE_ASSET_ID.into(),
             referral_cap_bps: 500,
             min_term_years: 1,
             max_term_years: 5,
@@ -2561,7 +2580,7 @@ mod catalog_verify_tests {
             policy_version: 1,
             reserved_labels: vec![ReservedLabel {
                 label: "treasury".into(),
-                assigned_to: Some("treasury@sns".into()),
+                assigned_to: Some("6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ".into()),
                 release_at_ms: None,
                 note: None,
             }],

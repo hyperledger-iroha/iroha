@@ -10,8 +10,8 @@ to hook up to a live admin surface.
 
 Example invocations::
 
-    # Inject a mismatch for alice@wonderland and update the local cache
-    scripts/telemetry/inject_redaction_failure.py --authority alice@wonderland
+    # Inject a mismatch for 6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9 and update the local cache
+    scripts/telemetry/inject_redaction_failure.py --authority 6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9
 
     # Clear recorded failures (after verifying alert recovery)
     scripts/telemetry/inject_redaction_failure.py --clear
@@ -68,8 +68,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--authority",
-        default="alice@wonderland",
-        help="Authority to flag (default: alice@wonderland).",
+        default="6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+        help="Authority to flag (default: 6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9).",
     )
     parser.add_argument(
         "--reason",

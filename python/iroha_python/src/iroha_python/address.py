@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import binascii
 import hashlib
 from dataclasses import dataclass
 from enum import Enum, IntEnum
@@ -153,7 +152,6 @@ class AccountAddressFormat(Enum):
 
     IH58 = "ih58"
     COMPRESSED = "compressed"
-    CANONICAL_HEX = "canonical_hex"
 
 
 class AddressClass(IntEnum):
@@ -370,15 +368,6 @@ class AccountAddress:
         return cls(header=header, domain=domain, controller=controller)
 
     @classmethod
-    def from_canonical_hex(cls, encoded: str) -> "AccountAddress":
-        body = encoded[2:] if encoded.lower().startswith("0x") else encoded
-        try:
-            payload = binascii.unhexlify(body)
-        except binascii.Error as exc:
-            raise AccountAddressError("invalid canonical hex account address") from exc
-        return cls.from_canonical_bytes(payload)
-
-    @classmethod
     def from_ih58(
         cls, encoded: str, expected_prefix: Optional[int] = None
     ) -> "AccountAddress":
@@ -395,18 +384,21 @@ class AccountAddress:
         return cls.from_canonical_bytes(canonical)
 
     @classmethod
-    def parse_any(
+    def parse_encoded(
         cls, address: str, expected_prefix: Optional[int] = None
     ) -> Tuple["AccountAddress", AccountAddressFormat]:
         token = address.strip()
         if not token:
             raise AccountAddressError("invalid length for address payload")
+        if "@" in token:
+            raise AccountAddressError("account id must not include '@domain'")
+        if token.startswith(("0x", "0X")):
+            raise AccountAddressError(
+                "canonical hex account literals are not accepted; use IH58 or sora compressed forms"
+            )
         if token.startswith(COMPRESSED_SENTINEL):
             parsed = cls.from_compressed_sora(token)
             return parsed, AccountAddressFormat.COMPRESSED
-        if token.startswith(("0x", "0X")):
-            parsed = cls.from_canonical_hex(token)
-            return parsed, AccountAddressFormat.CANONICAL_HEX
         try:
             parsed = cls.from_ih58(token, expected_prefix=expected_prefix)
             return parsed, AccountAddressFormat.IH58
@@ -421,7 +413,7 @@ class AccountAddress:
         return bytes(out)
 
     def canonical_hex(self) -> str:
-        return "0x" + binascii.hexlify(self.canonical_bytes()).decode("ascii")
+        return "0x" + self.canonical_bytes().hex()
 
     def to_ih58(self, network_prefix: int) -> str:
         return encode_ih58_string(network_prefix, self.canonical_bytes())

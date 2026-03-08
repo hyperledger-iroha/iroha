@@ -49,7 +49,7 @@ published coordinates when consuming from Maven.
 import org.hyperledger.iroha.android.address.AccountAddress;
 
 byte[] key = new byte[32];
-AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
 System.out.println(address.canonicalHex());
 System.out.println(address.toIH58(753));
 System.out.println(address.toCompressedSora());
@@ -75,8 +75,8 @@ MultisigSpec spec =
     MultisigSpec.builder()
         .setQuorum(3)
         .setTransactionTtlMs(86_400_000L)
-        .addSignatory("<account_ih58>@wonderland", 2)
-        .addSignatory("<backup_ih58>@wonderland", 1)
+        .addSignatory("<account_ih58>", 2)
+        .addSignatory("<backup_ih58>", 1)
         .build();
 
 MultisigProposalTtlPreview preview = spec.enforceProposalTtl(90_000L, System.currentTimeMillis());
@@ -138,7 +138,7 @@ SubscriptionPlanCreateResponse planResponse =
 SubscriptionCreateResponse subscriptionResponse =
     client.createSubscription(
             SubscriptionCreateRequest.builder()
-                .authority("<account_ih58>@subscriptions")
+                .authority("<account_ih58>")
                 .privateKey("<hex>")
                 .subscriptionId("sub-001$subscriptions")
                 .planId("aws_compute#commerce")
@@ -1014,7 +1014,7 @@ from any `HttpClientTransport`:
 ```java
 OfflineListParams params = OfflineListParams.builder()
     .limit(10L)
-    .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"<merchant_ih58>@wonderland\"]}")
+    .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"<merchant_ih58>\"]}")
     .build();
 
 transport.offlineToriiClient().listAllowances(params)
@@ -1025,7 +1025,7 @@ transport.offlineToriiClient().listAllowances(params)
     });
 
 OfflineQueryEnvelope query = OfflineQueryEnvelope.builder()
-    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"<merchant_ih58>@wonderland\"]}")
+    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"<merchant_ih58>\"]}")
     .setLimit(25L)
     .build();
 

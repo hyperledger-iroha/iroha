@@ -82,7 +82,7 @@ Aktiv kəmiyyətləri `(asset definition, account)` cütü altında yaşayır. N
 
 ```sh
 iroha --config defaults/client.toml asset mint \
-  --id coffee#wonderland##${ADMIN_ACCOUNT} \
+  --id norito:4e52543000000002 \
   --quantity 250
 ```
 
@@ -97,7 +97,7 @@ və ya yalnız yeni aktivi hədəfləmək üçün:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${ADMIN_ACCOUNT}\"}" \
+  "{\"id\":\"norito:4e52543000000002\"}" \
   --limit 1 | jq .
 ```
 
@@ -107,7 +107,7 @@ Operator hesabından 50 vahidi `$RECEIVER_ACCOUNT`-ə köçürün:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
-  --id coffee#wonderland##${ADMIN_ACCOUNT} \
+  --id norito:4e52543000000002 \
   --to ${RECEIVER_ACCOUNT} \
   --quantity 50
 ```
@@ -117,10 +117,10 @@ yeni qalıqları yoxlamaq üçün hesablar:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${ADMIN_ACCOUNT}\"}" --limit 1 | jq .
+  "{\"id\":\"norito:4e52543000000002\"}" --limit 1 | jq .
 
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
+  "{\"id\":\"norito:4e52543000000003\"}" --limit 1 | jq .
 ```
 
 ## 5. Kitab dəlillərini yoxlayın

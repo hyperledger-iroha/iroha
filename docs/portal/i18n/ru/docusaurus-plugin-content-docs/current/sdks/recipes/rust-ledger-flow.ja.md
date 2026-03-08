@@ -133,5 +133,5 @@ ih58... now holds:
 ## Проверьте хеши и паритет
 
 - Используйте `iroha --config defaults/client.toml transaction get --hash <hash>` для просмотра транзакций, отправленных SDK.
-- Сверьте балансы с `iroha --config defaults/client.toml asset list all --table` или `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- Сверьте балансы с `iroha --config defaults/client.toml asset list all --table` или `asset list filter '{"id":"norito:4e52543000000002"}'`.
 - Повторите тот же поток через CLI walkthrough, чтобы подтвердить, что обе поверхности создают одинаковые payloads Norito и статусы транзакций.

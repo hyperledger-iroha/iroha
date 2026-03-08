@@ -113,7 +113,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
     func testChallengePreimageCanonicalizesReceiverAccountId() throws {
         let publicKey = Data(repeating: 0x22, count: 32)
         let domain = AccountAddress.defaultDomainName
-        let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey, algorithm: "ed25519")
+        let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: "ed25519")
         let rawAccountId = try address.toCompressedSora()
         let canonicalAccountId = try address.toIH58(networkPrefix: 0x02F1)
         let rawAssetId = try makeNoritoAssetId(name: "xor", domain: domain, accountId: rawAccountId)
@@ -154,9 +154,8 @@ final class OfflineReceiptChallengeTests: XCTestCase {
             throw XCTSkip("NoritoBridge not available")
         }
         let publicKey = Data(repeating: 0x11, count: 32)
-        let domain = "wonderland"
-        let receiverAccountId = AccountId.make(publicKey: publicKey, domain: domain)
-        let assetId = try makeNoritoAssetId(name: "xor", domain: domain, accountId: receiverAccountId)
+        let receiverAccountId = AccountId.make(publicKey: publicKey)
+        let assetId = try fixtureAllowanceAssetId()
         let senderCertificateIdHex = sampleSenderCertificateIdHex()
         let nonceHex = sampleNonceHex()
         let result = try bridge.offlineReceiptChallenge(
@@ -176,8 +175,21 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         XCTAssertEqual(native.clientHash.count, 32)
         XCTAssertFalse(native.preimage.isEmpty)
         #else
-        throw XCTSkip("NoritoBridge not available on this platform")
+            throw XCTSkip("NoritoBridge not available on this platform")
         #endif
+    }
+
+    private func fixtureAllowanceAssetId() throws -> String {
+        let url = fixtureURL("summary.json")
+        let data = try Data(contentsOf: url)
+        let object = try JSONSerialization.jsonObject(with: data, options: [])
+        guard let map = object as? [String: Any],
+              let value = map["allowance_asset"] as? String else {
+            throw NSError(domain: "OfflineReceiptChallengeTests", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "fixtures/offline_allowance/ios-demo/summary.json is missing allowance_asset"
+            ])
+        }
+        return value
     }
 
     private func sampleNonceHex() -> String {
@@ -195,5 +207,13 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         writer.writeField(try OfflineNorito.encodeAssetDefinitionId(name: name, domain: domain))
         writer.writeField(try OfflineNorito.encodeAccountId(accountId))
         return "norito:\(writer.data.hexLowercased())"
+    }
+
+    private func fixtureURL(_ name: String) -> URL {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 {
+            url.deleteLastPathComponent()
+        }
+        return url.appendingPathComponent("fixtures/offline_allowance/ios-demo/\(name)")
     }
 }

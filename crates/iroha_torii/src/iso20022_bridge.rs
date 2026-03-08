@@ -1309,7 +1309,7 @@ mod tests {
 
     use super::*;
 
-    const RAW_PUBLIC_KEY_LITERAL: &str =
+    const LEGACY_PUBLIC_KEY_LITERAL: &str =
         "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@test";
 
     fn sample_account_bundle() -> (AccountId, String, iroha_crypto::PrivateKey) {
@@ -1460,23 +1460,25 @@ mod tests {
     }
 
     #[test]
-    fn runtime_accepts_raw_signer_account_literal() {
+    fn runtime_rejects_legacy_signer_account_literal() {
         let mut config = sample_config();
         if let Some(ref mut signer) = config.signer {
-            signer.account_id = RAW_PUBLIC_KEY_LITERAL.to_string();
+            signer.account_id = LEGACY_PUBLIC_KEY_LITERAL.to_string();
         }
-        Iso20022BridgeRuntime::from_config(&config)
-            .expect("raw public key signer should be accepted")
-            .expect("runtime should be enabled");
+        let err = Iso20022BridgeRuntime::from_config(&config)
+            .err()
+            .expect("legacy signer literal must be rejected");
+        assert!(err.to_string().contains("signer account_id"));
     }
 
     #[test]
-    fn runtime_accepts_raw_alias_account_literal() {
+    fn runtime_rejects_legacy_alias_account_literal() {
         let mut config = sample_config();
-        config.account_aliases[0].account_id = RAW_PUBLIC_KEY_LITERAL.to_string();
-        Iso20022BridgeRuntime::from_config(&config)
-            .expect("raw public key alias should be accepted")
-            .expect("runtime should be enabled");
+        config.account_aliases[0].account_id = LEGACY_PUBLIC_KEY_LITERAL.to_string();
+        let err = Iso20022BridgeRuntime::from_config(&config)
+            .err()
+            .expect("legacy alias literal must be rejected");
+        assert!(err.to_string().contains("account alias"));
     }
 
     #[test]
@@ -1836,7 +1838,9 @@ mod tests {
         assert!(runtime.check_and_record_message(message_id));
         let context = IsoMessageContext {
             ledger_id: Some("ledger-A".to_string()),
-            source_account_id: Some("ed0120ctx@test".to_string()),
+            source_account_id: Some(
+                "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".to_string(),
+            ),
             ..IsoMessageContext::default()
         };
         runtime.update_message_context(message_id, context.clone());
@@ -1844,7 +1848,10 @@ mod tests {
 
         let status = runtime.message_status(message_id).expect("status");
         assert_eq!(status.ledger_id(), Some("ledger-A"));
-        assert_eq!(status.source_account_id(), Some("ed0120ctx@test"));
+        assert_eq!(
+            status.source_account_id(),
+            Some("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU")
+        );
         assert_eq!(status.transaction_hash(), Some("hash-ctx"));
     }
 

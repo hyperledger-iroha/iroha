@@ -719,7 +719,7 @@ public final class HttpClientTransportTests {
             + "\"account_id\":\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\","
             + "\"label\":\"Primary\","
             + "\"assets\":[{"
-            + "\"asset_id\":\"xor#wonderland\",\"asset_definition_id\":\"xor#nexus\",\"quantity\":\"42\""
+            + "\"asset_id\":\"norito:00\",\"asset_definition_id\":\"xor#nexus\",\"quantity\":\"42\""
             + "}]"
             + "}]"
             + "}]"
@@ -752,7 +752,7 @@ public final class HttpClientTransportTests {
     assert "Primary".equals(account.label()) : "Account label mismatch";
     assert account.assets().size() == 1 : "Expected single asset entry";
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
-    assert "xor#wonderland".equals(asset.assetId()) : "Asset ID mismatch";
+    assert "norito:00".equals(asset.assetId()) : "Asset ID mismatch";
     assert "xor#nexus".equals(asset.assetDefinitionId()) : "Asset definition mismatch";
     assert "42".equals(asset.quantity()) : "Asset quantity mismatch";
 
@@ -789,7 +789,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
     final UaidPortfolioQuery query =
-        UaidPortfolioQuery.builder().setAssetId("xor#wonderland").build();
+        UaidPortfolioQuery.builder().setAssetId("norito:00").build();
     transport.getUaidPortfolio("uaid:" + hex.toUpperCase(), query).join();
 
     final TransportRequest request = executor.lastRequest();
@@ -800,7 +800,7 @@ public final class HttpClientTransportTests {
         .equals(
             "https://torii.example/v1/accounts/uaid%3A"
                 + hex
-                + "/portfolio?asset_id=xor%23wonderland")
+                + "/portfolio?asset_id=norito%3A00")
         : "UAID portfolio query must include asset_id filter";
   }
 
@@ -838,7 +838,7 @@ public final class HttpClientTransportTests {
             + "\"dataspaces\":[{"
             + "\"dataspace_id\":7,"
             + "\"dataspace_alias\":null,"
-            + "\"accounts\":[\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\",\"bob@sora\"]"
+            + "\"accounts\":[\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\",\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\"]"
             + "}]"
             + "}";
     final StubResponseExecutor executor =

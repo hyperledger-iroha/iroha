@@ -182,5 +182,5 @@ public final class LedgerFlow {
 ## 5. Ստուգեք հավասարությունը
 
 - Ստուգեք գործարքի հեշերը `iroha --config defaults/client.toml transaction get --hash <hash>`-ի միջոցով:
-- Ստացեք մնացորդներ CLI-ով (`asset list filter '{"id":"coffee#wonderland##<account>"}'`):
+- Ստացեք մնացորդներ CLI-ով (`asset list filter '{"id":"norito:4e52543000000002"}'`):
 - Համեմատեք արդյունքները Rust/Python/JavaScript/Swift բաղադրատոմսերի հետ՝ համոզվելու համար, որ յուրաքանչյուր SDK-ն արտադրում է նույնական Norito օգտակար բեռներ դեմո հոսքի համար:

@@ -169,8 +169,7 @@ public final class TransactionPayload {
     private static String defaultAuthority() {
       final byte[] publicKey = new byte[32];
       try {
-        return AccountAddress.fromAccount(
-                AccountAddress.DEFAULT_DOMAIN_NAME, publicKey, "ed25519")
+        return AccountAddress.fromAccount(publicKey, "ed25519")
             .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
       } catch (final AccountAddress.AccountAddressException ex) {
         throw new IllegalStateException("Failed to construct default encoded authority", ex);

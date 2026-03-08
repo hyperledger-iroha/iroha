@@ -55,9 +55,9 @@ const tx = buildTransaction({
   authority: adminAccount,
   instructions: [
     {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
-    {Mint: {asset: {id: `coffee#wonderland##${adminAccount}`}, value: {quantity: '250'}}},
+    {Mint: {asset: {id: `norito:4e52543000000002`}, value: {quantity: '250'}}},
     {Transfer: {
-      asset: {id: `coffee#wonderland##${adminAccount}`},
+      asset: {id: `norito:4e52543000000002`},
       destination: receiverAccount,
       value: {quantity: '50'},
     }},
@@ -82,5 +82,5 @@ for (const asset of balances.items) {
 ## אימות תאימות
 
 - הביאו את פרטי העסקה דרך `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- בדקו יתרות עם `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- בדקו יתרות עם `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'`.
 - השוו את ההאש שנפלט עם המתכונים של Rust ו-Python כדי לוודא תאימות בין ה-SDK.

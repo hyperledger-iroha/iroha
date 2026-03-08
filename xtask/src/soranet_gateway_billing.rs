@@ -723,12 +723,8 @@ mod tests {
             catalog_path,
             guardrails_path: Some(guardrails_path),
             output_dir: output_dir.clone(),
-            payer:
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .to_string(),
-            treasury:
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .to_string(),
+            payer: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string(),
+            treasury: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string(),
             asset_definition: "xor#wonderland".to_string(),
             allow_hard_cap: false,
         })
@@ -812,12 +808,8 @@ mod tests {
             catalog_path,
             guardrails_path: Some(guardrails_path),
             output_dir,
-            payer:
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .to_string(),
-            treasury:
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .to_string(),
+            payer: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string(),
+            treasury: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string(),
             asset_definition: "xor#wonderland".to_string(),
             allow_hard_cap: false,
         });

@@ -124,8 +124,8 @@ address-manifest-<REVISION>/
 2. **Derive canonical payloads.** For each alias being updated, run:
 
    ```bash
-   iroha tools address convert sora...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .input_domain' /tmp/alias.json
+   iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
+   jq '.canonical_hex, .ih58' /tmp/alias.json
    ```
 
 3. **Draft manifest entry.** Append a JSON record similar to:

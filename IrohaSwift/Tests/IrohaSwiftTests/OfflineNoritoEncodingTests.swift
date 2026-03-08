@@ -5,7 +5,7 @@ final class OfflineNoritoEncodingTests: XCTestCase {
     private func makeAddress(seed: UInt8,
                              domain: String = AccountAddress.defaultDomainName) throws -> AccountAddress {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: seed, count: 32))
-        return try AccountAddress.fromAccount(domain: domain, publicKey: keypair.publicKey)
+        return try AccountAddress.fromAccount(publicKey: keypair.publicKey)
     }
 
     private func makeIH58(seed: UInt8,

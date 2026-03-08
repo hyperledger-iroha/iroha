@@ -617,7 +617,7 @@ Key details:
 
 - `--spec` accepts a JSON file with `{ "operator": { "account": "<account id>", "private_key": "ed25519:…" }, "allowances": [...] }`.
   Each allowance entry supplies `label`, `controller`, `operator`, `allowance_asset`, and policy fields using the
-  canonical IH58 account syntax (no `@domain`; append `@domain` only as an explicit routing hint). Spend keys can be specified as a multihash (`ed0120…`)
+  canonical IH58 account syntax (no `@domain`; runtime parsers reject `@domain` suffixes). Spend keys can be specified as a multihash (`ed0120…`)
   or as `algo:hex`, metadata can be provided inline or via `metadata_file`, attestation bytes can be
   embedded with `attestation_report_{hex,base64}` (or loaded from `attestation_report_file`), and an
   optional `blinding_hex` override keeps regression fixtures deterministic.

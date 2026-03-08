@@ -19,7 +19,7 @@ companion tooling. It provides:
 
 ## Motivation
 
-Wallets and off-chain tooling rely on raw `alias@domain` routing aliases today. This
+Wallets and off-chain tooling rely on raw `alias@domain` (rejected legacy form) routing aliases today. This
 has two major drawbacks:
 
 1. **No network binding.** The string has no checksum or chain prefix, so users
@@ -62,12 +62,8 @@ AccountId {
 
 Display: canonical IH58 literal (no `@domain` suffix)
 Parse accepts:
-- IH58 (preferred), `sora` compressed, or canonical hex (`0x...`) inputs, with
-  optional `@<domain>` suffixes for explicit routing hints.
-- `<label>@<domain>` aliases resolved through the account-alias resolver
-  (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<alias>@<domain>` for domain-scoped alias routing; account IDs themselves are canonical encoded literals (IH58 or compressed).
-- `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
+- Encoded account identifiers only: IH58 (preferred) and `sora` compressed.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
@@ -144,9 +140,7 @@ adds value. Canonical hex remains a debugging aid.
 - **Canonical hex** – a debugging-friendly `0x…` encoding of the canonical byte
   envelope.
 
-`AccountAddress::parse_encoded` auto-detects IH58 (preferred), compressed (`sora`, second-best), or canonical hex
-(`0x...` only; bare hex is rejected) inputs and returns both the decoded payload and the detected
-`AccountAddressFormat`. Torii now calls `parse_encoded` for ISO 20022 supplementary
+`AccountAddress::parse_encoded` accepts encoded account identifiers only: IH58 (preferred) and compressed (`sora`, second-best). It rejects canonical hex (`0x...`), bare hex, and any `@domain` suffix. Torii now calls `parse_encoded` for ISO 20022 supplementary
 addresses and stores the canonical hex form so metadata remains deterministic
 regardless of the original representation.
 
@@ -310,7 +304,7 @@ Key implementation details:
 - Oversized or malformed key material raises `KeyPayloadTooLong` or `InvalidPublicKey`.
 - Multisig controllers exceeding 255 members raise `MultisigMemberOverflow`.
 - IME/NFKC conversions: half-width Sora kana can be normalised to their full-width forms without breaking decoding, but the ASCII `sora` sentinel and IH58 digits/letters MUST stay ASCII. Full-width or case-folded sentinels surface `ERR_MISSING_COMPRESSED_SENTINEL`, full-width ASCII payloads raise `ERR_INVALID_COMPRESSED_CHAR`, and checksum mismatches bubble up as `ERR_CHECKSUM_MISMATCH`. Property tests in `crates/iroha_data_model/src/account/address.rs` cover these paths so SDKs and wallets can rely on deterministic failures.
-- Torii and SDK parsing of `address@domain` aliases now emit the same `ERR_*` codes when IH58 (preferred)/sora (second-best) inputs fail before alias fallback (e.g., checksum mismatch, domain digest mismatch), so clients can relay structured reasons without guessing from prose strings.
+- Torii and SDK parsing of `address@domain` (rejected legacy form) aliases now emit the same `ERR_*` codes when IH58 (preferred)/sora (second-best) inputs fail before alias fallback (e.g., checksum mismatch, domain digest mismatch), so clients can relay structured reasons without guessing from prose strings.
 - Local selector payloads shorter than 12 bytes surface `ERR_LOCAL8_DEPRECATED`, preserving a hard cutover from legacy Local‑8 digests.
 - Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
 
@@ -360,7 +354,7 @@ consistent textual forms for every canonical payload. Selected fixtures from
 These strings match the ones emitted by the CLI (`iroha tools address convert`), Torii
 responses (`address_format=ih58|compressed`), and SDK helpers, so UX copy/paste
 flows can rely on them verbatim. Canonical IH58/compressed outputs are globally
-scoped and selector-free; optional `<address>@<domain>` suffixes are legacy routing
+scoped and selector-free; optional `<address>@<domain>` (rejected legacy form) suffixes are legacy routing
 hints only and are not part of canonical output.
 
 #### 2.6 Textual aliases for interoperability (planned)
@@ -618,9 +612,7 @@ their change tickets.
   plus the resolved domain as a label fetched from the registry. Domains are
   clearly marked as descriptive metadata that may change, while IH58 is the
   stable address.
-- **Input canonicalization:** Torii and SDKs accept IH58 (preferred)/sora (second-best)/0x
-  addresses plus `alias@domain`, `uaid:…`, and
-  `opaque:…` forms, then canonicalize to IH58 for output. There is no
+- **Input canonicalization:** Torii and SDKs accept encoded account IDs only (IH58 preferred, `sora` compressed accepted) and reject `@domain` suffixes, alias forms, and canonical-hex account literals in runtime parser paths. There is no
   strict-mode toggle; raw phone/email identifiers must be kept off-ledger
   via UAID/opaque mappings.
 - **Error prevention:** Wallets parse IH58 prefixes and enforce chain-discriminant

@@ -183,17 +183,21 @@ export function normalizeAccountId(value, name) {
     fail(ValidationErrorCode.INVALID_ACCOUNT_ID, `${name} must be a non-empty string`, name);
   }
 
-  if (raw.slice(0, 5).toLowerCase() === "uaid:" || /^[0-9a-fA-F]{64}$/.test(raw)) {
-    return normalizeUaidLiteral(raw, name);
-  }
-  if (raw.slice(0, 7).toLowerCase() === "opaque:") {
-    return normalizeOpaqueLiteral(raw, name);
-  }
-
   if (raw.includes("@")) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must not include '@domain'; use an encoded IH58/sora address, uaid:, or opaque:`,
+      `${name} must not include '@domain'; use an encoded IH58/sora account id`,
+      name,
+    );
+  }
+  if (
+    raw.slice(0, 5).toLowerCase() === "uaid:" ||
+    raw.slice(0, 7).toLowerCase() === "opaque:" ||
+    /^[0-9a-fA-F]{64}$/.test(raw)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      `${name} must be IH58 (preferred) or sora compressed account id`,
       name,
     );
   }
@@ -205,7 +209,7 @@ export function normalizeAccountId(value, name) {
     if (error instanceof AccountAddressError) {
       fail(
         ValidationErrorCode.INVALID_ACCOUNT_ID,
-        `${name} must be IH58 (preferred)/sora (second-best), uaid:, or opaque:`,
+        `${name} must be IH58 (preferred) or sora compressed account id`,
         name,
       );
     }
@@ -225,7 +229,11 @@ export function ensureCanonicalAccountId(value, name) {
       name,
     );
   }
-  if (raw.slice(0, 5).toLowerCase() === "uaid:" || raw.slice(0, 7).toLowerCase() === "opaque:") {
+  if (
+    raw.slice(0, 5).toLowerCase() === "uaid:" ||
+    raw.slice(0, 7).toLowerCase() === "opaque:" ||
+    /^[0-9a-fA-F]{64}$/.test(raw)
+  ) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
       `${name} must be a canonical IH58 account id`,

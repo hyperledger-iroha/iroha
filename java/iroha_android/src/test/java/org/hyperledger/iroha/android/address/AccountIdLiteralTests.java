@@ -34,7 +34,7 @@ public final class AccountIdLiteralTests {
     final byte[] publicKey = new byte[32];
     Arrays.fill(publicKey, (byte) 0x44);
     final String canonical =
-        AccountAddress.fromAccount("wonderland", publicKey, "ed25519").canonicalHex();
+        AccountAddress.fromAccount(publicKey, "ed25519").canonicalHex();
     try {
       AccountIdLiteral.extractIh58Address(canonical);
       throw new AssertionError("expected IllegalArgumentException");
@@ -56,7 +56,7 @@ public final class AccountIdLiteralTests {
   private static String sampleIh58(final int fill) throws Exception {
     final byte[] publicKey = new byte[32];
     Arrays.fill(publicKey, (byte) fill);
-    return AccountAddress.fromAccount("wonderland", publicKey, "ed25519")
+    return AccountAddress.fromAccount(publicKey, "ed25519")
         .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
   }
 }

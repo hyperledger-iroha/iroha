@@ -49,10 +49,12 @@ const RELAY_ACCOUNT_ID_RAW =
   "6cmzPVPX4Vnjpp7MFrUdgoZ9scoVXwFPcp4U6r6yELFetMDx2taw8et";
 const RELAY_ACCOUNT_ID = ih58FromEd25519AccountId(RELAY_ACCOUNT_ID_RAW);
 const RELAY_ACCOUNT_ID_INPUT = ih58FromEd25519AccountId(RELAY_ACCOUNT_ID_RAW);
-const ASSET_ID = `rose##${AUTHORITY_ID}`;
-const ASSET_ID_INPUT = `rose##${AUTHORITY_ID_INPUT}`;
 const CANONICAL_ASSET_ID_INPUT =
   "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c4000000000000006165e1e191d7b79c00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323045444636443742353243373033324430334145433639364632303638424435333130313532384633433742363038314246463035413136363244374643323435330000000000000017000000000000000f00000000000000070000000000000064656661756c740c000000000000000400000000000000726f7365";
+const CANONICAL_LILY_ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT.replace(/726f7365$/u, "6c696c79");
+const SECOND_CANONICAL_ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT.replace("6165e1e191d7b79c", "7165e1e191d7b79c");
+const ASSET_ID = CANONICAL_ASSET_ID_INPUT;
+const ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT;
 const test = makeNativeTest(baseTest);
 
 function ih58FromEd25519AccountId(raw) {
@@ -312,7 +314,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
         domain: { domainId: "wonderland" },
         mints: [
           { assetId: ASSET_ID_INPUT, quantity: "4" },
-          { assetId: `lily##${AUTHORITY_ID_INPUT}`, quantity: "1" },
+          { assetId: CANONICAL_LILY_ASSET_ID_INPUT, quantity: "1" },
         ],
         privateKey: PRIVATE_KEY,
       }),
@@ -330,7 +332,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
   assert.deepEqual(instructions[2], {
     Mint: {
       Asset: {
-        destination: `lily##${AUTHORITY_ID}`,
+        destination: CANONICAL_LILY_ASSET_ID_INPUT,
         object: "1",
       },
     },
@@ -359,13 +361,13 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
         authority: AUTHORITY_ID_INPUT,
         assetDefinition: { assetDefinitionId: "rose#wonderland" },
         mints: [
-          { accountId: AUTHORITY_ID_INPUT, quantity: "7" },
-          { assetId: `rose#wonderland##${secondAccountIdInput}`, quantity: "2" },
+          { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "7" },
+          { assetId: SECOND_CANONICAL_ASSET_ID_INPUT, quantity: "2" },
         ],
         transfers: [
           { quantity: "5", destinationAccountId: AUTHORITY_ID_INPUT },
           {
-            sourceAssetId: `rose#wonderland##${secondAccountIdInput}`,
+            sourceAssetId: SECOND_CANONICAL_ASSET_ID_INPUT,
             quantity: "1",
             destinationAccountId: secondAccountIdInput,
           },
@@ -379,7 +381,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   assert.deepEqual(instructions[1], {
     Mint: {
       Asset: {
-        destination: `rose#wonderland##${AUTHORITY_ID}`,
+        destination: CANONICAL_ASSET_ID_INPUT,
         object: "7",
       },
     },
@@ -387,7 +389,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   assert.deepEqual(instructions[2], {
     Mint: {
       Asset: {
-        destination: `rose#wonderland##${secondAccountId}`,
+        destination: SECOND_CANONICAL_ASSET_ID_INPUT,
         object: "2",
       },
     },
@@ -395,7 +397,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   assert.deepEqual(instructions[3], {
     Transfer: {
       Asset: {
-        source: `rose#wonderland##${AUTHORITY_ID}`,
+        source: CANONICAL_ASSET_ID_INPUT,
         object: "5",
         destination: AUTHORITY_ID,
       },
@@ -404,7 +406,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   assert.deepEqual(instructions[4], {
     Transfer: {
       Asset: {
-        source: `rose#wonderland##${secondAccountId}`,
+        source: SECOND_CANONICAL_ASSET_ID_INPUT,
         object: "1",
         destination: secondAccountId,
       },
@@ -412,7 +414,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   });
 });
 
-test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects mismatched assetId/accountId", () => {
+test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects legacy mint.accountId", () => {
   assert.throws(
     () =>
       buildRegisterAssetDefinitionMintAndTransferTransaction({
@@ -422,14 +424,14 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects mismatched 
         mints: [
           {
             accountId: AUTHORITY_ID_INPUT,
-            assetId: "rose#wonderland##someone_else",
+            assetId: CANONICAL_ASSET_ID_INPUT,
             quantity: "1",
           },
         ],
         transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
         privateKey: PRIVATE_KEY,
       }),
-    /must match/,
+    /accountId is no longer supported/i,
   );
 });
 

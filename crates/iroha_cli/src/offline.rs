@@ -1450,7 +1450,8 @@ mod bundle_inspect_tests {
         let controller = AccountId::new(domain.clone(), controller_key);
         let receiver = AccountId::new(domain, receiver_key);
         let deposit = receiver.clone();
-        let asset: AssetId = format!("xor#wonderland#{controller}").parse().unwrap();
+        let asset_definition: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let asset = AssetId::new(asset_definition, controller.clone());
 
         let allowance_amount = Numeric::from_str("500").unwrap();
         let expected_scale = allowance_amount.scale();

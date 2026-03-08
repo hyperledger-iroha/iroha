@@ -42,7 +42,7 @@ use iroha_data_model::da::types::DaRentQuote;
 use iroha_data_model::{
     ChainId,
     account::{
-        Account, AccountId, NewAccount,
+        Account, NewAccount, ScopedAccountId,
         address::{AccountAddress, AccountAddressError, AccountAddressFormat},
     },
     asset::{
@@ -4740,7 +4740,7 @@ fn ensure_zk_public_input_owner_canonical(map: &json::Map, context: &str) -> nap
             format!("{context}.owner must be a canonical account id"),
         )
     })?;
-    let canonical = AccountId::canonicalize(owner).map_err(|_| {
+    let canonical = ScopedAccountId::canonicalize(owner).map_err(|_| {
         napi::Error::new(
             napi::Status::InvalidArg,
             format!("{context}.owner must be a canonical account id"),
@@ -5091,7 +5091,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     return Ok(InstructionBox::from(unregister_box));
                 }
                 if let Some(account_value) = unregister_map.remove("Account") {
-                    let account_id: AccountId =
+                    let account_id: ScopedAccountId =
                         json::from_value(account_value).map_err(norito_to_napi)?;
                     let unregister_box =
                         UnregisterBox::Account(Unregister::<Account>::account(account_id));
@@ -5202,7 +5202,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     let source: AssetId = json::from_value(source_value).map_err(norito_to_napi)?;
                     let quantity: Numeric =
                         json::from_value(quantity_value).map_err(norito_to_napi)?;
-                    let destination: AccountId =
+                    let destination: ScopedAccountId =
                         json::from_value(destination_value).map_err(norito_to_napi)?;
                     let transfer = Transfer::asset_numeric(source, quantity, destination);
                     return Ok(InstructionBox::from(TransferBox::Asset(transfer)));
@@ -5228,11 +5228,11 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                                 "Transfer.Domain.destination field missing",
                             )
                         })?;
-                    let source: AccountId =
+                    let source: ScopedAccountId =
                         json::from_value(source_value).map_err(norito_to_napi)?;
                     let domain_id: DomainId =
                         json::from_value(object_value).map_err(norito_to_napi)?;
-                    let destination: AccountId =
+                    let destination: ScopedAccountId =
                         json::from_value(destination_value).map_err(norito_to_napi)?;
                     let transfer = Transfer::domain(source, domain_id, destination);
                     return Ok(InstructionBox::from(TransferBox::Domain(transfer)));
@@ -5259,11 +5259,11 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                                 "Transfer.AssetDefinition.destination field missing",
                             )
                         })?;
-                    let source: AccountId =
+                    let source: ScopedAccountId =
                         json::from_value(source_value).map_err(norito_to_napi)?;
                     let definition: AssetDefinitionId =
                         json::from_value(object_value).map_err(norito_to_napi)?;
-                    let destination: AccountId =
+                    let destination: ScopedAccountId =
                         json::from_value(destination_value).map_err(norito_to_napi)?;
                     let transfer = Transfer::asset_definition(source, definition, destination);
                     return Ok(InstructionBox::from(TransferBox::AssetDefinition(transfer)));
@@ -5287,10 +5287,10 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             "Transfer.Nft.destination field missing",
                         )
                     })?;
-                    let source: AccountId =
+                    let source: ScopedAccountId =
                         json::from_value(source_value).map_err(norito_to_napi)?;
                     let nft_id: NftId = json::from_value(object_value).map_err(norito_to_napi)?;
-                    let destination: AccountId =
+                    let destination: ScopedAccountId =
                         json::from_value(destination_value).map_err(norito_to_napi)?;
                     let transfer = Transfer::nft(source, nft_id, destination);
                     return Ok(InstructionBox::from(TransferBox::Nft(transfer)));
@@ -5331,7 +5331,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             "JoinKaigi.participant field missing",
                         )
                     })?;
-                    let participant: AccountId =
+                    let participant: ScopedAccountId =
                         json::from_value(participant_value).map_err(norito_to_napi)?;
                     let commitment =
                         parse_optional_commitment(join_fields.remove("commitment"), "JoinKaigi")?;
@@ -5370,7 +5370,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                                 "LeaveKaigi.participant field missing",
                             )
                         })?;
-                    let participant: AccountId =
+                    let participant: ScopedAccountId =
                         json::from_value(participant_value).map_err(norito_to_napi)?;
                     let commitment =
                         parse_optional_commitment(leave_fields.remove("commitment"), "LeaveKaigi")?;
@@ -5504,7 +5504,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             "ReportKaigiRelayHealth.relay_id field missing",
                         )
                     })?;
-                    let relay_id: AccountId =
+                    let relay_id: ScopedAccountId =
                         json::from_value(relay_id_value).map_err(norito_to_napi)?;
                     let status_value = health_fields.remove("status").ok_or_else(|| {
                         napi::Error::new(
@@ -5616,7 +5616,8 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     "CastPlainBallot.referendum_id",
                 )?;
                 let owner_value = required_value(&mut fields, "owner", "CastPlainBallot")?;
-                let owner: AccountId = json::from_value(owner_value).map_err(norito_to_napi)?;
+                let owner: ScopedAccountId =
+                    json::from_value(owner_value).map_err(norito_to_napi)?;
                 let amount = parse_u128_value(
                     required_value(&mut fields, "amount", "CastPlainBallot")?,
                     "CastPlainBallot.amount",
@@ -5641,7 +5642,8 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
 
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterCitizen") {
                 let owner_value = required_value(&mut fields, "owner", "RegisterCitizen")?;
-                let owner: AccountId = json::from_value(owner_value).map_err(norito_to_napi)?;
+                let owner: ScopedAccountId =
+                    json::from_value(owner_value).map_err(norito_to_napi)?;
                 let amount = parse_u128_value(
                     required_value(&mut fields, "amount", "RegisterCitizen")?,
                     "RegisterCitizen.amount",
@@ -5669,12 +5671,12 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 )?;
                 let members_value =
                     required_value(&mut fields, "members", "PersistCouncilForEpoch")?;
-                let members: Vec<AccountId> =
+                let members: Vec<ScopedAccountId> =
                     json::from_value(members_value).map_err(norito_to_napi)?;
                 let alternates_value = fields
                     .remove("alternates")
                     .unwrap_or_else(|| json::Value::Array(Vec::new()));
-                let alternates: Vec<AccountId> =
+                let alternates: Vec<ScopedAccountId> =
                     json::from_value(alternates_value).map_err(norito_to_napi)?;
                 let verified = parse_u32_value(
                     fields
@@ -6803,7 +6805,7 @@ fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
 fn assemble_transaction(
     chain_id: ChainId,
-    authority: AccountId,
+    authority: ScopedAccountId,
     instructions: Vec<InstructionBox>,
     metadata: Metadata,
     creation_time_ms: Option<i64>,
@@ -6952,7 +6954,7 @@ pub fn build_register_domain_transaction(
     let chain_id: ChainId = chain_id.parse().map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
-    let authority: AccountId = AccountId::parse_encoded(&authority)
+    let authority: ScopedAccountId = ScopedAccountId::parse_encoded(&authority)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| {
             napi::Error::new(
@@ -6985,7 +6987,7 @@ pub fn build_register_domain_transaction(
 #[allow(clippy::too_many_arguments)] // helper mirrors the JS surface for clarity
 fn build_transaction_from_instructions_json(
     chain_id: ChainId,
-    authority: AccountId,
+    authority: ScopedAccountId,
     instructions_json: Vec<String>,
     metadata_json: Option<String>,
     creation_time_ms: Option<i64>,
@@ -7024,7 +7026,7 @@ pub fn build_transaction(
     let chain_id: ChainId = chain_id.parse().map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
-    let authority: AccountId = AccountId::parse_encoded(&authority)
+    let authority: ScopedAccountId = ScopedAccountId::parse_encoded(&authority)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| {
             napi::Error::new(
@@ -7086,7 +7088,7 @@ pub fn build_time_trigger_action(
         None
     };
 
-    let authority: AccountId = AccountId::parse_encoded(&authority)
+    let authority: ScopedAccountId = ScopedAccountId::parse_encoded(&authority)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| {
             napi::Error::new(
@@ -7132,7 +7134,7 @@ pub fn build_precommit_trigger_action(
     repeats: Option<u32>,
     metadata_json: Option<String>,
 ) -> napi::Result<String> {
-    let authority: AccountId = AccountId::parse_encoded(&authority)
+    let authority: ScopedAccountId = ScopedAccountId::parse_encoded(&authority)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| {
             napi::Error::new(
@@ -7172,7 +7174,7 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         HasMetadata,
-        account::AccountId,
+        account::ScopedAccountId,
         asset::id::{AssetDefinitionId, AssetId},
         da::{
             manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
@@ -7256,13 +7258,13 @@ mod tests {
         buf
     }
 
-    fn sample_account(domain: &str) -> AccountId {
+    fn sample_account(domain: &str) -> ScopedAccountId {
         let keypair = KeyPair::random();
         let domain_id: DomainId = domain.parse().expect("valid domain id");
-        AccountId::new(domain_id, keypair.public_key().clone())
+        ScopedAccountId::new(domain_id, keypair.public_key().clone())
     }
 
-    fn account_json_literal(account: &AccountId) -> String {
+    fn account_json_literal(account: &ScopedAccountId) -> String {
         json::to_value(account)
             .expect("serialize account id")
             .as_str()
@@ -9476,7 +9478,7 @@ mod tests {
             .and_then(|v| v.get("host"))
             .and_then(|v| v.as_str())
         {
-            AccountId::parse_encoded(host)
+            ScopedAccountId::parse_encoded(host)
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .expect("host account id");
         }
@@ -9487,7 +9489,7 @@ mod tests {
             .and_then(|v| v.get("billing_account"))
             .and_then(|v| v.as_str())
         {
-            AccountId::parse_encoded(billing)
+            ScopedAccountId::parse_encoded(billing)
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .expect("billing account id");
         }
@@ -9501,7 +9503,7 @@ mod tests {
             .and_then(|v| v.get("relay_id"))
             .and_then(|v| v.as_str())
         {
-            AccountId::parse_encoded(relay_id)
+            ScopedAccountId::parse_encoded(relay_id)
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .expect("relay account id");
         }
@@ -9515,7 +9517,7 @@ mod tests {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
-        let authority = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+        let authority = ScopedAccountId::new(domain_id.clone(), keypair.public_key().clone());
 
         let asset_definition: AssetDefinitionId = "rose#wonderland"
             .parse()
@@ -9583,7 +9585,7 @@ mod tests {
     fn build_transaction_with_empty_instructions_fails() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
-        let authority = AccountId::new(domain_id, keypair.public_key().clone());
+        let authority = ScopedAccountId::new(domain_id, keypair.public_key().clone());
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let (_, secret_bytes) = keypair.private_key().to_bytes();
 
@@ -9605,7 +9607,7 @@ mod tests {
     fn build_time_trigger_action_encodes_expected_schedule() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
-        let authority_id = AccountId::new(domain_id, keypair.public_key().clone());
+        let authority_id = ScopedAccountId::new(domain_id, keypair.public_key().clone());
         let encoded = build_time_trigger_action(
             account_json_literal(&authority_id),
             vec![
@@ -9641,7 +9643,7 @@ mod tests {
     fn build_precommit_trigger_action_encodes_filter() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
-        let authority_id = AccountId::new(domain_id, keypair.public_key().clone());
+        let authority_id = ScopedAccountId::new(domain_id, keypair.public_key().clone());
         let encoded = build_precommit_trigger_action(
             account_json_literal(&authority_id),
             vec![

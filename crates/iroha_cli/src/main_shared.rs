@@ -44,7 +44,7 @@ use futures::{TryStreamExt, stream::TryStream};
 use iroha::{
     client::Client,
     config::{Config, LoadPath},
-    data_model::{prelude::*, transaction::IvmBytecode},
+    data_model::{account::ScopedAccountId, prelude::*, transaction::IvmBytecode},
 };
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_crypto::{Algorithm, KeyPair};
@@ -1008,7 +1008,7 @@ pub(crate) fn fallback_config() -> Config {
     let domain: DomainId = "offline".parse().expect("offline domain parses");
     let seed = vec![0u8; 32];
     let key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
-    let account = AccountId::new(domain, key_pair.public_key().clone());
+    let account = ScopedAccountId::new(domain, key_pair.public_key().clone());
     let alias_cache = AliasCachePolicy::new(
         Duration::from_secs(defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
         Duration::from_secs(defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS),
@@ -1983,7 +1983,7 @@ mod asset {
 
     fn asset_transfer_instructions(
         args: &Transfer,
-        to: &AccountId,
+        to: &ScopedAccountId,
         policy: Option<&AccountAdmissionPolicy>,
     ) -> Vec<InstructionBox> {
         let mut instructions: Vec<InstructionBox> = Vec::new();
@@ -2483,12 +2483,12 @@ mod asset {
         use iroha_crypto::Algorithm;
         use iroha_primitives::numeric::Numeric;
 
-        fn sample_transfer_args(ensure_destination: bool) -> (Transfer, AccountId) {
+        fn sample_transfer_args(ensure_destination: bool) -> (Transfer, ScopedAccountId) {
             let domain: DomainId = "wonderland".parse().expect("domain id");
             let src = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
             let dest = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
-            let owner = AccountId::new(domain.clone(), src.public_key().clone());
-            let to = AccountId::new(domain, dest.public_key().clone());
+            let owner = ScopedAccountId::new(domain.clone(), src.public_key().clone());
+            let to = ScopedAccountId::new(domain, dest.public_key().clone());
             let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def");
             let asset_id = AssetId::new(asset_def_id, owner);
             let args = Transfer {
@@ -2500,7 +2500,7 @@ mod asset {
             (args, to)
         }
 
-        fn assert_register_account(instruction: &InstructionBox, expected: &AccountId) {
+        fn assert_register_account(instruction: &InstructionBox, expected: &ScopedAccountId) {
             let any: &dyn Instruction = &**instruction;
             let reg = any
                 .as_any()
@@ -2514,7 +2514,7 @@ mod asset {
             }
         }
 
-        fn assert_transfer_destination(instruction: &InstructionBox, to: &AccountId) {
+        fn assert_transfer_destination(instruction: &InstructionBox, to: &ScopedAccountId) {
             let any: &dyn Instruction = &**instruction;
             let transfer = any
                 .as_any()
@@ -2945,7 +2945,7 @@ mod multisig {
                         .parse()
                         .map_err(|_| eyre!("configured default domain label is invalid"))?;
                 let generated = KeyPair::random();
-                AccountId::new(default_domain, generated.public_key().clone())
+                ScopedAccountId::new(default_domain, generated.public_key().clone())
             };
             let spec = MultisigSpec::new(
                 signatories.into_iter().zip(self.weights).collect(),
@@ -3213,7 +3213,7 @@ mod multisig {
 
     fn surface_policy_ttl<C: RunContext>(
         context: &mut C,
-        multisig_account: &AccountId,
+        multisig_account: &ScopedAccountId,
         override_ttl_ms: Option<NonZeroU64>,
     ) -> Result<()> {
         use iroha::data_model::prelude::FindAccounts;
@@ -3292,7 +3292,7 @@ mod multisig {
         context: &mut C,
         effective_ttl_ms: NonZeroU64,
         policy_ttl_ms: NonZeroU64,
-        account: Option<&AccountId>,
+        account: Option<&ScopedAccountId>,
     ) -> Result<()> {
         let now = SystemTime::now();
         let expiry = now
@@ -3317,15 +3317,15 @@ mod multisig {
         format!("{MULTISIG}{DELIMITER}proposals{DELIMITER}")
     }
 
-    fn multisig_account_from(role: &RoleId) -> Option<AccountId> {
+    fn multisig_account_from(role: &RoleId) -> Option<ScopedAccountId> {
         role.name()
             .as_ref()
             .strip_prefix(MULTISIG_SIGNATORY)?
             .rsplit_once(DELIMITER)
             .and_then(|(init, last)| {
                 let domain = init.trim_matches(DELIMITER).parse().ok()?;
-                let parsed = AccountId::parse_encoded(last).ok()?;
-                Some(AccountId {
+                let parsed = ScopedAccountId::parse_encoded(last).ok()?;
+                Some(ScopedAccountId {
                     domain,
                     controller: parsed.account_id().controller().clone(),
                 })
@@ -3351,7 +3351,7 @@ mod multisig {
         has_approved: bool,
         got: u16,
         quorum: u16,
-        target: AccountId,
+        target: ScopedAccountId,
     }
 
     impl ApprovalEdge {
@@ -3362,8 +3362,8 @@ mod multisig {
 
     #[derive(Debug, Constructor, Clone, PartialEq, Eq)]
     struct Context {
-        child: AccountId,
-        this: AccountId,
+        child: ScopedAccountId,
+        this: ScopedAccountId,
         key_span: Option<(ProposalKey, ProposalKey)>,
     }
 
@@ -3372,7 +3372,7 @@ mod multisig {
         stack: &mut Vec<Context>,
         client: &Client,
     ) -> Result<()> {
-        let mut fetch = |account_id: &AccountId| {
+        let mut fetch = |account_id: &ScopedAccountId| {
             client
                 .query(FindAccounts)
                 .execute_all()?
@@ -3389,7 +3389,7 @@ mod multisig {
         fetch: &mut F,
     ) -> Result<()>
     where
-        F: FnMut(&AccountId) -> Result<Account>,
+        F: FnMut(&ScopedAccountId) -> Result<Account>,
     {
         let Some(context) = stack.pop() else {
             return Ok(());
@@ -3497,22 +3497,22 @@ mod multisig {
         MultisigInstructionBox::try_from(&custom.payload).ok()
     }
 
-    fn signatory_weight_by_subject(spec: &MultisigSpec, account: &AccountId) -> Option<u8> {
+    fn signatory_weight_by_subject(spec: &MultisigSpec, account: &ScopedAccountId) -> Option<u8> {
         let subject = account.subject_id();
         spec.signatories
             .iter()
             .find_map(|(signatory, weight)| (signatory.subject_id() == subject).then_some(*weight))
     }
 
-    fn approval_contains_subject(approvals: &BTreeSet<AccountId>, account: &AccountId) -> bool {
+    fn approval_contains_subject(approvals: &BTreeSet<ScopedAccountId>, account: &ScopedAccountId) -> bool {
         let subject = account.subject_id();
         approvals
             .iter()
             .any(|approved| approved.subject_id() == subject)
     }
 
-    fn approval_weight_by_subject(spec: &MultisigSpec, approvals: &BTreeSet<AccountId>) -> u16 {
-        let approved_subjects: BTreeSet<_> = approvals.iter().map(AccountId::subject_id).collect();
+    fn approval_weight_by_subject(spec: &MultisigSpec, approvals: &BTreeSet<ScopedAccountId>) -> u16 {
+        let approved_subjects: BTreeSet<_> = approvals.iter().map(ScopedAccountId::subject_id).collect();
         spec.signatories
             .iter()
             .filter(|(signatory, _)| approved_subjects.contains(&signatory.subject_id()))
@@ -3526,7 +3526,7 @@ mod multisig {
         use iroha::crypto::{Algorithm, KeyPair};
         use iroha::data_model::{
             Level,
-            account::{Account, AccountId},
+            account::{Account, ScopedAccountId},
             domain::DomainId,
             isi::Log,
         };
@@ -3536,9 +3536,9 @@ mod multisig {
             num::{NonZeroU16, NonZeroU64},
         };
 
-        fn account_from_seed(seed: u8, domain: &DomainId) -> AccountId {
+        fn account_from_seed(seed: u8, domain: &DomainId) -> ScopedAccountId {
             let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-            AccountId::new(domain.clone(), key_pair.public_key().clone())
+            ScopedAccountId::new(domain.clone(), key_pair.public_key().clone())
         }
 
         #[test]
@@ -3546,7 +3546,7 @@ mod multisig {
             let home: DomainId = "home".parse().unwrap();
             let alt: DomainId = "alt".parse().unwrap();
             let shared = account_from_seed(1, &home);
-            let shared_alt = AccountId::new(alt, shared.signatory().clone());
+            let shared_alt = ScopedAccountId::new(alt, shared.signatory().clone());
             let peer = account_from_seed(2, &home);
             let spec = MultisigSpec::new(
                 BTreeMap::from([(shared.clone(), 1), (peer.clone(), 1)]),
@@ -3576,7 +3576,7 @@ mod multisig {
 
             let mut proposals = BTreeMap::new();
             let mut stack = vec![Context::new(account_id.clone(), account_id.clone(), None)];
-            let mut fetch = |id: &AccountId| {
+            let mut fetch = |id: &ScopedAccountId| {
                 accounts
                     .get(id)
                     .cloned()
@@ -5593,6 +5593,7 @@ mod settlement {
     use super::*;
     use clap::ValueEnum;
     use iroha::data_model::{
+        account::ScopedAccountId,
         isi::{
             InstructionBox,
             settlement::{
@@ -5601,7 +5602,7 @@ mod settlement {
             },
         },
         metadata::Metadata,
-        prelude::{AccountId, AssetDefinitionId, Numeric},
+        prelude::{AssetDefinitionId, Numeric},
     };
 
     #[derive(clap::Subcommand, Debug)]
@@ -6161,7 +6162,7 @@ mod settlement {
             if value { b"true" } else { b"false" }
         }
 
-        fn write_party(prefix: &str, account: &AccountId) {
+        fn write_party(prefix: &str, account: &ScopedAccountId) {
             let bic = bic_from_account(account);
             msg_set(format!("{prefix}/Pty/Bic").as_str(), bic.as_bytes());
             msg_set(
@@ -6170,7 +6171,7 @@ mod settlement {
             );
         }
 
-        fn bic_from_account(account: &AccountId) -> String {
+        fn bic_from_account(account: &ScopedAccountId) -> String {
             let mut country: String = account
                 .domain()
                 .name()
@@ -6236,9 +6237,9 @@ mod settlement {
             use std::io::Write;
             use tempfile::NamedTempFile;
 
-            fn account_with_seed(domain: &DomainId, seed: u8) -> AccountId {
+            fn account_with_seed(domain: &DomainId, seed: u8) -> ScopedAccountId {
                 let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-                AccountId::new(domain.clone(), key_pair.public_key().clone())
+                ScopedAccountId::new(domain.clone(), key_pair.public_key().clone())
             }
 
             fn sample_dvp() -> DvpIsi {
@@ -6501,7 +6502,7 @@ where
     norito::json::from_json(s).map_err(|err| eyre!("failed to parse JSON: {err}"))
 }
 
-fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
+fn resolve_account_id_with(literal: &str) -> Result<ScopedAccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
         eyre::bail!("account literal must not be empty");
@@ -6518,12 +6519,12 @@ fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
             "account literal must be IH58 or sora compressed; canonical hex is not accepted"
         );
     }
-    let parsed = AccountId::parse_encoded(trimmed)
+    let parsed = ScopedAccountId::parse_encoded(trimmed)
         .map_err(|err| eyre!("account literal must be IH58 or sora compressed: {err}"))?;
     Ok(parsed.into_account_id())
 }
 
-pub(crate) fn resolve_account_id<C: RunContext>(_context: &C, literal: &str) -> Result<AccountId> {
+pub(crate) fn resolve_account_id<C: RunContext>(_context: &C, literal: &str) -> Result<ScopedAccountId> {
     resolve_account_id_with(literal)
 }
 
@@ -6535,7 +6536,7 @@ fn parse_asset_id_literal(literal: &str) -> Result<AssetId> {
     parse_asset_id_literal_with(literal, "asset literal")
 }
 
-fn parse_register_account_id(literal: &str) -> Result<AccountId> {
+fn parse_register_account_id(literal: &str) -> Result<ScopedAccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
         eyre::bail!("`ledger account register --id` must be an IH58 or sora compressed account id");
@@ -6553,7 +6554,7 @@ fn parse_register_account_id(literal: &str) -> Result<AccountId> {
             "`ledger account register --id` must be IH58 or sora compressed; canonical hex is not accepted"
         );
     }
-    let parsed = AccountId::parse_encoded(trimmed).map_err(|err| {
+    let parsed = ScopedAccountId::parse_encoded(trimmed).map_err(|err| {
         eyre!("`ledger account register --id` must be an IH58 or sora compressed account id: {err}")
     })?;
     Ok(parsed.into_account_id())
@@ -6702,10 +6703,10 @@ mod tests {
         }
     }
 
-    fn account_with_seed(domain_literal: &str, seed: u8) -> AccountId {
+    fn account_with_seed(domain_literal: &str, seed: u8) -> ScopedAccountId {
         let domain: iroha::data_model::domain::DomainId = domain_literal.parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        AccountId::new(domain, key_pair.public_key().clone())
+        ScopedAccountId::new(domain, key_pair.public_key().clone())
     }
 
     #[test]
@@ -6821,13 +6822,13 @@ mod tests {
             .parse()
             .expect("default domain");
         let key_pair = KeyPair::from_seed(vec![11_u8; 32], Algorithm::Ed25519);
-        let literal = AccountId::new(domain.clone(), key_pair.public_key().clone())
+        let literal = ScopedAccountId::new(domain.clone(), key_pair.public_key().clone())
             .canonical_ih58()
             .expect("canonical ih58");
         let resolved = parse_register_account_id(&literal).expect("register account id");
         assert_eq!(
             resolved,
-            AccountId::new(domain, key_pair.public_key().clone())
+            ScopedAccountId::new(domain, key_pair.public_key().clone())
         );
     }
 
@@ -6844,7 +6845,7 @@ mod tests {
     fn parse_register_account_id_rejects_encoded_address_suffix() {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![13_u8; 32], Algorithm::Ed25519);
-        let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
+        let account = ScopedAccountId::new(domain.clone(), key_pair.public_key().clone());
         let literal = format!("{}@{}", account.canonical_ih58().expect("ih58"), domain);
         let err = parse_register_account_id(&literal).expect_err("encoded address should fail");
         assert!(
@@ -6857,7 +6858,7 @@ mod tests {
     fn parse_register_account_id_rejects_canonical_hex() {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![14_u8; 32], Algorithm::Ed25519);
-        let literal = AccountId::new(domain, key_pair.public_key().clone())
+        let literal = ScopedAccountId::new(domain, key_pair.public_key().clone())
             .to_canonical_hex()
             .expect("canonical hex");
         let err = parse_register_account_id(&literal).expect_err("canonical hex should fail");
@@ -6930,7 +6931,7 @@ mod tests {
     fn resolve_account_id_with_resolves_encoded_literal() {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![9_u8; 32], Algorithm::Ed25519);
-        let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
+        let account = ScopedAccountId::new(domain.clone(), key_pair.public_key().clone());
         let canonical = account.canonical_ih58().expect("canonical ih58");
         let resolved = resolve_account_id_with(&canonical).expect("local resolve");
 
@@ -7142,7 +7143,7 @@ transaction_status_timeout = "77s"
     }
 
     impl CaptureContext {
-        fn new(account: AccountId) -> Self {
+        fn new(account: ScopedAccountId) -> Self {
             let key_pair = KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519);
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
@@ -7555,7 +7556,7 @@ mod multisig_json_tests {
     use super::*;
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
-        account::AccountId,
+        account::ScopedAccountId,
         domain::DomainId,
         isi::{CustomInstruction, InstructionBox},
     };
@@ -7565,10 +7566,10 @@ mod multisig_json_tests {
     use std::collections::BTreeMap;
     use std::num::{NonZeroU16, NonZeroU64};
 
-    fn multisig_account() -> AccountId {
+    fn multisig_account() -> ScopedAccountId {
         let domain: DomainId = "acme".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![0xD6; 32], Algorithm::Ed25519);
-        AccountId::new(domain, key_pair.public_key().clone())
+        ScopedAccountId::new(domain, key_pair.public_key().clone())
     }
 
     #[test]
@@ -7664,10 +7665,10 @@ mod tests {
         }
     }
 
-    fn sample_account_id(domain: &str, seed: u8) -> AccountId {
+    fn sample_account_id(domain: &str, seed: u8) -> ScopedAccountId {
         let domain_id: DomainId = domain.parse().expect("domain id");
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        AccountId::new(domain_id, key_pair.public_key().clone())
+        ScopedAccountId::new(domain_id, key_pair.public_key().clone())
     }
 
     #[test]
@@ -7781,15 +7782,15 @@ mod tests {
             let domain_id2: iroha::data_model::domain::DomainId = "d2".parse().unwrap();
             let domain_id3: iroha::data_model::domain::DomainId = "d3".parse().unwrap();
             let kp = KeyPair::random();
-            let owner1 = iroha::data_model::account::AccountId::new(
+            let owner1 = iroha::data_model::account::ScopedAccountId::new(
                 domain_id1.clone(),
                 kp.public_key().clone(),
             );
-            let owner2 = iroha::data_model::account::AccountId::new(
+            let owner2 = iroha::data_model::account::ScopedAccountId::new(
                 domain_id2.clone(),
                 kp.public_key().clone(),
             );
-            let owner3 = iroha::data_model::account::AccountId::new(
+            let owner3 = iroha::data_model::account::ScopedAccountId::new(
                 domain_id3.clone(),
                 kp.public_key().clone(),
             );
@@ -7894,16 +7895,16 @@ mod tests {
             &self,
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
-            use iroha::data_model::account::{Account, AccountId};
+            use iroha::data_model::account::{Account, ScopedAccountId};
             use iroha::data_model::domain::DomainId;
 
             let domain: DomainId = "land".parse().unwrap();
             let kp1 = KeyPair::random();
             let kp2 = KeyPair::random();
             let kp3 = KeyPair::random();
-            let id1 = AccountId::new(domain.clone(), kp1.public_key().clone());
-            let id2 = AccountId::new(domain.clone(), kp2.public_key().clone());
-            let id3 = AccountId::new(domain.clone(), kp3.public_key().clone());
+            let id1 = ScopedAccountId::new(domain.clone(), kp1.public_key().clone());
+            let id2 = ScopedAccountId::new(domain.clone(), kp2.public_key().clone());
+            let id3 = ScopedAccountId::new(domain.clone(), kp3.public_key().clone());
 
             // Build accounts; builder API needs an authority, use id1 for simplicity
             let mut a1 = Account::new(id1.clone()).build(&id1);
@@ -8037,14 +8038,14 @@ mod tests {
             &self,
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
-            use iroha::data_model::account::AccountId;
+            use iroha::data_model::account::ScopedAccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
 
             let domain: DomainId = "land".parse().unwrap();
             let kp = KeyPair::random();
-            let owner = AccountId::new(domain.clone(), kp.public_key().clone());
+            let owner = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
             let id1: AssetDefinitionId = "gold#land".parse().unwrap();
             let id2: AssetDefinitionId = "silver#land".parse().unwrap();
             let id3: AssetDefinitionId = "bronze#land".parse().unwrap();
@@ -8173,7 +8174,7 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PAGED_DOMAINS_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::AccountId;
+            use iroha::data_model::account::ScopedAccountId;
             use iroha::data_model::domain::DomainId;
 
             // Build 5 domains d0..d4
@@ -8182,7 +8183,7 @@ mod tests {
             for i in 0..5 {
                 let name = format!("d{i}");
                 let did: DomainId = name.parse().unwrap();
-                let owner = AccountId::new(did.clone(), kp.public_key().clone());
+                let owner = ScopedAccountId::new(did.clone(), kp.public_key().clone());
                 domains.push(Domain::new(did).build(&owner));
             }
 
@@ -8314,7 +8315,7 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PSD_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::AccountId;
+            use iroha::data_model::account::ScopedAccountId;
             use iroha::data_model::domain::DomainId;
 
             let kp = KeyPair::random();
@@ -8322,7 +8323,7 @@ mod tests {
             let mut domains = Vec::new();
             let mut mk = |name: &str, rank: Option<i64>| {
                 let did: DomainId = name.parse().unwrap();
-                let owner = AccountId::new(did.clone(), kp.public_key().clone());
+                let owner = ScopedAccountId::new(did.clone(), kp.public_key().clone());
                 let mut d = Domain::new(did).build(&owner);
                 if let Some(r) = rank {
                     d.metadata_mut()
@@ -8435,14 +8436,14 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PSD_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::AccountId;
+            use iroha::data_model::account::ScopedAccountId;
             use iroha::data_model::domain::DomainId;
 
             let kp = KeyPair::random();
             let mut domains = Vec::new();
             let mut mk = |name: &str, rank: Option<i64>| {
                 let did: DomainId = name.parse().unwrap();
-                let owner = AccountId::new(did.clone(), kp.public_key().clone());
+                let owner = ScopedAccountId::new(did.clone(), kp.public_key().clone());
                 let mut d = Domain::new(did).build(&owner);
                 if let Some(r) = rank {
                     d.metadata_mut()
@@ -8635,7 +8636,7 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PSA_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::{Account, AccountId};
+            use iroha::data_model::account::{Account, ScopedAccountId};
             use iroha::data_model::domain::DomainId;
 
             let domain: DomainId = "land".parse().unwrap();
@@ -8643,9 +8644,9 @@ mod tests {
             let mut accounts: Vec<Account> = (0..5)
                 .map(|_| {
                     let kp = KeyPair::random();
-                    let id = AccountId::new(domain.clone(), kp.public_key().clone());
+                    let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
                     // owner for builder is arbitrary for this harness
-                    Account::new(id).build(&AccountId::new(
+                    Account::new(id).build(&ScopedAccountId::new(
                         domain.clone(),
                         KeyPair::random().public_key().clone(),
                     ))
@@ -8765,15 +8766,15 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PSA_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::{Account, AccountId};
+            use iroha::data_model::account::{Account, ScopedAccountId};
             use iroha::data_model::domain::DomainId;
 
             let domain: DomainId = "land".parse().unwrap();
             let mut accounts: Vec<Account> = (0..5)
                 .map(|_| {
                     let kp = KeyPair::random();
-                    let id = AccountId::new(domain.clone(), kp.public_key().clone());
-                    Account::new(id).build(&AccountId::new(
+                    let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
+                    Account::new(id).build(&ScopedAccountId::new(
                         domain.clone(),
                         KeyPair::random().public_key().clone(),
                     ))
@@ -8982,13 +8983,13 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PSAD_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::AccountId;
+            use iroha::data_model::account::ScopedAccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
 
             let domain: DomainId = "land".parse().unwrap();
-            let owner = AccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+            let owner = ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
 
             // Build asset defs ad0..ad4 with ranks: ad0=2, ad1=4, ad2=None, ad3=1, ad4=3
             let ids: Vec<AssetDefinitionId> = (0..5)
@@ -9154,13 +9155,13 @@ mod tests {
             ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error>
             {
                 PSAD_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-                use iroha::data_model::account::AccountId;
+                use iroha::data_model::account::ScopedAccountId;
                 use iroha::data_model::asset::definition::AssetDefinition;
                 use iroha::data_model::asset::id::AssetDefinitionId;
                 use iroha::data_model::domain::DomainId;
 
                 let domain: DomainId = "land".parse().unwrap();
-                let owner = AccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+                let owner = ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
                 let ids: Vec<AssetDefinitionId> = (0..5)
                     .map(|i| format!("ad{i}#land").parse().unwrap())
                     .collect();
@@ -9323,13 +9324,13 @@ mod tests {
             &self,
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
-            use iroha::data_model::account::AccountId;
+            use iroha::data_model::account::ScopedAccountId;
             use iroha::data_model::domain::DomainId;
             use iroha::data_model::nft::{Nft, NftId};
 
             let domain: DomainId = "art".parse().unwrap();
             let kp = KeyPair::random();
-            let owner = AccountId::new(domain.clone(), kp.public_key().clone());
+            let owner = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
             let id1: NftId = "n1$art".parse().unwrap();
             let id2: NftId = "n2$art".parse().unwrap();
             let id3: NftId = "n3$art".parse().unwrap();
@@ -9455,12 +9456,12 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PSN_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::AccountId;
+            use iroha::data_model::account::ScopedAccountId;
             use iroha::data_model::domain::DomainId;
             use iroha::data_model::nft::{Nft, NftId};
 
             let domain: DomainId = "art".parse().unwrap();
-            let owner = AccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+            let owner = ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
 
             // Build NFTs n0..n4 with ranks: n0=2, n1=4, n2=None, n3=1, n4=3
             let ids: Vec<NftId> = (0..5)
@@ -9626,12 +9627,12 @@ mod tests {
             ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error>
             {
                 PSN_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-                use iroha::data_model::account::AccountId;
+                use iroha::data_model::account::ScopedAccountId;
                 use iroha::data_model::domain::DomainId;
                 use iroha::data_model::nft::{Nft, NftId};
 
                 let domain: DomainId = "art".parse().unwrap();
-                let owner = AccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+                let owner = ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
 
                 let ids: Vec<NftId> = (0..5)
                     .map(|i| format!("n{i}$art").parse().unwrap())
@@ -9799,7 +9800,7 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PAGED_ACCOUNTS_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::{Account, AccountId};
+            use iroha::data_model::account::{Account, ScopedAccountId};
             use iroha::data_model::domain::DomainId;
 
             // Build 5 accounts a0..a4 in the same domain, annotate metadata pos = index
@@ -9807,10 +9808,10 @@ mod tests {
             let mut accounts = Vec::new();
             for i in 0..5 {
                 let kp = KeyPair::random();
-                let id = AccountId::new(domain.clone(), kp.public_key().clone());
+                let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
                 let mut a = Account::new(id).build(
                     // owner is arbitrary in builder path
-                    &AccountId::new(domain.clone(), KeyPair::random().public_key().clone()),
+                    &ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone()),
                 );
                 a.metadata
                     .insert("pos".parse().unwrap(), Json::from(norito::json!(i)));
@@ -9949,13 +9950,13 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PAGED_ADS_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::AccountId;
+            use iroha::data_model::account::ScopedAccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
 
             let domain: DomainId = "land".parse().unwrap();
-            let owner = AccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+            let owner = ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
 
             // Build 5 defs ad0..ad4 and tag pos metadata
             let mut defs = Vec::new();
@@ -10162,7 +10163,7 @@ mod cli_integration_harness {
         },
         #[cfg(feature = "ids_projection")]
         AccountIds {
-            ids: Vec<iroha::data_model::account::AccountId>,
+            ids: Vec<iroha::data_model::account::ScopedAccountId>,
             idx: usize,
             fetch: usize,
         },
@@ -10352,7 +10353,7 @@ mod cli_integration_harness {
                         };
                         return Ok((
                             QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::AccountId(first_ids)],
+                                tuple: vec![QueryOutputBatchBox::ScopedAccountId(first_ids)],
                             },
                             remaining,
                             next,
@@ -10554,7 +10555,7 @@ mod cli_integration_harness {
                     };
                     Ok((
                         QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::AccountId(batch)],
+                            tuple: vec![QueryOutputBatchBox::ScopedAccountId(batch)],
                         },
                         remaining,
                         next,
@@ -10677,7 +10678,7 @@ mod cli_integration_harness {
 
     #[test]
     fn mock_query_accounts_ids_projection() {
-        use iroha::data_model::account::{Account, AccountId};
+        use iroha::data_model::account::{Account, ScopedAccountId};
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::QueryParams;
         use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
@@ -10700,7 +10701,7 @@ mod cli_integration_harness {
 
         let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
         let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AccountId(v) => v,
+            query::QueryOutputBatchBox::ScopedAccountId(v) => v,
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids.len(), 2);
@@ -10803,7 +10804,7 @@ mod cli_integration_harness {
 
     #[test]
     fn mock_query_accounts_ids_projection_batched() {
-        use iroha::data_model::account::{Account, AccountId};
+        use iroha::data_model::account::{Account, ScopedAccountId};
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::{FetchSize, QueryParams};
         use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
@@ -10831,7 +10832,7 @@ mod cli_integration_harness {
 
         let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
         let ids1 = match batch1.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AccountId(v) => v,
+            query::QueryOutputBatchBox::ScopedAccountId(v) => v,
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids1.len(), 2);
@@ -10844,7 +10845,7 @@ mod cli_integration_harness {
             <MockQueryServer as query::builder::QueryExecutor>::continue_query(cur)
                 .expect("cont ok");
         let ids2 = match batch2.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AccountId(v) => v,
+            query::QueryOutputBatchBox::ScopedAccountId(v) => v,
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids2.len(), 1);
@@ -10951,7 +10952,7 @@ mod cli_integration_harness {
     #[test]
     fn harness_singular_asset_roundtrip() {
         use iroha::data_model::{
-            account::AccountId,
+            account::ScopedAccountId,
             asset::{Asset, AssetId, id::AssetDefinitionId},
             query::asset::prelude::FindAssetById,
         };

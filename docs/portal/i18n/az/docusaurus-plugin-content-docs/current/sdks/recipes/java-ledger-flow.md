@@ -182,5 +182,5 @@ Tercih etdiyiniz qurma aləti (`./gradlew :java:iroha_android:assemble && ./grad
 ## 5. Pariteti yoxlayın
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` vasitəsilə əməliyyat hashlərini yoxlayın.
-- CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`) ilə balansları əldə edin.
+- CLI (`asset list filter '{"id":"norito:4e52543000000002"}'`) ilə balansları əldə edin.
 - Hər bir SDK-nın demo axını üçün eyni Norito faydalı yükləri istehsal etdiyinə əmin olmaq üçün nəticələri Rust/Python/JavaScript/Swift reseptləri ilə müqayisə edin.

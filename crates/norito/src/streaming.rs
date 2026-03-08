@@ -10044,7 +10044,7 @@ mod tests {
         };
         let ticket = StreamingTicket {
             ticket_id: demo_hash(0x44),
-            owner: "bob@streaming".to_owned(),
+            owner: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".to_owned(),
             dsid: 7,
             lane_id: 5,
             settlement_bucket: 2_048,
@@ -10257,7 +10257,7 @@ mod tests {
         };
         let ticket = StreamingTicket {
             ticket_id: demo_hash(0x44),
-            owner: "viewer@stream.test".into(),
+            owner: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into(),
             dsid: 7,
             lane_id: 5,
             settlement_bucket: 2_048,

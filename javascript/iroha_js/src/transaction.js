@@ -625,12 +625,14 @@ function buildRegisterAssetDefinitionInstructions({ assetDefinition, mints = [] 
 
 function resolveAssetIdForMint(assetDefinitionId, mint) {
   if (mint.assetId) {
-    return mint.assetId;
+    return ToriiClient._normalizeAssetId(mint.assetId, "mint.assetId");
   }
   if (!mint.accountId) {
-    throw new TypeError("mint.accountId is required when mint.assetId is not provided");
+    throw new TypeError("mint.assetId is required");
   }
-  return `${assetDefinitionId}##${mint.accountId}`;
+  throw new TypeError(
+    "mint.accountId is no longer supported; provide an encoded mint.assetId",
+  );
 }
 
 function normalizeDomainMintSpec(value, context) {
@@ -642,7 +644,7 @@ function normalizeDomainMintSpec(value, context) {
     throw new TypeError(`${context}.assetId must be a non-empty string`);
   }
   return {
-    assetId,
+    assetId: ToriiClient._normalizeAssetId(assetId, `${context}.assetId`),
     quantity: value.quantity,
   };
 }
@@ -660,37 +662,18 @@ function normalizeAssetDefinitionMintSpec(assetDefinitionId, value, context) {
   }
   const assetIdValue = value.assetId;
   const accountIdValue = value.accountId;
-  if (assetIdValue !== undefined && assetIdValue !== null) {
-    if (typeof assetIdValue !== "string" || assetIdValue.length === 0) {
-      throw new TypeError(`${context}.assetId must be a non-empty string when provided`);
-    }
-  }
   if (accountIdValue !== undefined && accountIdValue !== null) {
-    if (typeof accountIdValue !== "string" || accountIdValue.length === 0) {
-      throw new TypeError(`${context}.accountId must be a non-empty string when provided`);
-    }
-    if (
-      assetIdValue !== undefined &&
-      assetIdValue !== null &&
-      assetIdValue !== `${assetDefinitionId}##${accountIdValue}`
-    ) {
-      throw new TypeError(
-        `${context}.assetId must match ${assetDefinitionId}##${accountIdValue} when accountId is provided`,
-      );
-    }
-  }
-  if ((assetIdValue === undefined || assetIdValue === null) && !accountIdValue) {
     throw new TypeError(
-      `${context} must include either assetId or accountId to resolve the destination`,
+      `${context}.accountId is no longer supported; provide encoded ${context}.assetId`,
     );
   }
-  const assetId = resolveAssetIdForMint(assetDefinitionId, {
-    assetId: assetIdValue ?? undefined,
-    accountId: accountIdValue ?? undefined,
-  });
+  if (assetIdValue === undefined || assetIdValue === null) {
+    throw new TypeError(`${context}.assetId must be provided`);
+  }
+  const assetId = ToriiClient._normalizeAssetId(assetIdValue, `${context}.assetId`);
   return {
     assetId,
-    accountId: accountIdValue ?? null,
+    accountId: null,
     quantity: value.quantity,
   };
 }

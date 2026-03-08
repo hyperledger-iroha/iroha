@@ -25,7 +25,7 @@ This document explains the structures, identifiers, traits, and protocols that f
 
 String forms of IDs (round-trippable with `Display`/`FromStr`):
 - `DomainId`: `name` (e.g., `wonderland`).
-- `AccountId`: canonical identifier encoded via `AccountAddress`, which exposes IH58, Sora compressed (`sora…`), and canonical hex codecs (`AccountAddress::to_ih58`, `to_compressed_sora`, `canonical_hex`, `parse_encoded`). IH58 is the preferred account format; the `sora…` form is second-best for Sora-only UX. The human-friendly routing alias `alias@domain` is preserved for UX but is no longer treated as the authoritative identifier. Torii normalises incoming strings through `AccountAddress::parse_encoded`. Account IDs support both single-key and multisig controllers.
+- `AccountId`: canonical account identifier encoded via `AccountAddress`. Parser inputs are encoded-only: IH58 (preferred) and compressed `sora…` (accepted). Domain suffixes (`@domain`), alias literals, canonical hex parser input, and `uaid:`/`opaque:` account parser forms are rejected.
 - `AssetDefinitionId`: `asset#domain` (e.g., `xor#soramitsu`).
 - `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`: `nft$domain` (e.g., `rose$garden`).
@@ -39,7 +39,8 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 - Builder: `NewDomain` with `with_logo`, `with_metadata`, then `Registrable::build(authority)` sets `owned_by`.
 
 ### Account
-- `AccountId { domain: DomainId, controller: AccountController }` (controller = single key or multisig policy).
+- `AccountId` identifies the account controller using canonical encoded account-address forms (single-key or multisig controller payloads).
+- `AccountSubjectId` provides domainless subject identity for account-facing aggregation flows.
 - `Account { id, metadata, label?, uaid? }` — `label` is an optional stable alias used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md).
 - Builder: `NewAccount` via `Account::new(id)`; `HasMetadata` for both builder and entity.
 

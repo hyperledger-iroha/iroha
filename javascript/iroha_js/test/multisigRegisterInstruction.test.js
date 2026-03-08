@@ -31,7 +31,7 @@ const CONTROLLER_ID = AccountAddress.fromAccount({
   publicKey: CONTROLLER_KEY,
 }).toIH58();
 
-test("multisig register builder requires explicit controller id and matches domains", () => {
+test("multisig register builder accepts encoded-only controller/signatory ids", () => {
   const spec = new MultisigSpecBuilder()
     .setQuorum(2)
     .setTransactionTtlMs(60_000)
@@ -56,7 +56,7 @@ test("multisig register builder requires explicit controller id and matches doma
   });
 });
 
-test("multisig register builder rejects controller domain drift", () => {
+test("multisig register builder rejects legacy @domain account literals", () => {
   const spec = new MultisigSpecBuilder()
     .setQuorum(1)
     .setTransactionTtlMs(10_000)

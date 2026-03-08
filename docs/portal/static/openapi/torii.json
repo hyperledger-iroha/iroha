@@ -6917,7 +6917,7 @@
         "operationId": "kaigiRelayDetail",
         "parameters": [
           {
-            "description": "Relay account identifier (e.g., `relay@kaigi`).",
+            "description": "Relay account identifier (e.g., `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).",
             "in": "path",
             "name": "relay_id",
             "required": true,

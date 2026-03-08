@@ -53,7 +53,8 @@ public final class MultisigSeedHelper {
     if (!targetParts.isEd25519()) {
       return false;
     }
-    final Optional<byte[]> derived = deriveDeterministicPublicKey(targetParts.domain, spec);
+    final Optional<byte[]> derived =
+        deriveDeterministicPublicKey(AccountAddress.DEFAULT_DOMAIN_NAME, spec);
     if (derived.isEmpty()) {
       return false;
     }
@@ -75,7 +76,7 @@ public final class MultisigSeedHelper {
 
     final NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.MINOR_VERSION);
     encodeSizedField(encoder, STRING_ADAPTER, domain);
-    encodeMultisigSpecField(encoder, signatories, spec);
+    encodeMultisigSpecField(encoder, domain, signatories, spec);
 
     final byte[] seed = Blake2b.digest256(encoder.toByteArray());
     seed[seed.length - 1] |= 1;
@@ -91,10 +92,11 @@ public final class MultisigSeedHelper {
 
   private static void encodeMultisigSpecField(
       final NoritoEncoder encoder,
+      final String domain,
       final SortedMap<AccountIdParts, Long> signatories,
       final MultisigSpec spec) {
     final NoritoEncoder child = encoder.childEncoder();
-    encodeMultisigSpec(child, signatories, spec);
+    encodeMultisigSpec(child, domain, signatories, spec);
     final byte[] payload = child.toByteArray();
     final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
     encoder.writeLength(payload.length, compact);
@@ -103,10 +105,11 @@ public final class MultisigSeedHelper {
 
   private static void encodeMultisigSpec(
       final NoritoEncoder encoder,
+      final String domain,
       final SortedMap<AccountIdParts, Long> signatories,
       final MultisigSpec spec) {
     final TypeAdapter<Map<AccountIdParts, Long>> signatoryAdapter =
-        NoritoAdapters.map(ACCOUNT_ID_ADAPTER, U8_ADAPTER);
+        NoritoAdapters.map(accountIdAdapter(domain), U8_ADAPTER);
     encodeSizedField(encoder, signatoryAdapter, signatories);
     encodeSizedField(encoder, U16_ADAPTER, (long) spec.quorum());
     encodeSizedField(encoder, U64_ADAPTER, spec.transactionTtlMs());
@@ -130,22 +133,13 @@ public final class MultisigSeedHelper {
     if (trimmed.isEmpty()) {
       return Optional.empty();
     }
-    final int atIndex = trimmed.lastIndexOf('@');
-    if (atIndex <= 0 || atIndex == trimmed.length() - 1) {
+    if (trimmed.contains("@") || trimmed.contains("#") || trimmed.contains("$")) {
       return Optional.empty();
     }
-    final String identifier = trimmed.substring(0, atIndex);
-    final String domain = trimmed.substring(atIndex + 1).trim();
-    if (domain.isBlank()) {
+    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
       return Optional.empty();
     }
-    if (identifier.indexOf('@') >= 0) {
-      return Optional.empty();
-    }
-    if (identifier.startsWith("0x") || identifier.startsWith("0X")) {
-      return Optional.empty();
-    }
-    final Optional<KeyPayload> payload = parseSingleKeyIdentifier(identifier);
+    final Optional<KeyPayload> payload = parseSingleKeyIdentifier(trimmed);
     if (payload.isEmpty()) {
       return Optional.empty();
     }
@@ -153,8 +147,7 @@ public final class MultisigSeedHelper {
     if (algorithmTag < 0) {
       return Optional.empty();
     }
-    return Optional.of(
-        new AccountIdParts(domain, payload.get().curveId, algorithmTag, payload.get().keyBytes));
+    return Optional.of(new AccountIdParts(payload.get().curveId, algorithmTag, payload.get().keyBytes));
   }
 
   private static Optional<KeyPayload> parseSingleKeyIdentifier(final String identifier) {
@@ -167,14 +160,9 @@ public final class MultisigSeedHelper {
         return Optional.of(new KeyPayload(payload.curveId(), payload.publicKey()));
       }
     } catch (final AccountAddress.AccountAddressException ignored) {
-      // fall through to multihash parsing
-    }
-    final PublicKeyCodec.PublicKeyPayload decoded =
-        PublicKeyCodec.decodePublicKeyLiteral(identifier);
-    if (decoded == null) {
       return Optional.empty();
     }
-    return Optional.of(new KeyPayload(decoded.curveId(), decoded.keyBytes()));
+    return Optional.empty();
   }
 
   private static int algorithmTagForCurveId(final int curveId) {
@@ -211,17 +199,14 @@ public final class MultisigSeedHelper {
   }
 
   private static final class AccountIdParts implements Comparable<AccountIdParts> {
-    private final String domain;
     private final int algorithmTag;
     private final byte[] publicKey;
     private final String publicKeyLiteral;
 
     private AccountIdParts(
-        final String domain,
         final int curveId,
         final int algorithmTag,
         final byte[] publicKey) {
-      this.domain = Objects.requireNonNull(domain, "domain");
       this.algorithmTag = algorithmTag;
       this.publicKey = Arrays.copyOf(publicKey, publicKey.length);
       this.publicKeyLiteral = PublicKeyCodec.encodePublicKeyMultihash(curveId, publicKey);
@@ -233,10 +218,6 @@ public final class MultisigSeedHelper {
 
     @Override
     public int compareTo(final AccountIdParts other) {
-      final int domainCmp = domain.compareTo(other.domain);
-      if (domainCmp != 0) {
-        return domainCmp;
-      }
       final int algoCmp = Integer.compare(algorithmTag, other.algorithmTag);
       if (algoCmp != 0) {
         return algoCmp;
@@ -260,15 +241,12 @@ public final class MultisigSeedHelper {
       if (!(obj instanceof AccountIdParts other)) {
         return false;
       }
-      return algorithmTag == other.algorithmTag
-          && domain.equals(other.domain)
-          && Arrays.equals(publicKey, other.publicKey);
+      return algorithmTag == other.algorithmTag && Arrays.equals(publicKey, other.publicKey);
     }
 
     @Override
     public int hashCode() {
-      int result = domain.hashCode();
-      result = 31 * result + algorithmTag;
+      int result = algorithmTag;
       result = 31 * result + Arrays.hashCode(publicKey);
       return result;
     }
@@ -288,17 +266,18 @@ public final class MultisigSeedHelper {
         }
       };
 
-  private static final TypeAdapter<AccountIdParts> ACCOUNT_ID_ADAPTER =
-      new TypeAdapter<AccountIdParts>() {
-        @Override
-        public void encode(final NoritoEncoder encoder, final AccountIdParts value) {
-          encodeSizedField(encoder, STRING_ADAPTER, value.domain);
-          encodeSizedField(encoder, ACCOUNT_CONTROLLER_ADAPTER, value);
-        }
+  private static TypeAdapter<AccountIdParts> accountIdAdapter(final String domain) {
+    return new TypeAdapter<AccountIdParts>() {
+      @Override
+      public void encode(final NoritoEncoder encoder, final AccountIdParts value) {
+        encodeSizedField(encoder, STRING_ADAPTER, domain);
+        encodeSizedField(encoder, ACCOUNT_CONTROLLER_ADAPTER, value);
+      }
 
-        @Override
-        public AccountIdParts decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("AccountIdParts decode is not supported");
-        }
-      };
+      @Override
+      public AccountIdParts decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
+        throw new UnsupportedOperationException("AccountIdParts decode is not supported");
+      }
+    };
+  }
 }

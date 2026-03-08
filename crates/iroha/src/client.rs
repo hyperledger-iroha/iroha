@@ -11807,7 +11807,9 @@ mod tests {
                 manifest_required: true,
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.toml".to_owned()),
-                validator_ids: vec!["validator@test".to_owned()],
+                validator_ids: vec![
+                    "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned(),
+                ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],
                 runtime_upgrade: Some(
@@ -13287,11 +13289,11 @@ mod tests {
       "dataspace_alias":"retail",
       "accounts":[
         {{
-          "account_id":"alice@nexus",
+          "account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "label":"primary",
           "assets":[
             {{
-              "asset_id":"cash#nexus::alice@nexus",
+              "asset_id":"norito:4e52543000000002",
               "asset_definition_id":"cash#nexus",
               "quantity":"500"
             }}
@@ -13353,12 +13355,15 @@ mod tests {
     {{
       "dataspace_id":0,
       "dataspace_alias":"universal",
-      "accounts":["alice@global"]
+      "accounts":["6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"]
     }},
     {{
       "dataspace_id":11,
       "dataspace_alias":"cbdc",
-      "accounts":["wholesale@cbdc","ops@cbdc"]
+      "accounts":[
+        "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
+        "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"
+      ]
     }}
   ]
 }}"#
@@ -13403,7 +13408,7 @@ mod tests {
       "manifest_hash":"{hash}",
       "status":"Active",
       "lifecycle":{{"activated_epoch":4097,"expired_epoch":null,"revocation":null}},
-      "accounts":["wholesale@cbdc"],
+      "accounts":["6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"],
       "manifest":{manifest}
     }}
   ]
@@ -13483,7 +13488,7 @@ mod tests {
         let payload = with_mock_http(respond_with(&snapshot_store, response), || {
             client.get_public_lane_stake(
                 LaneId::new(1),
-                Some("validator@lane"),
+                Some("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"),
                 Some(AddressFormat::Ih58),
             )
         })
@@ -13497,7 +13502,10 @@ mod tests {
             .expect("snapshot captured");
         assert_eq!(snapshot.url.path(), "/v1/nexus/public_lanes/1/stake");
         let pairs: Vec<_> = snapshot.url.query_pairs().collect();
-        assert!(pairs.contains(&("validator".into(), "validator@lane".into())));
+        assert!(pairs.contains(&(
+            "validator".into(),
+            "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into()
+        )));
         assert!(pairs.contains(&("address_format".into(), "ih58".into())));
     }
 
@@ -13510,7 +13518,7 @@ mod tests {
         let payload = with_mock_http(respond_with(&snapshot_store, response), || {
             client.get_public_lane_pending_rewards(
                 LaneId::new(0),
-                "validator@lane",
+                "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
                 Some(5),
                 Some(AddressFormat::Compressed),
             )
@@ -13528,7 +13536,10 @@ mod tests {
             "/v1/nexus/public_lanes/0/rewards/pending"
         );
         let pairs: Vec<_> = snapshot.url.query_pairs().collect();
-        assert!(pairs.contains(&("account".into(), "validator@lane".into())));
+        assert!(pairs.contains(&(
+            "account".into(),
+            "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into()
+        )));
         assert!(pairs.contains(&("upto_epoch".into(), "5".into())));
         assert!(pairs.contains(&("address_format".into(), "compressed".into())));
     }
@@ -14696,7 +14707,9 @@ mod tests {
                 manifest_required: true,
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.toml".to_owned()),
-                validator_ids: vec!["validator@test".to_owned()],
+                validator_ids: vec![
+                    "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned(),
+                ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],
                 runtime_upgrade: Some(
@@ -14922,7 +14935,7 @@ mod tests {
                 .first()
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            Some("validator@test".to_owned()),
+            Some("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned()),
             "validator id mismatch"
         );
         let runtime_hook = lane_entry

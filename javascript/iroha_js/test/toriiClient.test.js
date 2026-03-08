@@ -136,6 +136,10 @@ const FIXTURE_MERCHANT_ID = fixtureAccountId("merchant");
 const FIXTURE_ISSUER_ID = fixtureAccountId("issuer");
 const FIXTURE_AUTHORITY_ID = fixtureAccountId("authority");
 const FIXTURE_COUNCIL_TEST_ID = fixtureAccountId("council", "test");
+const FIXTURE_ASSET_ID_A = "norito:01020304deadbeef";
+const FIXTURE_ASSET_ID_B = "norito:01020304cafebabe";
+const FIXTURE_ASSET_ID_C = "norito:01020304feedface";
+const FIXTURE_ASSET_ID_D = "norito:01020304aabbccdd";
 
 function expectValidationErrorFixture(error, key) {
   assert(error instanceof ValidationError);
@@ -2191,6 +2195,11 @@ test("listSorafsReplicationOrders normalizes response and validates status filte
 test("getUaidPortfolio normalizes UAID literals and dataspace payloads", async () => {
   let capturedUrl;
   const fixture = cloneFixture(toriiFixtures.uaid.portfolio);
+  fixture.dataspaces[0].accounts[0].account_id = FIXTURE_ALICE_ID;
+  fixture.dataspaces[0].accounts[0].assets[0].asset_id = FIXTURE_ASSET_ID_A;
+  fixture.dataspaces[1].accounts[0].account_id = FIXTURE_BOB_ID;
+  fixture.dataspaces[1].accounts[0].assets[0].asset_id = FIXTURE_ASSET_ID_B;
+  fixture.dataspaces[1].accounts[0].assets[1].asset_id = FIXTURE_ASSET_ID_C;
   const canonical = fixture.uaid;
   const rawHex = canonical.slice("uaid:".length);
   const fetchImpl = async (url) => {
@@ -2217,6 +2226,11 @@ test("getUaidPortfolio normalizes UAID literals and dataspace payloads", async (
 test("getUaidPortfolio accepts mixed-case UAID prefixes", async () => {
   let capturedUrl;
   const fixture = cloneFixture(toriiFixtures.uaid.portfolio);
+  fixture.dataspaces[0].accounts[0].account_id = FIXTURE_ALICE_ID;
+  fixture.dataspaces[0].accounts[0].assets[0].asset_id = FIXTURE_ASSET_ID_A;
+  fixture.dataspaces[1].accounts[0].account_id = FIXTURE_BOB_ID;
+  fixture.dataspaces[1].accounts[0].assets[0].asset_id = FIXTURE_ASSET_ID_B;
+  fixture.dataspaces[1].accounts[0].assets[1].asset_id = FIXTURE_ASSET_ID_C;
   const canonical = fixture.uaid;
   const rawHex = canonical.slice("uaid:".length);
   const mixed = `UaiD:  ${rawHex.toUpperCase()}  `;
@@ -2240,6 +2254,11 @@ test("getUaidPortfolio accepts mixed-case UAID prefixes", async () => {
 test("getUaidPortfolio encodes assetId filters", async () => {
   let capturedUrl;
   const fixture = cloneFixture(toriiFixtures.uaid.portfolio);
+  fixture.dataspaces[0].accounts[0].account_id = FIXTURE_ALICE_ID;
+  fixture.dataspaces[0].accounts[0].assets[0].asset_id = FIXTURE_ASSET_ID_A;
+  fixture.dataspaces[1].accounts[0].account_id = FIXTURE_BOB_ID;
+  fixture.dataspaces[1].accounts[0].assets[0].asset_id = FIXTURE_ASSET_ID_B;
+  fixture.dataspaces[1].accounts[0].assets[1].asset_id = FIXTURE_ASSET_ID_C;
   const assetId = fixture.dataspaces[0].accounts[0].assets[0].asset_id;
   const fetchImpl = async (url) => {
     capturedUrl = url;
@@ -2341,7 +2360,7 @@ test("publishSpaceDirectoryManifest posts manifest payloads with normalized keys
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const privateKeyHex = "11".repeat(32);
   await client.publishSpaceDirectoryManifest({
-    authority: "operator@space",
+    authority: FIXTURE_AUTHORITY_ID,
     manifest,
     privateKeyHex,
     reason: "rotation audit",
@@ -2349,7 +2368,7 @@ test("publishSpaceDirectoryManifest posts manifest payloads with normalized keys
   assert.equal(captured.url, `${BASE_URL}/v1/space-directory/manifests`);
   assert.equal(captured.init.method, "POST");
   const parsedBody = JSON.parse(captured.init.body.toString());
-  assert.equal(parsedBody.authority, "operator@space");
+  assert.equal(parsedBody.authority, FIXTURE_AUTHORITY_ID);
   assert.equal(parsedBody.reason, "rotation audit");
   assert.deepEqual(parsedBody.manifest, manifest);
   assert.equal(parsedBody.private_key, `ed25519:${privateKeyHex}`);
@@ -2372,7 +2391,7 @@ test("publishSpaceDirectoryManifest canonicalizes manifest payloads", async () =
     issuedMs: "2048",
     activationEpoch: "512",
     expiryEpoch: 4096,
-    accounts: ["holder1@portfolio"],
+    accounts: [FIXTURE_ALICE_ID],
     Entries: [
       {
         scope: { program: "demo.transfer" },
@@ -2383,7 +2402,7 @@ test("publishSpaceDirectoryManifest canonicalizes manifest payloads", async () =
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await client.publishSpaceDirectoryManifest({
-    authority: "operator@space",
+    authority: FIXTURE_AUTHORITY_ID,
     privateKeyHex: "22".repeat(32),
     manifest: manifestInput,
   });
@@ -2399,7 +2418,7 @@ test("publishSpaceDirectoryManifest canonicalizes manifest payloads", async () =
   assert.equal(manifest.issued_ms, 2048);
   assert.equal(manifest.activation_epoch, 512);
   assert.equal(manifest.expiry_epoch, 4096);
-  assert.deepEqual(manifest.accounts, ["holder1@portfolio"]);
+  assert.deepEqual(manifest.accounts, [FIXTURE_ALICE_ID]);
   assert.equal(manifest.entries.length, 1);
   assert.deepEqual(
     manifest.entries[0].effect,
@@ -2421,7 +2440,7 @@ test("publishSpaceDirectoryManifest forwards AbortSignal options", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await client.publishSpaceDirectoryManifest(
     {
-      authority: "operator@space",
+      authority: FIXTURE_AUTHORITY_ID,
       privateKeyHex: "77".repeat(32),
       manifest: toriiFixtures.uaid.manifests.manifests[0].manifest,
     },
@@ -2439,7 +2458,7 @@ test("publishSpaceDirectoryManifest rejects invalid options payloads", async () 
     () =>
       client.publishSpaceDirectoryManifest(
         {
-          authority: "operator@space",
+          authority: FIXTURE_AUTHORITY_ID,
           privateKeyHex: "44".repeat(32),
           manifest: toriiFixtures.uaid.manifests.manifests[0].manifest,
         },
@@ -2458,7 +2477,7 @@ test("publishSpaceDirectoryManifest rejects invalid manifest entries", async () 
   await assert.rejects(
     () =>
       client.publishSpaceDirectoryManifest({
-        authority: "operator@space",
+        authority: FIXTURE_AUTHORITY_ID,
         privateKeyHex: "12".repeat(32),
         manifest: {
           version: "V1",
@@ -2472,7 +2491,7 @@ test("publishSpaceDirectoryManifest rejects invalid manifest entries", async () 
   await assert.rejects(
     () =>
       client.publishSpaceDirectoryManifest({
-        authority: "operator@space",
+        authority: FIXTURE_AUTHORITY_ID,
         privateKeyHex: "12".repeat(32),
         manifest: {
           version: "V1",
@@ -2486,7 +2505,7 @@ test("publishSpaceDirectoryManifest rejects invalid manifest entries", async () 
   await assert.rejects(
     () =>
       client.publishSpaceDirectoryManifest({
-        authority: "operator@space",
+        authority: FIXTURE_AUTHORITY_ID,
         privateKeyHex: "12".repeat(32),
         manifest: {
           version: "V1",
@@ -2518,7 +2537,7 @@ test("revokeSpaceDirectoryManifest normalizes UAIDs, epochs, and private key byt
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const seed = Buffer.alloc(32, 0x22);
   await client.revokeSpaceDirectoryManifest({
-    authority: "operator@space",
+    authority: FIXTURE_AUTHORITY_ID,
     privateKey: seed,
     uaid: "0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
     dataspaceId: 11,
@@ -2552,7 +2571,7 @@ test("revokeSpaceDirectoryManifest supports AbortSignal options", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await client.revokeSpaceDirectoryManifest(
     {
-      authority: "operator@space",
+      authority: FIXTURE_AUTHORITY_ID,
       privateKeyHex: "18".repeat(32),
       uaid: toriiFixtures.uaid.manifests.uaid,
       dataspaceId: 3,
@@ -2572,7 +2591,7 @@ test("revokeSpaceDirectoryManifest rejects unsupported option fields", async () 
     () =>
       client.revokeSpaceDirectoryManifest(
         {
-          authority: "operator@space",
+          authority: FIXTURE_AUTHORITY_ID,
           privateKeyHex: "19".repeat(32),
           uaid: toriiFixtures.uaid.manifests.uaid,
           dataspaceId: 5,
@@ -11770,7 +11789,7 @@ test("listAccountAssets encodes pagination params", async () => {
     return createResponse({
       status: 200,
       jsonData: {
-        items: [{ asset_id: `rose#wonderland##${FIXTURE_ALICE_ID}`, quantity: "10" }],
+        items: [{ asset_id: FIXTURE_ASSET_ID_A, quantity: "10" }],
         total: 1,
       },
       headers: { "content-type": "application/json" },
@@ -11778,7 +11797,7 @@ test("listAccountAssets encodes pagination params", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.listAccountAssets(FIXTURE_ALICE_ID, { limit: 5, offset: 1 });
-  assert.equal(payload.items[0].asset_id, `rose#wonderland##${FIXTURE_ALICE_ID}`);
+  assert.equal(payload.items[0].asset_id, FIXTURE_ASSET_ID_A);
 });
 
 test("listAccountAssets encodes assetId filters", async () => {
@@ -11819,7 +11838,7 @@ test("listAccountAssets enforces canonical quantity strings", async () => {
       createResponse({
         status: 200,
         jsonData: {
-          items: [{ asset_id: `rose#wonderland##${FIXTURE_ALICE_ID}`, quantity: 10 }],
+          items: [{ asset_id: FIXTURE_ASSET_ID_A, quantity: 10 }],
           total: 1,
         },
         headers: { "content-type": "application/json" },
@@ -11839,8 +11858,8 @@ test("listAccountAssets rejects camelCase assetId fields", async () => {
         jsonData: {
           items: [
             {
-              asset_id: `rose#wonderland##${FIXTURE_ALICE_ID}`,
-              assetId: `rose#wonderland##${FIXTURE_ALICE_ID}`,
+              asset_id: FIXTURE_ASSET_ID_A,
+              assetId: FIXTURE_ASSET_ID_A,
               quantity: "10",
             },
           ],
@@ -11902,8 +11921,8 @@ test("queryAccountAssets surfaces errors for invalid filters", async () => {
 
 test("iterateAccountAssets walks multiple pages", async () => {
   const responses = [
-    { items: [{ asset_id: `rose##${FIXTURE_ALICE_ID}`, quantity: "5" }], total: 2 },
-    { items: [{ asset_id: `daisy##${FIXTURE_ALICE_ID}`, quantity: "7" }], total: 2 },
+    { items: [{ asset_id: FIXTURE_ASSET_ID_A, quantity: "5" }], total: 2 },
+    { items: [{ asset_id: FIXTURE_ASSET_ID_B, quantity: "7" }], total: 2 },
   ];
   let callCount = 0;
   const fetchImpl = async () => {
@@ -11920,7 +11939,7 @@ test("iterateAccountAssets walks multiple pages", async () => {
   for await (const holding of client.iterateAccountAssets(FIXTURE_ALICE_ID, { pageSize: 1 })) {
     collected.push(holding.asset_id);
   }
-  assert.deepEqual(collected, [`rose##${FIXTURE_ALICE_ID}`, `daisy##${FIXTURE_ALICE_ID}`]);
+  assert.deepEqual(collected, [FIXTURE_ASSET_ID_A, FIXTURE_ASSET_ID_B]);
 });
 
 test("iterateAccountAssetsQuery paginates per-account query endpoint", async () => {
@@ -11933,8 +11952,8 @@ test("iterateAccountAssetsQuery paginates per-account query endpoint", async () 
     callCount += 1;
     const items =
       offset === 0
-        ? [{ asset_id: "rose##alice", quantity: "5" }]
-        : [{ asset_id: "daisy##alice", quantity: "7" }];
+        ? [{ asset_id: FIXTURE_ASSET_ID_A, quantity: "5" }]
+        : [{ asset_id: FIXTURE_ASSET_ID_B, quantity: "7" }];
     return createResponse({
       status: 200,
       jsonData: { items, total: 2 },
@@ -11948,7 +11967,7 @@ test("iterateAccountAssetsQuery paginates per-account query endpoint", async () 
   })) {
     seen.push(holding.asset_id);
   }
-  assert.deepEqual(seen, ["rose##alice", "daisy##alice"]);
+  assert.deepEqual(seen, [FIXTURE_ASSET_ID_A, FIXTURE_ASSET_ID_B]);
   assert.equal(callCount, 2);
 });
 
@@ -11970,7 +11989,7 @@ test("iterateAccountAssetsQuery honours requirePermissions with credentials", as
     callCount += 1;
     return createResponse({
       status: 200,
-      jsonData: { items: [{ asset_id: "rose##alice", quantity: "1" }], total: 1 },
+      jsonData: { items: [{ asset_id: FIXTURE_ASSET_ID_A, quantity: "1" }], total: 1 },
       headers: { "content-type": "application/json" },
     });
   };
@@ -11982,7 +12001,7 @@ test("iterateAccountAssetsQuery honours requirePermissions with credentials", as
     holdings.push(item.asset_id);
   }
   assert.equal(callCount, 1);
-  assert.deepEqual(holdings, ["rose##alice"]);
+  assert.deepEqual(holdings, [FIXTURE_ASSET_ID_A]);
 });
 
 test("iterateAccountAssets enforces maxItems and offset progression", async () => {
@@ -11996,8 +12015,11 @@ test("iterateAccountAssets enforces maxItems and offset progression", async () =
     const offset = Number(parsed.searchParams.get("offset") ?? "0");
     const page =
       offset === 0
-        ? [{ asset_id: "rose##alice", quantity: "2" }, { asset_id: "daisy##alice", quantity: "3" }]
-        : [{ asset_id: "tulip##alice", quantity: "5" }];
+        ? [
+            { asset_id: FIXTURE_ASSET_ID_A, quantity: "2" },
+            { asset_id: FIXTURE_ASSET_ID_B, quantity: "3" },
+          ]
+        : [{ asset_id: FIXTURE_ASSET_ID_C, quantity: "5" }];
     return createResponse({
       status: 200,
       jsonData: { items: page, total: 5 },
@@ -12012,7 +12034,7 @@ test("iterateAccountAssets enforces maxItems and offset progression", async () =
   })) {
     collected.push(holding.asset_id);
   }
-  assert.deepEqual(collected, ["rose##alice", "daisy##alice", "tulip##alice"]);
+  assert.deepEqual(collected, [FIXTURE_ASSET_ID_A, FIXTURE_ASSET_ID_B, FIXTURE_ASSET_ID_C]);
   assert.deepEqual(seenRequests, [
     { limit: "2", offset: "0" },
     { limit: "1", offset: "2" },
@@ -12050,7 +12072,10 @@ test("queryAccountAssets surfaces permission errors with payload details", async
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.queryAccountAssets(FIXTURE_ALICE_ID, { filter: { Eq: ["asset_id", "rose##alice"] } }),
+    () =>
+      client.queryAccountAssets(FIXTURE_ALICE_ID, {
+        filter: { Eq: ["asset_id", FIXTURE_ASSET_ID_A] },
+      }),
     (error) => {
       assert.ok(error instanceof ToriiHttpError);
       assert.equal(error.status, 403);
@@ -13154,7 +13179,7 @@ test("listKaigiRelays normalizes summary payloads", async () => {
         total: "2",
         items: [
           {
-            relay_id: "relay@kaigi",
+            relay_id: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
             domain: "kaigi",
             bandwidth_class: 5,
             hpke_fingerprint_hex: "aa".repeat(32),
@@ -13345,17 +13370,17 @@ test("streamKaigiRelayEvents encodes filters and normalizes payloads", async () 
     assert.equal(init.headers["Last-Event-ID"], "cursor");
     return createSseResponse([
       'event: kaigi\n',
-      `data: {"kind":"registration","domain":"kaigi","relay_id":"relay@kaigi","bandwidth_class":1,"hpke_fingerprint_hex":"${"aa".repeat(32)}"}\n`,
+      `data: {"kind":"registration","domain":"kaigi","relay_id":"6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw","bandwidth_class":1,"hpke_fingerprint_hex":"${"aa".repeat(32)}"}\n`,
       "\n",
       'event: kaigi\n',
-      'data: {"kind":"health","domain":"kaigi","relay_id":"relay@kaigi","status":"degraded","reported_at_ms":5000,"call":{"domain":"kaigi","name":"demo"}}\n',
+      'data: {"kind":"health","domain":"kaigi","relay_id":"6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw","status":"degraded","reported_at_ms":5000,"call":{"domain":"kaigi","name":"demo"}}\n',
       "\n",
     ]);
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const iterator = client.streamKaigiRelayEvents({
     domain: "Kaigi",
-    relay: "relay@kaigi",
+    relay: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
     kind: ["registration", "health"],
     lastEventId: "cursor",
   });
@@ -13365,7 +13390,9 @@ test("streamKaigiRelayEvents encodes filters and normalizes payloads", async () 
   assert.equal(second.value?.data?.status, "degraded");
   assert.equal(second.value?.data?.call.name, "demo");
   assert.ok(requested?.includes("domain=kaigi"));
-  assert.ok(requested?.includes("relay=relay%40kaigi"));
+  assert.ok(
+    requested?.includes("relay=6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"),
+  );
   assert.ok(requested?.includes("kind=registration%2Chealth"));
 });
 
@@ -14628,7 +14655,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
     contractId: "calc",
     entrypoint: "increment",
     payload,
-    gasAssetId: "xor#wonderland",
+    gasAssetId: FIXTURE_ASSET_ID_D,
     gasLimit: 42n,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call`);
@@ -14640,7 +14667,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
     contract_id: "calc",
     entrypoint: "increment",
     payload,
-    gas_asset_id: "xor#wonderland",
+    gas_asset_id: FIXTURE_ASSET_ID_D,
     gas_limit: 42,
   });
   assert.deepEqual(result, {
@@ -15677,7 +15704,7 @@ test("issueOfflineCertificate posts draft and parses response", async () => {
   const body = JSON.parse(capturedRequest.init.body);
   assert.ok(body.certificate);
   assert.deepEqual(body.certificate.attestation_report, [4, 5, 6]);
-  assert.equal("operator" in body.certificate, false);
+  assert.equal(FIXTURE_AUTHORITY_ID in body.certificate, false);
   assert.equal(response.certificate_id_hex, certId);
   assert.equal(response.certificate.controller, FIXTURE_ALICE_ID);
 });
@@ -16079,7 +16106,7 @@ test("issueOfflineCertificateRenewal posts to renewal path", async () => {
   );
   const body = JSON.parse(capturedRequest.init.body);
   assert.ok(body.certificate);
-  assert.equal("operator" in body.certificate, false);
+  assert.equal(FIXTURE_AUTHORITY_ID in body.certificate, false);
 });
 
 test("registerOfflineAllowance posts certificate and parses response", async () => {
@@ -16255,7 +16282,7 @@ test("topUpOfflineAllowance chains issue and register", async () => {
   assert.equal(requests.length, 2);
   assert.equal(new URL(requests[0].url).pathname, "/v1/offline/certificates/issue");
   const issueBody = JSON.parse(requests[0].init.body);
-  assert.equal("operator" in issueBody.certificate, false);
+  assert.equal(FIXTURE_AUTHORITY_ID in issueBody.certificate, false);
   assert.equal(new URL(requests[1].url).pathname, "/v1/offline/allowances");
   const registerBody = JSON.parse(requests[1].init.body);
   assert.ok(registerBody.private_key.startsWith("ed25519:"));
@@ -16335,7 +16362,7 @@ test("topUpOfflineAllowanceRenewal chains issue and renew", async () => {
     `/v1/offline/certificates/${certId}/renew/issue`,
   );
   const renewIssueBody = JSON.parse(requests[0].init.body);
-  assert.equal("operator" in renewIssueBody.certificate, false);
+  assert.equal(FIXTURE_AUTHORITY_ID in renewIssueBody.certificate, false);
   assert.equal(
     new URL(requests[1].url).pathname,
     `/v1/offline/allowances/${certId}/renew`,
@@ -17517,7 +17544,7 @@ test("registerSnsName posts payload and normalizes response", async () => {
     assert.equal(parsed.selector.suffix_id, 1);
     assert.equal(parsed.selector.label, "makoto");
     assert.equal(parsed.owner, SAMPLE_ACCOUNT_ID);
-    assert.equal(parsed.payment.asset_id, "xor#sora");
+    assert.equal(parsed.payment.asset_id, FIXTURE_ASSET_ID_A);
     return createResponse({
       status: 201,
       jsonData: {
@@ -17539,7 +17566,7 @@ test("registerSnsName posts payload and normalizes response", async () => {
             kind: "VickreyCommitReveal",
             opened_at_ms: 1,
             closes_at_ms: 2,
-            floor_price: { asset_id: "xor#sora", amount: "120" },
+            floor_price: { asset_id: FIXTURE_ASSET_ID_A, amount: "120" },
             highest_commitment: highestCommitment,
             settlement_tx: { tx: "abc" },
           },
@@ -17555,7 +17582,7 @@ test("registerSnsName posts payload and normalizes response", async () => {
     term_years: 1,
     controllers: [{ controller_type: "Account", account_address: "soraowner", payload: { note: "primary" } }],
     payment: {
-      asset_id: "xor#sora",
+      asset_id: FIXTURE_ASSET_ID_A,
       gross_amount: 120,
       settlement_tx: { tx: "abc" },
       payer: SAMPLE_ACCOUNT_ID,
@@ -17581,7 +17608,7 @@ test("SNS mutation helpers reject unsupported option fields", async () => {
     term_years: 1,
     controllers: [{ controller_type: "Account", account_address: SAMPLE_ACCOUNT_ID }],
     payment: {
-      asset_id: "xor#sora",
+      asset_id: FIXTURE_ASSET_ID_A,
       gross_amount: 120,
       settlement_tx: { tx: "abc" },
       payer: SAMPLE_ACCOUNT_ID,
@@ -17591,7 +17618,7 @@ test("SNS mutation helpers reject unsupported option fields", async () => {
   const sampleRenewPayload = {
     term_years: 1,
     payment: {
-      asset_id: "xor#sora",
+      asset_id: FIXTURE_ASSET_ID_A,
       gross_amount: 120,
       settlement_tx: { tx: "abc" },
       payer: SAMPLE_ACCOUNT_ID,
@@ -17639,14 +17666,14 @@ test("getSnsPolicy fetches and normalizes suffix policy", async () => {
         redemption_period_days: 60,
         referral_cap_bps: 100,
         reserved_labels: [{ normalized_label: "gov", assigned_to: null, release_at_ms: null, note: "reserved" }],
-        payment_asset_id: "xor#sora",
+        payment_asset_id: FIXTURE_ASSET_ID_A,
         pricing: [
           {
             tier_id: 1,
             label_regex: ".*",
-            base_price: { asset_id: "xor#sora", amount: "100" },
+            base_price: { asset_id: FIXTURE_ASSET_ID_A, amount: "100" },
             auction_kind: "DutchReopen",
-            dutch_floor: { asset_id: "xor#sora", amount: "10" },
+            dutch_floor: { asset_id: FIXTURE_ASSET_ID_A, amount: "10" },
             min_duration_years: 1,
             max_duration_years: 5,
           },
@@ -17695,7 +17722,7 @@ test("registerSnsName rejects invalid controller types", async () => {
         selector: { suffix_id: 1, label: "bad" },
         owner: SAMPLE_ACCOUNT_ID,
         payment: {
-          asset_id: "xor#sora",
+          asset_id: FIXTURE_ASSET_ID_A,
           gross_amount: 1,
           settlement_tx: {},
           payer: SAMPLE_ACCOUNT_ID,

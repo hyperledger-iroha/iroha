@@ -122,10 +122,8 @@ const SAMPLE_ALICE_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const SAMPLE_OTHER_PUBLIC_KEY: &str =
     "ed0120E9F632D3034BAB6BB26D92AC8FD93EF878D9C5E69E01B61B4C47101884EE2F99";
-const SAMPLE_ALICE_ACCOUNT_ID: &str =
-    "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
-const SAMPLE_BOB_ACCOUNT_ID: &str =
-    "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016@wonderland";
+const SAMPLE_ALICE_ACCOUNT_ID: &str = "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
+const SAMPLE_BOB_ACCOUNT_ID: &str = "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ";
 
 static CLI_OVERRIDES: LazyLock<Mutex<CliOverrides>> =
     LazyLock::new(|| Mutex::new(CliOverrides::default()));
@@ -1169,7 +1167,7 @@ impl ComposerTemplate {
                         (fallback.account_id(), fallback.label())
                     });
                 app.composer_asset_id = template_asset_id("rose#wonderland", owner)
-                    .unwrap_or_else(|| format!("rose#wonderland#{}", account_literal(owner)));
+                    .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
                 app.composer_quantity = "10".to_owned();
                 app.composer_destination_account.clear();
                 app.last_info = Some(format!("Loaded rose mint template for {label}."));
@@ -1185,7 +1183,7 @@ impl ComposerTemplate {
                         (fallback.account_id(), fallback.label())
                     });
                 app.composer_asset_id = template_asset_id("cabbage#garden_of_live_flowers", owner)
-                    .unwrap_or_else(|| format!("cabbage#garden_of_live_flowers#{owner}"));
+                    .unwrap_or_else(|| "norito:4e52543000000002".to_owned());
                 app.composer_quantity = "5".to_owned();
                 app.composer_destination_account.clear();
                 app.last_info = Some(format!("Loaded cabbage mint template for {label}."));
@@ -1201,7 +1199,7 @@ impl ComposerTemplate {
                         (fallback.account_id(), fallback.label())
                     });
                 app.composer_asset_id = template_asset_id("rose#wonderland", owner)
-                    .unwrap_or_else(|| format!("rose#wonderland#{owner}"));
+                    .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
                 app.composer_quantity = "1".to_owned();
                 app.composer_destination_account.clear();
                 app.last_info = Some(format!("Loaded rose burn template for {label}."));
@@ -1214,9 +1212,7 @@ impl ComposerTemplate {
                         .expect("development authorities must not be empty")
                 });
                 app.composer_asset_id = template_asset_id("rose#wonderland", signer.account_id())
-                    .unwrap_or_else(|| {
-                        format!("rose#wonderland#{}", account_literal(signer.account_id()))
-                    });
+                    .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
                 app.composer_quantity = "2".to_owned();
                 let destination = signers
                     .iter()
@@ -1238,9 +1234,7 @@ impl ComposerTemplate {
                 });
                 let domain = signer.account_id().domain().to_string();
                 app.composer_asset_id = template_asset_id("rose#wonderland", signer.account_id())
-                    .unwrap_or_else(|| {
-                        format!("rose#wonderland#{}", account_literal(signer.account_id()))
-                    });
+                    .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
                 app.composer_quantity = "1".to_owned();
                 app.composer_destination_account =
                     sample_account_id_for_domain(&domain, SAMPLE_OTHER_PUBLIC_KEY);
@@ -1425,20 +1419,19 @@ fn template_asset_id(definition: &str, owner: &AccountId) -> Option<String> {
 }
 
 fn account_literal(account_id: &AccountId) -> String {
-    format!("{account_id}@{}", account_id.domain())
+    account_id.to_string()
 }
 
 fn asset_literal(asset_id: &AssetId) -> String {
-    let account_literal = account_literal(asset_id.account());
-    if asset_id.definition().domain() == asset_id.account().domain() {
-        format!("{}##{account_literal}", asset_id.definition().name())
-    } else {
-        format!("{}#{account_literal}", asset_id.definition())
-    }
+    asset_id.to_string()
 }
 
 fn sample_account_id_for_domain(domain: &str, public_key: &str) -> String {
-    format!("{public_key}@{domain}")
+    let domain_id = domain
+        .parse::<DomainId>()
+        .unwrap_or_else(|_| "wonderland".parse().expect("valid fallback domain"));
+    let public_key = public_key.parse().expect("sample public key must parse");
+    AccountId::new(domain_id, public_key).to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9051,7 +9044,7 @@ impl MochiApp {
             ui.add(
                 egui::TextEdit::multiline(&mut self.composer_multisig_instructions)
                     .desired_rows(6)
-                    .hint_text("[ { \"kind\": \"mint_asset\", \"asset\": \"rose#wonderland#ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland\", \"quantity\": \"1\" } ]"),
+                    .hint_text("[ { \"kind\": \"mint_asset\", \"asset\": \"norito:4e52543000000001\", \"quantity\": \"1\" } ]"),
             );
             ui.horizontal(|ui| {
                 ui.checkbox(
@@ -9070,7 +9063,7 @@ impl MochiApp {
             ui.add(
                 egui::TextEdit::multiline(&mut self.composer_multisig_policy_json)
                     .desired_rows(4)
-                    .hint_text("{ \"signatories\": { \"ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland\": 1 }, \"quorum\": 1, \"transaction_ttl_ms\": 3600000 }"),
+                    .hint_text("{ \"signatories\": { \"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9\": 1 }, \"quorum\": 1, \"transaction_ttl_ms\": 3600000 }"),
             );
             if !self.composer_multisig_policy_json.trim().is_empty() {
                 match Self::parse_multisig_policy(&self.composer_multisig_policy_json) {
@@ -12441,7 +12434,10 @@ mod tests {
                 manifest_required: true,
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.json".to_owned()),
-                validator_ids: vec!["alice@test".to_owned(), "bob@test".to_owned()],
+                validator_ids: vec![
+                    "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned(),
+                    "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ".to_owned(),
+                ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],
                 runtime_upgrade: Some(SumeragiRuntimeUpgradeHook {
@@ -12574,8 +12570,14 @@ mod tests {
     #[test]
     fn collect_state_json_exports_array() {
         let entries = [
-            sample_state_entry("alice@test", vec![0xAA, 0x01]),
-            sample_state_entry("bob@test", vec![0xBB, 0x02]),
+            sample_state_entry(
+                "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                vec![0xAA, 0x01],
+            ),
+            sample_state_entry(
+                "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+                vec![0xBB, 0x02],
+            ),
         ];
         let refs: Vec<&super::StateEntry> = entries.iter().collect();
         let json_text = super::collect_state_json(&refs).expect("export filtered state to json");
@@ -12586,21 +12588,24 @@ mod tests {
         assert_eq!(array.len(), 2, "expected two exported state entries");
         assert_eq!(
             array[0].get("title").and_then(Value::as_str),
-            Some("alice@test")
+            Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
         );
         assert_eq!(
             array[1].get("title").and_then(Value::as_str),
-            Some("bob@test")
+            Some("6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ")
         );
     }
 
     #[test]
     fn collect_state_norito_exports_hex_dump() {
-        let entries = [sample_state_entry("alice@test", vec![0xAB, 0xCD])];
+        let entries = [sample_state_entry(
+            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            vec![0xAB, 0xCD],
+        )];
         let refs: Vec<&super::StateEntry> = entries.iter().collect();
         let dump = super::collect_state_norito(&refs).expect("export filtered state to norito");
         assert!(
-            dump.contains("alice@test"),
+            dump.contains("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"),
             "export should include the entry title"
         );
         let mut parts = dump.split(':');
@@ -12622,7 +12627,10 @@ mod tests {
 
     #[test]
     fn save_state_json_to_file_writes_filtered_entries() {
-        let entries = [sample_state_entry("alice@test", vec![0x01, 0x02])];
+        let entries = [sample_state_entry(
+            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            vec![0x01, 0x02],
+        )];
         let refs: Vec<&super::StateEntry> = entries.iter().collect();
         let dir = tempfile::tempdir().expect("tempdir");
         let path =
@@ -12633,7 +12641,7 @@ mod tests {
         );
         let written = std::fs::read_to_string(&path).expect("read exported state json");
         assert!(
-            written.contains("alice@test"),
+            written.contains("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"),
             "exported JSON should include entry identifier"
         );
     }
@@ -12649,7 +12657,10 @@ mod tests {
 
     #[test]
     fn save_state_norito_to_file_writes_filtered_entries() {
-        let entries = [sample_state_entry("alice@test", vec![0x0A, 0x0B])];
+        let entries = [sample_state_entry(
+            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            vec![0x0A, 0x0B],
+        )];
         let refs: Vec<&super::StateEntry> = entries.iter().collect();
         let dir = tempfile::tempdir().expect("tempdir");
         let path =
@@ -12660,7 +12671,7 @@ mod tests {
         );
         let written = std::fs::read_to_string(&path).expect("read exported state norito");
         assert!(
-            written.contains("alice@test"),
+            written.contains("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"),
             "exported Norito dump should include entry identifier"
         );
     }
@@ -12677,8 +12688,14 @@ mod tests {
     #[test]
     fn state_tab_select_page_updates_entries_and_remaining() {
         let mut tab = super::StateTabState::new(StateQueryKind::Accounts);
-        let first = sample_state_entry("alice@test", vec![0xAA]);
-        let second = sample_state_entry("bob@test", vec![0xBB]);
+        let first = sample_state_entry(
+            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            vec![0xAA],
+        );
+        let second = sample_state_entry(
+            "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+            vec![0xBB],
+        );
         tab.pages = vec![
             StatePageCache {
                 entries: vec![first.clone()],
@@ -12694,7 +12711,7 @@ mod tests {
         assert_eq!(tab.entries.len(), 1, "expected a single entry on page 0");
         assert_eq!(
             tab.entries.first().map(|entry| entry.title.as_str()),
-            Some("alice@test"),
+            Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"),
             "selecting first page should surface corresponding entries"
         );
         assert_eq!(
@@ -12707,7 +12724,7 @@ mod tests {
         assert_eq!(tab.entries.len(), 1, "expected a single entry on page 1");
         assert_eq!(
             tab.entries.first().map(|entry| entry.title.as_str()),
-            Some("bob@test"),
+            Some("6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ"),
             "switching pages should update visible entries"
         );
         assert_eq!(
@@ -12721,10 +12738,15 @@ mod tests {
         let mut tabs = super::StateTabs::default();
         let tab = tabs.get_mut(StateQueryKind::Accounts);
         tab.filter.search = "alice".to_owned();
-        tab.entries
-            .push(sample_state_entry("alice@test", vec![0x01]));
+        tab.entries.push(sample_state_entry(
+            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            vec![0x01],
+        ));
         tab.pages.push(StatePageCache {
-            entries: vec![sample_state_entry("alice@test", vec![0x02])],
+            entries: vec![sample_state_entry(
+                "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                vec![0x02],
+            )],
             remaining: 1,
         });
         let peer_tab = tabs.get_mut(StateQueryKind::Peers);
@@ -12766,7 +12788,7 @@ mod tests {
         let mut filter = super::StateFilter {
             search: "peer".to_owned(),
             domain: "wonderland".to_owned(),
-            owner: "alice@test".to_owned(),
+            owner: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned(),
             asset_definition: "rose#wonderland".to_owned(),
         };
         filter.adapt_to_kind(StateQueryKind::Peers);
@@ -12790,8 +12812,14 @@ mod tests {
 
     #[test]
     fn filter_state_entries_collects_cached_matches() {
-        let entry_page0 = sample_state_entry("alice@test", vec![0xAA]);
-        let entry_page1 = sample_state_entry("bob@test", vec![0xBB]);
+        let entry_page0 = sample_state_entry(
+            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            vec![0xAA],
+        );
+        let entry_page1 = sample_state_entry(
+            "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+            vec![0xBB],
+        );
         let pages = vec![
             StatePageCache {
                 entries: vec![entry_page0.clone()],
@@ -12814,7 +12842,7 @@ mod tests {
         );
         assert!(
             page_indices.is_empty(),
-            "bob@test is not present on the selected page"
+            "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ is not present on the selected page"
         );
         assert_eq!(
             cached_matches.len(),
@@ -12822,14 +12850,17 @@ mod tests {
             "expected a cached match sourced from another page"
         );
         assert_eq!(
-            cached_matches[0].title, "bob@test",
-            "cached match should reference the bob@test entry"
+            cached_matches[0].title, "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+            "cached match should reference the 6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ entry"
         );
     }
 
     #[test]
     fn filter_state_entries_falls_back_to_current_page() {
-        let entry_page0 = sample_state_entry("alice@test", vec![0xAC]);
+        let entry_page0 = sample_state_entry(
+            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            vec![0xAC],
+        );
         let current_entries = vec![entry_page0.clone()];
         let pages: Vec<StatePageCache> = Vec::new();
         let (page_indices, cached_matches) = filter_state_entries(
@@ -12844,7 +12875,7 @@ mod tests {
         assert_eq!(
             page_indices,
             vec![0],
-            "alice@test should be matched on the current page"
+            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9 should be matched on the current page"
         );
         assert_eq!(
             cached_matches.len(),
@@ -12852,16 +12883,23 @@ mod tests {
             "fallback to current page should return a single match"
         );
         assert_eq!(
-            cached_matches[0].title, "alice@test",
+            cached_matches[0].title, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
             "cached results should include the local page entry"
         );
     }
 
     #[test]
     fn filter_state_entries_respects_domain_filter() {
-        let entry_page0 =
-            sample_state_entry_with_domain("alice@test", "wonderland", vec![0xDE, 0x01]);
-        let entry_page1 = sample_state_entry_with_domain("bob@test", "narnia", vec![0xDE, 0x02]);
+        let entry_page0 = sample_state_entry_with_domain(
+            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "wonderland",
+            vec![0xDE, 0x01],
+        );
+        let entry_page1 = sample_state_entry_with_domain(
+            "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+            "narnia",
+            vec![0xDE, 0x02],
+        );
         let pages = vec![
             StatePageCache {
                 entries: vec![entry_page0.clone()],

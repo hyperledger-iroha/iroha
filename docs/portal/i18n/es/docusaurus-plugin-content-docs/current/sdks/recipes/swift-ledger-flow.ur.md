@@ -127,5 +127,5 @@ struct LedgerFlow {
 ## 5. برابری کی تصدیق
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` کے ذریعے ٹرانزیکشنز دیکھیں۔
-- `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` سے ہولڈنگز کا موازنہ کریں۔
+- `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'` سے ہولڈنگز کا موازنہ کریں۔
 - اس ترکیب کو Rust/Python/JavaScript والی ترکیبوں کے ساتھ ملائیں تاکہ یہ تصدیق ہو کہ ہر SDK ڈیمو فلو کے لیے ایک ہی ہیشز تیار کرتا ہے۔

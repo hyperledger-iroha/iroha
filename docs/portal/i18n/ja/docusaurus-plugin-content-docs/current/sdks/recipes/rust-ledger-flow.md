@@ -122,6 +122,6 @@ ih58... now holds:
 ## ハッシュとパリティの確認
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` を使って SDK が送信したトランザクションを確認します。
-- `iroha --config defaults/client.toml asset list all --table` または `asset list filter '{"id":"coffee#wonderland##<account>"}'` で残高を突き合わせます。
+- `iroha --config defaults/client.toml asset list all --table` または `asset list filter '{"id":"norito:4e52543000000002"}'` で残高を突き合わせます。
 - CLI のウォークスルーと同じフローを繰り返し、両方の経路が同じ Norito ペイロードとトランザクションステータスを生成することを確認します。
 

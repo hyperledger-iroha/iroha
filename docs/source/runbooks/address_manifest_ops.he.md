@@ -130,8 +130,8 @@ address-manifest-<REVISION>/
 2. **גזירת payloads קנוניים.** לכל alias שעובד עדכון, הריצו:
 
    ```bash
-   iroha tools address convert sora...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .input_domain' /tmp/alias.json
+   iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
+   jq '.canonical_hex, .ih58' /tmp/alias.json
    ```
 
 3. **טיוטת רשומת מניפסט.** הוסיפו רשומת JSON כמו:

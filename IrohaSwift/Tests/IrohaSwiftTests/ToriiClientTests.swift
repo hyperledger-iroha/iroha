@@ -549,14 +549,14 @@ final class ToriiClientTests: XCTestCase {
 
     private func canonicalOwnerLiteral(domain: String = "wonderland") throws -> String {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 1, count: 32))
-        let address = try AccountAddress.fromAccount(domain: domain, publicKey: keypair.publicKey)
+        let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
         let ih58 = try address.toIH58(networkPrefix: 0x02F1)
         return ih58
     }
 
     private func noncanonicalOwnerLiteral(domain: String = "wonderland") throws -> String {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 2, count: 32))
-        let address = try AccountAddress.fromAccount(domain: domain, publicKey: keypair.publicKey)
+        let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
         let canonicalHex = try address.canonicalHex()
         return canonicalHex
     }
@@ -1228,18 +1228,13 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetAssetsEncodesPercentInAccountLiteral() async throws {
-        StubURLProtocol.handler = { request in
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn%252F6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9/assets"))
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            [{"asset_id":"norito:4e52543000000001","quantity":"10"}]
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        let balances = try await makeClient().getAssets(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn%2F6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
-        XCTAssertEqual(balances.count, 1)
+    func testGetAssetsRejectsPercentEscapedAccountLiteral() async {
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().getAssets(
+                accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn%2F6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
+            ),
+            expectation: { _ in }
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)

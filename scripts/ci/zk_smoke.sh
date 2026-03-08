@@ -10,8 +10,8 @@ set -euo pipefail
 #
 # Env overrides:
 # - CLI_CONFIG: path to client config TOML (optional)
-# - ASSET_ID: AssetDefinitionId (default rose#wonderland)
-# - FROM: AccountId to debit (default alice@wonderland)
+# - ASSET_ID: encoded AssetId (default norito:4e52543000000001)
+# - FROM: AccountId to debit (default 6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9)
 # - AMOUNT: amount to shield (default 1)
 # - NOTE_COMMITMENT_HEX: 64-hex commitment (default zeros)
 
@@ -21,8 +21,8 @@ need iroha
 CONFIG_FLAG=()
 if [[ -n "${CLI_CONFIG:-}" ]]; then CONFIG_FLAG=(--config "$CLI_CONFIG"); fi
 
-ASSET_ID="${ASSET_ID:-rose#wonderland}"
-FROM="${FROM:-alice@wonderland}"
+ASSET_ID="${ASSET_ID:-norito:4e52543000000001}"
+FROM="${FROM:-6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9}"
 AMOUNT="${AMOUNT:-1}"
 NOTE_COMMITMENT_HEX="${NOTE_COMMITMENT_HEX:-0000000000000000000000000000000000000000000000000000000000000000}"
 
@@ -38,4 +38,3 @@ iroha "${CONFIG_FLAG[@]}" zk shield --asset "$ASSET_ID" --from "$FROM" \
   --amount "$AMOUNT" --note-commitment "$NOTE_COMMITMENT_HEX" >/dev/null
 
 echo "[zk-smoke] OK"
-

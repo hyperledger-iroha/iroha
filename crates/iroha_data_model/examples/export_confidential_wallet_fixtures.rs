@@ -27,7 +27,11 @@ fn main() {
             .parse()
             .unwrap();
     let keypair = KeyPair::from_private_key(signing_key.clone()).unwrap();
-    let authority = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+    let authority_seed = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+    let authority_literal = authority_seed.canonical_ih58().unwrap();
+    let authority = AccountId::parse_encoded(&authority_literal)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .unwrap();
     let creation_time = Duration::from_millis(1_700_000_000_000);
     let ttl = Duration::from_millis(45);
     let chain_id_label = chain_id.to_string();

@@ -11,9 +11,7 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let domain = "wonderland"
         let chainId = "00000000-0000-0000-0000-000000000000"
         let assetDefinitionId = "xor#\(domain)"
-        guard let authority = try? AccountId.makeIH58(publicKey: sm2Keypair.publicKey,
-                                                      domain: domain,
-                                                      algorithm: "sm2") else {
+        guard let authority = try? AccountId.makeIH58(publicKey: sm2Keypair.publicKey, algorithm: "sm2") else {
             throw XCTSkip("SM2 account-id encoding is unavailable in this build.")
         }
         let request = TransferRequest(chainId: chainId,
@@ -39,9 +37,7 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let domain = "wonderland"
         let chainId = "00000000-0000-0000-0000-000000000000"
         let assetDefinitionId = "xor#\(domain)"
-        guard let authority = try? AccountId.makeIH58(publicKey: sm2Keypair.publicKey,
-                                                      domain: domain,
-                                                      algorithm: "sm2") else {
+        guard let authority = try? AccountId.makeIH58(publicKey: sm2Keypair.publicKey, algorithm: "sm2") else {
             throw XCTSkip("SM2 account-id encoding is unavailable in this build.")
         }
         let request = MintRequest(chainId: chainId,
@@ -66,9 +62,7 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let domain = "wonderland"
         let chainId = "00000000-0000-0000-0000-000000000000"
         let assetDefinitionId = "xor#\(domain)"
-        let authority = try AccountId.makeIH58(publicKey: keypair.publicKey,
-                                               domain: domain,
-                                               algorithm: "secp256k1")
+        let authority = try AccountId.makeIH58(publicKey: keypair.publicKey, algorithm: "secp256k1")
         let request = TransferRequest(chainId: chainId,
                                       authority: authority,
                                       assetDefinitionId: assetDefinitionId,

@@ -149,7 +149,7 @@ public final class AccountAddressTests {
 
   private static void goldenVectorsRoundTrip() throws Exception {
     final byte[] key = new byte[32];
-    final AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+    final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
 
     final String canonical = address.canonicalHex();
     final String ih58 = address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
@@ -175,7 +175,7 @@ public final class AccountAddressTests {
   private static void ih58PrefixMismatchThrows() throws Exception {
     final byte[] key = new byte[32];
     Arrays.fill(key, (byte) 1);
-    final AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+    final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
     final String ih58 = address.toIH58(5);
     boolean threw = false;
     try {
@@ -188,7 +188,7 @@ public final class AccountAddressTests {
 
   private static void parseEncodedRejectsLegacyForms() throws Exception {
     final byte[] key = new byte[32];
-    final AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+    final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
     final String canonical = address.canonicalHex();
     final String ih58 = address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
 
@@ -202,7 +202,7 @@ public final class AccountAddressTests {
     for (int i = 0; i < key.length; i++) {
       key[i] = (byte) i;
     }
-    final AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+    final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
     final java.util.Optional<AccountAddress.SingleKeyPayload> payload = address.singleKeyPayload();
     assert payload.isPresent() : "expected single-key payload";
     final AccountAddress.SingleKeyPayload info = payload.get();
@@ -225,7 +225,7 @@ public final class AccountAddressTests {
     final byte[] key = new byte[32];
     boolean threw = false;
     try {
-      AccountAddress.fromAccount("default", key, "ml-dsa");
+      AccountAddress.fromAccount(key, "ml-dsa");
     } catch (final AccountAddress.AccountAddressException ex) {
       threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ALGORITHM;
     }
@@ -236,7 +236,7 @@ public final class AccountAddressTests {
     final byte[] key = new byte[32];
     AccountAddress.configureCurveSupport(
         AccountAddress.CurveSupportConfig.builder().allowMlDsa(true).build());
-    final AccountAddress address = AccountAddress.fromAccount("default", key, "ml-dsa");
+    final AccountAddress address = AccountAddress.fromAccount(key, "ml-dsa");
     final AccountAddress roundTripped = AccountAddress.fromIH58(address.toIH58(1), 1);
     assert Arrays.equals(address.canonicalBytes(), roundTripped.canonicalBytes())
         : "ML-DSA enablement round-trip mismatch";

@@ -23,6 +23,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
 )
 
 CANONICAL_OWNER = "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
+CANONICAL_ASSET_ID = "norito:00112233445566778899aabbccddeeff"
 
 
 class StubResponse(requests.Response):
@@ -623,7 +624,7 @@ def test_get_uaid_portfolio_parses_payload() -> None:
                                 "label": "primary",
                                 "assets": [
                                     {
-                                        "asset_id": "xor#wonderland",
+                                        "asset_id": CANONICAL_ASSET_ID,
                                         "asset_definition_id": "xor#wonderland",
                                         "quantity": "42",
                                     }
@@ -660,9 +661,9 @@ def test_get_uaid_portfolio_encodes_asset_id_filter() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    client.get_uaid_portfolio(uaid_literal, asset_id="xor#wonderland")
+    client.get_uaid_portfolio(uaid_literal, asset_id=CANONICAL_ASSET_ID)
 
-    assert "asset_id=xor%23wonderland" in session.calls[0]["url"]
+    assert session.calls[0]["params"]["asset_id"] == CANONICAL_ASSET_ID
 
 
 def test_get_uaid_portfolio_rejects_invalid_lsb() -> None:
@@ -763,7 +764,7 @@ def test_publish_space_directory_manifest_posts_payload() -> None:
         "entries": [{"scope": {"program": "cbdc.transfer"}, "effect": {"Allow": {"max_amount": "10"}}}],
     }
     response = client.publish_space_directory_manifest(
-        authority="ops@cbdc",
+        authority=CANONICAL_OWNER,
         private_key="ed25519:AAAA",
         manifest=manifest,
         reason="demo",
@@ -774,7 +775,7 @@ def test_publish_space_directory_manifest_posts_payload() -> None:
     assert session.calls[0]["url"].endswith("/v1/space-directory/manifests")
     assert session.calls[0]["headers"]["Content-Type"] == "application/json"
     body = json.loads(session.calls[0]["data"])
-    assert body["authority"] == "ops@cbdc"
+    assert body["authority"] == CANONICAL_OWNER
     assert body["reason"] == "demo"
     assert body["manifest"]["entries"][0]["scope"]["program"] == "cbdc.transfer"
 
@@ -788,7 +789,7 @@ def test_revoke_space_directory_manifest_posts_payload() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     result = client.revoke_space_directory_manifest(
-        authority="ops@cbdc",
+        authority=CANONICAL_OWNER,
         private_key="ed25519:BBBB",
         uaid="UAID:" + "23" * 32,
         dataspace=3,
@@ -1919,7 +1920,7 @@ def test_trigger_listing_and_lookup_roundtrip() -> None:
         "items": [
             {
                 "id": "daily-airdrop",
-                "action": {"Mint": {"params": {"asset_id": "xor#wonderland"}}},
+                "action": {"Mint": {"params": {"asset_id": CANONICAL_ASSET_ID}}},
                 "metadata": {"cron": "0 0 * * *"},
             }
         ],
@@ -1930,7 +1931,7 @@ def test_trigger_listing_and_lookup_roundtrip() -> None:
     session.queue(StubResponse(status_code=404))
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.list_triggers(namespace="core", authority="alice@test", limit=5, offset=10)
+    page = client.list_triggers(namespace="core", authority=CANONICAL_OWNER, limit=5, offset=10)
     trigger = client.get_trigger("daily-airdrop")
     missing = client.get_trigger("unknown-trigger")
 
@@ -1941,7 +1942,7 @@ def test_trigger_listing_and_lookup_roundtrip() -> None:
 
     assert session.calls[0]["params"] == {
         "namespace": "core",
-        "authority": "alice@test",
+        "authority": CANONICAL_OWNER,
         "limit": 5,
         "offset": 10,
     }
@@ -2007,7 +2008,7 @@ def test_list_offline_allowances_parses_payload() -> None:
                         "certificate_id_hex": "cafebabe",
                         "controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
                         "controller_display": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
-                        "asset_id": "rose#wonderland",
+                        "asset_id": CANONICAL_ASSET_ID,
                         "registered_at_ms": 10,
                         "expires_at_ms": 20,
                         "policy_expires_at_ms": 30,
@@ -2128,7 +2129,7 @@ def test_register_offline_allowance_posts_payload() -> None:
 
     response = client.register_offline_allowance(
         certificate=certificate,
-        authority="treasury@wonderland",
+        authority=CANONICAL_OWNER,
         private_key="deadbeef",
     )
 
@@ -2137,7 +2138,7 @@ def test_register_offline_allowance_posts_payload() -> None:
     assert call["method"] == "POST"
     assert call["url"].endswith("/v1/offline/allowances")
     assert json.loads(call["data"].decode("utf-8")) == {
-        "authority": "treasury@wonderland",
+        "authority": CANONICAL_OWNER,
         "private_key": "deadbeef",
         "certificate": certificate,
     }
@@ -2165,7 +2166,7 @@ def test_renew_offline_allowance_posts_payload() -> None:
     client.renew_offline_allowance(
         certificate_id_hex="deadbeef",
         certificate=certificate,
-        authority="treasury@wonderland",
+        authority=CANONICAL_OWNER,
         private_key="deadbeef",
     )
 
@@ -2173,7 +2174,7 @@ def test_renew_offline_allowance_posts_payload() -> None:
     assert call["method"] == "POST"
     assert call["url"].endswith("/v1/offline/allowances/deadbeef/renew")
     assert json.loads(call["data"].decode("utf-8")) == {
-        "authority": "treasury@wonderland",
+        "authority": CANONICAL_OWNER,
         "private_key": "deadbeef",
         "certificate": certificate,
     }
@@ -2220,7 +2221,7 @@ def test_top_up_offline_allowance_chains_issue_and_register() -> None:
 
     response = client.top_up_offline_allowance(
         certificate=draft,
-        authority="treasury@wonderland",
+        authority=CANONICAL_OWNER,
         private_key="deadbeef",
     )
 
@@ -2275,7 +2276,7 @@ def test_top_up_offline_allowance_renewal_chains_issue_and_register() -> None:
     client.top_up_offline_allowance_renewal(
         certificate_id_hex="deadbeef",
         certificate=draft,
-        authority="treasury@wonderland",
+        authority=CANONICAL_OWNER,
         private_key="deadbeef",
     )
 
@@ -2299,7 +2300,7 @@ def test_list_offline_transfers_parses_payload() -> None:
                         "receiver_display": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
                         "deposit_account_id": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
                         "deposit_account_display": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
-                        "asset_id": "rose#wonderland",
+                        "asset_id": CANONICAL_ASSET_ID,
                         "certificate_id_hex": "cafebabe",
                         "certificate_expires_at_ms": 100,
                         "policy_expires_at_ms": 200,

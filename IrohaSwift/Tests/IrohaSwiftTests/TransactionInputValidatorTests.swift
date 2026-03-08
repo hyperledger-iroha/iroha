@@ -5,7 +5,7 @@ final class TransactionInputValidatorTests: XCTestCase {
     private func ih58(seed: UInt8 = 1,
                       domain: String = AccountAddress.defaultDomainName) throws -> String {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: seed, count: 32))
-        let address = try AccountAddress.fromAccount(domain: domain, publicKey: keypair.publicKey)
+        let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
         return try address.toIH58(networkPrefix: AccountId.defaultNetworkPrefix)
     }
 
@@ -111,15 +111,14 @@ final class TransactionInputValidatorTests: XCTestCase {
 
     func testValidateAcceptsIh58Authority() throws {
         let publicKey = Data(repeating: 0xAB, count: 32)
-        let ih58 = try AccountId.makeIH58(publicKey: publicKey, domain: "wonderland")
+        let ih58 = try AccountId.makeIH58(publicKey: publicKey)
         let ids = try TransactionInputValidator.validate(chainId: "0000",
                                                          authorityId: ih58)
         XCTAssertEqual(ids.authorityId, ih58)
     }
 
     func testValidateAcceptsCompressedAuthorityAndCanonicalizesToIh58() throws {
-        let address = try AccountAddress.fromAccount(domain: "wonderland",
-                                                     publicKey: Data(repeating: 0xAD, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0xAD, count: 32))
         let compressed = try address.toCompressedSora()
         let ih58 = try address.toIH58(networkPrefix: AccountId.defaultNetworkPrefix)
         let ids = try TransactionInputValidator.validate(chainId: "0000",
@@ -129,7 +128,7 @@ final class TransactionInputValidatorTests: XCTestCase {
 
     func testValidateRejectsIh58WithDomainSuffix() throws {
         let publicKey = Data(repeating: 0xAC, count: 32)
-        let ih58 = try AccountId.makeIH58(publicKey: publicKey, domain: "wonderland")
+        let ih58 = try AccountId.makeIH58(publicKey: publicKey)
         let literal = "\(ih58)@wonderland"
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",

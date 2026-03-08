@@ -1,5 +1,8 @@
 package org.hyperledger.iroha.android.offline;
 
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
+import org.hyperledger.iroha.android.address.AssetIdLiteral;
+
 /**
  * Encodes OfflineSpendReceiptPayload to Norito bytes for signing.
  *
@@ -30,9 +33,9 @@ public final class OfflineSpendReceiptPayloadEncoder {
    * Encode OfflineSpendReceiptPayload to Norito bytes for signing.
    *
    * @param txIdHex 32-byte transaction ID as hex (64 chars)
-   * @param fromAccountId sender AccountId (e.g., "<ih58>@<domain>")
+   * @param fromAccountId sender AccountId (encoded IH58 or compressed)
    * @param toAccountId receiver AccountId
-   * @param assetId full asset ID (e.g., "token#domain#<ih58>@<domain>")
+   * @param assetId encoded asset ID (`norito:<hex>`)
    * @param amount decimal amount string
    * @param issuedAtMs timestamp in milliseconds
    * @param invoiceId invoice identifier
@@ -58,15 +61,9 @@ public final class OfflineSpendReceiptPayloadEncoder {
     if (txIdHex == null || txIdHex.length() != 64) {
       throw new IllegalArgumentException("txIdHex must be 64 hex characters");
     }
-    if (fromAccountId == null || fromAccountId.isEmpty()) {
-      throw new IllegalArgumentException("fromAccountId must not be empty");
-    }
-    if (toAccountId == null || toAccountId.isEmpty()) {
-      throw new IllegalArgumentException("toAccountId must not be empty");
-    }
-    if (assetId == null || assetId.isEmpty()) {
-      throw new IllegalArgumentException("assetId must not be empty");
-    }
+    final String normalizedFromAccountId = AccountIdLiteral.extractIh58Address(fromAccountId);
+    final String normalizedToAccountId = AccountIdLiteral.extractIh58Address(toAccountId);
+    final String normalizedAssetId = AssetIdLiteral.normalizeEncoded(assetId, "assetId");
     if (amount == null || amount.isEmpty()) {
       throw new IllegalArgumentException("amount must not be empty");
     }
@@ -82,9 +79,9 @@ public final class OfflineSpendReceiptPayloadEncoder {
     final byte[] result =
         nativeEncode(
             txIdHex,
-            fromAccountId,
-            toAccountId,
-            assetId,
+            normalizedFromAccountId,
+            normalizedToAccountId,
+            normalizedAssetId,
             amount,
             issuedAtMs,
             invoiceId,

@@ -137,11 +137,10 @@ public struct AccountAddress {
 
     public static let defaultDomainName = "default"
 
-    public static func fromAccount(domain: String, publicKey: Data, algorithm: String = "ed25519") throws -> AccountAddress {
+    public static func fromAccount(publicKey: Data, algorithm: String = "ed25519") throws -> AccountAddress {
         let header = try AddressHeader.new(version: 0, classId: .singleKey, normVersion: 1)
-        let selector = try DomainSelector.from(domain: domain)
         let controller = try ControllerPayload.singleKey(publicKey: publicKey, algorithm: algorithm)
-        return AccountAddress(header: header, domain: selector, controller: controller)
+        return AccountAddress(header: header, domain: .default, controller: controller)
     }
 
     public static func fromCanonicalBytes(_ bytes: Data) throws -> AccountAddress {
@@ -224,12 +223,6 @@ public struct AccountAddress {
         case .global:
             return true
         }
-    }
-
-    /// This helper is retained for compatibility, but selector-free canonical payloads no longer rebase domain bytes.
-    public func rebasedFromDefaultDomain(to domainLabel: String) throws -> AccountAddress {
-        _ = try DomainSelector.canonicalizeLabel(domainLabel)
-        return self
     }
 
     private static func containsCompressedAlphabetBeyondIh58(_ literal: String) -> Bool {

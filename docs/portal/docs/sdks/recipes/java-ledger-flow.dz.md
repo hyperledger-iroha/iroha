@@ -179,5 +179,5 @@ public final class LedgerFlow {
 ## 5. ཆ་སྙོམས་བདེན་པ།
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` བརྒྱུད་དེ་ ཚོང་འབྲེལ་ཧ་ཤི་ཚུ་ བརྟག་ཞིབ་འབད།
-- སི་ཨེལ་ཨའི་ (`asset list filter '{"id":"coffee#wonderland##<account>"}'`) དང་གཅིག་ཁར་ ཕིཊི་ཆི་ལྷག་ལུས་འབདཝ་ཨིན།
+- སི་ཨེལ་ཨའི་ (`asset list filter '{"id":"norito:4e52543000000002"}'`) དང་གཅིག་ཁར་ ཕིཊི་ཆི་ལྷག་ལུས་འབདཝ་ཨིན།
 - བརྡ་བཀོད་རྒྱུན་འགྲུལ་གྱི་དོན་ལུ་ ཨེསི་ཌི་ཀེ་རེ་རེ་གིས་ I18NT000000001X གི་ སྤྲོད་ལེན་ཚུ་ ངེས་གཏན་བཟོ་ནི་ལུ་ Rust/Python/Python/JavaScript/Swift བཟོ་ཐངས་ཚུ་དང་གཅིག་ཁར་ གྲུབ་འབྲས་ཚུ་ ག་བསྡུར་རྐྱབ།

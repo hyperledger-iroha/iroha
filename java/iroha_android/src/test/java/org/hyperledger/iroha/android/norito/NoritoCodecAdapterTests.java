@@ -93,7 +93,7 @@ public final class NoritoCodecAdapterTests {
     final String ih58;
     try {
       ih58 =
-          AccountAddress.fromAccount("wonderland", publicKey, "ed25519")
+          AccountAddress.fromAccount(publicKey, "ed25519")
               .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build authority address", ex);
@@ -135,7 +135,7 @@ public final class NoritoCodecAdapterTests {
     final String ih58;
     try {
       ih58 =
-          AccountAddress.fromMultisigPolicy("wonderland", policy)
+          AccountAddress.fromMultisigPolicy(policy)
               .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build multisig authority address", ex);
@@ -168,7 +168,7 @@ public final class NoritoCodecAdapterTests {
     Arrays.fill(publicKey, (byte) 0x6C);
     final String canonical;
     try {
-      canonical = AccountAddress.fromAccount("wonderland", publicKey, "ed25519").canonicalHex();
+      canonical = AccountAddress.fromAccount(publicKey, "ed25519").canonicalHex();
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build canonical authority address", ex);
     }
@@ -192,7 +192,7 @@ public final class NoritoCodecAdapterTests {
     final String ih58;
     try {
       ih58 =
-          AccountAddress.fromAccount("wonderland", publicKey, "ed25519")
+          AccountAddress.fromAccount(publicKey, "ed25519")
               .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build authority address", ex);
@@ -633,7 +633,7 @@ public final class NoritoCodecAdapterTests {
     final byte[] publicKey = new byte[32];
     Arrays.fill(publicKey, (byte) fillByte);
     try {
-      return AccountAddress.fromAccount("wonderland", publicKey, "ed25519")
+      return AccountAddress.fromAccount(publicKey, "ed25519")
           .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build sample authority", ex);

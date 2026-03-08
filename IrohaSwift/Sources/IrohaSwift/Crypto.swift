@@ -370,13 +370,12 @@ public struct Keypair {
     /// Build IH58 format account ID for this keypair.
     ///
     /// - Parameters:
-    ///   - domain: Account domain (e.g., "wonderland")
     ///   - networkPrefix: Network prefix for IH58 encoding (defaults to Iroha mainnet)
     /// - Returns: Account ID in format `<ih58>`
     /// - Throws: `AccountAddressError` if conversion fails
     @available(macOS 10.15, iOS 13.0, *)
-    public func accountId(domain: String, networkPrefix: UInt16 = AccountId.defaultNetworkPrefix) throws -> String {
-        try AccountId.makeIH58(publicKey: publicKey, domain: domain, networkPrefix: networkPrefix)
+    public func accountId(networkPrefix: UInt16 = AccountId.defaultNetworkPrefix) throws -> String {
+        try AccountId.makeIH58(publicKey: publicKey, networkPrefix: networkPrefix)
     }
 }
 
@@ -385,12 +384,9 @@ public enum AccountId {
     public static let defaultNetworkPrefix: UInt16 = 0x02F1
 
     /// Build an encoded account id literal (IH58).
-    ///
-    /// The `domain` argument is retained for source compatibility and domain-label validation only.
-    /// Account ids are domainless subject identifiers in the current model.
-    public static func make(publicKey: Data, domain: String) -> String {
+    public static func make(publicKey: Data) -> String {
         do {
-            return try makeIH58(publicKey: publicKey, domain: domain)
+            return try makeIH58(publicKey: publicKey)
         } catch {
             preconditionFailure("Invalid account id inputs: \(error)")
         }
@@ -403,18 +399,16 @@ public enum AccountId {
     ///
     /// - Parameters:
     ///   - publicKey: Public key bytes (32 bytes for ed25519, 33 for secp256k1)
-    ///   - domain: Account domain (e.g., "wonderland")
     ///   - algorithm: Signing algorithm ("ed25519" or "secp256k1"), defaults to "ed25519"
     ///   - networkPrefix: Network prefix for IH58 encoding (defaults to Iroha mainnet)
     /// - Returns: Account ID in format `<ih58>`
     /// - Throws: `AccountAddressError` if conversion fails
     public static func makeIH58(
         publicKey: Data,
-        domain: String,
         algorithm: String = "ed25519",
         networkPrefix: UInt16 = defaultNetworkPrefix
     ) throws -> String {
-        let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey, algorithm: algorithm)
+        let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: algorithm)
         let ih58 = try address.toIH58(networkPrefix: networkPrefix)
         return ih58
     }

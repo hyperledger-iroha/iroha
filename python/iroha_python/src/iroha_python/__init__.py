@@ -255,7 +255,6 @@ from .settlement import (
     SettlementLeg,
     SettlementPlan,
 )
-from .tx import TransactionConfig, TransactionDraft
 from .privacy import (
     PrivacyMode,
     PrivacyHandshakeFailureReason,
@@ -489,8 +488,6 @@ _BASE_EXPORTS = [
     "derive_connect_direction_keys",
     "build_connect_approve_preimage",
     "ConnectKeyPair",
-    "TransactionConfig",
-    "TransactionDraft",
     "PrivacyMode",
     "PrivacyHandshakeFailureReason",
     "PrivacyThrottleScope",
@@ -510,6 +507,8 @@ _BASE_EXPORTS = [
 ]
 
 _CRYPTO_EXPORTS: List[str] = [
+    "TransactionConfig",
+    "TransactionDraft",
     "Ed25519KeyPair",
     "Sm2KeyPair",
     "Instruction",
@@ -591,6 +590,7 @@ _CRYPTO_EXPORTS: List[str] = [
 ]
 
 try:
+    from .tx import TransactionConfig, TransactionDraft
     from .crypto import (
         ED25519_PRIVATE_KEY_LENGTH,
         ED25519_PUBLIC_KEY_LENGTH,

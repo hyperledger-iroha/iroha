@@ -103,7 +103,7 @@ private struct ExpectedError: Decodable {
 
 final class AccountAddressTests: XCTestCase {
     func testGoldenRoundTrip() throws {
-        let address = try AccountAddress.fromAccount(domain: "default", publicKey: Data(repeating: 1, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 1, count: 32))
 
         let canonical = try address.canonicalHex()
         let ih58 = try address.toIH58(networkPrefix: 753)
@@ -129,7 +129,7 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testParseEncodedRejectsCanonicalHex() throws {
-        let address = try AccountAddress.fromAccount(domain: "default", publicKey: Data(repeating: 0x42, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0x42, count: 32))
         let canonical = try address.canonicalHex()
         XCTAssertThrowsError(try AccountAddress.parseEncoded(canonical)) { error in
             XCTAssertEqual(error as? AccountAddressError, .unsupportedAddressFormat)
@@ -138,22 +138,20 @@ final class AccountAddressTests: XCTestCase {
 
     func testAccountAddressCanonicalizesDomainCase() throws {
         let key = Data(repeating: 0x11, count: 32)
-        let lower = try AccountAddress.fromAccount(domain: "wonderland", publicKey: key)
-        let upper = try AccountAddress.fromAccount(domain: "Wonderland", publicKey: key)
+        let lower = try AccountAddress.fromAccount(publicKey: key)
+        let upper = try AccountAddress.fromAccount(publicKey: key)
         XCTAssertEqual(try lower.canonicalBytes(), try upper.canonicalBytes())
     }
 
-    func testAccountAddressRejectsInvalidDomainLabel() {
-        XCTAssertThrowsError(
-            try AccountAddress.fromAccount(domain: "bad label", publicKey: Data(repeating: 0x22, count: 32))
-        ) { error in
-            XCTAssertEqual(error as? AccountAddressError, .invalidDomainLabel("bad label"))
-        }
+    func testAccountAddressConstructorIsDomainless() throws {
+        XCTAssertNoThrow(
+            try AccountAddress.fromAccount(publicKey: Data(repeating: 0x22, count: 32))
+        )
     }
 
     func testAccountAddressRejectsEmptyPublicKey() {
         XCTAssertThrowsError(
-            try AccountAddress.fromAccount(domain: "wonderland", publicKey: Data())
+            try AccountAddress.fromAccount(publicKey: Data())
         ) { error in
             XCTAssertEqual(error as? AccountAddressError, .invalidPublicKey)
         }
@@ -161,14 +159,14 @@ final class AccountAddressTests: XCTestCase {
 
     func testAccountAddressRejectsInvalidEd25519KeyLength() {
         XCTAssertThrowsError(
-            try AccountAddress.fromAccount(domain: "wonderland", publicKey: Data(repeating: 0x01, count: 31))
+            try AccountAddress.fromAccount(publicKey: Data(repeating: 0x01, count: 31))
         ) { error in
             XCTAssertEqual(error as? AccountAddressError, .invalidPublicKey)
         }
     }
 
     func testIh58PrefixMismatch() throws {
-        let address = try AccountAddress.fromAccount(domain: "default", publicKey: Data(repeating: 1, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 1, count: 32))
         let ih58 = try address.toIH58(networkPrefix: 5)
         XCTAssertThrowsError(try AccountAddress.parseEncoded(ih58, expectedPrefix: 9)) { error in
             guard case let AccountAddressError.unexpectedNetworkPrefix(expected, found) = error else {
@@ -208,9 +206,7 @@ final class AccountAddressTests: XCTestCase {
 
     func testUnsupportedAlgorithmRejected() {
         XCTAssertThrowsError(
-            try AccountAddress.fromAccount(
-                domain: "default",
-                publicKey: Data(repeating: 0xAA, count: 32),
+            try AccountAddress.fromAccount(publicKey: Data(repeating: 0xAA, count: 32),
                 algorithm: "sm2"
             )
         ) { error in
@@ -235,7 +231,7 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testDisplayFormats() throws {
-        let address = try AccountAddress.fromAccount(domain: "default", publicKey: Data(repeating: 0xAB, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0xAB, count: 32))
         let formats = try address.displayFormats()
 
         XCTAssertEqual(formats.networkPrefix, 753)

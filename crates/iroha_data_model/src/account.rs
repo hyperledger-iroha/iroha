@@ -195,6 +195,13 @@ impl ParsedAccountId {
     }
 }
 
+/// Explicit domain-scoped identity used for domain-bound records and lookups.
+///
+/// Account-facing APIs should operate on domainless [`AccountSubjectId`] and
+/// only materialize a scoped identity at boundaries that require domain
+/// context.
+pub type ScopedAccountId = AccountId;
+
 /// Domain-agnostic account identity keyed only by authorization controller.
 ///
 /// This subject identity can be linked to one or more domains by materializing
@@ -1358,7 +1365,7 @@ pub mod prelude {
         AccountAddressSource, AccountAdmissionMode, AccountAdmissionPolicy, AccountController,
         AccountDomainSelector, AccountEntry, AccountId, AccountLabel, AccountRekeyRecord,
         AccountSubjectId, AccountValue, MultisigMember, MultisigPolicy, NewAccount,
-        OpaqueAccountId, ParsedAccountId,
+        OpaqueAccountId, ParsedAccountId, ScopedAccountId,
     };
 }
 

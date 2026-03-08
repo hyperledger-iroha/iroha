@@ -258,7 +258,7 @@ Unlock Sweep (Operator/Audit)
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x…64hex?",
-      "owner": "ih58…",          // canonical AccountId (IH58 literal; optional @domain hint)
+      "owner": "ih58…",          // canonical AccountId (domainless encoded literal; no @domain suffix)
       "amount": "100?",
       "duration_blocks": 6000?,
       "direction": "Aye|Nay|Abstain?",
@@ -278,7 +278,7 @@ Unlock Sweep (Operator/Audit)
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=",   // base64 of ZK1 or H2* container
         "root_hint": null,                // optional 32-byte hex string (eligibility root)
-        "owner": null,                    // optional canonical AccountId (IH58 literal; optional @domain hint)
+        "owner": null,                    // optional canonical AccountId (domainless encoded literal; no @domain suffix)
         "nullifier": null,                // optional 32-byte hex string (nullifier hint)
         "amount": "100",                  // optional lock amount hint (decimal string)
         "duration_blocks": 6000,          // optional lock duration hint

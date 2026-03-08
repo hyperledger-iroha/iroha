@@ -119,6 +119,6 @@ struct LedgerFlow {
 ## 5. Проверьте паритет
 
 - Просмотрите транзакции через `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Сравните балансы с `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- Сравните балансы с `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'`.
 - Совместите этот рецепт с Rust/Python/JavaScript, чтобы подтвердить, что каждый SDK выдает одинаковые хеши для демо-потока.
 

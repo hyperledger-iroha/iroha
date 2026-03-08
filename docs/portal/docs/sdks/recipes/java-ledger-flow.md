@@ -175,5 +175,5 @@ Compile with your preferred build tool (`./gradlew :java:iroha_android:assemble 
 ## 5. Verify parity
 
 - Inspect the transaction hashes via `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Fetch balances with the CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`).
+- Fetch balances with the CLI (`asset list filter '{"id":"norito:4e52543000000002"}'`).
 - Compare results with the Rust/Python/JavaScript/Swift recipes to ensure every SDK produces identical Norito payloads for the demo flow.

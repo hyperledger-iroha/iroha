@@ -1,54 +1,62 @@
 {
   "base_subject": "soranet.gar",
-  "operator": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
   "default_expires_at_unix": 1700003600,
-  "pops": [
-    {
-      "label": "soranet-pop-sjc",
-      "nats_subject": "soranet.gar.sjc",
-      "audit_uri": "sora://gar/audit/sjc"
-    },
-    {
-      "label": "soranet-pop-ams",
-      "audit_uri": "sora://gar/audit/ams"
-    }
-  ],
+  "operator": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
   "policies": [
     {
-      "gar_name": "docs.sora",
-      "canonical_host": "docs.gw.sora.net",
-      "policy_version": "m1",
       "cache_version": "m1",
+      "canonical_host": "docs.gw.sora.net",
+      "evidence_uris": [
+        "sora://gar/docs/log"
+      ],
+      "expires_at_unix": 1700007200,
+      "gar_name": "docs.sora",
+      "labels": [
+        "snnet-15g"
+      ],
       "policy": {
-        "license_sets": [],
-        "moderation_directives": [],
         "cdn_policy": {
-          "ttl_override_secs": 300,
-          "purge_tags": [
-            "rollout"
-          ],
-          "moderation_slugs": [],
-          "rate_ceiling_rps": 2000,
           "allow_regions": [
             "NA",
             "EU"
           ],
-          "deny_regions": [],
-          "legal_hold": false
+          "deny_regions": [
+            
+          ],
+          "legal_hold": false,
+          "moderation_slugs": [
+            
+          ],
+          "purge_tags": [
+            "rollout"
+          ],
+          "rate_ceiling_rps": 2000,
+          "ttl_override_secs": 300
         },
+        "license_sets": [
+          
+        ],
         "metrics_policy": null,
+        "moderation_directives": [
+          
+        ],
+        "rpt_digest": null,
         "telemetry_labels": [
           "gar.docs"
-        ],
-        "rpt_digest": null
+        ]
       },
-      "evidence_uris": [
-        "sora://gar/docs/log"
-      ],
-      "labels": [
-        "snnet-15g"
-      ],
-      "expires_at_unix": 1700007200
+      "policy_version": "m1"
+    }
+  ],
+  "pops": [
+    {
+      "audit_uri": "sora://gar/audit/sjc",
+      "label": "soranet-pop-sjc",
+      "nats_subject": "soranet.gar.sjc"
+    },
+    {
+      "audit_uri": "sora://gar/audit/ams",
+      "label": "soranet-pop-ams"
     }
   ]
 }

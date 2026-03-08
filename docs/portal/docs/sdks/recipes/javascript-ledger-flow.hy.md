@@ -54,9 +54,9 @@ const tx = buildTransaction({
   authority: adminAccount,
   instructions: [
     {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
-    {Mint: {asset: {id: `coffee#wonderland##${adminAccount}`}, value: {quantity: '250'}}},
+    {Mint: {asset: {id: `norito:4e52543000000002`}, value: {quantity: '250'}}},
     {Transfer: {
-      asset: {id: `coffee#wonderland##${adminAccount}`},
+      asset: {id: `norito:4e52543000000002`},
       destination: receiverAccount,
       value: {quantity: '50'},
     }},
@@ -83,5 +83,5 @@ for (const asset of balances.items) {
 ## Ստուգեք հավասարությունը
 
 - Ստացեք գործարքի մանրամասները `iroha --config defaults/client.toml transaction get --hash <hash>`-ի միջոցով:
-- Խաչաձև ստուգեք մնացորդները `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`-ով:
+- Խաչաձև ստուգեք մնացորդները `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'`-ով:
 - Համեմատեք թողարկված հեշը Rust-ի և Python-ի բաղադրատոմսերի հետ՝ ապահովելու SDK-ի հավասարությունը:

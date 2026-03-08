@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Union
 
-from .tx import NumericLike
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .tx import NumericLike
+else:
+    NumericLike = Union[str, int, float, Decimal]
 
 
 def _normalize_quantity(value: NumericLike) -> str:
