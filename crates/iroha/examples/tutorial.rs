@@ -77,12 +77,15 @@ fn account_definition_test() -> Result<(), Error> {
 
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::random().into_parts();
-    // Create an AccountId instance by providing a DomainId instance and the public key
+    // Materialize a scoped AccountId for `looking_glass` from the account subject's public key
     let longhand_account_id = AccountId::new("looking_glass".parse()?, public_key.clone());
-    // Create an AccountId instance by parsing the `<public_key>@<domain>` input form
-    let account_id: AccountId = format!("{public_key}@looking_glass")
-        .parse()
-        .expect("Valid, because before @ is a valid public key and after @ is a valid name i.e. a string with no spaces or forbidden chars");
+    // Create an AccountId instance by parsing the canonical IH58 account address form
+    let canonical_account_id = longhand_account_id
+        .canonical_ih58()
+        .expect("Single-key account IDs can be rendered as IH58");
+    let account_id = AccountId::parse_encoded(&canonical_account_id)
+        .map(|parsed| parsed.into_account_id())
+        .expect("Valid, because the IH58 payload was generated from a valid AccountId");
 
     // Check that two ways to define an account match
     assert_eq!(account_id, longhand_account_id);
@@ -111,10 +114,8 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
     // #region register_account_create
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::random().into_parts();
-    // Create an AccountId instance by parsing the `<public_key>@<domain>` input form
-    let account_id: AccountId = format!("{public_key}@looking_glass")
-        .parse()
-        .expect("Valid, because before @ is a valid public key and after @ is a valid name i.e. a string with no spaces or forbidden chars");
+    // Materialize a scoped AccountId in the domain where this registration is performed
+    let account_id = AccountId::new("looking_glass".parse()?, public_key);
     // #endregion register_account_create
 
     // #region register_account_generate
@@ -170,10 +171,8 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
 
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::random().into_parts();
-    // Create an AccountId instance by parsing the `<public_key>@<domain>` input form
-    let account_id: AccountId = format!("{public_key}@looking_glass")
-        .parse()
-        .expect("Valid, because before @ is a valid public key and after @ is a valid name i.e. a string with no spaces or forbidden chars");
+    // Materialize a scoped AccountId in the domain used for this minting example
+    let account_id = AccountId::new("looking_glass".parse()?, public_key);
 
     // #region register_asset_mint_submit
     // Create a MintBox using a previous asset and account
@@ -191,7 +190,7 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
     // #region mint_asset_crates
     use iroha::{
         client::Client,
-        data_model::prelude::{AccountId, AssetId, Mint},
+        data_model::prelude::{AccountId, AssetDefinitionId, AssetId, Mint},
     };
     // #endregion mint_asset_crates
 
@@ -200,15 +199,21 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
 
     // Define the instances of an Asset and Account
     // #region mint_asset_define_asset_account
-    let roses = "rose#wonderland".parse()
+    let roses: AssetDefinitionId = "rose#wonderland".parse()
         .expect("Valid, because the string contains no whitespace, has a single '#' character and is not empty after");
-    let alice: AccountId = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland".parse()
-        .expect("Valid, because before @ is a valid public key and after @ is a valid name i.e. a string with no spaces or forbidden chars");
+    let alice = AccountId::new(
+        "wonderland"
+            .parse()
+            .expect("Valid, because `wonderland` is a valid domain identifier"),
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+            .parse()
+            .expect("Valid, because this is a valid public key literal"),
+    );
     // #endregion mint_asset_define_asset_account
 
     // Mint the Asset instance
     // #region mint_asset_mint
-    let mint_roses = Mint::asset_numeric(42u32, AssetId::new(roses, alice));
+    let mint_roses = Mint::asset_numeric(42u32, AssetId::new(roses.clone(), alice.clone()));
     // #endregion mint_asset_mint
 
     // #region mint_asset_submit_tx
@@ -219,13 +224,9 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
 
     // #region mint_asset_mint_alt
     // Mint the Asset instance (alternate syntax).
-    // The syntax is `asset_name#asset_domain#account_signatory@account_domain`,
-    // or `roses.to_string() + "#" + alice.to_string()`.
-    // The `##` is a short-hand for the rose `which belongs to the same domain as the account
-    // to which it belongs to.
-    let alice_roses: AssetId =
-        "rose##ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-            .parse()?;
+    // AssetId textual representation is the canonical encoded `norito:<hex>` form.
+    let alice_roses_literal = AssetId::new(roses, alice).canonical_encoded();
+    let alice_roses: AssetId = alice_roses_literal.parse()?;
     let mint_roses_alt = Mint::asset_numeric(10u32, alice_roses);
     // #endregion mint_asset_mint_alt
 
@@ -243,7 +244,7 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
     // #region burn_asset_crates
     use iroha::{
         client::Client,
-        data_model::prelude::{AccountId, AssetId, Burn},
+        data_model::prelude::{AccountId, AssetDefinitionId, AssetId, Burn},
     };
     // #endregion burn_asset_crates
 
@@ -252,15 +253,21 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
 
     // #region burn_asset_define_asset_account
     // Define the instances of an Asset and Account
-    let roses = "rose#wonderland".parse()
+    let roses: AssetDefinitionId = "rose#wonderland".parse()
         .expect("Valid, because the string contains no whitespace, has a single '#' character and is not empty after");
-    let alice: AccountId = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland".parse()
-        .expect("Valid, because before @ is a valid public key and after @ is a valid name i.e. a string with no spaces or forbidden chars");
+    let alice = AccountId::new(
+        "wonderland"
+            .parse()
+            .expect("Valid, because `wonderland` is a valid domain identifier"),
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+            .parse()
+            .expect("Valid, because this is a valid public key literal"),
+    );
     // #endregion burn_asset_define_asset_account
 
     // #region burn_asset_burn
     // Burn the Asset instance
-    let burn_roses = Burn::asset_numeric(10u32, AssetId::new(roses, alice));
+    let burn_roses = Burn::asset_numeric(10u32, AssetId::new(roses.clone(), alice.clone()));
     // #endregion burn_asset_burn
 
     // #region burn_asset_submit_tx
@@ -271,13 +278,9 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
 
     // #region burn_asset_burn_alt
     // Burn the Asset instance (alternate syntax).
-    // The syntax is `asset_name#asset_domain#account_signatory@account_domain`,
-    // or `roses.to_string() + "#" + alice.to_string()`.
-    // The `##` is a short-hand for the rose `which belongs to the same domain as the account
-    // to which it belongs to.
-    let alice_roses: AssetId =
-        "rose##ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-            .parse()?;
+    // AssetId textual representation is the canonical encoded `norito:<hex>` form.
+    let alice_roses_literal = AssetId::new(roses, alice).canonical_encoded();
+    let alice_roses: AssetId = alice_roses_literal.parse()?;
     let burn_roses_alt = Burn::asset_numeric(10u32, alice_roses);
     // #endregion burn_asset_burn_alt
 

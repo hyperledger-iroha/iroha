@@ -613,19 +613,21 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
             .first()
             .ok_or_else(|| eyre!("network must have at least one peer"))?;
         let store_dir = peer.kura_store_dir();
-        let blocks_dir = locate_blocks_dir(&store_dir)?;
-
-        let index_path = blocks_dir.join("blocks.index");
-        let hashes_path = blocks_dir.join("blocks.hashes");
-        let da_blocks_dir = blocks_dir.join("da_blocks");
 
         let status_before = fetch_status(&client).await?;
         let mut expected_height = status_before.blocks;
-        let mut evicted_height = None;
+        let mut evicted_da_path = None;
         let mut submitted = 0_u64;
         let deadline = Instant::now() + da_commit_wait_timeout();
+        let pick_lowest_da_height = |files: Vec<PathBuf>| -> Option<PathBuf> {
+            files
+                .into_iter()
+                .filter_map(|path| da_block_height(&path).map(|height| (height, path)))
+                .min_by_key(|(height, _)| *height)
+                .map(|(_, path)| path)
+        };
 
-        while evicted_height.is_none() && Instant::now() < deadline {
+        while evicted_da_path.is_none() && Instant::now() < deadline {
             expected_height = expected_height.saturating_add(1);
             let message = generate_incompressible_payload(
                 &format!("{scenario_name}-{submitted}"),
@@ -654,32 +656,59 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
                 continue;
             }
 
+            let da_files = collect_da_block_files(&store_dir).wrap_err("collect DA block files")?;
+            evicted_da_path = pick_lowest_da_height(da_files);
+        }
+
+        if evicted_da_path.is_none() {
+            let da_files = wait_for_da_block_files(store_dir.clone(), Duration::from_secs(30))
+                .await
+                .wrap_err("wait for DA-backed Kura eviction files")?;
+            evicted_da_path = pick_lowest_da_height(da_files);
+        }
+
+        let evicted_da_path = evicted_da_path
+            .ok_or_else(|| eyre!("timed out waiting for DA-backed Kura eviction after {submitted} blocks"))?;
+        ensure!(
+            evicted_da_path.exists(),
+            "expected DA block body at {evicted_da_path:?}"
+        );
+        let evicted_height = da_block_height(&evicted_da_path)
+            .ok_or_else(|| eyre!("failed to parse DA block height from {evicted_da_path:?}"))?;
+
+        let blocks_dir = evicted_da_path
+            .parent()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .or_else(|| locate_blocks_dir(&store_dir).ok())
+            .ok_or_else(|| eyre!("failed to locate blocks dir for {evicted_da_path:?}"))?;
+        let index_path = blocks_dir.join("blocks.index");
+        let hashes_path = blocks_dir.join("blocks.hashes");
+
+        let marker_probe_start = Instant::now();
+        loop {
             let bytes = fs::read(&index_path).wrap_err("read blocks.index")?;
             ensure!(
                 bytes.len() % 16 == 0,
                 "blocks.index size is not aligned to 16-byte entries"
             );
-            for (idx, chunk) in bytes.chunks_exact(16).enumerate() {
-                if idx == 0 {
-                    continue;
-                }
+            let index_offset = usize::try_from(evicted_height.saturating_sub(1))
+                .unwrap_or(usize::MAX)
+                .saturating_mul(16);
+            let index_end = index_offset.saturating_add(16);
+            if let Some(chunk) = bytes.get(index_offset..index_end) {
                 let start =
                     u64::from_le_bytes(chunk[0..8].try_into().expect("block index start"));
                 if start == u64::MAX {
-                    evicted_height = Some(idx as u64 + 1);
                     break;
                 }
             }
+            ensure!(
+                marker_probe_start.elapsed() < Duration::from_secs(30),
+                "timed out waiting for DA-backed Kura eviction to mark blocks.index for height {evicted_height}"
+            );
+            sleep(Duration::from_millis(200)).await;
         }
-
-        let evicted_height = evicted_height.ok_or_else(|| {
-            eyre!(
-                "timed out waiting for DA-backed Kura eviction to mark blocks.index after {submitted} blocks"
-            )
-        })?;
-
-        let da_path = da_blocks_dir.join(format!("{evicted_height:020}.norito"));
-        ensure!(da_path.exists(), "expected DA block body at {da_path:?}");
 
         let hashes = fs::read(&hashes_path).wrap_err("read blocks.hashes")?;
         ensure!(
