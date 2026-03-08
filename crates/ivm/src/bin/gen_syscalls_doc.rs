@@ -133,7 +133,7 @@ fn main() {
                 args = "r10=&Name(schema)".into();
                 ret = "ptr (&Json{\"id\":...,\"version\":...})".into();
             } else if up.contains("GET_ACCOUNT_BALANCE") || n == 0xF9 {
-                args = "r10=&AccountId, r11=&AssetDefinitionId".into();
+                args = "r10=&ScopedAccountId, r11=&AssetDefinitionId".into();
                 ret = "ptr (&NoritoBytes(Numeric))".into();
                 gas = "G_get_bal".into();
             } else if up.contains("NAME_DECODE") || n == 0x5C {
@@ -166,7 +166,7 @@ fn main() {
                 ret = "ptr (r10)".into();
                 gas = "G_get_pub".into();
             } else if up.contains("GET_AUTHORITY") || n == 0xA4 {
-                ret = "ptr (AccountId in INPUT)".into();
+                ret = "ptr (ScopedAccountId in INPUT)".into();
                 gas = "G_get_auth".into();
             } else if up.contains("INPUT_PUBLISH_TLV") || n == 0xE0 {
                 args = "r10=&Blob(TLV)".into();

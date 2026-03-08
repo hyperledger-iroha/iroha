@@ -182,5 +182,5 @@ public final class LedgerFlow {
 ## 5. ተመሳሳይነት ያረጋግጡ
 
 - የግብይቱን ሃሽ በ`iroha --config defaults/client.toml transaction get --hash <hash>` ይፈትሹ።
-- ከ CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`) ጋር ሚዛኖችን ያግኙ።
+- ከ CLI (`asset list filter '{"id":"norito:4e52543000000002"}'`) ጋር ሚዛኖችን ያግኙ።
 - እያንዳንዱ ኤስዲኬ ለ demo ፍሰት ተመሳሳይ I18NT0000001X ክፍያ ማፍራቱን ለማረጋገጥ ከRust/Python/JavaScript/Swift የምግብ አዘገጃጀቶች ጋር ያወዳድሩ።

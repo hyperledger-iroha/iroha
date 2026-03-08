@@ -31,7 +31,7 @@ yoldaş alətlər. O, təmin edir:
 
 ## Motivasiya
 
-Pul kisələri və zəncirdənkənar alətlər bu gün xam `alias@domain` marşrutlaşdırma ləqəblərinə əsaslanır. Bu
+Pul kisələri və zəncirdənkənar alətlər bu gün xam `alias@domain` (rejected legacy form) marşrutlaşdırma ləqəblərinə əsaslanır. Bu
 iki əsas çatışmazlıq var:
 
 1. **Şəbəkə bağlaması yoxdur.** Sətirdə yoxlama məbləği və ya zəncir prefiksi yoxdur, ona görə də istifadəçilər
@@ -74,12 +74,8 @@ AccountId {
 
 Display: canonical IH58 literal (no `@domain` suffix)
 Parse accepts:
-- IH58 (preferred), `sora` compressed, or canonical hex (`0x...`) inputs, with
-  optional `@<domain>` suffixes for explicit routing hints.
-- `<label>@<domain>` aliases resolved through the account-alias resolver
-  (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<public_key>@<domain>` where `public_key` is the canonical multihash string.
-- `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
+- Encoded account identifiers only: IH58 (preferred) and `sora` compressed.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
@@ -156,15 +152,15 @@ dəyər əlavə edir. Canonical hex sazlama yardımı olaraq qalır.
 - **Canonical hex** – kanonik baytın sazlama üçün əlverişli `0x…` kodlaması
   zərf.
 
-`AccountAddress::parse_any` IH58 (üstünlük verilir), sıxılmış (`sora`, ikinci ən yaxşı) və ya kanonik hex-i avtomatik aşkarlayır
+`AccountAddress::parse_encoded` IH58 (üstünlük verilir), sıxılmış (`sora`, ikinci ən yaxşı) və ya kanonik hex-i avtomatik aşkarlayır
 (yalnız `0x...`; çılpaq hex rədd edilir) həm deşifrə edilmiş faydalı yükü, həm də aşkarlanmış yükü daxil edir və qaytarır
-`AccountAddressFormat`. Torii indi ISO 20022 əlavəsi üçün `parse_any` çağırır
+`AccountAddressFormat`. Torii indi ISO 20022 əlavəsi üçün `parse_encoded` çağırır
 kanonik hex formasını ünvanlayır və saxlayır ki, metadata deterministik olaraq qalır
 orijinal təmsilindən asılı olmayaraq.
 
 #### 2.1 Başlıq bayt tərtibatı (ADDR-1a)
 
-Hər bir kanonik faydalı yük `header · domain selector · controller` kimi tərtib edilmişdir. The
+Hər bir kanonik faydalı yük `header · controller` kimi tərtib edilmişdir. The
 `header` tək baytdır ki, bu baytlara hansı analiz qaydalarının tətbiq olunduğunu bildirir.
 izləyin:
 
@@ -188,47 +184,49 @@ Rust kodlayıcısı tək düyməli kontrollerlər üçün `0x02` yazır (versiya
 norma v1, genişləndirmə bayrağı silindi) və multisig nəzarətçiləri üçün `0x0A` (versiya 0,
 sinif 1, norma v1, genişləndirmə bayrağı təmizləndi).
 
-#### 2.2 Domen seçici kodlaşdırmaları (ADDR-1a)
+#### 2.2 Legacy selector compatibility (decode-only)
 
-Domen seçicisi dərhal başlığı izləyir və etiketlənmiş birlikdir:
+Newly encoded canonical payloads do not include a domain-selector segment. For
+backward compatibility, decoders still accept pre-cutover payloads where a
+selector segment appears between header and controller as a tagged union:
 
-| Tag | Məna | Yük | Qeydlər |
+| Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | Gizli defolt domen | heç biri | Konfiqurasiya edilmiş `default_domain_name()` ilə uyğun gəlir. |
-| `0x01` | Yerli domen həzmi | 12 bayt | Həzm = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
-| `0x02` | Qlobal reyestr girişi | 4 bayt | Böyük endian `registry_id`; qlobal reyestr göndərilənə qədər qorunur. |
+| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
+| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
-Domen etiketləri heşinqdən əvvəl kanonlaşdırılır (UTS-46 + STD3 + NFC). Naməlum teqlər `AccountAddressError::UnknownDomainTag`-ni artırır. Ünvanı domenə qarşı doğrulayan zaman uyğun olmayan seçicilər `AccountAddressError::DomainMismatch`-i artırır.
+Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
 
 ```
-domain selector
+legacy selector segment
 ┌──────────┬──────────────────────────────────────────────┐
 │ tag (u8) │ payload (depends on selector kind, see table)│
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-Selektor dərhal nəzarətçinin faydalı yükünə bitişikdir, buna görə dekoder gəzə bilər
-tel formatını qaydada: teq baytını oxuyun, etiketə aid yükü oxuyun, sonra davam edin
-nəzarətçi baytlarına.
+When present, the selector is immediately adjacent to the controller payload, so
+a decoder can walk the wire format in order: read the tag byte, read the
+tag-specific payload, then move on to the controller bytes.
 
-**Seçici nümunələri**
+**Legacy selector examples**
 
-- *Düzgün defolt* (`tag = 0x00`). Faydalı yük yoxdur. Defolt üçün kanonik hex nümunəsi
-  deterministik test açarından istifadə edərək domen:
-  `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
-- *Yerli həzm* (`tag = 0x01`). Faydalı yük 12 baytlıq həzmdir. Nümunə (`treasury` toxumu
+- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
+  domain using the deterministic test key:
+  `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
+- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
   `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
-- *Qlobal reyestr* (`tag = 0x02`). Faydalı yük böyük-endian `registry_id:u32`-dir. Baytlar
-  faydalı yükü izləyənlər gizli-defolt halı ilə eynidir; sadəcə seçici
-  normallaşdırılmış domen sətirini reyestr göstəricisi ilə əvəz edir. İstifadə nümunəsi
-  `registry_id = 0x0000_002A` (ondalık42) və deterministik defolt nəzarətçi:
-  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.  
-  Parçalanma: `0x02` başlığı, `0x02` seçici etiketi, `00 00 00 2A` reyestr id, `0x00`
-  nəzarətçi etiketi, `0x01` əyri id, `0x20` açar uzunluğu, 32 bayt Ed25519 açar yükü.
+- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
+  that follow the payload are identical to the implicit-default case; the selector simply
+  replaces the normalised domain string with a registry pointer. Example using
+  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
+  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
 
 #### 2.3 Nəzarətçinin faydalı yük kodlaşdırmaları (ADDR-1a)
 
-Nəzarətçinin faydalı yükü domen seçicisindən sonra əlavə edilmiş başqa bir işarələnmiş birləşmədir:| Tag | Nəzarətçi | Layout | Qeydlər |
+Nəzarətçinin faydalı yükü kanonik yükdə başlıqdan dərhal sonra (legacy selector segment dekodlaşdırılarkən ondan sonra) gələn başqa bir işarələnmiş birləşmədir.
+
+| Tag | Nəzarətçi | Layout | Qeydlər |
 |-----|------------|--------|-------|
 | `0x00` | Tək açar | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` bu gün Ed25519 ilə xəritələr. `key_len` `u8` ilə məhdudlaşır; daha böyük dəyərlər `AccountAddressError::KeyPayloadTooLong`-i artırır (buna görə də >255 bayt olan tək açarlı ML‑DSA açıq açarları kodlaşdırıla bilməz və multisig istifadə etməlidir). |
 | `0x01` | Multisig | `version:u8` · `threshold:u16` · `member_count:u8` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_len:u16`)\* | 255-ə qədər üzvü dəstəkləyir (`CONTROLLER_MULTISIG_MEMBER_MAX`). Naməlum əyrilər `AccountAddressError::UnknownCurve` artırır; səhv formalaşmış siyasətlər `AccountAddressError::InvalidMultisigPolicy` kimi qabarır. |
@@ -319,22 +317,22 @@ SDK-lar və operator iş axınları arasında ardıcıl.
 - Böyük ölçülü və ya qüsurlu əsas material `KeyPayloadTooLong` və ya `InvalidPublicKey`-i qaldırır.
 - 255 üzvdən çox olan Multisig nəzarətçiləri `MultisigMemberOverflow`-i qaldırır.
 - IME/NFKC çevrilmələri: yarım eni Sora kana kodlaşdırmanı pozmadan tam enli formalarına normallaşdırıla bilər, lakin ASCII `sora` sentinel və IH58 rəqəmləri/hərfləri ASCII olaraq qalmalıdır. Tam enli və ya qutu qatlanmış gözətçilər səthi `ERR_MISSING_COMPRESSED_SENTINEL`, tam enli ASCII faydalı yükləri `ERR_INVALID_COMPRESSED_CHAR` artırır və yoxlama məbləği uyğunsuzluqları `ERR_CHECKSUM_MISMATCH` kimi qabarır. `crates/iroha_data_model/src/account/address.rs`-də mülkiyyət testləri bu yolları əhatə edir ki, SDK-lar və pul kisələri deterministik uğursuzluqlara arxalana bilsin.
-- Torii və `address@domain` ləqəblərinin SDK təhlili indi IH58 (üstünlük verilir)/sora (ikinci-ən yaxşı) daxiletmələr ləqəbdən əvvəl uğursuz olduqda (məsələn, domen strukturunda səhv səhvlər ola bilməyəndə) eyni `ERR_*` kodlarını buraxır. nəsr sətirlərindən təxmin etmək.
+- Torii və `address@domain` (rejected legacy form) ləqəblərinin SDK təhlili indi IH58 (üstünlük verilir)/sora (ikinci-ən yaxşı) daxiletmələr ləqəbdən əvvəl uğursuz olduqda (məsələn, domen strukturunda səhv səhvlər ola bilməyəndə) eyni `ERR_*` kodlarını buraxır. nəsr sətirlərindən təxmin etmək.
 - `ERR_LOCAL8_DEPRECATED` səthi 12 baytdan qısa olan yerli selektorun faydalı yükləri köhnə Local‑8 həzmlərindən sərt kəsimi qoruyur.
-- Domensiz IH58 (üstünlük verilir)/sora (ikinci ən yaxşı) literallar daxil edilmiş seçicini domen seçici həlledicisi vasitəsilə həll edir; heç biri quraşdırılmayıbsa (və ya selektor həll edilə bilmirsə) `ERR_DOMAIN_SELECTOR_UNRESOLVED` ilə təhlil uğursuz olur. Gizli defolt seçici həlledici tələb etmədən konfiqurasiya edilmiş standart domen etiketinə həll edir.
+- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
 
 #### 2.5 Normativ ikili vektorlar
 
 - **Düzgün defolt domen (`default`, əsas bayt `0x00`)**  
-  Kanonik hex: `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
+  Kanonik hex: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
   Parçalanma: `0x02` başlığı, `0x00` selektoru (örtülü defolt), `0x00` nəzarətçi teqi, `0x01` əyri identifikatoru (Ed25519), I18NI0000027X açarı yükləmək, 3-byte açarı yükləmək.
 - **Yerli domen həzmi (`treasury`, toxum baytı `0x01`)**  
   Kanonik hex: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
-  Parçalanma: `0x02` başlığı, selektor teqi `0x01` üstəgəl həzm `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, ardınca tək düyməli faydalı yük (`0x00` teqi, `0x01` əyri id, uzunluğu 002, I18 byte) Ed25519 açarı).Vahid testləri (`account::address::tests::parse_any_accepts_all_formats`) aşağıdakı V1 vektorlarını `AccountAddress::parse_any` vasitəsilə təsdiqləyir və alətlərin hex, IH58 (üstünlük verilir) və sıxılmış (`sora`, ikinci ən yaxşı) formalar üzrə kanonik faydalı yükə etibar edə biləcəyinə zəmanət verir. Genişləndirilmiş armatur dəstini `cargo run -p iroha_data_model --example address_vectors` ilə bərpa edin.
+  Parçalanma: `0x02` başlığı, selektor teqi `0x01` üstəgəl həzm `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, ardınca tək düyməli faydalı yük (`0x00` teqi, `0x01` əyri id, uzunluğu 002, I18 byte) Ed25519 açarı).Vahid testləri (`account::address::tests::parse_encoded_accepts_all_formats`) aşağıdakı V1 vektorlarını `AccountAddress::parse_encoded` vasitəsilə təsdiqləyir və alətlərin hex, IH58 (üstünlük verilir) və sıxılmış (`sora`, ikinci ən yaxşı) formalar üzrə kanonik faydalı yükə etibar edə biləcəyinə zəmanət verir. Genişləndirilmiş armatur dəstini `cargo run -p iroha_data_model --example address_vectors` ilə bərpa edin.
 
 | Domain | Toxum baytı | kanonik hex | Sıxılmış (`sora`) |
 |-------------|-----------|-----------------------------------------------------------------------------------------|------------|
-| default | `0x00` | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` |
+| default | `0x00` | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
 | xəzinə | `0x01` | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | möcüzələr diyarı | `0x02` | `0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394` | `sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS` |
 | iroha | `0x03` | `0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1` | `sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L` |
@@ -360,13 +358,13 @@ hər kanonik yük üçün ardıcıl mətn formaları. Seçilmiş qurğular
 
 | Hesab / seçici | IH58 hərfi (prefiks `0x02F1`) | Sora sıxılmış (`sora`) hərfi |
 |--------------------------------|--------------------------------|-------------------------|
-| `default` domeni (örtülü seçici, toxum `0x00`) | `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` (açıq marşrut göstərişləri təmin edərkən isteğe bağlı `@default` şəkilçisi) |
+| `default` domeni (örtülü seçici, toxum `0x00`) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (açıq marşrut göstərişləri təmin edərkən isteğe bağlı `@default` şəkilçisi) |
 | `treasury` (yerli həzm seçicisi, toxum `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | Qlobal reyestr göstəricisi (`registry_id = 0x0000_002A`, `treasury` ekvivalenti) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 Bu sətirlər CLI (`iroha tools address convert`), Torii tərəfindən buraxılanlara uyğundur
 cavablar (`address_format=ih58|compressed`) və SDK köməkçiləri, buna görə də UX kopyalayın/yapışdırın
-axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişinə ehtiyacınız olduqda `<address>@<domain>` əlavə edin; şəkilçi kanonik çıxışın bir hissəsi deyil.
+axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişinə ehtiyacınız olduqda `<address>@<domain>` (rejected legacy form) əlavə edin; şəkilçi kanonik çıxışın bir hissəsi deyil.
 
 #### 2.6 Qarşılıqlı fəaliyyət üçün mətn ləqəbləri (planlaşdırılmış)
 
@@ -378,7 +376,7 @@ axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişi
   alət zəncirləri.
 - **Maşın köməkçiləri:** Rust, TypeScript/JavaScript, Python, üçün kodekləri dərc edin,
   və IH58 və sıxılmış formatları əhatə edən Kotlin (`AccountAddress::to_ih58`,
-  `AccountAddress::parse_any` və onların SDK ekvivalentləri). CAIP-10 köməkçiləridir
+  `AccountAddress::parse_encoded` və onların SDK ekvivalentləri). CAIP-10 köməkçiləridir
   gələcək iş.
 
 #### 2.7 Deterministik IH58 ləqəbi
@@ -397,7 +395,7 @@ axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişi
 - **Kodlaşdırma:** `encode_ih58()` prefiks baytlarını kanonik baytlarla birləşdirir
   faydalı yüklənir və Blake2b-512-dən əldə edilmiş 16 bitlik yoxlama məbləğini sabitlə əlavə edir.
   prefiks `IH58PRE` (`b"IH58PRE" || prefix || payload`). Nəticə `bs58` vasitəsilə Base58 ilə kodlanmışdır.
-  CLI/SDK köməkçiləri eyni proseduru ifşa edir və `AccountAddress::parse_any`
+  CLI/SDK köməkçiləri eyni proseduru ifşa edir və `AccountAddress::parse_encoded`
   onu `decode_ih58` vasitəsilə geri qaytarır.
 
 #### 2.8 Normativ mətn test vektorları
@@ -406,7 +404,7 @@ axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişi
 hər kanonik faydalı yük üçün hərflər. Əsas məqamlar:
 
 - **`addr-single-default-ed25519` (Sora Nexus, prefiks `0x02F1`).**  
-  IH58 `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`, sıxılmış (`sora`)
+  IH58 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, sıxılmış (`sora`)
   `sora2QG…U4N5E5`. Torii bu dəqiq sətirləri `AccountId`-dən yayır
   `Display` tətbiqi (kanonik IH58) və `AccountAddress::to_compressed_sora`.
 - **`addr-global-registry-002a` (reyestr seçicisi → xəzinə).**  
@@ -592,10 +590,10 @@ audit cığırının oflayn olaraq yenidən qurulması üçün dəyişiklik.
    CLI IH58, `sora…` və kanonik `0x…` literallarını qəbul edir; əlavə edin
    `@<domain>` yalnız manifestlər üçün etiket saxlamaq lazım olduqda.
    JSON xülasəsi həmin domeni `input_domain` sahəsi vasitəsilə göstərir və
-   `--append-domain` çevrilmiş kodlaşdırmanı `<address>@<domain>` kimi təkrarlayır.
+   `legacy  suffix` çevrilmiş kodlaşdırmanı `<address>@<domain>` (rejected legacy form) kimi təkrarlayır.
    manifest fərqləri (bu şəkilçi kanonik hesab identifikatoru deyil, metadatadır).
    Yeni sətir yönümlü ixrac üçün istifadə edin
-   Kütləvi çevirmək üçün `iroha tools address normalize --input <file> --only-local` Yerli
+   Kütləvi çevirmək üçün `iroha tools address normalize --input <file> legacy-selector input mode` Yerli
    seçiciləri atlayarkən kanonik IH58 (üstünlük verilir), sıxılmış (`sora`, ikinci ən yaxşı), hex və ya JSON formalarına
    yerli olmayan sıralar. Auditorların elektron cədvələ uyğun sübuta ehtiyacı olduqda, qaçın
    CSV xülasəsi yaymaq üçün `iroha tools address audit --input <file> --format csv`
@@ -623,7 +621,7 @@ onların dəyişmə biletləri.
   aydın şəkildə dəyişə bilən təsviri metadata kimi qeyd olunur, IH58 isə
   sabit ünvan.
 - **Daxiletmənin kanonikləşdirilməsi:** Torii və SDK-lar IH58 (üstünlük verilir)/sora (ikinci ən yaxşı)/0x qəbul edir
-  ünvanlar üstəgəl `alias@domain`, `public_key@domain`, `uaid:…` və
+  ünvanlar üstəgəl `alias@domain` (rejected legacy form), `uaid:…` və
   `opaque:…` formalaşdırır, sonra çıxış üçün IH58-ə kanonikləşir. yoxdur
   ciddi rejimdə keçid; xam telefon/e-poçt identifikatorları kitabdan kənar saxlanılmalıdır
   UAID/şəffaf xəritələr vasitəsilə.
@@ -659,19 +657,18 @@ onların dəyişmə biletləri.
   Xəritəçəkmələr gələcək iş olaraq qalır).
 - **CLI alətləri:** `iroha tools address convert` vasitəsilə deterministik operator iş axını təmin edin
   (bax `crates/iroha_cli/src/address.rs`), IH58/`sora…`/`0x…` hərfi və
-  isteğe bağlı `<address>@<domain>` etiketləri, defolt olaraq Sora Nexus (`753`) prefiksindən istifadə edərək IH58 çıxışı,
+  isteğe bağlı `<address>@<domain>` (rejected legacy form) etiketləri, defolt olaraq Sora Nexus (`753`) prefiksindən istifadə edərək IH58 çıxışı,
   və yalnız operatorlar bunu açıq şəkildə tələb etdikdə yalnız Sora sıxılmış əlifbasını yayır
   `--format compressed` və ya JSON xülasə rejimi. Komanda prefiks gözləntilərini tətbiq edir
-  təhlil edir, təmin edilmiş domeni (JSON-da `input_domain`) və `--append-domain` bayrağını qeyd edir
-  çevrilmiş kodlaşdırmanı `<address>@<domain>` kimi təkrarlayır, beləliklə, aşkar fərqlər erqonomik olaraq qalır.
+  təhlil edir, təmin edilmiş domeni (JSON-da `input_domain`) və `legacy  suffix` bayrağını qeyd edir
+  çevrilmiş kodlaşdırmanı `<address>@<domain>` (rejected legacy form) kimi təkrarlayır, beləliklə, aşkar fərqlər erqonomik olaraq qalır.
 - **Wallet/explorer UX:** [ünvan göstərmə qaydalarına] əməl edin (source/sns/address_display_guidelines.md)
   ADDR-6 ilə göndərilir - ikili nüsxə düymələri təklif edin, IH58-i QR yükü kimi saxlayın və xəbərdarlıq edin
   istifadəçilər sıxılmış `sora…` formasının yalnız Sora-dır və IME-nin yenidən yazılmasına həssasdır.
 - **Torii inteqrasiyası:** Keş Nexus TTL-ə uyğun olaraq təzahür edir, yayır
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministik və
-  `alias@domain`-i kanonikləşdirmək üçün `POST /v1/accounts/resolve`-i ifşa edin,
-  `public_key@domain`, `uaid:`/`opaque:` hərfi və ya kodlanmış ünvanlar
-  IH58 həll edilmiş domen və mənbəni qaytararkən.
+  keep account-literal parsing encoded-only (`IH58` preferred, `sora…`
+  compressed accepted) with canonical IH58 output.
 
 ### Torii cavab formatları
 
@@ -679,7 +676,7 @@ onların dəyişmə biletləri.
   `POST /v1/accounts/query` JSON zərfində eyni sahəni qəbul edir.
   Dəstəklənən dəyərlər bunlardır:
   - `ih58` (defolt) — cavablar kanonik IH58 Base58 faydalı yükləri yayır (məsələn,
-    `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`).
+    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
   - `compressed` — cavablar yalnız Sora üçün `sora…` sıxılmış görünüşünü yayır.
     filtrlərin/yol parametrlərinin kanonik saxlanması.
 - Yanlış dəyərlər `400` (`QueryExecutionFail::Conversion`) qaytarır. Bu imkan verir
@@ -781,7 +778,7 @@ mesajlar, üstəlik tövsiyə olunan düzəliş təlimatı.
 ## Növbəti Addımlar
 
 1. IH58 kodlaşdırması `iroha_data_model` (`AccountAddress::to_ih58`,
-   `parse_any`); qurğuları/testləri hər SDK-ya daşımağa davam edin və hər hansı birini təmizləyin
+   `parse_encoded`); qurğuları/testləri hər SDK-ya daşımağa davam edin və hər hansı birini təmizləyin
    Bech32m yer tutucular.
 2. `chain_discriminant` ilə konfiqurasiya sxemini genişləndirin və həssas əldə edin
   mövcud test/dev quraşdırmaları üçün defoltlar. **(Tamamlandı: `common.chain_discriminant`

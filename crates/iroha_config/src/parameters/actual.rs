@@ -1602,11 +1602,13 @@ pub struct ViralIncentives {
 impl Default for ViralIncentives {
     fn default() -> Self {
         Self {
-            incentive_pool_account: defaults::governance::viral_incentive_pool_account()
-                .parse()
-                .expect("default viral incentive pool account"),
-            escrow_account: defaults::governance::viral_escrow_account()
-                .parse()
+            incentive_pool_account: AccountId::parse_encoded(
+                &defaults::governance::viral_incentive_pool_account(),
+            )
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("default viral incentive pool account"),
+            escrow_account: AccountId::parse_encoded(&defaults::governance::viral_escrow_account())
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .expect("default viral escrow account"),
             reward_asset_definition_id: defaults::governance::viral_reward_asset_id()
                 .parse()
@@ -1802,16 +1804,10 @@ impl Default for Governance {
                 .parse()
                 .expect("valid default citizenship asset id"),
             citizenship_bond_amount: defaults::governance::citizenship_bond_amount(),
-            citizenship_escrow_account: defaults::governance::citizenship_escrow_account()
-                .parse()
-                .expect("valid default citizenship escrow account id"),
+            citizenship_escrow_account: defaults::governance::citizenship_escrow_account_id(),
             min_bond_amount: 150,
-            bond_escrow_account: defaults::governance::bond_escrow_account()
-                .parse()
-                .expect("valid default bond escrow account id"),
-            slash_receiver_account: defaults::governance::slash_receiver_account()
-                .parse()
-                .expect("valid default slash receiver account id"),
+            bond_escrow_account: defaults::governance::bond_escrow_account_id(),
+            slash_receiver_account: defaults::governance::slash_receiver_account_id(),
             slash_double_vote_bps: defaults::governance::slash_policy::DOUBLE_VOTE_BPS,
             slash_invalid_proof_bps: defaults::governance::slash_policy::MISCONDUCT_BPS,
             slash_ineligible_proof_bps: defaults::governance::slash_policy::INELIGIBLE_PROOF_BPS,
@@ -4664,7 +4660,7 @@ pub struct Torii {
     pub api_fee_asset_id: Option<String>,
     /// Optional fee policy: fixed amount per request.
     pub api_fee_amount: Option<u64>,
-    /// Optional fee policy: receiver account id (IH58 or `<alias|public_key>@domain`).
+    /// Optional fee policy: receiver account id (IH58 or sora compressed literal).
     pub api_fee_receiver: Option<String>,
     /// SoraNet privacy ingestion guard rails (auth/rate/namespace).
     pub soranet_privacy_ingest: SoranetPrivacyIngest,
@@ -5711,7 +5707,8 @@ impl Default for SorafsTelemetryPolicy {
             submitters: defaults::governance::sorafs_telemetry::submitters()
                 .iter()
                 .map(|id| {
-                    id.parse()
+                    AccountId::parse_encoded(id)
+                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                         .expect("default SoraFS telemetry submitter account id")
                 })
                 .collect(),
@@ -6280,7 +6277,7 @@ pub struct IsoBridgeSigner {
 pub struct IsoAccountAlias {
     /// External IBAN representation.
     pub iban: String,
-    /// Account identifier (IH58 or `<alias|public_key>@domain`).
+    /// Account identifier (IH58 or sora compressed literal).
     pub account_id: String,
 }
 

@@ -143,8 +143,7 @@ pub mod isi {
         let (account_id, account_value) = account.clone().into_key_value();
         state_transaction
             .world
-            .accounts
-            .insert(account_id, account_value);
+            .insert_account_with_links(account_id, account_value);
         state_transaction
             .world
             .emit_events(Some(DomainEvent::Account(AccountEvent::Created(account))));
@@ -237,8 +236,7 @@ pub mod isi {
             }
             state_transaction
                 .world
-                .accounts
-                .insert(account_id.clone(), account_value);
+                .insert_account_with_links(account_id.clone(), account_value);
 
             if let Some(uaid) = account.uaid() {
                 state_transaction
@@ -255,7 +253,9 @@ pub mod isi {
                     .insert(label.clone(), account_id.clone())
                     .is_some()
                 {
-                    state_transaction.world.accounts.remove(account_id.clone());
+                    state_transaction
+                        .world
+                        .remove_account_with_links(&account_id);
                     if let Some(uaid) = account.uaid() {
                         state_transaction.world.uaid_accounts.remove(*uaid);
                         state_transaction.rebuild_space_directory_bindings(*uaid);
@@ -274,7 +274,9 @@ pub mod isi {
                         .insert(*opaque, *uaid)
                         .is_some()
                     {
-                        state_transaction.world.accounts.remove(account_id.clone());
+                        state_transaction
+                            .world
+                            .remove_account_with_links(&account_id);
                         state_transaction.world.uaid_accounts.remove(*uaid);
                         if let Some(label) = account.label() {
                             state_transaction
@@ -300,7 +302,9 @@ pub mod isi {
                     .insert(record.label.clone(), record)
                     .is_some()
             {
-                state_transaction.world.accounts.remove(account_id.clone());
+                state_transaction
+                    .world
+                    .remove_account_with_links(&account_id);
                 if let Some(uaid) = account.uaid() {
                     state_transaction.world.uaid_accounts.remove(*uaid);
                     state_transaction.rebuild_space_directory_bindings(*uaid);
@@ -384,7 +388,9 @@ pub mod isi {
                     .emit_events(Some(DomainEvent::Nft(NftEvent::Deleted(nft_id))));
             }
 
-            let removed = state_transaction.world.accounts.remove(account_id.clone());
+            let removed = state_transaction
+                .world
+                .remove_account_with_links(&account_id);
             let Some(account_value) = removed else {
                 return Err(FindError::Account(account_id).into());
             };
@@ -932,7 +938,31 @@ mod tests {
             opaque_ids: Vec::new(),
         };
         let (account_id, account_value) = account.into_key_value();
+        let subject = account_id.subject_id();
+        let domain = account_id.domain().clone();
         state.world.accounts.insert(account_id, account_value);
+        let mut domains = state
+            .world
+            .account_subject_domains
+            .view()
+            .get(&subject)
+            .cloned()
+            .unwrap_or_default();
+        domains.insert(domain.clone());
+        state
+            .world
+            .account_subject_domains
+            .insert(subject.clone(), domains);
+
+        let mut subjects = state
+            .world
+            .domain_account_subjects
+            .view()
+            .get(&domain)
+            .cloned()
+            .unwrap_or_default();
+        subjects.insert(subject);
+        state.world.domain_account_subjects.insert(domain, subjects);
     }
 
     fn seed_manifest_record<F>(

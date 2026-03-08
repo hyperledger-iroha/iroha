@@ -716,10 +716,10 @@ public final class HttpClientTransportTests {
             + "\"dataspace_id\":42,"
             + "\"dataspace_alias\":\"sandbox\","
             + "\"accounts\":[{"
-            + "\"account_id\":\"alice@wonderland\","
+            + "\"account_id\":\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\","
             + "\"label\":\"Primary\","
             + "\"assets\":[{"
-            + "\"asset_id\":\"xor#wonderland\",\"asset_definition_id\":\"xor#nexus\",\"quantity\":\"42\""
+            + "\"asset_id\":\"norito:00\",\"asset_definition_id\":\"xor#nexus\",\"quantity\":\"42\""
             + "}]"
             + "}]"
             + "}]"
@@ -747,12 +747,12 @@ public final class HttpClientTransportTests {
     assert dataspace.accounts().size() == 1 : "Expected single account entry";
     final UaidPortfolioResponse.UaidPortfolioAccount account =
         dataspace.accounts().get(0);
-    assert "alice@wonderland".equals(account.accountId())
+    assert "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp".equals(account.accountId())
         : "Account ID mismatch";
     assert "Primary".equals(account.label()) : "Account label mismatch";
     assert account.assets().size() == 1 : "Expected single asset entry";
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
-    assert "xor#wonderland".equals(asset.assetId()) : "Asset ID mismatch";
+    assert "norito:00".equals(asset.assetId()) : "Asset ID mismatch";
     assert "xor#nexus".equals(asset.assetDefinitionId()) : "Asset definition mismatch";
     assert "42".equals(asset.quantity()) : "Asset quantity mismatch";
 
@@ -789,7 +789,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
     final UaidPortfolioQuery query =
-        UaidPortfolioQuery.builder().setAssetId("xor#wonderland").build();
+        UaidPortfolioQuery.builder().setAssetId("norito:00").build();
     transport.getUaidPortfolio("uaid:" + hex.toUpperCase(), query).join();
 
     final TransportRequest request = executor.lastRequest();
@@ -800,7 +800,7 @@ public final class HttpClientTransportTests {
         .equals(
             "https://torii.example/v1/accounts/uaid%3A"
                 + hex
-                + "/portfolio?asset_id=xor%23wonderland")
+                + "/portfolio?asset_id=norito%3A00")
         : "UAID portfolio query must include asset_id filter";
   }
 
@@ -838,7 +838,7 @@ public final class HttpClientTransportTests {
             + "\"dataspaces\":[{"
             + "\"dataspace_id\":7,"
             + "\"dataspace_alias\":null,"
-            + "\"accounts\":[\"alice@wonderland\",\"bob@sora\"]"
+            + "\"accounts\":[\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\",\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\"]"
             + "}]"
             + "}";
     final StubResponseExecutor executor =
@@ -885,7 +885,7 @@ public final class HttpClientTransportTests {
             + "\"expired_epoch\":null,"
             + "\"revocation\":{\"epoch\":15,\"reason\":\"policy\"}"
             + "},"
-            + "\"accounts\":[\"alice@wonderland\"],"
+            + "\"accounts\":[\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\"],"
             + "\"manifest\":{"
             + "\"version\":\"1\","
             + "\"uaid\":\"uaid:"
@@ -924,7 +924,7 @@ public final class HttpClientTransportTests {
     assert record.lifecycle().revocation() != null : "Revocation should be present";
     assert record.lifecycle().revocation().epoch() == 15L : "Revocation epoch mismatch";
     assert "policy".equals(record.lifecycle().revocation().reason()) : "Revocation reason mismatch";
-    assert record.accounts().contains("alice@wonderland") : "Accounts must surface";
+    assert record.accounts().contains("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp") : "Accounts must surface";
     assert record.manifestJson().contains("\"version\":\"1\"") : "Manifest JSON should be stored";
     final Map<String, Object> manifestMap = record.manifestAsMap();
     assert "1".equals(manifestMap.get("version")) : "Manifest map mismatch";
@@ -1173,7 +1173,7 @@ public final class HttpClientTransportTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", fillValue))
-            .setAuthority("alice@wonderland")
+            .setAuthority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
             .setCreationTimeMs(1_700_000_000_000L + (fillValue & 0xFF))
             .setInstructionBytes(new byte[] {fillValue, (byte) (fillValue + 1)})
             .setTimeToLiveMs(5_000L)

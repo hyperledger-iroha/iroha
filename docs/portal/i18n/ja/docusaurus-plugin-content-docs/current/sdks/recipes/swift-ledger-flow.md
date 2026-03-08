@@ -113,6 +113,6 @@ struct LedgerFlow {
 ## 5. パリティの確認
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` でトランザクションを確認します。
-- `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` で保有量を比較します。
+- `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'` で保有量を比較します。
 - このレシピを Rust/Python/JavaScript のレシピと組み合わせ、すべての SDK がデモフローで同じハッシュを生成することを確認します。
 

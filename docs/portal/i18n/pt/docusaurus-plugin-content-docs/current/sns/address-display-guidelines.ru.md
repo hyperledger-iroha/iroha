@@ -151,7 +151,7 @@ ver em documentos/testes:
 
 | Tipo de seleção | hexadecimal canônico |
 |---------------|---------------|
-| Novos para умолчанию | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Novos para умолчанию | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | Resumo local (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | Registro global (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -168,7 +168,7 @@ Selecione o ícone, use a interface CLI do ADDR-5:
    no modelo `kind`/`warning` e no local de trabalho mais difícil
    `input_domain`. O produto `kind` é `local12`, CLI está pronto para uso
    stderr, um JSON-резюме отражает ту же подсказку, contém pacotes CI e SDK moгли
-   ее показывать. Instale `--append-domain`, exceto o que você deseja
+   ее показывать. Instale `legacy  suffix`, exceto o que você deseja
    codificação convertível como `<ih58>@<domain>`.
 2. O SDK pode ter um aviso/resumo para o auxiliar JavaScript:
 
@@ -194,19 +194,19 @@ Selecione o ícone, use a interface CLI do ADDR-5:
    em `--input -` ou em uma bandeira usando STDIN), você precisa de um JSON
    каноническими/IH58/сжатыми резюме для каждой записи и считает ошибки парсинга
    e предупреждения Domínio local. Use `--allow-errors` por auditoria
-   `--fail-on-warning`, o operador de operação seleciona o seletor local no CI.
+   `strict CI post-check`, o operador de operação seleciona o seletor local no CI.
 6. Não há necessidade de testar, usar
   Para a correção da tabela Local селекторов используйте
   para transporte CSV `input,status,format,...`, que pode ser canônico
   кодировки, предупреждения и ошибки парсинга один проход.
    Helper по умолчанию пропускает не-Local строки, конвертирует каждую оставшуюся
    Use a codificação codificada (IH58/сжатый/hex/JSON) e administre o domínio
-   por `--append-domain`. Совмещайте с `--allow-errors`, чтобы продолжать скан даже
+   por `legacy  suffix`. Совмещайте с `--allow-errors`, чтобы продолжать скан даже
    exceto dump que contém literais.
 7. CI/lint automático pode ser usado para substituir `ci/check_address_normalize.sh`, caixa
    selecione Seletores locais de `fixtures/account/address_vectors.json`,
    converta-o em `iroha tools address normalize` e feche-o perfeitamente
-   `iroha tools address audit --fail-on-warning`, isso é necessário, mas isso não é possível
+   `iroha tools address audit`, isso é necessário, mas isso não é possível
    эмитят Resumos locais.
 
 `torii_address_local8_total{endpoint}` em vez de
@@ -240,7 +240,7 @@ guarda-corpos:- `AddressLocal8Resurgence` permite que o contato seja solicitado 
 
 Ative o marcador nas notas de lançamento do código/recuperação do cutover:
 
-> **Адреса:** Auxiliar auxiliar `iroha tools address normalize --only-local --append-domain`
+> **Адреса:** Auxiliar auxiliar `iroha tools address normalize`
 > e colocado em CI (`ci/check_address_normalize.sh`), este pacote de cola/
 > обозревателя могли конвертировать устаревшие Seletores locais em канонические
 > IH58/formas de configuração para blocos Local-8/Local-12 na mainnet. Обновите любые

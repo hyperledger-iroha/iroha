@@ -1,5 +1,22 @@
 {
+  "bls_domain": "bls-iroha2:npos-sumeragi:v1",
   "chain": "iroha3-testus",
+  "consensus_fingerprint": "0x653bb383f0d53faa4fd9e9995d75f44dd91928ff3f6efc346fa8bbe8eb139ae8",
+  "consensus_mode": "Npos",
+  "crypto": {
+    "allowed_curve_ids": [
+      1,
+      4
+    ],
+    "allowed_signing": [
+      "ed25519",
+      "secp256k1"
+    ],
+    "default_hash": "blake2b-256",
+    "sm2_distid_default": "1234567812345678",
+    "sm_intrinsics": "auto",
+    "sm_openssl_preview": false
+  },
   "executor": null,
   "ivm_dir": ".",
   "transactions": [
@@ -19,7 +36,7 @@
         {
           "Register": {
             "Account": {
-              "id": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "label": null,
               "metadata": {
                 "key": "value"
@@ -67,7 +84,7 @@
         {
           "Register": {
             "Account": {
-              "id": "34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD@garden_of_live_flowers",
+              "id": "6cmzPVPX9g5LPdtBLCo3EgGtBJ7X9P1Y4pTocgsnjrziQFDxrWi3AGU",
               "label": null,
               "metadata": {
                 
@@ -106,50 +123,8 @@
         
       ],
       "parameters": {
-        "sumeragi": {
-          "block_time_ms": 100,
-          "commit_time_ms": 100,
-          "min_finality_ms": 100,
-          "pacing_factor_bps": 10000,
-          "max_clock_drift_ms": 1000,
-          "collectors_k": 3,
-          "collectors_redundant_send_r": 3,
-          "da_enabled": true,
-          "key_activation_lead_blocks": 1,
-          "key_overlap_grace_blocks": 8,
-          "key_expiry_grace_blocks": 0,
-          "key_require_hsm": false,
-          "key_allowed_algorithms": [
-            "bls_normal"
-          ],
-          "key_allowed_hsm_providers": [
-            "pkcs11",
-            "yubihsm",
-            "softkey"
-          ]
-        },
         "block": {
           "max_transactions": 512
-        },
-        "transaction": {
-          "max_signatures": 16,
-          "max_instructions": 50000,
-          "ivm_bytecode_size": 4194304,
-          "max_tx_bytes": 10485760,
-          "max_decompressed_bytes": 10485760,
-          "max_metadata_depth": 8,
-          "require_height_ttl": false,
-          "require_sequence": false
-        },
-        "executor": {
-          "fuel": 55000000,
-          "memory": 55000000,
-          "execution_depth": 3
-        },
-        "smart_contract": {
-          "fuel": 55000000,
-          "memory": 55000000,
-          "execution_depth": 3
         },
         "custom": {
           "ivm_gas_limit_per_block": {
@@ -177,6 +152,48 @@
               "vrf_reveal_window_blocks": 40
             }
           }
+        },
+        "executor": {
+          "execution_depth": 3,
+          "fuel": 55000000,
+          "memory": 55000000
+        },
+        "smart_contract": {
+          "execution_depth": 3,
+          "fuel": 55000000,
+          "memory": 55000000
+        },
+        "sumeragi": {
+          "block_time_ms": 100,
+          "collectors_k": 3,
+          "collectors_redundant_send_r": 3,
+          "commit_time_ms": 100,
+          "da_enabled": true,
+          "key_activation_lead_blocks": 1,
+          "key_allowed_algorithms": [
+            "bls_normal"
+          ],
+          "key_allowed_hsm_providers": [
+            "pkcs11",
+            "yubihsm",
+            "softkey"
+          ],
+          "key_expiry_grace_blocks": 0,
+          "key_overlap_grace_blocks": 8,
+          "key_require_hsm": false,
+          "max_clock_drift_ms": 1000,
+          "min_finality_ms": 100,
+          "pacing_factor_bps": 10000
+        },
+        "transaction": {
+          "ivm_bytecode_size": 4194304,
+          "max_decompressed_bytes": 10485760,
+          "max_instructions": 50000,
+          "max_metadata_depth": 8,
+          "max_signatures": 16,
+          "max_tx_bytes": 10485760,
+          "require_height_ttl": false,
+          "require_sequence": false
         }
       },
       "topology": [
@@ -188,7 +205,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "rose##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c7000000000000001dca78b6e91809aa00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e0000000000000046000000000000006564303132304345374641343643394443453745413442313235453245333642444236334541333330373345373539304143393238313641453145383631423730343842303336000000000000001a0000000000000012000000000000000a00000000000000776f6e6465726c616e640c000000000000000400000000000000726f7365",
               "object": "13"
             }
           }
@@ -196,7 +213,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "cabbage#garden_of_live_flowers#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200d6000000000000004b9fa464dfc100ea00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323043453746413436433944434537454134423132354532453336424442363345413333303733453735393041433932383136414531453836314237303438423033450000000000000026000000000000001e00000000000000160000000000000067617264656e5f6f665f6c6976655f666c6f776572730f00000000000000070000000000000063616262616765",
               "object": "44"
             }
           }
@@ -204,16 +221,16 @@
         {
           "Transfer": {
             "AssetDefinition": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "object": "rose#wonderland",
-              "source": "34mSYmtx2t7jKZDQcTrSU7yorGiKwqgAXgN4uZ68R7hDuq5WEinPUdY17nCNpTyMLhAvqFG4V@genesis"
+              "source": "6cmzPVPX95gYbXrP7UnfTUDLtn3Ynet18uDqS4S7njAFJS8GG8ds6MS"
             }
           }
         },
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "object": {
                 "name": "CanSetParameters"
               }
@@ -223,7 +240,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "object": {
                 "name": "CanRegisterDomain"
               }
@@ -233,7 +250,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "object": {
                 "name": "CanRegisterAssetDefinition"
               }
@@ -243,7 +260,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "object": {
                 "name": "CanRegisterAccount"
               }
@@ -286,24 +303,7 @@
       ]
     }
   ],
-  "consensus_mode": "Npos",
-  "bls_domain": "bls-iroha2:npos-sumeragi:v1",
   "wire_proto_versions": [
     1
-  ],
-  "consensus_fingerprint": "0x653bb383f0d53faa4fd9e9995d75f44dd91928ff3f6efc346fa8bbe8eb139ae8",
-  "crypto": {
-    "sm_openssl_preview": false,
-    "sm_intrinsics": "auto",
-    "default_hash": "blake2b-256",
-    "allowed_signing": [
-      "ed25519",
-      "secp256k1"
-    ],
-    "sm2_distid_default": "1234567812345678",
-    "allowed_curve_ids": [
-      1,
-      4
-    ]
-  }
+  ]
 }

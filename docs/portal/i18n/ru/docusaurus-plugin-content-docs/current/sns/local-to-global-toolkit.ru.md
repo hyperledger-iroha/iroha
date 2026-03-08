@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Опции:
 
 - `--format compressed (`sora`)` для вывода `sora...` вместо IH58.
-- `--no-append-domain` для вывода голых литералов.
+- `domainless output (default)` для вывода голых литералов.
 - `--audit-only`, чтобы пропустить шаг конвертации.
 - `--allow-errors` для продолжения подтверждения ошибочных строк (поведение соответствует CLI).
 
@@ -47,7 +47,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 1. Запустите скрипт в отдельном задании и загрузите выходные данные.
 2. Блокируйте слияния, когда `audit.json` сообщает Локальные селекторы (`domain.kind = local12`).
    со значением по умолчанию `true` (меняйте на `false` только в dev/test при диагностике регрессий) и
-   записи `iroha tools address normalize --fail-on-warning --only-local` в CI, чтобы попытаться регрессии
+   записи `iroha tools address normalize` в CI, чтобы попытаться регрессии
    падали до производства.
 
 См. исходный документ для деталей, контрольные списки доказательств и фрагмент примечания к выпуску, которые можно

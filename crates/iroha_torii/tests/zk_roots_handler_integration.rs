@@ -126,9 +126,10 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
     // Seed shielded roots via ISIs
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "rose#zkd".parse().unwrap();
-    let owner: AccountId = format!("{ACCOUNT_SIGNATORY}@zkd")
-        .parse()
-        .expect("valid account id");
+    let owner = AccountId::new(
+        domain_id.clone(),
+        ACCOUNT_SIGNATORY.parse().expect("public key"),
+    );
     {
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);

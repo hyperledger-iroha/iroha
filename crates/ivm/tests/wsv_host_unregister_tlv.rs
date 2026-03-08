@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, PublicKey};
 use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
+    mock_wsv::{
+        AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost,
+    },
     syscalls,
 };
 use norito::to_bytes;
@@ -31,16 +33,29 @@ fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     make_tlv(PointerType::NoritoBytes as u16, &buf)
 }
 
+fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
+    let buf = to_bytes(account).expect("encode account into Norito");
+    make_tlv(PointerType::AccountId as u16, &buf)
+}
+
+fn test_account(domain: DomainId, public_key: PublicKey) -> ScopedAccountId {
+    ScopedAccountId::new(domain, public_key)
+}
+
 #[test]
 fn unregister_flow_with_dependencies() {
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
+    let alice_domain: DomainId = "domain".parse().unwrap();
+    let bob_domain: DomainId = "wonder".parse().unwrap();
+    let alice_pk: PublicKey =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
             .unwrap();
-    let bob: AccountId =
-        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4@wonder"
+    let bob_pk: PublicKey =
+        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
             .parse()
             .unwrap();
+    let alice = test_account(alice_domain, alice_pk);
+    let bob = test_account(bob_domain, bob_pk);
     let rose: AssetDefinitionId = "rose#wonder".parse().unwrap();
 
     let mut wsv = MockWorldStateView::new();
@@ -52,7 +67,11 @@ fn unregister_flow_with_dependencies() {
     wsv.grant_permission(&alice, PermissionToken::MintAsset(rose.clone()));
     wsv.grant_permission(&alice, PermissionToken::BurnAsset(rose.clone()));
 
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -64,8 +83,8 @@ fn unregister_flow_with_dependencies() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    // Register account bob@wonder
-    let acc = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    // Register the recipient account
+    let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -84,7 +103,7 @@ fn unregister_flow_with_dependencies() {
     vm.run().expect("register asset def");
 
     // Mint 7 units of rose to bob
-    let tlv_bob = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let tlv_bob = make_account_tlv(&bob);
     let tlv_rose = make_tlv(
         PointerType::AssetDefinitionId as u16,
         rose.to_string().as_bytes(),
@@ -125,7 +144,7 @@ fn unregister_flow_with_dependencies() {
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 
     // Burn 7 units from bob to clear balances
-    let tlv_bob = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let tlv_bob = make_account_tlv(&bob);
     let tlv_rose = make_tlv(
         PointerType::AssetDefinitionId as u16,
         rose.to_string().as_bytes(),
@@ -157,7 +176,7 @@ fn unregister_flow_with_dependencies() {
     vm.run().expect("unregister asset def");
 
     // Unregister account bob -> success
-    let acc = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_uacc = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ACCOUNT as u8]);

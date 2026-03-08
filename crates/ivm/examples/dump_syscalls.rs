@@ -37,7 +37,7 @@ fn main() {
     dump(src1);
 
     // Case 2: typed NFT syscalls
-    let src2 = "seiyaku Sample2 { kotoage fn run() { nft_mint_asset(nft_id!(\"n0$wonderland\"), account!(\"ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland\")); nft_transfer_asset(account!(\"ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland\"), nft_id!(\"n0$wonderland\"), account!(\"ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland\")); } }";
+    let src2 = "seiyaku Sample2 { kotoage fn run() { nft_mint_asset(nft_id!(\"n0$wonderland\"), account!(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\")); nft_transfer_asset(account!(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"), nft_id!(\"n0$wonderland\"), account!(\"6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU\")); } }";
     println!("-- case 2 --");
     dump(src2);
 }

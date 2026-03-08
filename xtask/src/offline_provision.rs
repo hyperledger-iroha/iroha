@@ -328,10 +328,8 @@ fn path_name(path: &Path, root: &Path) -> String {
 mod tests {
     use super::*;
 
-    const RECEIVER: &str =
-        "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016@wonderland";
-    const ASSET: &str =
-        "xor#sora#ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E@sora";
+    const RECEIVER: &str = "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ";
+    const ASSET: &str = "norito:4e52543000000001";
     const NONCE_HEX: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 
     fn sample_challenge(issued_at_ms: Option<u64>) -> ChallengeSpec {

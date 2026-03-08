@@ -236,8 +236,7 @@ mod tests {
 
     impl Visit for NoopVisitor {}
 
-    const ALICE_ACCOUNT_ID_STR: &str =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+    const ALICE_ACCOUNT_ID_STR: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
 
     #[test]
     fn visit_find_parameters_dispatches() {
@@ -283,9 +282,12 @@ mod tests {
             proof_hash: [0x11; 32],
         };
         let manifest_hash = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
-        let asset_id: AssetId = format!("rose#wonderland#{ALICE_ACCOUNT_ID_STR}")
-            .parse()
-            .expect("valid asset id");
+        let account_id = AccountId::parse_encoded(ALICE_ACCOUNT_ID_STR)
+            .map(crate::account::ParsedAccountId::into_account_id)
+            .expect("valid account id");
+        let asset_definition: crate::asset::AssetDefinitionId =
+            "rose#wonderland".parse().expect("valid asset definition");
+        let asset_id = AssetId::new(asset_definition, account_id);
 
         let queries = vec![
             SingularQueryBox::FindExecutorDataModel(FindExecutorDataModel),

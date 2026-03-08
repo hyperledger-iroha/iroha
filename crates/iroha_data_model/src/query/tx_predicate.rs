@@ -682,23 +682,31 @@ fn apply_account_filter(
     op: RelationalOp,
     value: &Value,
 ) -> Option<()> {
+    fn parse_account_literal(raw: &str) -> Option<crate::account::AccountId> {
+        crate::account::AccountId::parse_encoded(raw)
+            .ok()
+            .map(crate::account::ParsedAccountId::into_account_id)
+    }
+
     use RelationalOp::*;
     match op {
         Eq => {
-            filters.authority_eq = Some(value.as_str()?.parse().ok()?);
+            filters.authority_eq = Some(parse_account_literal(value.as_str()?)?);
             Some(())
         }
         Ne => {
-            filters.authority_ne = Some(value.as_str()?.parse().ok()?);
+            filters.authority_ne = Some(parse_account_literal(value.as_str()?)?);
             Some(())
         }
         In => {
-            let accounts = collect_parsed_slice(value.as_array()?, |v| v.as_str()?.parse().ok())?;
+            let accounts =
+                collect_parsed_slice(value.as_array()?, |v| parse_account_literal(v.as_str()?))?;
             filters.authority_in.extend(accounts);
             Some(())
         }
         Nin => {
-            let accounts = collect_parsed_slice(value.as_array()?, |v| v.as_str()?.parse().ok())?;
+            let accounts =
+                collect_parsed_slice(value.as_array()?, |v| parse_account_literal(v.as_str()?))?;
             filters.authority_nin.extend(accounts);
             Some(())
         }

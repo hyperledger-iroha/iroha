@@ -7,7 +7,6 @@
 use std::{
     collections::BTreeMap,
     fmt,
-    str::FromStr,
     sync::{Arc, RwLock},
 };
 
@@ -16,7 +15,6 @@ use iroha_crypto::{
     blake2::{Blake2b512, Digest as _},
 };
 use iroha_data_model::{
-    account,
     alias::{
         AliasAttestation, AliasEvent, AliasIndex, AliasRecord, AliasRecordedEvent, AliasTarget,
     },
@@ -301,43 +299,6 @@ impl AliasService {
         self.storage.set_metrics(metrics);
     }
 
-    /// Install the global account alias resolver consulted when parsing account strings.
-    pub fn install_account_alias_resolver(service: &Arc<Self>) {
-        let resolver = Arc::clone(service);
-        account::clear_account_alias_resolver();
-        account::set_account_alias_resolver(Arc::new(move |label, domain| {
-            let alias_name = match Name::from_str(label) {
-                Ok(name) => name,
-                Err(_) => return None,
-            };
-            let record = match resolver.storage.resolve(&alias_name) {
-                Ok(Some(record)) => record,
-                Ok(None) => return None,
-                Err(err) => {
-                    tracing::warn!(
-                        alias = %alias_name.as_ref(),
-                        ?err,
-                        "failed to resolve alias while parsing account identifier"
-                    );
-                    return None;
-                }
-            };
-            if let AliasTarget::Account(account_id) = &record.target {
-                if account_id.domain() != domain {
-                    tracing::warn!(
-                        alias = %alias_name.as_ref(),
-                        expected_domain = %domain,
-                        resolved_domain = %account_id.domain(),
-                        "alias resolved to a different domain"
-                    );
-                }
-                Some(account_id.clone())
-            } else {
-                None
-            }
-        }));
-    }
-
     /// Resolve alias to target, returning attestation hashes for auditing.
     ///
     /// # Errors
@@ -363,15 +324,17 @@ mod tests {
         sync::Arc,
     };
 
-    use iroha_data_model::{account::AccountId, alias::AliasIndex, name::Name};
+    use iroha_data_model::{account::AccountId, alias::AliasIndex, domain::DomainId, name::Name};
 
     use super::*;
 
     fn owner() -> AccountId {
         const SIGNATORY: &str =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
-        AccountId::from_str(&format!("{SIGNATORY}@wonderland"))
-            .expect("account identifier should parse")
+        AccountId::new(
+            DomainId::from_str("wonderland").expect("domain"),
+            SIGNATORY.parse().expect("public key"),
+        )
     }
 
     #[test]

@@ -14,9 +14,9 @@ import {
 
 const chainId = "batching-sample-chain";
 const authority =
-  "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland";
+  "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
 const recipient =
-  "ed0120C0F6FA775885F8FFB5F203C10EAA90E1B49FB4CD39C0F95CCA1E5A02B5E45F61@wonderland";
+  "6cmzPVPX8kKbxWFadZoh6wnVFcy1Po6PtHt5KJ8i9j6ovCJWDM7rWN7";
 const assetDefinitionId = "rose#wonderland";
 const assetId = `${assetDefinitionId}#${authority}`;
 const privateKey = Buffer.alloc(32, 0x11);

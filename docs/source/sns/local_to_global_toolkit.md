@@ -37,10 +37,9 @@ Pair it with:
 `scripts/address_local_toolkit.sh` wraps the `iroha` CLI and emits two outputs:
 
 1. `audit.json` — structured report from `iroha tools address audit` with entry-by-entry status,
-   Local-domain warnings, and parse errors. Use this to prioritise remediation.
+   domain-kind classification, and parse errors. Use this to prioritise remediation.
 2. `normalized.txt` — converted address list that replaces every Local selector
-   with the chosen format (IH58 preferred or compressed (`sora`, second-best)) while optionally preserving the
-   original domain suffix.
+   with the chosen format (IH58 preferred or compressed (`sora`, second-best)).
 
 ### 2.1 Invocation
 
@@ -55,8 +54,6 @@ scripts/address_local_toolkit.sh \
 Flags of note:
 
 - `--format compressed` converts to the `sora…` Sora alphabet instead of IH58.
-- `--no-append-domain` emits bare IH58 (preferred)/sora (second-best) values (useful for systems
-  that store the domain separately).
 - `--audit-only` trims the run to the JSON report (no conversion).
 - `--allow-errors` keeps scanning when malformed rows are present; the behaviour
   matches the CLI flags exposed by `iroha tools address audit/normalize`.
@@ -74,30 +71,23 @@ already powers SDK heuristics. Each entry contains:
   "status": "parsed",
   "summary": {
     "detected_format": {"kind": "canonical_hex"},
-    "domain": {
-      "kind": "local12",
-      "warning": "local-domain selector detected…"
-    },
-    "ih58": {"value": "ih1qzg…", "prefix": 753},
-    "compressed": "sora…",
-    "input_domain": "default"
+    "domain": {"kind": "local12"},
+    "ih58": {"value": "ih1qzg…", "network_prefix": 753},
+    "compressed": "sora…"
   }
 }
 ```
 
 - `domain.kind = local12` is the guardrail we track on dashboards and alerts.
-- `domain.warning` matches the UX/CLI warning strings cited in the display
-  guidelines so operators see the same messaging across tooling.
 
 ## 3. CI integration
 
 1. Check the script out as part of your pipeline (point it at your export).
 2. Archive both `audit.json` and `normalized.txt` as build artefacts; reference
    them from release tickets or readiness reports.
-3. Run `iroha tools address normalize --fail-on-warning --only-local` during PR
-   validation once dashboards show zero legitimate Local usage. This blocks
-   regressions before enforcement gates activate and keeps Local selectors out
-   of new releases.
+3. Gate PR validation on canonical outputs: run normalize/audit (or
+   `ci/check_address_normalize.sh`) and fail when audit reports parse errors or
+   residual `domain.kind = local12` rows.
 
 ## 4. Manual triage workflow
 

@@ -35,10 +35,10 @@ fn main() -> Result<()> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
 
     // Account
-    let account_id = AccountId::from_str(
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
-    )
-    .unwrap();
+    let public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+        .parse()
+        .unwrap();
+    let account_id = AccountId::new("wonderland".parse().unwrap(), public_key);
     let mut account_metadata = Metadata::default();
     account_metadata.insert("hat".parse().unwrap(), "white");
     let account = NewAccount::new(account_id.clone()).with_metadata(account_metadata);

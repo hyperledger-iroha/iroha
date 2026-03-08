@@ -133,5 +133,5 @@ ih58... now holds:
 ## ہیشز اور برابری کی تصدیق
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` استعمال کر کے SDK کی بھیجی گئی ٹرانزیکشنز دیکھیں۔
-- `iroha --config defaults/client.toml asset list all --table` یا `asset list filter '{"id":"coffee#wonderland##<account>"}'` سے بیلنس کا موازنہ کریں۔
+- `iroha --config defaults/client.toml asset list all --table` یا `asset list filter '{"id":"norito:4e52543000000002"}'` سے بیلنس کا موازنہ کریں۔
 - CLI walkthrough سے وہی فلو دہرائیں تاکہ تصدیق ہو سکے کہ دونوں سطحیں ایک جیسے Norito payloads اور ٹرانزیکشن اسٹیٹس بناتی ہیں۔

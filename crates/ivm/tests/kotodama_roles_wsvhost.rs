@@ -6,17 +6,23 @@ use std::collections::HashMap;
 use ivm::{
     AssetDefinitionId, IVM, PermissionToken,
     kotodama::compiler::Compiler as KotodamaCompiler,
-    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
+    mock_wsv::{MockWorldStateView, ScopedAccountId, WsvHost},
 };
 
-fn make_vm_with_wsv() -> (IVM, AccountId) {
-    let alice: AccountId =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+fn make_vm_with_wsv() -> (IVM, ScopedAccountId) {
+    let alice: ScopedAccountId = ScopedAccountId::new(
+        "wonderland".parse().expect("domain id"),
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
-            .unwrap();
+            .expect("public key"),
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(1_000_000);
     vm.set_host(host);
     (vm, alice)
@@ -55,7 +61,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
     // 2) Grant role to alice and check derived permission
     let src_grant = r#"
         fn main() {
-          grant_role(account_id("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"), name("minter"));
+          grant_role(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), name("minter"));
         }
     "#;
     let prog = compiler
@@ -79,7 +85,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
     // 3) Revoke role and delete; verify permissions removed and role absent
     let src_cleanup = r#"
         fn main() {
-          revoke_role(account_id("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"), name("minter"));
+          revoke_role(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), name("minter"));
           delete_role(name("minter"));
         }
     "#;

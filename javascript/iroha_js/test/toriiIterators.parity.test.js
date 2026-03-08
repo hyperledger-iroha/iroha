@@ -5,6 +5,7 @@ import { ToriiClient, ToriiHttpError } from "../src/toriiClient.js";
 import { ValidationError, ValidationErrorCode } from "../src/index.js";
 
 const BASE_URL = "http://localhost:8080";
+const FIXTURE_ACCOUNT_ID = "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W";
 
 function createResponse({ status, jsonData = {}, headers, textBody }) {
   const headerMap = new Map();
@@ -71,18 +72,18 @@ test("listNfts forwards pagination/sort/filter and validates filter payloads", a
 
 test("iterateAccountAssets paginates with addressFormat and maxItems", async () => {
   let callCount = 0;
+  const expectedPath = `/v1/accounts/${encodeURIComponent(FIXTURE_ACCOUNT_ID)}/assets`;
+  const firstAssetId = "norito:deadbeef";
+  const secondAssetId = "norito:cafebabe";
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    assert.equal(
-      parsed.pathname,
-      "/v1/accounts/34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx/assets",
-    );
+    assert.equal(parsed.pathname, expectedPath);
     assert.equal(parsed.searchParams.get("address_format"), "compressed");
     const offset = Number(parsed.searchParams.get("offset") ?? 0);
     const items =
       offset === 0
-        ? [{ asset_id: "rose#wonderland#34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", quantity: "5" }]
-        : [{ asset_id: "daisy#wonderland#34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", quantity: "1" }];
+        ? [{ asset_id: firstAssetId, quantity: "5" }]
+        : [{ asset_id: secondAssetId, quantity: "1" }];
     callCount += 1;
     return createResponse({
       status: 200,
@@ -92,17 +93,14 @@ test("iterateAccountAssets paginates with addressFormat and maxItems", async () 
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const seen = [];
-  for await (const holding of client.iterateAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
+  for await (const holding of client.iterateAccountAssets(FIXTURE_ACCOUNT_ID, {
     pageSize: 1,
     maxItems: 2,
     addressFormat: "compressed",
   })) {
     seen.push(holding.asset_id);
   }
-  assert.deepEqual(seen, [
-    "rose#wonderland#34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
-    "daisy#wonderland#34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
-  ]);
+  assert.deepEqual(seen, [firstAssetId, secondAssetId]);
   assert.equal(callCount, 2);
 });
 
@@ -118,7 +116,7 @@ test("queryAccountAssets surfaces permission errors with context", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.queryAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", { filter: { Eq: ["quantity", 1] } }),
+    () => client.queryAccountAssets(FIXTURE_ACCOUNT_ID, { filter: { Eq: ["quantity", 1] } }),
     (error) => {
       assert(error instanceof ToriiHttpError);
       assert.equal(error.status, 403);

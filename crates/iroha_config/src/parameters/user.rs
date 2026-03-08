@@ -28,6 +28,7 @@ use std::{
     num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
+    sync::{LazyLock, Mutex, MutexGuard},
     time::Duration,
 };
 
@@ -122,6 +123,15 @@ fn normalize_jdg_signature_schemes(raw: Vec<String>) -> BTreeSet<JdgSignatureSch
     }
     schemes
 }
+
+fn parse_account_id_literal(raw: &str, context: &str) -> AccountId {
+    AccountId::parse_encoded(raw).map_or_else(
+        |err| panic!("{context}: {err}"),
+        iroha_data_model::account::ParsedAccountId::into_account_id,
+    )
+}
+
+static ACCOUNT_ADDRESS_PARSE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 enum KyberKeyConfig {
     Absent,
@@ -789,6 +799,54 @@ pub enum ParseError {
     /// Concurrency configuration contained invalid values.
     #[error("Invalid concurrency configuration")]
     InvalidConcurrencyConfig,
+    /// Common address-related configuration contained invalid values.
+    #[error("Invalid common configuration")]
+    InvalidCommonConfig,
+}
+
+struct AccountAddressParseScope {
+    original_default_domain_label: std::sync::Arc<str>,
+    original_chain_discriminant: u16,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl AccountAddressParseScope {
+    fn enter(
+        default_domain_label: &str,
+        chain_discriminant: u16,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Self {
+        let lock = ACCOUNT_ADDRESS_PARSE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let original_default_domain_label =
+            iroha_data_model::account::address::default_domain_name();
+        let original_chain_discriminant = iroha_data_model::account::address::chain_discriminant();
+        if let Err(err) = iroha_data_model::account::address::set_default_domain_name(
+            default_domain_label.to_owned(),
+        ) {
+            emitter.emit(Report::new(ParseError::InvalidCommonConfig).attach(format!(
+                "invalid default_account_domain_label `{default_domain_label}`: {err}",
+            )));
+        }
+        iroha_data_model::account::address::set_chain_discriminant(chain_discriminant);
+        Self {
+            original_default_domain_label,
+            original_chain_discriminant,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for AccountAddressParseScope {
+    fn drop(&mut self) {
+        let _ = iroha_data_model::account::address::set_default_domain_name(
+            self.original_default_domain_label.to_string(),
+        );
+        iroha_data_model::account::address::set_chain_discriminant(
+            self.original_chain_discriminant,
+        );
+    }
 }
 
 impl Root {
@@ -895,6 +953,11 @@ impl Root {
     #[allow(clippy::too_many_lines)]
     pub fn parse(self) -> Result<actual::Root, ParseError> {
         let mut emitter = Emitter::new();
+        let _account_address_scope = AccountAddressParseScope::enter(
+            self.default_account_domain_label.value(),
+            *self.chain_discriminant.value(),
+            &mut emitter,
+        );
 
         let (private_key, private_key_origin) = self.private_key.into_tuple();
         let (public_key, public_key_origin) = self.public_key.into_tuple();
@@ -1556,9 +1619,7 @@ impl SorafsTelemetryPolicy {
             .into_vec()
             .into_iter()
             .map(|account| {
-                account
-                    .parse()
-                    .expect("invalid SoraFS telemetry submitter account id")
+                parse_account_id_literal(&account, "invalid SoraFS telemetry submitter account id")
             })
             .collect();
         actual::SorafsTelemetryPolicy {
@@ -1582,9 +1643,10 @@ impl SorafsTelemetryPolicy {
                         .into_vec()
                         .into_iter()
                         .map(|account| {
-                            account
-                                .parse()
-                                .expect("invalid SoraFS telemetry submitter account id")
+                            parse_account_id_literal(
+                                &account,
+                                "invalid SoraFS telemetry submitter account id",
+                            )
                         })
                         .collect();
                     (provider_id, parsed_submitters)
@@ -2145,14 +2207,14 @@ impl Governance {
             "parliament_quorum_bps must be within 1..=10_000 (basis points)"
         );
         let viral_incentives = actual::ViralIncentives {
-            incentive_pool_account: self
-                .viral_incentive_pool_account
-                .parse()
-                .expect("invalid viral incentive pool account id"),
-            escrow_account: self
-                .viral_escrow_account
-                .parse()
-                .expect("invalid viral escrow account id"),
+            incentive_pool_account: parse_account_id_literal(
+                &self.viral_incentive_pool_account,
+                "invalid viral incentive pool account id",
+            ),
+            escrow_account: parse_account_id_literal(
+                &self.viral_escrow_account,
+                "invalid viral escrow account id",
+            ),
             reward_asset_definition_id: self
                 .viral_reward_asset_id
                 .parse()
@@ -2200,19 +2262,19 @@ impl Governance {
                 .parse()
                 .expect("invalid citizenship asset id"),
             citizenship_bond_amount: self.citizenship_bond_amount,
-            citizenship_escrow_account: self
-                .citizenship_escrow_account
-                .parse()
-                .expect("invalid citizenship escrow account id"),
+            citizenship_escrow_account: parse_account_id_literal(
+                &self.citizenship_escrow_account,
+                "invalid citizenship escrow account id",
+            ),
             min_bond_amount: self.min_bond_amount,
-            bond_escrow_account: self
-                .bond_escrow_account
-                .parse()
-                .expect("invalid governance bond escrow account id"),
-            slash_receiver_account: self
-                .slash_receiver_account
-                .parse()
-                .expect("invalid governance slash receiver account id"),
+            bond_escrow_account: parse_account_id_literal(
+                &self.bond_escrow_account,
+                "invalid governance bond escrow account id",
+            ),
+            slash_receiver_account: parse_account_id_literal(
+                &self.slash_receiver_account,
+                "invalid governance slash receiver account id",
+            ),
             slash_double_vote_bps: self.slash_double_vote_bps,
             slash_invalid_proof_bps: self.slash_invalid_proof_bps,
             slash_ineligible_proof_bps: self.slash_ineligible_proof_bps,
@@ -2239,9 +2301,10 @@ impl Governance {
                         panic!("SoraFS provider id {provider} must be 32 bytes")
                     });
                     let provider_id = ProviderId::new(array);
-                    let owner_id = owner.parse().unwrap_or_else(|err| {
-                        panic!("invalid SoraFS provider owner {owner}: {err}");
-                    });
+                    let owner_id = parse_account_id_literal(
+                        &owner,
+                        &format!("invalid SoraFS provider owner {owner}"),
+                    );
                     if bindings.insert(provider_id, owner_id).is_some() {
                         panic!("duplicate SoraFS provider binding for {provider}");
                     }
@@ -9603,8 +9666,8 @@ impl Offline {
                     continue;
                 }
             };
-            let account_id = match account.parse() {
-                Ok(id) => id,
+            let account_id = match AccountId::parse_encoded(&account) {
+                Ok(parsed) => parsed.into_account_id(),
                 Err(err) => {
                     emitter.emit(
                         Report::new(ParseError::InvalidSettlementConfig)
@@ -14474,12 +14537,15 @@ impl ToriiOnboarding {
         if !self.enabled {
             return None;
         }
-        let authority = self.authority.parse::<AccountId>().unwrap_or_else(|err| {
-            panic!(
-                "invalid torii.onboarding.authority `{}`: {err}",
-                self.authority
-            )
-        });
+        let authority = AccountId::parse_encoded(&self.authority).map_or_else(
+            |err| {
+                panic!(
+                    "invalid torii.onboarding.authority `{}`: {err}",
+                    self.authority
+                )
+            },
+            iroha_data_model::account::ParsedAccountId::into_account_id,
+        );
         let allowed_domain = self.allowed_domain.map(|domain| {
             domain.parse::<DomainId>().unwrap_or_else(|err| {
                 panic!("invalid torii.onboarding.allowed_domain `{domain}`: {err}")
@@ -14518,9 +14584,12 @@ impl ToriiOfflineIssuer {
             .allowed_controllers
             .into_iter()
             .map(|controller| {
-                controller.parse::<AccountId>().unwrap_or_else(|err| {
-                    panic!("invalid torii.offline_issuer.allowed_controllers entry `{controller}`: {err}")
-                })
+                AccountId::parse_encoded(&controller).map_or_else(
+                    |err| {
+                        panic!("invalid torii.offline_issuer.allowed_controllers entry `{controller}`: {err}")
+                    },
+                    iroha_data_model::account::ParsedAccountId::into_account_id,
+                )
             })
             .collect();
         Some(actual::ToriiOfflineIssuer {
@@ -16617,11 +16686,11 @@ mod offline_cfg_tests {
             "enabled": true,
             "dedupe_ttl_secs": 120,
             "signer": {
-                "account_id": "iso@test",
+                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                 "private_key": "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
             },
             "account_aliases": [
-                {"iban": "DE137017", "account_id": "alice@test"}
+                {"iban": "DE137017", "account_id": "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"}
             ],
             "currency_assets": [
                 {"currency": "USD", "asset_definition": "usd#fin"}
@@ -16639,7 +16708,10 @@ mod offline_cfg_tests {
         assert!(parsed.enabled);
         assert_eq!(parsed.dedupe_ttl_secs, 120);
         let signer = parsed.signer.expect("signer present");
-        assert_eq!(signer.account_id, "iso@test");
+        assert_eq!(
+            signer.account_id,
+            "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        );
         assert_eq!(parsed.account_aliases[0].iban, "DE137017");
         assert_eq!(parsed.currency_assets[0].currency, "USD");
         assert_eq!(parsed.reference_data.refresh_interval_secs, 3600);
@@ -16654,13 +16726,9 @@ mod offline_cfg_tests {
             voting_asset_id: "xor#sora".to_string(),
             citizenship_asset_id: "xor#sora".to_string(),
             citizenship_bond_amount: 99,
-            citizenship_escrow_account:
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .to_string(),
+            citizenship_escrow_account: defaults::governance::citizenship_escrow_account(),
             min_bond_amount: 42,
-            bond_escrow_account:
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .to_string(),
+            bond_escrow_account: defaults::governance::bond_escrow_account(),
             sorafs_pin_policy: SorafsPinPolicyConstraints::default(),
             sorafs_penalty: SorafsPenaltyPolicy::default(),
             conviction_step_blocks: 42,
@@ -16697,17 +16765,19 @@ mod offline_cfg_tests {
         assert_eq!(parsed.citizenship_bond_amount, 99);
         assert_eq!(
             parsed.citizenship_escrow_account,
-            iroha_data_model::account::AccountId::from_str(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+            iroha_data_model::account::AccountId::parse_encoded(
+                &defaults::governance::citizenship_escrow_account()
             )
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .unwrap()
         );
         assert_eq!(parsed.min_bond_amount, 42);
         assert_eq!(
             parsed.bond_escrow_account,
-            iroha_data_model::account::AccountId::from_str(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+            iroha_data_model::account::AccountId::parse_encoded(
+                &defaults::governance::bond_escrow_account()
             )
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .unwrap()
         );
         assert_eq!(parsed.approval_threshold_q_num, 2);

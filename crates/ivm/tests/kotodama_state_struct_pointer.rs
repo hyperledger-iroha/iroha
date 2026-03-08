@@ -16,8 +16,14 @@ fn encode_pointer_tlv(ty: PointerType, payload: Vec<u8>) -> Vec<u8> {
     out
 }
 
+fn parse_account_id_literal(id: &str) -> AccountId {
+    AccountId::parse_encoded(id)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("account literal must be canonical IH58 or sora compressed")
+}
+
 fn encode_account_id_pointer(id: &str) -> Vec<u8> {
-    let parsed: AccountId = id.parse().expect("valid AccountId literal");
+    let parsed = parse_account_id_literal(id);
     let raw = encode_pointer_tlv(
         PointerType::AccountId,
         to_bytes(&parsed).expect("encode id"),
@@ -28,7 +34,7 @@ fn encode_account_id_pointer(id: &str) -> Vec<u8> {
 fn encode_account_id_pointer_without_inner_hash(id: &str) -> Vec<u8> {
     use iroha_crypto::Hash as IrohaHash;
 
-    let parsed: AccountId = id.parse().expect("valid AccountId literal");
+    let parsed = parse_account_id_literal(id);
     let payload = to_bytes(&parsed).expect("encode id");
     // Build an inner TLV without the trailing hash (invalid layout).
     let mut inner = Vec::with_capacity(2 + 1 + 4 + payload.len());
@@ -49,8 +55,7 @@ fn encode_account_id_pointer_without_inner_hash(id: &str) -> Vec<u8> {
 
 #[test]
 fn pointer_from_norito_syscall_returns_pointer() {
-    const OWNER_ID: &str =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+    const OWNER_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
     let pointer_bytes = encode_account_id_pointer(OWNER_ID);
 
     let mut vm = IVM::new(u64::MAX);
@@ -78,8 +83,7 @@ fn pointer_from_norito_syscall_returns_pointer() {
 
 #[test]
 fn pointer_from_norito_rejects_inner_tlv_without_hash() {
-    const OWNER_ID: &str =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+    const OWNER_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
     let pointer_bytes = encode_account_id_pointer_without_inner_hash(OWNER_ID);
 
     let mut vm = IVM::new(u64::MAX);
@@ -98,8 +102,7 @@ fn pointer_from_norito_rejects_inner_tlv_without_hash() {
 
 #[test]
 fn pointer_from_norito_rejects_wrong_expected_type() {
-    const OWNER_ID: &str =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+    const OWNER_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
     let pointer_bytes = encode_account_id_pointer(OWNER_ID);
 
     let mut vm = IVM::new(u64::MAX);

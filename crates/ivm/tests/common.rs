@@ -184,47 +184,10 @@ fn encode_account_id_payload(payload: &[u8]) -> Vec<u8> {
     }
 
     let raw = core::str::from_utf8(payload).expect("payload must be utf-8");
-    if let Ok(account) = raw.parse::<AccountId>() {
-        return norito::to_bytes(&account).expect("encode payload");
-    }
-
-    // AccountId::Display now emits canonical IH58 without `@domain`. Many tests still pass
-    // `account.to_string()` into TLV builders; recover by trying known test domains.
-    if !raw.contains('@') {
-        const TEST_DOMAIN_FALLBACKS: &[&str] = &[
-            "domain",
-            "wonder",
-            "wonderland",
-            "stream",
-            "admin",
-            "treasury",
-            "sora",
-            "soranet",
-            "default",
-            "iroha",
-            "alpha",
-            "omega",
-            "governance",
-            "validators",
-            "explorer",
-            "kitsune",
-            "da",
-            "council",
-        ];
-
-        for domain in TEST_DOMAIN_FALLBACKS {
-            let candidate = format!("{raw}@{domain}");
-            if let Ok(account) = candidate.parse::<AccountId>() {
-                return norito::to_bytes(&account).expect("encode payload");
-            }
-        }
-    }
-
-    let err = match raw.parse::<AccountId>() {
-        Ok(_) => "failed domain fallback for IH58 account literal".to_owned(),
-        Err(err) => err.to_string(),
-    };
-    panic!("AccountId literal `{raw}` failed to parse: {err}");
+    let account = AccountId::parse_encoded(raw)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .unwrap_or_else(|err| panic!("AccountId literal `{raw}` failed to parse: {err}"));
+    norito::to_bytes(&account).expect("encode payload")
 }
 
 fn encode_json_payload(payload: &[u8]) -> Vec<u8> {

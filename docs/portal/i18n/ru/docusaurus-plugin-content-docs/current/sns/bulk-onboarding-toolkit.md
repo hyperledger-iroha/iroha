@@ -34,7 +34,7 @@ payloads автоматически, записывая структуриров
 |---------|-------------|----------|
 | `label` | Да | Запрошенная метка (допускается mixed case; инструмент нормализует по Norm v1 и UTS-46). |
 | `suffix_id` | Да | Числовой идентификатор суффикса (десятичный или `0x` hex). |
-| `owner` | Да | Строка AccountId (IH58 literal; optional @domain hint) владельца регистрации. |
+| `owner` | Да | Строка AccountId (domainless encoded AccountId literal (IH58 preferred, compressed accepted; no @domain suffix)) владельца регистрации. |
 | `term_years` | Да | Целое число `1..=255`. |
 | `payment_asset_id` | Да | Актив settlement (например `xor#sora`). |
 | `payment_gross` / `payment_net` | Да | Беззнаковые целые, представляющие единицы актива. |

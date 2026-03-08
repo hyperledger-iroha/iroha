@@ -7,14 +7,15 @@ use std::{
     str::FromStr,
 };
 
+use iroha_crypto::PublicKey;
 use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, KotodamaCompiler, VMError,
     host::IVMHost,
     kotodama::compiler::CompilerOptions,
     mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, NftId,
-        PermissionToken, WsvHost,
+        AssetDefinitionId, DomainId, Mintable, MockWorldStateView, NftId, PermissionToken,
+        ScopedAccountId, WsvHost,
     },
     syscalls,
 };
@@ -127,6 +128,21 @@ where
     check(host_ref);
 }
 
+fn account(domain: &str, public_key: &str) -> ScopedAccountId {
+    let domain: DomainId = domain.parse().expect("domain id");
+    let public_key: PublicKey = public_key.parse().expect("public key");
+    ScopedAccountId::new(domain, public_key)
+}
+
+const ACCOUNT_A_LITERAL: &str = "6cmzPVPX8F5t35VB7wQQ68PAW8Wb1iAEr4PZHPLTQ3p69JAGG9oifzi";
+const ACCOUNT_B_LITERAL: &str = "6cmzPVPX8dTmJWnCc8X5MpcZLb7UjrvR5Y1VdRmfj9pbb93hFbJfpLb";
+
+fn parse_account_literal(raw: &str) -> ScopedAccountId {
+    ScopedAccountId::parse_encoded(raw)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("valid encoded account literal")
+}
+
 #[derive(Default)]
 struct LoggingCoreHost {
     inner: ivm::CoreHost,
@@ -153,7 +169,7 @@ impl IVMHost for LoggingCoreHost {
     }
 }
 
-fn setup_base_world(domain: &DomainId, caller: &AccountId) -> MockWorldStateView {
+fn setup_base_world(domain: &DomainId, caller: &ScopedAccountId) -> MockWorldStateView {
     let mut wsv = MockWorldStateView::new();
     wsv.grant_permission(caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(caller, PermissionToken::RegisterAccount);
@@ -179,19 +195,16 @@ fn run_hajimari_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
 fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let program = compile_snippet(compiler, path);
-    let caller: AccountId =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-            .parse()
-            .expect("canonical caller");
+    let caller = account(
+        "default",
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    );
     let domain = caller.domain().clone();
     let mut wsv = setup_base_world(&domain, &caller);
 
     let asset_id =
-        AssetDefinitionId::from_str("rose#wonderland").expect("asset definition identifier");
-    let recipient: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-            .parse()
-            .expect("recipient account");
+        AssetDefinitionId::from_str("rose#default").expect("asset definition identifier");
+    let recipient = parse_account_literal(ACCOUNT_A_LITERAL);
 
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::MintAsset(asset_id.clone()));
@@ -200,7 +213,11 @@ fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
         "register recipient"
     );
 
-    let host = WsvHost::new(wsv, caller.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        HashMap::new(),
+    );
     let asset_id_clone = asset_id.clone();
     run_program_with_host("register-and-mint", &program, host, move |host| {
         let balance = host.wsv.balance(recipient.clone(), asset_id_clone.clone());
@@ -213,19 +230,13 @@ fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
 fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let program = compile_snippet(compiler, path);
-    let caller: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-            .parse()
-            .expect("transfer caller");
+    let caller = parse_account_literal(ACCOUNT_A_LITERAL);
     let domain = caller.domain().clone();
     let mut wsv = setup_base_world(&domain, &caller);
 
-    let recipient: AccountId =
-        "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
-            .parse()
-            .expect("recipient account");
+    let recipient = parse_account_literal(ACCOUNT_B_LITERAL);
     let asset_id =
-        AssetDefinitionId::from_str("rose#wonderland").expect("asset definition identifier");
+        AssetDefinitionId::from_str("rose#default").expect("asset definition identifier");
 
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::MintAsset(asset_id.clone()));
@@ -247,7 +258,11 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
         "seed caller balance"
     );
 
-    let host = WsvHost::new(wsv, caller.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        HashMap::new(),
+    );
     let asset_id_clone = asset_id.clone();
     run_program_with_host("transfer-asset", &program, host, move |host| {
         let caller_balance = host.wsv.balance(caller.clone(), asset_id_clone.clone());
@@ -269,23 +284,17 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
 fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let program = compile_snippet(compiler, path);
-    let caller: AccountId =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-            .parse()
-            .expect("contract account id");
+    let caller = account(
+        "default",
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    );
     let domain = caller.domain().clone();
     let mut wsv = setup_base_world(&domain, &caller);
 
-    let alice: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-            .parse()
-            .expect("alice account id");
-    let bob: AccountId =
-        "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
-            .parse()
-            .expect("bob account id");
+    let alice = parse_account_literal(ACCOUNT_A_LITERAL);
+    let bob = parse_account_literal(ACCOUNT_B_LITERAL);
     let asset_id =
-        AssetDefinitionId::from_str("rose#wonderland").expect("asset definition identifier");
+        AssetDefinitionId::from_str("rose#default").expect("asset definition identifier");
 
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::MintAsset(asset_id.clone()));
@@ -313,7 +322,11 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
     run_program_with_host(
         "call-transfer-asset",
         &program,
-        WsvHost::new(wsv, caller.clone(), HashMap::new(), HashMap::new()),
+        WsvHost::new_with_subject(
+            wsv,
+            ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+            HashMap::new(),
+        ),
         move |host| {
             let alice_balance = host.wsv.balance(alice.clone(), asset_id_clone.clone());
             let bob_balance = host.wsv.balance(bob.clone(), asset_id_clone.clone());
@@ -335,28 +348,21 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
 fn run_nft_flow_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let program = compile_snippet(compiler, path);
-    let caller: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-            .parse()
-            .expect("nft owner");
+    let caller = parse_account_literal(ACCOUNT_A_LITERAL);
     let domain = caller.domain().clone();
     let mut wsv = setup_base_world(&domain, &caller);
 
-    let recipient: AccountId =
-        "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
-            .parse()
-            .expect("nft recipient");
+    let recipient = parse_account_literal(ACCOUNT_B_LITERAL);
     assert!(
         wsv.register_account(&caller, recipient.clone()),
         "register recipient"
     );
 
-    let nft_id = NftId::from_str("n0$wonderland").expect("nft id");
+    let nft_id = NftId::from_str("n0$default").expect("nft id");
     let mut vm = IVM::new(u64::MAX);
-    vm.set_host(WsvHost::new(
+    vm.set_host(WsvHost::new_with_subject(
         wsv,
-        caller.clone(),
-        HashMap::new(),
+        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
         HashMap::new(),
     ));
     vm.load_program(&program)

@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Опции:
 
 - `--format compressed (`sora`)` для продажи `sora...` в приложении IH58.
-- `--no-append-domain` для эмитирования литералов без владения.
+- `domainless output (default)` для эмитирования литералов без владения.
 - `--audit-only`, чтобы пропустить этап преобразования.
 - `--allow-errors`, чтобы выполнить сканирование при повреждении неправильных файлов (совпадает с совместимостью CLI).
 
@@ -48,7 +48,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 2. Bloquea объединяет локальные селекторы отчетов `audit.json` (`domain.kind = local12`).
    в вашей доблести из-за дефекта `true` (одиночное переопределение `false` в кластерах dev/test al
    диагностические регрессии) и агрегаты
-   `iroha tools address normalize --fail-on-warning --only-local` — это CI для того, чтобы
+   `iroha tools address normalize` — это CI для того, чтобы
    регресс упал до начала производства.
 
 Проконсультируйтесь с документом, содержащим дополнительные сведения, контрольными списками доказательств и фрагментами

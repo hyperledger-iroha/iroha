@@ -33,7 +33,7 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
     .await?;
     network.ensure_blocks(2).await?;
 
-    // Build filter: authority == alice@wonderland AND timestamp_ms >= 0
+    // Build filter: authority == ALICE_ID (canonical encoded literal) AND timestamp_ms >= 0
     let eq_filter = norito::json::object([
         (
             "op",

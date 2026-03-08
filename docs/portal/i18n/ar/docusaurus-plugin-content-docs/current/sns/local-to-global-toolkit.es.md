@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 الخيارات:
 
 - `--format compressed (`sora`)` للخروج `sora...` في مكان IH58.
-- `--no-append-domain` للإصدار الحرفي بدون ملكية.
+- `domainless output (default)` للإصدار الحرفي بدون ملكية.
 - `--audit-only` لحذف خطوة التحويل.
 - `--allow-errors` لمتابعة المسح عند ظهور ملفات مشوهة (تتزامن مع سلوك CLI).يصف النص مسارات القطع الأثرية في نهاية عملية الإخراج. Adjunta ambos archives أ
 تذكرة إدارة التغييرات جنبًا إلى جنب مع لقطة شاشة Grafana التي تختبرها
@@ -46,7 +46,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 2. يدمج الحظر عند تحديد `audit.json` للمحددات المحلية (`domain.kind = local12`).
    في شجاعتك المعيبة `true` (تجاوز منفردًا `false` في مجموعات التطوير/اختبار al
    الانحدارات التشخيصية) والموافقة عليها
-   `iroha tools address normalize --fail-on-warning --only-local` a CI لهذه الأغراض
+   `iroha tools address normalize` a CI لهذه الأغراض
    تراجع الانحدار قبل أن يصبح إنتاجًا.
 
 قم بمراجعة المستند بشكل فعال للحصول على المزيد من التفاصيل وقوائم الأدلة والمقتطفات

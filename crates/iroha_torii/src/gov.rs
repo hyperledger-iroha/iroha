@@ -48,6 +48,11 @@ const CONTEXT_GOV_BALLOT_PLAIN_AUTHORITY: &str = "/v1/gov/ballots/plain#authorit
 const CONTEXT_GOV_BALLOT_PLAIN_OWNER: &str = "/v1/gov/ballots/plain#owner";
 const CONTEXT_GOV_FINALIZE_AUTHORITY: &str = "/v1/gov/finalize#authority";
 const CONTEXT_GOV_ENACT_AUTHORITY: &str = "/v1/gov/enact#authority";
+const CONTEXT_GOV_COUNCIL_PERSIST_CANDIDATE_ACCOUNT: &str =
+    "/v1/gov/council/persist#candidate.account_id";
+const CONTEXT_GOV_COUNCIL_PERSIST_AUTHORITY: &str = "/v1/gov/council/persist#authority";
+const CONTEXT_GOV_COUNCIL_REPLACE_MISSING: &str = "/v1/gov/council/replace#missing";
+const CONTEXT_GOV_COUNCIL_REPLACE_AUTHORITY: &str = "/v1/gov/council/replace#authority";
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, crate::Error> {
     let s = s.trim_start_matches("0x");
@@ -752,22 +757,60 @@ struct ParsedCandidate {
 }
 
 #[cfg(feature = "gov_vrf")]
-fn parse_candidates(dtos: &[VrfCandidateDto]) -> Vec<ParsedCandidate> {
+fn parse_candidate_account_id(
+    account_id: &str,
+    index: usize,
+    telemetry: Option<(&MaybeTelemetry, &'static str)>,
+) -> Result<iroha_data_model::account::AccountId, crate::Error> {
+    if let Some((telemetry, context)) = telemetry {
+        return parse_account_literal(account_id, telemetry, context)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|err| {
+                crate::routing::conversion_error(format!(
+                    "invalid candidates[{index}].account_id: {}",
+                    err.reason()
+                ))
+            });
+    }
+
+    iroha_data_model::account::AccountId::parse_encoded(account_id)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| {
+            crate::routing::conversion_error(format!(
+                "invalid candidates[{index}].account_id: {}",
+                err.reason()
+            ))
+        })
+}
+
+#[cfg(feature = "gov_vrf")]
+fn parse_candidates(
+    dtos: &[VrfCandidateDto],
+    telemetry: Option<(&MaybeTelemetry, &'static str)>,
+) -> Result<Vec<ParsedCandidate>, crate::Error> {
     let mut parsed = Vec::with_capacity(dtos.len());
-    for dto in dtos {
-        let Ok(account_id) = dto.account_id.parse() else {
-            continue;
-        };
-        let Ok(variant) = CandidateVariant::from_str(dto.variant.as_str()) else {
-            continue;
-        };
-        let Ok(pk) = base64::engine::general_purpose::STANDARD.decode(dto.pk_b64.as_bytes()) else {
-            continue;
-        };
-        let Ok(proof) = base64::engine::general_purpose::STANDARD.decode(dto.proof_b64.as_bytes())
-        else {
-            continue;
-        };
+    for (index, dto) in dtos.iter().enumerate() {
+        let account_id = parse_candidate_account_id(&dto.account_id, index, telemetry)?;
+        let variant = CandidateVariant::from_str(dto.variant.as_str()).map_err(|_| {
+            crate::routing::conversion_error(format!(
+                "invalid candidates[{index}].variant `{}`: expected `Normal` or `Small`",
+                dto.variant
+            ))
+        })?;
+        let pk = base64::engine::general_purpose::STANDARD
+            .decode(dto.pk_b64.as_bytes())
+            .map_err(|err| {
+                crate::routing::conversion_error(format!(
+                    "invalid candidates[{index}].pk_b64: {err}"
+                ))
+            })?;
+        let proof = base64::engine::general_purpose::STANDARD
+            .decode(dto.proof_b64.as_bytes())
+            .map_err(|err| {
+                crate::routing::conversion_error(format!(
+                    "invalid candidates[{index}].proof_b64: {err}"
+                ))
+            })?;
         parsed.push(ParsedCandidate {
             account_id,
             variant,
@@ -775,11 +818,12 @@ fn parse_candidates(dtos: &[VrfCandidateDto]) -> Vec<ParsedCandidate> {
             proof,
         });
     }
-    parsed
+    Ok(parsed)
 }
 
 #[cfg(feature = "gov_vrf")]
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+/// Request body for deriving a council roster from VRF candidates.
 pub struct CouncilDeriveVrfRequest {
     /// Optional committee size override; defaults to governance config.
     #[norito(default)]
@@ -790,17 +834,25 @@ pub struct CouncilDeriveVrfRequest {
     /// Optional epoch override; defaults to height/TERM_BLOCKS
     #[norito(default)]
     pub epoch: Option<u64>,
+    /// Candidate list used for VRF ranking.
     pub candidates: Vec<VrfCandidateDto>,
 }
 
 #[cfg(feature = "gov_vrf")]
 #[derive(Debug, JsonSerialize)]
+/// Response emitted after deriving a council roster.
 pub struct CouncilDeriveVrfResponse {
+    /// Derived epoch index.
     pub epoch: u64,
+    /// Selected committee members.
     pub members: Vec<CouncilMemberDto>,
+    /// Selected alternates.
     pub alternates: Vec<CouncilMemberDto>,
+    /// Number of candidates accepted by input parsing.
     pub total_candidates: usize,
+    /// Number of cryptographically verified VRF proofs.
     pub verified: usize,
+    /// Derivation method applied to the resulting roster.
     pub derived_by: CouncilDerivationKind,
 }
 
@@ -818,7 +870,8 @@ pub struct CouncilDeriveVrfResponse;
 /// POST /v1/gov/council/derive-vrf — derive the council roster from VRF candidates.
 ///
 /// # Errors
-/// This handler never returns an error; invalid candidates are skipped from the roster.
+/// Returns `crate::Error::Query` when candidate account identifiers, variants, or base64 payloads
+/// are invalid.
 pub async fn handle_gov_council_derive_vrf(
     state: Arc<iroha_core::state::State>,
     NoritoJson(body): NoritoJson<CouncilDeriveVrfRequest>,
@@ -842,7 +895,7 @@ pub async fn handle_gov_council_derive_vrf(
             .max(committee_size)
     });
 
-    let parsed = parse_candidates(&body.candidates);
+    let parsed = parse_candidates(&body.candidates, None)?;
     let candidate_refs = parsed.iter().map(|candidate| CandidateRef {
         account_id: &candidate.account_id,
         variant: candidate.variant,
@@ -1617,19 +1670,13 @@ pub async fn handle_gov_protected_set(
     );
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-    // Authority is not used by SetParameter currently
-    let dummy_auth: iroha_data_model::account::AccountId =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-            .parse()
-            .unwrap_or_else(|_| {
-                // Fallback: construct a synthetic account id with zero key
-                use iroha_crypto::KeyPair;
-                let kp = KeyPair::random();
-                iroha_data_model::account::AccountId::of(
-                    "wonderland".parse().unwrap(),
-                    kp.public_key().clone(),
-                )
-            });
+    // Authority is not used by SetParameter currently. Keep it deterministic.
+    let dummy_auth = {
+        use iroha_crypto::{Algorithm, KeyPair};
+        let kp = KeyPair::from_seed(vec![0; 32], Algorithm::Ed25519);
+        let domain = "default".parse().expect("default domain must parse");
+        iroha_data_model::account::AccountId::of(domain, kp.public_key().clone())
+    };
     isi.execute(&dummy_auth, &mut stx).map_err(|e| {
         crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -2333,8 +2380,8 @@ pub struct CouncilReplaceResponse {
 /// Persist a VRF-derived council for the current epoch.
 ///
 /// # Errors
-/// Returns `crate::Error::Query` when requester credentials are invalid or missing, or when routing
-/// the signed transaction fails.
+/// Returns `crate::Error::Query` when candidate payloads or requester credentials are invalid or
+/// missing, or when routing the signed transaction fails.
 #[cfg(feature = "gov_vrf")]
 pub async fn handle_gov_council_persist(
     chain_id: Arc<iroha_data_model::ChainId>,
@@ -2362,7 +2409,10 @@ pub async fn handle_gov_council_persist(
             .max(committee_size)
     });
 
-    let parsed = parse_candidates(&body.candidates);
+    let parsed = parse_candidates(
+        &body.candidates,
+        Some((&telemetry, CONTEXT_GOV_COUNCIL_PERSIST_CANDIDATE_ACCOUNT)),
+    )?;
     let candidate_refs = parsed.iter().map(|candidate| CandidateRef {
         account_id: &candidate.account_id,
         variant: candidate.variant,
@@ -2400,13 +2450,12 @@ pub async fn handle_gov_council_persist(
     {
         // Preferred path: submit signed transaction
         use iroha_data_model::prelude as dm;
-        let authority: iroha_data_model::account::AccountId = authority.parse().map_err(|_| {
-            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid authority".into(),
-                ),
-            ))
-        })?;
+        let authority: iroha_data_model::account::AccountId =
+            parse_account_literal(authority, &telemetry, CONTEXT_GOV_COUNCIL_PERSIST_AUTHORITY)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .map_err(|err| {
+                    crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
+                })?;
         let pk: iroha_crypto::PrivateKey = private_key.parse().map_err(|_| {
             crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(
@@ -2493,26 +2542,31 @@ pub async fn handle_gov_council_replace(
     telemetry: crate::routing::MaybeTelemetry,
     NoritoJson(body): NoritoJson<CouncilReplaceRequest>,
 ) -> Result<JsonBody<CouncilReplaceResponse>, crate::Error> {
-    let world = state.world_view();
-    let target_epoch = if let Some(epoch) = body.epoch {
-        epoch
-    } else {
-        world.council().iter().map(|(ep, _)| *ep).max().unwrap_or(0)
+    let (_target_epoch, mut term) = {
+        let world = state.world_view();
+        let target_epoch = if let Some(epoch) = body.epoch {
+            epoch
+        } else {
+            world.council().iter().map(|(ep, _)| *ep).max().unwrap_or(0)
+        };
+        let term = world.council().get(&target_epoch).cloned().ok_or_else(|| {
+            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "no persisted council for epoch".into(),
+                ),
+            ))
+        })?;
+        (target_epoch, term)
     };
-    let mut term = world.council().get(&target_epoch).cloned().ok_or_else(|| {
-        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "no persisted council for epoch".into(),
-            ),
-        ))
-    })?;
 
-    let missing: iroha_data_model::account::AccountId = body.missing.parse().map_err(|_| {
-        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "invalid missing account id".into(),
-            ),
-        ))
+    let missing: iroha_data_model::account::AccountId = parse_account_literal(
+        &body.missing,
+        &telemetry,
+        CONTEXT_GOV_COUNCIL_REPLACE_MISSING,
+    )
+    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+    .map_err(|err| {
+        crate::routing::conversion_error(format!("invalid missing account id: {}", err.reason()))
     })?;
 
     if !term.replace_member(&missing) {
@@ -2538,13 +2592,12 @@ pub async fn handle_gov_council_replace(
         (body.authority.as_deref(), body.private_key.as_deref())
     {
         use iroha_data_model::prelude as dm;
-        let authority: iroha_data_model::account::AccountId = authority.parse().map_err(|_| {
-            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid authority".into(),
-                ),
-            ))
-        })?;
+        let authority: iroha_data_model::account::AccountId =
+            parse_account_literal(authority, &telemetry, CONTEXT_GOV_COUNCIL_REPLACE_AUTHORITY)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .map_err(|err| {
+                    crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
+                })?;
         let pk: iroha_crypto::PrivateKey = private_key.parse().map_err(|_| {
             crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(
@@ -2576,7 +2629,7 @@ pub async fn handle_gov_council_replace(
                 0,
             ));
             let mut stx = block.transaction();
-            stx.world.council.insert(target_epoch, term.clone());
+            stx.world.council.insert(_target_epoch, term.clone());
             stx.apply();
         }
         #[cfg(not(feature = "council_direct_wsv"))]
@@ -2719,10 +2772,8 @@ mod tests {
     use super::*;
     use crate::routing::MaybeTelemetry;
 
-    const ACCOUNT_AUTHORITY: &str =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland";
-    const ACCOUNT_OWNER_ALT: &str =
-        "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland";
+    const ACCOUNT_AUTHORITY: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const ACCOUNT_OWNER_ALT: &str = "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV";
 
     #[test]
     fn hint_present_handles_nulls() {
@@ -2737,21 +2788,65 @@ mod tests {
         assert!(hint_present(&map, "owner"));
     }
 
+    #[cfg(feature = "gov_vrf")]
+    fn conversion_message(err: crate::Error) -> String {
+        match err {
+            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => message,
+            other => panic!("expected conversion query error, got {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "gov_vrf")]
+    #[test]
+    fn parse_candidates_rejects_invalid_account_id_literal() {
+        let candidates = vec![VrfCandidateDto {
+            account_id: "not-an-ih58@invalid-domain".to_string(),
+            variant: "Normal".to_string(),
+            pk_b64: "AQ==".to_string(),
+            proof_b64: "AQ==".to_string(),
+        }];
+        let err = parse_candidates(&candidates, None).expect_err("candidate parse must fail");
+        let message = conversion_message(err);
+        assert!(
+            message.contains("candidates[0].account_id"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[cfg(feature = "gov_vrf")]
+    #[test]
+    fn parse_candidates_rejects_invalid_proof_base64() {
+        let candidates = vec![VrfCandidateDto {
+            account_id: ACCOUNT_AUTHORITY.to_string(),
+            variant: "Normal".to_string(),
+            pk_b64: "AQ==".to_string(),
+            proof_b64: "*".to_string(),
+        }];
+        let err = parse_candidates(&candidates, None).expect_err("candidate parse must fail");
+        let message = conversion_message(err);
+        assert!(
+            message.contains("candidates[0].proof_b64"),
+            "unexpected message: {message}"
+        );
+    }
+
     fn canonical_literal(raw: &str) -> String {
-        crate::ensure_test_domain_selector_resolver();
-        iroha_data_model::account::AccountId::parse(raw)
+        iroha_data_model::account::AccountId::parse_encoded(raw)
             .expect("literal parses")
             .canonical()
             .to_string()
     }
 
     fn noncanonical_literal(raw: &str) -> String {
-        crate::ensure_test_domain_selector_resolver();
-        let account_id = AccountId::parse(raw)
+        let account_id = AccountId::parse_encoded(raw)
             .expect("literal parses")
             .into_account_id();
-        let hex = account_id.to_canonical_hex().expect("canonical hex");
-        format!("{hex}@{}", account_id.domain())
+        account_id
+            .to_account_address()
+            .and_then(|address| address.to_compressed_sora())
+            .expect("compressed literal")
     }
 
     fn mk_basic_context() -> (Arc<State>, Arc<Queue>, Arc<ChainId>) {
@@ -2782,9 +2877,7 @@ mod tests {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let authority = AccountId::of(domain_id.clone(), authority_keypair.public_key().clone());
         let escrow: AccountId =
-            iroha_config::parameters::defaults::governance::bond_escrow_account()
-                .parse()
-                .expect("escrow account id");
+            iroha_config::parameters::defaults::governance::bond_escrow_account_id();
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
         let escrow_account = Account::new(escrow.clone()).build(&escrow);
@@ -2817,10 +2910,12 @@ mod tests {
             );
             let enact = Permission::new("CanEnactGovernance".to_string(), norito::json!({}));
             let mut world_block = world.block();
-            #[cfg(feature = "telemetry")]
-            let mut world_tx = world_block.trasaction(None, LaneConfig::default(), 0);
-            #[cfg(not(feature = "telemetry"))]
-            let mut world_tx = world_block.trasaction(LaneConfig::default(), 0);
+            let mut world_tx = world_block.trasaction(
+                #[cfg(feature = "telemetry")]
+                None,
+                LaneConfig::default(),
+                0,
+            );
             let _ = world_tx.add_account_permission(&authority, propose);
             let _ = world_tx.add_account_permission(&authority, ballot);
             let _ = world_tx.add_account_permission(&authority, enact);
@@ -3180,9 +3275,7 @@ mod tests {
         // minimal non-empty proof bytes
         let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
         let dto = ZkBallotDto {
-            authority:
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .to_string(),
+            authority: ACCOUNT_AUTHORITY.to_string(),
             chain_id: chain_id_str,
             election_id: "e1".to_string(),
             proof_b64,
@@ -3780,9 +3873,7 @@ mod tests {
         // Build DTO
         let owner = canonical_literal(ACCOUNT_AUTHORITY);
         let dto = super::ZkBallotV1Dto {
-            authority:
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .to_string(),
+            authority: ACCOUNT_AUTHORITY.to_string(),
             chain_id: chain_id_str,
             election_id: "ref-1".to_string(),
             backend: "halo2/ipa".to_string(),
@@ -4033,9 +4124,7 @@ mod tests {
             direction: Some("Nay".to_string()),
         };
         let dto = super::ZkBallotV1BallotProofDto {
-            authority:
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .to_string(),
+            authority: ACCOUNT_AUTHORITY.to_string(),
             chain_id: chain_id_str,
             election_id: "ref-1".to_string(),
             ballot,

@@ -20,7 +20,7 @@ so every run records a timestamped entry in `<output>/rotation_drill.log`.
 ```jsonc
 {
   "operator": {
-    "account": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+    "account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
     "private_key": "ed25519:..."        // optional, --operator-key takes precedence
   },
   "manifests": [
@@ -32,7 +32,7 @@ so every run records a timestamped entry in `<output>/rotation_drill.log`.
       "valid_from_ms": 1730314876000,
       "valid_until_ms": 1745900000000,
       "rotation_hint_ms": 1736000000000,  // optional refresh hint
-      "operator_account": "ops@wonderland", // optional override per manifest
+      "operator_account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn", // optional override per manifest
       "operator_key": "ed25519:...",        // optional override per manifest
       "metadata": { "jurisdiction": "EU" }, // optional metadata inline or via metadata_file
       "roots": [
@@ -50,7 +50,7 @@ so every run records a timestamped entry in `<output>/rotation_drill.log`.
 }
 ```
 
-All account identifiers use the canonical multihash format (`ed0120…@domain`). Public keys
+All account identifiers use encoded account IDs (IH58 preferred, `sora…` compressed accepted). Public keys
 accept either the multihash literal (`ed0120...`) or the `algo:hex` helper used
 elsewhere in the repo.
 
@@ -66,7 +66,7 @@ optional operator overrides/metadata) and references either an inline
 [
   {
     "verdict_id_hex": "0000000000000000000000000000000000000000000000000000000000000001",
-    "issuer": "ed0120...@wonderland",
+    "issuer": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
     "revoked_at_ms": 1730314876000,
     "reason": "device_compromised",
     "note": "Retail device reported stolen",

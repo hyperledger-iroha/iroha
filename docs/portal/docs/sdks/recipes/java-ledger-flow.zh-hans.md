@@ -184,5 +184,5 @@ public final class LedgerFlow {
 ## 5. 验证奇偶性
 
 - 通过 `iroha --config defaults/client.toml transaction get --hash <hash>` 检查交易哈希。
-- 使用 CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`) 获取余额。
+- 使用 CLI (`asset list filter '{"id":"norito:4e52543000000002"}'`) 获取余额。
 - 将结果与 Rust/Python/JavaScript/Swift 配方进行比较，以确保每个 SDK 为演示流程生成相同的 Norito 有效负载。

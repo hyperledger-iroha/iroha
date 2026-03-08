@@ -13,11 +13,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake2::{Blake2bVar, digest::VariableOutput};
 use eyre::{Context, Result, bail, eyre};
 use hex::encode as hex_encode;
-use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     ChainId,
-    account::{AccountId, address},
-    domain::DomainId,
+    account::AccountId,
     isi::{Instruction, InstructionBox, decode_instruction_from_pair, frame_instruction_payload},
     metadata::Metadata,
     name::Name,
@@ -625,7 +624,7 @@ impl RawPayloadFixture {
             signed_bytes,
             summary: PayloadSummary {
                 chain: self.payload.chain.clone(),
-                authority: self.payload.authority.clone(),
+                authority: payload_value.authority.to_string(),
                 creation_time_ms: self.payload.creation_time_ms,
                 ttl_ms: self.payload.ttl_ms,
                 nonce: self.payload.nonce,
@@ -852,52 +851,15 @@ fn normalize_authority_hint(authority: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    if let Ok(canonical) = AccountId::canonicalize(trimmed) {
-        return canonical;
-    }
-    if let Some((address_part, _)) = trimmed.rsplit_once('@') {
-        if let Ok(canonical) = AccountId::canonicalize(address_part) {
-            return canonical;
-        }
-        return address_part.to_string();
-    }
-    trimmed.to_string()
+    AccountId::parse_encoded(trimmed)
+        .map(|parsed| parsed.into_account_id().to_string())
+        .unwrap_or_else(|_| trimmed.to_string())
 }
 
 fn parse_account_id(value: &str) -> Result<AccountId> {
-    let (signatory_hint, domain_part) = value
-        .split_once('@')
-        .ok_or_else(|| eyre!("account id '{value}' must contain '@'"))?;
-    let domain: DomainId = domain_part
-        .parse()
-        .with_context(|| format!("invalid domain id '{domain_part}'"))?;
-
-    if let Ok((address_payload, _)) = address::AccountAddress::parse_any(signatory_hint, None) {
-        return address_payload
-            .to_account_id(&domain)
-            .map_err(|err| eyre!(err.code_str()));
-    }
-
-    if let Ok(signatory) = signatory_hint.parse::<PublicKey>() {
-        return Ok(AccountId::of(domain, signatory));
-    }
-
-    let seed = derive_seed(signatory_hint, domain_part);
-    let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
-    Ok(AccountId::of(domain, keypair.public_key().clone()))
-}
-
-fn derive_seed(left: &str, right: &str) -> Vec<u8> {
-    let mut seed = [0u8; 32];
-    for (index, byte) in left
-        .as_bytes()
-        .iter()
-        .chain(right.as_bytes().iter())
-        .enumerate()
-    {
-        seed[index % seed.len()] ^= *byte;
-    }
-    seed.to_vec()
+    AccountId::parse_encoded(value.trim())
+        .map(|parsed| parsed.into_account_id())
+        .with_context(|| format!("account id '{value}' must be IH58 or compressed encoded"))
 }
 
 fn optional_u64_value(value: Option<u64>) -> Value {
@@ -974,6 +936,12 @@ fn build_payload_fixtures_json(
         );
 
         let mut payload = raw.payload_json.clone();
+        if let Some(payload_obj) = payload.as_object_mut() {
+            payload_obj.insert(
+                "authority".to_owned(),
+                Value::String(fixture.summary.authority.clone()),
+            );
+        }
         let wire_payloads = wire_payloads_from_encoded(&fixture.payload_bytes)?;
         if !wire_payloads.is_empty() {
             apply_wire_payloads_to_payload_json(&mut payload, &wire_payloads)?;
@@ -1411,7 +1379,7 @@ mod tests {
     fn fixture(name: &str) -> FixtureEntry {
         FixtureEntry {
             name: name.to_string(),
-            authority: "alice@wonderland".into(),
+            authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
             chain: "00000001".into(),
             creation_time_ms: 1_735_000_000_000,
             encoded_file: format!("{name}.norito"),

@@ -7,8 +7,8 @@ fn print_one(name: &str, filter: &DataEventFilter) {
     let json = norito::json::to_json_pretty(filter).expect("json");
     let bytes = norito::to_bytes(filter).expect("norito");
     let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-    println!("{} JSON={}", name, json);
-    println!("{} B64=\"{}\"", name, b64);
+    println!("{name} JSON={json}");
+    println!("{name} B64=\"{b64}\"");
 }
 
 fn main() {

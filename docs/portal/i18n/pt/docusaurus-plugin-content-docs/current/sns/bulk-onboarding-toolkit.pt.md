@@ -36,7 +36,7 @@ O analisador exige a seguinte linha de cabecalho (a ordem e flexivel):
 |--------|-------------|-----------|
 | `label` | Sim | Etiqueta solicitada (aceita maiúsculas e minúsculas; a ferramenta normaliza conforme Norma v1 e UTS-46). |
 | `suffix_id` | Sim | Identificador numérico de sufixo (decimal ou `0x` hex). |
-| `owner` | Sim | String AccountId (literal IH58; dica opcional @domain) do proprietário do registro. |
+| `owner` | Sim | String AccountId (literal AccountId codificado (IH58 preferido, compressed aceito; sem sufixo @domain)) do proprietário do registro. |
 | `term_years` | Sim | Inteiro `1..=255`. |
 | `payment_asset_id` | Sim | Ativo de liquidação (por exemplo `xor#sora`). |
 | `payment_gross` / `payment_net` | Sim | Inteiros sem sinal representando unidades nativas do ativo. |

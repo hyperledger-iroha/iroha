@@ -3459,7 +3459,9 @@ mod status_tests {
             last_amount: Some(42),
             last_asset_id: Some("xor#sora".to_owned()),
             last_payer: Some(sumeragi::status::NexusFeePayer::Sponsor),
-            last_payer_id: Some("sponsor@test".to_owned()),
+            last_payer_id: Some(
+                "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".to_owned(),
+            ),
             last_error: Some("denied".to_owned()),
         };
         let lane_id = LaneId::new(7);

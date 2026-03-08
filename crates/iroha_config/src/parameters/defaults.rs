@@ -92,7 +92,7 @@ pub mod crypto {
 pub mod common {
     /// Default account domain label applied when configuration omits an override.
     pub fn default_account_domain_label() -> String {
-        iroha_data_model::account::address::DEFAULT_DOMAIN_NAME_FALLBACK.to_owned()
+        iroha_data_model::account::address::DEFAULT_DOMAIN_NAME.to_owned()
     }
 
     /// Default chain discriminant / IH58 network prefix (Sora Nexus global).
@@ -2223,8 +2223,9 @@ pub mod pipeline {
     pub const SIGNATURE_BATCH_MAX_PQC: usize = 8;
     /// BLS-specific batch size (0 disables batching).
     pub const SIGNATURE_BATCH_MAX_BLS: usize = 16;
-    /// Default gas-collection technical account identifier.
-    pub const GAS_TECH_ACCOUNT_ID: &str = "gas@ivm";
+    /// Default gas-collection technical account identifier (encoded-only literal).
+    pub const GAS_TECH_ACCOUNT_ID: &str =
+        "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs";
     /// Admission-time upper bound for `max_cycles` embedded in IVM bytecode headers.
     pub const IVM_MAX_CYCLES_UPPER_BOUND: u64 = 1_000_000;
     /// Maximum decoded Kotodama instructions accepted during admission (0 = unlimited).
@@ -2801,13 +2802,9 @@ pub mod governance {
     pub const VOTING_ASSET_ID: &str = "xor#sora";
     /// Default asset definition used for citizenship bonding (mirrors voting asset).
     pub const CITIZENSHIP_ASSET_ID: &str = VOTING_ASSET_ID;
-    /// Default escrow account that custodies governance bonds.
-    pub const BOND_ESCROW_ACCOUNT: &str =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
-    /// Default escrow account that holds citizenship bonds (mirrors governance escrow).
-    pub const CITIZENSHIP_ESCROW_ACCOUNT: &str = BOND_ESCROW_ACCOUNT;
-    /// Default account that receives slashed governance bonds (mirrors escrow by default).
-    pub const SLASH_RECEIVER_ACCOUNT: &str = BOND_ESCROW_ACCOUNT;
+    /// Default public key used for governance escrow account derivation.
+    pub const BOND_ESCROW_PUBLIC_KEY: &str =
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
     /// Default citizenship bond requirement (smallest units).
     pub const CITIZENSHIP_BOND_AMOUNT: u128 = 150;
 
@@ -2816,9 +2813,42 @@ pub mod governance {
         VOTING_ASSET_ID.to_string()
     }
 
+    fn account_id_from_public_key(public_key: &str) -> AccountId {
+        let domain: DomainId = super::common::default_account_domain_label()
+            .parse()
+            .expect("default governance account domain");
+        let public_key = public_key.parse().expect("default governance public key");
+        AccountId::new(domain, public_key)
+    }
+
+    fn account_literal_from_account_id(account_id: &AccountId) -> String {
+        // Use compressed form to keep the default stable across chain-discriminant overrides.
+        account_id
+            .to_account_address()
+            .and_then(|address| address.to_compressed_sora())
+            .expect("default governance account literal")
+    }
+
+    fn account_literal_from_public_key(public_key: &str) -> String {
+        account_literal_from_account_id(&account_id_from_public_key(public_key))
+    }
+
+    fn default_governance_account_id() -> AccountId {
+        account_id_from_public_key(BOND_ESCROW_PUBLIC_KEY)
+    }
+
+    fn default_governance_account_literal() -> String {
+        account_literal_from_account_id(&default_governance_account_id())
+    }
+
     /// Default escrow account that custodies governance bonds.
+    pub fn bond_escrow_account_id() -> AccountId {
+        default_governance_account_id()
+    }
+
+    /// Default escrow account literal that custodies governance bonds.
     pub fn bond_escrow_account() -> String {
-        BOND_ESCROW_ACCOUNT.to_string()
+        default_governance_account_literal()
     }
 
     /// Default asset definition used for citizenship bonding.
@@ -2827,13 +2857,23 @@ pub mod governance {
     }
 
     /// Default escrow account that holds citizenship bonds.
+    pub fn citizenship_escrow_account_id() -> AccountId {
+        default_governance_account_id()
+    }
+
+    /// Default escrow account literal that holds citizenship bonds.
     pub fn citizenship_escrow_account() -> String {
-        CITIZENSHIP_ESCROW_ACCOUNT.to_string()
+        default_governance_account_literal()
     }
 
     /// Default receiver for slashed governance bonds.
+    pub fn slash_receiver_account_id() -> AccountId {
+        default_governance_account_id()
+    }
+
+    /// Default literal receiver for slashed governance bonds.
     pub fn slash_receiver_account() -> String {
-        SLASH_RECEIVER_ACCOUNT.to_string()
+        default_governance_account_literal()
     }
 
     /// Default citizenship bond requirement (smallest units).
@@ -2927,10 +2967,6 @@ pub mod governance {
     pub const PIPELINE_RULES_SLA_BLOCKS: u64 = 20;
     /// Default SLA (blocks) for agenda council scheduling.
     pub const PIPELINE_AGENDA_SLA_BLOCKS: u64 = 40;
-    /// Default incentive pool account for viral rewards.
-    pub const VIRAL_INCENTIVE_POOL_ACCOUNT: &str = SLASH_RECEIVER_ACCOUNT;
-    /// Default escrow account for pending social sends (mirrors pool).
-    pub const VIRAL_ESCROW_ACCOUNT: &str = SLASH_RECEIVER_ACCOUNT;
     /// Default reward asset definition (mirrors governance voting asset).
     pub const VIRAL_REWARD_ASSET_ID: &str = VOTING_ASSET_ID;
     /// Default per-binding reward amount ("1" XOR).
@@ -2946,12 +2982,12 @@ pub mod governance {
 
     /// Default incentive pool account identifier.
     pub fn viral_incentive_pool_account() -> String {
-        VIRAL_INCENTIVE_POOL_ACCOUNT.to_string()
+        slash_receiver_account()
     }
 
     /// Default escrow account identifier.
     pub fn viral_escrow_account() -> String {
-        VIRAL_ESCROW_ACCOUNT.to_string()
+        slash_receiver_account()
     }
 
     /// Default viral reward asset definition identifier.
@@ -3065,6 +3101,10 @@ pub mod governance {
 
     /// Default authentication and validation policy for SoraFS telemetry.
     pub mod sorafs_telemetry {
+        /// Default telemetry submitter public key (development profile).
+        pub const DEFAULT_SUBMITTER_PUBLIC_KEY: &str =
+            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C";
+
         /// Require telemetry submissions to originate from an authorised submitter list.
         pub const REQUIRE_SUBMITTER: bool = true;
         /// Require telemetry windows to carry a nonce for replay protection.
@@ -3078,8 +3118,8 @@ pub mod governance {
 
         /// Default authorised submitter accounts (development only).
         pub fn submitters() -> Vec<String> {
-            vec![String::from(
-                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@sora",
+            vec![super::account_literal_from_public_key(
+                DEFAULT_SUBMITTER_PUBLIC_KEY,
             )]
         }
     }

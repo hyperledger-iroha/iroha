@@ -42,7 +42,7 @@ test("fromCanonicalBytes rejects controller payloads with mismatched key lengths
   });
   const canonical = Buffer.from(address.canonicalBytes());
   const tampered = Buffer.from(canonical.slice(0, canonical.length - 1));
-  tampered[4] = 31;
+  tampered[3] = 31;
 
   assert.throws(
     () => AccountAddress.fromCanonicalBytes(tampered),
@@ -68,9 +68,10 @@ test("fromCanonicalBytes rejects non-canonical ed25519 encodings", () => {
     publicKey: VALID_KEY,
   });
   const canonical = Buffer.from(address.canonicalBytes());
-  const keyLength = canonical[4];
-  const keyOffset = canonical.length - keyLength;
+  const keyLength = canonical[3];
+  const keyOffset = 4;
   const tampered = Buffer.from(canonical);
+  assert.equal(keyLength, NON_CANONICAL_IDENTITY.length);
   tampered.set(NON_CANONICAL_IDENTITY, keyOffset);
 
   assert.throws(

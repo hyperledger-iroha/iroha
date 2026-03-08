@@ -242,9 +242,9 @@ impl RawFixture {
             });
         }
 
-        let payload_base64 = self
-            .payload_base64
-            .ok_or_else(|| anyhow::anyhow!("fixture '{}' missing payload and payload_base64", self.name))?;
+        let payload_base64 = self.payload_base64.ok_or_else(|| {
+            anyhow::anyhow!("fixture '{}' missing payload and payload_base64", self.name)
+        })?;
         let encoded = BASE64
             .decode(payload_base64.as_bytes())
             .context("failed to decode payload_base64")?;
@@ -400,10 +400,7 @@ fn parse_fixture(value: &Value) -> Result<RawFixture> {
         .get("signed_base64")
         .and_then(|v| v.as_str())
         .map(str::to_owned);
-    let chain_hint = obj
-        .get("chain")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
+    let chain_hint = obj.get("chain").and_then(|v| v.as_str()).map(str::to_owned);
     let authority_hint = obj
         .get("authority")
         .and_then(|v| v.as_str())
@@ -1117,59 +1114,21 @@ fn parse_numeric(value: &str) -> Result<Numeric> {
 }
 
 fn parse_account_id(value: &str) -> Result<AccountId> {
-    let (signatory_hint, domain_part) = value
-        .split_once('@')
-        .ok_or_else(|| anyhow::anyhow!("account id '{value}' must contain '@'"))?;
-    let domain: DomainId = domain_part
-        .parse()
-        .with_context(|| format!("invalid domain id '{domain_part}'"))?;
-    let seed = derive_seed(signatory_hint, domain_part);
-    let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
-    Ok(AccountId::of(domain, keypair.public_key().clone()))
+    AccountId::parse_encoded(value.trim())
+        .map(|parsed| parsed.into_account_id())
+        .with_context(|| format!("invalid encoded account id '{value}'"))
 }
 
 fn parse_asset_id(value: &str) -> Result<AssetId> {
-    if let Ok(id) = value.parse::<AssetId>() {
-        return Ok(id);
-    }
-
-    let (definition_part, owner_part) = value
-        .rsplit_once('#')
-        .ok_or_else(|| anyhow::anyhow!("asset id '{value}' must contain '#' separators"))?;
-    let account = parse_account_id(owner_part)
-        .with_context(|| format!("invalid account '{owner_part}' in asset id '{value}'"))?;
-    let definition_str = if let Some(prefix) = definition_part.strip_suffix('#') {
-        if prefix.is_empty() {
-            bail!("asset id '{value}' missing definition name");
-        }
-        format!("{prefix}#{}", account.domain())
-    } else {
-        definition_part.to_string()
-    };
-    let definition: AssetDefinitionId = definition_str.parse().with_context(|| {
-        format!("invalid definition portion '{definition_str}' in asset id '{value}'")
-    })?;
-
-    Ok(AssetId::new(definition, account))
+    value
+        .parse::<AssetId>()
+        .with_context(|| format!("invalid encoded asset id '{value}'"))
 }
 
 fn parse_nft_id(value: &str) -> Result<NftId> {
     value
         .parse::<NftId>()
         .with_context(|| format!("invalid NFT id '{value}'"))
-}
-
-fn derive_seed(left: &str, right: &str) -> Vec<u8> {
-    let mut seed = [0u8; 32];
-    for (index, byte) in left
-        .as_bytes()
-        .iter()
-        .chain(right.as_bytes().iter())
-        .enumerate()
-    {
-        seed[index % seed.len()] ^= *byte;
-    }
-    seed.to_vec()
 }
 
 fn build_permission(name: &str) -> Result<Permission> {
@@ -1984,22 +1943,22 @@ mod tests {
     }
 
     #[test]
-    fn parse_asset_id_supports_alias_owner() {
-        let id = parse_asset_id("rose#wonderland#alice@wonderland").expect("parse alias asset id");
-        assert_eq!(format!("{}", id.definition), "rose#wonderland");
-        assert_eq!(format!("{}", id.account.domain()), "wonderland");
+    fn parse_asset_id_accepts_encoded_literal() {
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let kp = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
+        let account = AccountId::new(domain.clone(), kp.public_key().clone());
+        let definition: AssetDefinitionId = "rose#wonderland".parse().expect("definition");
+        let literal = AssetId::new(definition.clone(), account.clone()).to_string();
+        let parsed = parse_asset_id(&literal).expect("parse encoded asset id");
+        assert_eq!(parsed.account, account);
+        assert_eq!(parsed.definition, definition);
     }
 
     #[test]
-    fn parse_asset_id_accepts_canonical_string() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
-        let kp = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
-        let account = AccountId::of(domain.clone(), kp.public_key().clone());
-        let definition: AssetDefinitionId = "rose#wonderland".parse().expect("definition");
-        let canonical = format!("{definition}#{account}");
-        let parsed = parse_asset_id(&canonical).expect("canonical asset id");
-        assert_eq!(parsed.account, account);
-        assert_eq!(parsed.definition, definition);
+    fn parse_account_id_accepts_encoded_literal() {
+        let authority = sample_authority_literal();
+        let parsed = parse_account_id(&authority).expect("parse encoded account id");
+        assert_eq!(parsed.to_string(), authority);
     }
 
     fn sample_fixture(encoded: Option<String>) -> RawFixture {
@@ -2007,7 +1966,7 @@ mod tests {
             name: "sample".to_string(),
             payload: Some(RawPayload {
                 chain: "00000002".to_string(),
-                authority: "alice@wonderland".to_string(),
+                authority: sample_authority_literal(),
                 creation_time_ms: 1_735_000_000_000,
                 executable: RawExecutable::Ivm(vec![1, 2, 3, 4]),
                 ttl_ms: Some(1_000),
@@ -2018,6 +1977,12 @@ mod tests {
             signed_base64: None,
             encoded,
         }
+    }
+
+    fn sample_authority_literal() -> String {
+        let kp = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        AccountId::new(domain, kp.public_key().clone()).to_string()
     }
 }
 fn build_repo_initiate_instruction(raw: &RawInstruction) -> Result<InstructionBox> {

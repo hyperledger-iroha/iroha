@@ -137,38 +137,18 @@ public struct AccountAddress {
 
     public static let defaultDomainName = "default"
 
-    public static func fromAccount(domain: String, publicKey: Data, algorithm: String = "ed25519") throws -> AccountAddress {
+    public static func fromAccount(publicKey: Data, algorithm: String = "ed25519") throws -> AccountAddress {
         let header = try AddressHeader.new(version: 0, classId: .singleKey, normVersion: 1)
-        let selector = try DomainSelector.from(domain: domain)
         let controller = try ControllerPayload.singleKey(publicKey: publicKey, algorithm: algorithm)
-        return AccountAddress(header: header, domain: selector, controller: controller)
+        return AccountAddress(header: header, domain: .default, controller: controller)
     }
 
     public static func fromCanonicalBytes(_ bytes: Data) throws -> AccountAddress {
         guard !bytes.isEmpty else { throw AccountAddressError.invalidLength }
         let header = try AddressHeader.decode(bytes[0])
-        var cursor = 1
-        let (domain, domainCursor) = try DomainSelector.decode(bytes: bytes, cursor: cursor)
-        cursor = domainCursor
-        let (controller, controllerCursor) = try ControllerPayload.decode(bytes: bytes, cursor: cursor)
-        cursor = controllerCursor
-        if cursor != bytes.count {
-            throw AccountAddressError.unexpectedTrailingBytes
-        }
-        return AccountAddress(header: header, domain: domain, controller: controller)
-    }
-
-    public static func fromCanonicalHex(_ encoded: String) throws -> AccountAddress {
-        let body: String
-        if encoded.lowercased().hasPrefix("0x") {
-            body = String(encoded.dropFirst(2))
-        } else {
-            body = encoded
-        }
-        guard let data = Data(hexString: body) else {
-            throw AccountAddressError.invalidHexAddress
-        }
-        return try AccountAddress.fromCanonicalBytes(data)
+        let (controller, cursor) = try ControllerPayload.decode(bytes: bytes, cursor: 1)
+        guard cursor == bytes.count else { throw AccountAddressError.unexpectedTrailingBytes }
+        return AccountAddress(header: header, domain: .default, controller: controller)
     }
 
     public static func fromIH58(_ encoded: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
@@ -200,7 +180,7 @@ public struct AccountAddress {
         return try AccountAddress.fromCanonicalBytes(canonical)
     }
 
-    public static func parseAny(_ input: String, expectedPrefix: UInt16? = nil) throws -> (AccountAddress, AccountAddressFormat) {
+    public static func parseEncoded(_ input: String, expectedPrefix: UInt16? = nil) throws -> (AccountAddress, AccountAddressFormat) {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
         let lowercased = trimmed.lowercased()
@@ -210,16 +190,18 @@ public struct AccountAddress {
         if containsCompressedAlphabetBeyondIh58(trimmed) {
             throw AccountAddressError.missingCompressedSentinel
         }
+        if lowercased.hasPrefix("0x") {
+            throw AccountAddressError.unsupportedAddressFormat
+        }
         if let bridged = try? NoritoNativeBridge.shared.parseAccountAddress(
             literal: trimmed,
             expectedPrefix: expectedPrefix
         ) {
+            guard bridged.format == .ih58 || bridged.format == .compressed else {
+                throw AccountAddressError.unsupportedAddressFormat
+            }
             let address = try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
             return (address, bridged.format)
-        }
-        if lowercased.hasPrefix("0x") {
-            let address = try fromCanonicalHex(trimmed)
-            return (address, .canonicalHex)
         }
         let address = try AccountAddress.fromIH58(trimmed, expectedPrefix: expectedPrefix)
         return (address, .ih58)
@@ -235,26 +217,12 @@ public struct AccountAddress {
         }
         switch domain {
         case .default:
-            return canonical == AccountAddress.defaultDomainName
+            return !canonical.isEmpty
         case .local12(let digest):
             return computeLocalDigest(label: canonical) == digest
         case .global:
             return true
         }
-    }
-
-    /// Re-encodes this address with a domain selector derived from the provided domain label when this address currently
-    /// uses the `default` domain selector.
-    ///
-    /// Why this exists:
-    /// - Some Core API deployments return account IDs encoded with the default-domain selector (tag `0x00`), while Torii
-    ///   / explorer interactions require the local-domain selector (tag `0x01`) for a specific FI domain label.
-    /// - For first-release client standardization, wallets should converge on local-domain IH58 encodings for QR codes,
-    ///   transfers, and any chain-facing workflows.
-    public func rebasedFromDefaultDomain(to domainLabel: String) throws -> AccountAddress {
-        guard case .default = domain else { return self }
-        let selector = try DomainSelector.from(domain: domainLabel)
-        return AccountAddress(header: header, domain: selector, controller: controller)
     }
 
     private static func containsCompressedAlphabetBeyondIh58(_ literal: String) -> Bool {
@@ -271,7 +239,6 @@ public struct AccountAddress {
     public func canonicalBytes() throws -> Data {
         var bytes = Data()
         bytes.append(header.encode())
-        domain.encode(into: &bytes)
         try controller.encode(into: &bytes)
         return bytes
     }
@@ -496,11 +463,9 @@ private enum DomainSelector {
     }
 
     static func from(domain: String) throws -> DomainSelector {
-        let canonical = try canonicalizeLabel(domain)
-        if canonical == AccountAddress.defaultDomainName {
-            return .default
-        }
-        return .local12(computeLocalDigest(label: canonical))
+        _ = try canonicalizeLabel(domain)
+        // Canonical payloads are globally scoped and no longer encode domain selectors.
+        return .default
     }
 
     func encode(into buffer: inout Data) {

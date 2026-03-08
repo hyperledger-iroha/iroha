@@ -2,25 +2,49 @@
 #![cfg(feature = "json")]
 
 use iroha_data_model::account::AccountId;
+use iroha_data_model::asset::{AssetDefinitionId, AssetId};
 
 const SIGNATORY: &str = "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
 const DOMAIN: &str = "wonderland";
 
-fn account_id_str() -> String {
-    format!("{SIGNATORY}@{DOMAIN}")
+fn account_id() -> AccountId {
+    AccountId::new(
+        DOMAIN.parse().expect("domain"),
+        SIGNATORY.parse().expect("public key"),
+    )
+}
+
+fn default_domain_id() -> iroha_data_model::domain::DomainId {
+    iroha_data_model::account::address::default_domain_name()
+        .as_ref()
+        .parse()
+        .expect("default domain")
+}
+
+fn asset_id() -> AssetId {
+    let domain = default_domain_id();
+    let account_id = AccountId::new(domain.clone(), SIGNATORY.parse().expect("public key"));
+    let definition = AssetDefinitionId::new(domain, "xor".parse().expect("asset name"));
+    AssetId::new(definition, account_id)
 }
 
 #[test]
 fn account_id_json_roundtrip() {
-    let raw = account_id_str();
-    let parsed = AccountId::parse(&raw).expect("parse account id");
-    let (account_id, canonical, _) = parsed.into_parts();
+    let account_id = account_id();
+    let canonical = account_id.canonical_ih58().expect("canonical ih58");
 
     let json = norito::json::to_json(&account_id).expect("serialize account id");
-    assert_eq!(json, format!("\"{canonical}@{}\"", account_id.domain()));
+    let expected = format!("\"{canonical}\"");
+    assert_eq!(json, expected);
 
     let decoded: AccountId = norito::json::from_json(&json).expect("deserialize account id");
-    assert_eq!(decoded, account_id);
+    let default_domain: iroha_data_model::domain::DomainId =
+        iroha_data_model::account::address::default_domain_name()
+            .as_ref()
+            .parse()
+            .expect("default domain");
+    assert_eq!(decoded.controller(), account_id.controller());
+    assert_eq!(decoded.domain(), &default_domain);
 }
 
 #[test]
@@ -32,4 +56,22 @@ fn account_id_rejects_object() {
         msg.contains("unexpected character"),
         "unexpected error: {msg}"
     );
+}
+
+#[test]
+fn asset_id_json_roundtrip_uses_fully_qualified_definition() {
+    let asset_id = asset_id();
+
+    let json = norito::json::to_json(&asset_id).expect("serialize asset id");
+    assert!(
+        !json.contains('@'),
+        "asset JSON must not use legacy @domain account literals: {json}"
+    );
+    assert!(
+        !json.contains("##"),
+        "asset JSON must use fully-qualified definition form: {json}"
+    );
+
+    let decoded: AssetId = norito::json::from_json(&json).expect("deserialize asset id");
+    assert_eq!(decoded, asset_id);
 }

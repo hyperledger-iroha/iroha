@@ -5,7 +5,9 @@ use iroha_data_model::isi::transfer::{TransferAssetBatch, TransferAssetBatchEntr
 use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, IVMHost, Memory, PointerType,
-    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
+    mock_wsv::{
+        AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost,
+    },
     syscalls,
 };
 use norito::to_bytes;
@@ -24,7 +26,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn make_account_tlv(account: &AccountId) -> Vec<u8> {
+fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
     let buf = to_bytes(account).expect("encode account into Norito");
     make_tlv(PointerType::AccountId as u16, &buf)
 }
@@ -40,7 +42,7 @@ fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
 }
 
 fn make_transfer_batch_tlv(
-    entries: &[(AccountId, AccountId, AssetDefinitionId, Numeric)],
+    entries: &[(ScopedAccountId, ScopedAccountId, AssetDefinitionId, Numeric)],
 ) -> Vec<u8> {
     let batch_entries = entries
         .iter()
@@ -57,20 +59,29 @@ fn num(value: u64) -> Numeric {
     Numeric::from(value)
 }
 
+fn test_account(domain: DomainId, public_key: PublicKey) -> ScopedAccountId {
+    ScopedAccountId::new(domain, public_key)
+}
+
 #[test]
 fn balance_syscall_with_tlv_pointers() {
+    let domain: DomainId = "domain".parse().unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
     let pk2: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
-    let alice: AccountId = format!("{pk1}@domain").parse().unwrap();
-    let bob: AccountId = format!("{pk2}@domain").parse().unwrap();
+    let alice = test_account(domain.clone(), pk1);
+    let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
     let wsv = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
-    let host = WsvHost::new(wsv, bob.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&bob.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -91,8 +102,15 @@ fn balance_syscall_with_tlv_pointers() {
 
     // Grant and retry
     let mut wsv2 = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
-    wsv2.grant_permission(&bob, PermissionToken::ReadAccountAssets(alice.clone()));
-    let host = WsvHost::new(wsv2, bob, HashMap::new(), HashMap::new());
+    wsv2.grant_permission(
+        &bob,
+        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&alice)),
+    );
+    let host = WsvHost::new_with_subject(
+        wsv2,
+        ivm::mock_wsv::AccountSubjectId::from(&bob),
+        HashMap::new(),
+    );
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("balance tlv syscall failed");
@@ -107,21 +125,26 @@ fn balance_syscall_with_tlv_pointers() {
 
 #[test]
 fn transfer_syscall_with_tlv_pointers() {
+    let domain: DomainId = "domain".parse().unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
     let pk2: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
-    let alice: AccountId = format!("{pk1}@domain").parse().unwrap();
-    let bob: AccountId = format!("{pk2}@domain").parse().unwrap();
+    let alice = test_account(domain.clone(), pk1);
+    let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
     let wsv = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset.clone()), num(50)),
         ((bob.clone(), asset.clone()), num(0)),
     ]);
-    let host = WsvHost::new(wsv, bob.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&bob.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -159,7 +182,11 @@ fn transfer_syscall_with_tlv_pointers() {
         ((bob.clone(), asset.clone()), num(0)),
     ]);
     wsv2.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
-    let host = WsvHost::new(wsv2, bob, HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv2,
+        ivm::mock_wsv::AccountSubjectId::from(&bob),
+        HashMap::new(),
+    );
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer tlv syscall failed");
@@ -167,14 +194,19 @@ fn transfer_syscall_with_tlv_pointers() {
 
 #[test]
 fn mint_syscall_with_tlv_pointers() {
+    let domain: DomainId = "domain".parse().unwrap();
     let pk: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
-    let bob: AccountId = format!("{pk}@domain").parse().unwrap();
+    let bob = test_account(domain, pk);
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
     let wsv = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
-    let host = WsvHost::new(wsv, bob.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&bob.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -199,7 +231,11 @@ fn mint_syscall_with_tlv_pointers() {
 
     let mut wsv2 = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
     wsv2.grant_permission(&bob, PermissionToken::MintAsset(asset.clone()));
-    let host = WsvHost::new(wsv2, bob, HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv2,
+        ivm::mock_wsv::AccountSubjectId::from(&bob),
+        HashMap::new(),
+    );
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("mint tlv syscall failed");
@@ -207,6 +243,7 @@ fn mint_syscall_with_tlv_pointers() {
 
 #[test]
 fn transfer_batch_syscalls_buffer_entries() {
+    let domain: DomainId = "domain".parse().unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -216,9 +253,9 @@ fn transfer_batch_syscalls_buffer_entries() {
     let pk3: PublicKey = "ed012026DB3C0E3D6A4C53E2CD59000B2D5F9ECB41D4EDD5E0C83F9F1B40D0F0A5BF42"
         .parse()
         .unwrap();
-    let alice: AccountId = format!("{pk1}@domain").parse().unwrap();
-    let bob: AccountId = format!("{pk2}@domain").parse().unwrap();
-    let carol: AccountId = format!("{pk3}@domain").parse().unwrap();
+    let alice = test_account(domain.clone(), pk1);
+    let bob = test_account(domain.clone(), pk2);
+    let carol = test_account(domain, pk3);
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
     let mut wsv = MockWorldStateView::with_balances(&[
@@ -228,12 +265,17 @@ fn transfer_batch_syscalls_buffer_entries() {
     ]);
     wsv.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
     let mut account_map = HashMap::new();
-    account_map.insert(1, alice.clone());
-    account_map.insert(2, bob.clone());
-    account_map.insert(3, carol.clone());
+    account_map.insert(1, ivm::mock_wsv::AccountSubjectId::from(&alice));
+    account_map.insert(2, ivm::mock_wsv::AccountSubjectId::from(&bob));
+    account_map.insert(3, ivm::mock_wsv::AccountSubjectId::from(&carol));
     let mut asset_map = HashMap::new();
     asset_map.insert(1, asset.clone());
-    let mut host = WsvHost::new(wsv, bob.clone(), account_map, asset_map);
+    let mut host = WsvHost::new_with_subject_map(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&bob),
+        account_map,
+        asset_map,
+    );
     let mut vm = IVM::new(u64::MAX);
 
     host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm)
@@ -279,6 +321,7 @@ fn transfer_batch_syscalls_buffer_entries() {
 
 #[test]
 fn transfer_batch_apply_syscall_executes_batch() {
+    let domain: DomainId = "domain".parse().unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -288,9 +331,9 @@ fn transfer_batch_apply_syscall_executes_batch() {
     let pk3: PublicKey = "ed012026DB3C0E3D6A4C53E2CD59000B2D5F9ECB41D4EDD5E0C83F9F1B40D0F0A5BF42"
         .parse()
         .unwrap();
-    let alice: AccountId = format!("{pk1}@domain").parse().unwrap();
-    let bob: AccountId = format!("{pk2}@domain").parse().unwrap();
-    let carol: AccountId = format!("{pk3}@domain").parse().unwrap();
+    let alice = test_account(domain.clone(), pk1);
+    let bob = test_account(domain.clone(), pk2);
+    let carol = test_account(domain, pk3);
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
     let mut wsv = MockWorldStateView::with_balances(&[
@@ -299,7 +342,11 @@ fn transfer_batch_apply_syscall_executes_batch() {
         ((carol.clone(), asset.clone()), num(0)),
     ]);
     wsv.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
-    let host = WsvHost::new(wsv, bob.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&bob.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 

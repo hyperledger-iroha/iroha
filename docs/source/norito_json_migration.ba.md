@@ -73,9 +73,8 @@ Serde derives, visitors, JSON DOM helpers, and config loaders.
 > migration paths.
 >
 > **Status (Jan 25, 2026):** `AccountId`/`AssetId` JSON now includes an explicit
-> `@domain` suffix (e.g., `IH58@domain`, `asset##IH58@domain`) so decoding does
-> not rely on a domain-selector resolver. Alias inputs such as `label@domain`
-> remain parseable via resolvers where configured.
+> canonical encoded literals (e.g., `IH58`, `norito:<hex>`) so decoding does
+> not rely on a domain-selector resolver. Legacy alias inputs such as `label@domain` are rejected by runtime parsers and reserved for explicit rejection tests.
 
 > **Status (Nov 7, 2025):** `IpfsPath` gained Norito `FastJsonWrite` and
 > `JsonDeserialize` impls backed by the existing parser, with regression tests

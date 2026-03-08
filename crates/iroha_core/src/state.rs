@@ -27,7 +27,8 @@ use iroha_crypto::{
 use iroha_data_model::{
     IntoKeyValue,
     account::{
-        AccountController, AccountDomainSelector, AccountEntry, AccountValue, OpaqueAccountId,
+        AccountController, AccountDomainSelector, AccountEntry, AccountSubjectId, AccountValue,
+        OpaqueAccountId,
         rekey::{AccountLabel, AccountRekeyRecord},
     },
     asset::{Asset, AssetEntry, AssetValue, Mintable},
@@ -330,6 +331,8 @@ macro_rules! build_world_block {
             domains: $state.domains.$method(),
             domain_selectors: $state.domain_selectors.$method(),
             accounts: $state.accounts.$method(),
+            account_subject_domains: $state.account_subject_domains.$method(),
+            domain_account_subjects: $state.domain_account_subjects.$method(),
             uaid_accounts: $state.uaid_accounts.$method(),
             account_aliases: $state.account_aliases.$method(),
             opaque_uaids: $state.opaque_uaids.$method(),
@@ -451,6 +454,8 @@ macro_rules! build_world_transaction {
             domains: $state.domains.transaction(),
             domain_selectors: $state.domain_selectors.transaction(),
             accounts: $state.accounts.transaction(),
+            account_subject_domains: $state.account_subject_domains.transaction(),
+            domain_account_subjects: $state.domain_account_subjects.transaction(),
             uaid_accounts: $state.uaid_accounts.transaction(),
             account_aliases: $state.account_aliases.transaction(),
             opaque_uaids: $state.opaque_uaids.transaction(),
@@ -1215,6 +1220,10 @@ pub struct World {
     pub(crate) domain_selectors: Storage<AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: Storage<AccountId, AccountValue>,
+    /// Domain memberships keyed by domainless account subject.
+    pub(crate) account_subject_domains: Storage<AccountSubjectId, BTreeSet<DomainId>>,
+    /// Subject memberships keyed by domain.
+    pub(crate) domain_account_subjects: Storage<DomainId, BTreeSet<AccountSubjectId>>,
     /// Index from UAID to bound account (1:1).
     #[norito(skip)]
     pub(crate) uaid_accounts: Storage<UniversalAccountId, AccountId>,
@@ -1527,6 +1536,10 @@ pub struct WorldBlock<'world> {
     pub(crate) domain_selectors: StorageBlock<'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageBlock<'world, AccountId, AccountValue>,
+    /// Domain memberships keyed by domainless account subject.
+    pub(crate) account_subject_domains: StorageBlock<'world, AccountSubjectId, BTreeSet<DomainId>>,
+    /// Subject memberships keyed by domain.
+    pub(crate) domain_account_subjects: StorageBlock<'world, DomainId, BTreeSet<AccountSubjectId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageBlock<'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical account id.
@@ -1946,6 +1959,12 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageTransaction<'block, 'world, AccountId, AccountValue>,
+    /// Domain memberships keyed by domainless account subject.
+    pub(crate) account_subject_domains:
+        StorageTransaction<'block, 'world, AccountSubjectId, BTreeSet<DomainId>>,
+    /// Subject memberships keyed by domain.
+    pub(crate) domain_account_subjects:
+        StorageTransaction<'block, 'world, DomainId, BTreeSet<AccountSubjectId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageTransaction<'block, 'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical account id.
@@ -2273,6 +2292,10 @@ pub struct WorldView<'world> {
     pub(crate) domain_selectors: StorageView<'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageView<'world, AccountId, AccountValue>,
+    /// Domain memberships keyed by domainless account subject.
+    pub(crate) account_subject_domains: StorageView<'world, AccountSubjectId, BTreeSet<DomainId>>,
+    /// Subject memberships keyed by domain.
+    pub(crate) domain_account_subjects: StorageView<'world, DomainId, BTreeSet<AccountSubjectId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageView<'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical account id.
@@ -4119,9 +4142,11 @@ mod governance_locks_map_json {
         let mut out = BTreeMap::new();
         while let Some(key) = visitor.next_key()? {
             let acc_str = key.as_str();
-            let account: AccountId = acc_str.parse().map_err(|err| {
-                json::Error::Message(format!("invalid account id `{acc_str}`: {err}"))
-            })?;
+            let account: AccountId = AccountId::parse_encoded(acc_str)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .map_err(|err| {
+                    json::Error::Message(format!("invalid account id `{acc_str}`: {err}"))
+                })?;
             let record: GovernanceLockRecord = visitor.parse_value()?;
             if out.insert(account, record).is_some() {
                 return Err(json::Error::DuplicateField {
@@ -4192,9 +4217,11 @@ mod governance_slash_map_json {
         let mut out = BTreeMap::new();
         while let Some(key) = visitor.next_key()? {
             let acc_str = key.as_str();
-            let account: AccountId = acc_str.parse().map_err(|err| {
-                json::Error::Message(format!("invalid account id `{acc_str}`: {err}"))
-            })?;
+            let account: AccountId = AccountId::parse_encoded(acc_str)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .map_err(|err| {
+                    json::Error::Message(format!("invalid account id `{acc_str}`: {err}"))
+                })?;
             let record: GovernanceSlashEntry = visitor.parse_value()?;
             if out.insert(account, record).is_some() {
                 return Err(json::Error::DuplicateField {
@@ -7214,12 +7241,11 @@ mod custom_parameter_tests {
     }
 
     #[test]
-    fn npos_parameters_legacy_string_wrapped_payload_is_decoded() {
+    fn npos_parameters_string_wrapped_payload_is_rejected() {
         let mut params = Parameters::default();
         let expected = SumeragiNposParameters::default();
         let legacy_json =
             norito::json::to_json(&expected).expect("serialize npos parameters to json");
-        // Legacy format: JSON object persisted as a JSON string payload.
         let legacy_payload = Json::new(legacy_json);
         let custom = iroha_data_model::parameter::CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
@@ -7227,13 +7253,14 @@ mod custom_parameter_tests {
         );
         params.set_parameter(Parameter::Custom(custom));
 
-        let decoded = sumeragi_npos_parameters_from_parameters(&params)
-            .expect("decode npos parameters from legacy payload");
-        assert_eq!(decoded, expected);
+        assert!(
+            sumeragi_npos_parameters_from_parameters(&params).is_none(),
+            "string-wrapped compatibility payload must be rejected"
+        );
     }
 
     #[test]
-    fn npos_parameters_legacy_numeric_strings_are_decoded() {
+    fn npos_parameters_numeric_string_payload_is_rejected() {
         let mut params = Parameters::default();
         let expected = SumeragiNposParameters::default();
         let mut legacy_value =
@@ -7242,9 +7269,25 @@ mod custom_parameter_tests {
             .as_object_mut()
             .expect("npos parameters should serialize as object");
 
-        for key in npos_numeric_string_compat_fields() {
+        for key in [
+            "k_aggregators",
+            "redundant_send_r",
+            "vrf_commit_window_blocks",
+            "vrf_reveal_window_blocks",
+            "max_validators",
+            "min_self_bond",
+            "min_nomination_bond",
+            "max_nominator_concentration_pct",
+            "seat_band_pct",
+            "max_entity_correlation_pct",
+            "finality_margin_blocks",
+            "evidence_horizon_blocks",
+            "activation_lag_blocks",
+            "slashing_delay_blocks",
+            "epoch_length_blocks",
+        ] {
             let value = map
-                .get_mut(*key)
+                .get_mut(key)
                 .unwrap_or_else(|| panic!("missing `{key}` in serialized npos payload"));
             let number = value
                 .as_u64()
@@ -7260,13 +7303,14 @@ mod custom_parameter_tests {
         );
         params.set_parameter(Parameter::Custom(custom));
 
-        let decoded = sumeragi_npos_parameters_from_parameters(&params)
-            .expect("decode npos parameters from numeric-string payload");
-        assert_eq!(decoded, expected);
+        assert!(
+            sumeragi_npos_parameters_from_parameters(&params).is_none(),
+            "numeric-string compatibility payload must be rejected"
+        );
     }
 
     #[test]
-    fn npos_parameters_legacy_epoch_seed_hex_string_is_decoded() {
+    fn npos_parameters_epoch_seed_hex_string_payload_is_decoded() {
         let mut params = Parameters::default();
         let expected = SumeragiNposParameters::default();
         let mut legacy_value =
@@ -7299,7 +7343,7 @@ mod custom_parameter_tests {
     }
 
     #[test]
-    fn npos_parameters_legacy_epoch_seed_nested_quotes_are_decoded() {
+    fn npos_parameters_epoch_seed_nested_quotes_payload_is_rejected() {
         let mut params = Parameters::default();
         let expected = SumeragiNposParameters::default();
         let mut legacy_value =
@@ -7327,9 +7371,10 @@ mod custom_parameter_tests {
         );
         params.set_parameter(Parameter::Custom(custom));
 
-        let decoded = sumeragi_npos_parameters_from_parameters(&params)
-            .expect("decode npos parameters from nested-quoted epoch seed payload");
-        assert_eq!(decoded, expected);
+        assert!(
+            sumeragi_npos_parameters_from_parameters(&params).is_none(),
+            "nested-quoted compatibility payload must be rejected"
+        );
     }
 
     #[test]
@@ -8900,7 +8945,6 @@ impl World {
         Self::default()
     }
 
-    #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
     /// Register an active validator consensus key with a PoP for deterministic tests.
     pub fn register_validator_pop_for_testing(&mut self, public_key: PublicKey, pop: Vec<u8>) {
         let id = derive_validator_key_id(&public_key);
@@ -9035,6 +9079,7 @@ impl World {
         world
             .rebuild_domain_selector_index()
             .expect("duplicate domain selector in world constructor");
+        world.rebuild_account_subject_domain_indexes();
         world
             .rebuild_uaid_account_index()
             .expect("duplicate UAID in world constructor");
@@ -9098,6 +9143,32 @@ impl World {
         }
         self.uaid_accounts = index.into_iter().collect();
         Ok(())
+    }
+
+    fn rebuild_account_subject_domain_indexes(&mut self) {
+        let mut subject_domains = BTreeMap::<AccountSubjectId, BTreeSet<DomainId>>::new();
+        let mut domain_subjects = BTreeMap::<DomainId, BTreeSet<AccountSubjectId>>::new();
+        let view = self.accounts.view();
+        for (account_id, _) in view.iter() {
+            let subject = account_id.subject_id();
+            let domain = account_id.domain().clone();
+            subject_domains
+                .entry(subject.clone())
+                .or_default()
+                .insert(domain.clone());
+            domain_subjects.entry(domain).or_default().insert(subject);
+        }
+
+        // Preserve explicitly materialized subject records that intentionally carry no linked
+        // domains (`subject -> {}`), for example after unlinking a subject from its last domain.
+        for (subject, domains) in self.account_subject_domains.view().iter() {
+            if domains.is_empty() {
+                subject_domains.entry(subject.clone()).or_default();
+            }
+        }
+
+        self.account_subject_domains = subject_domains.into_iter().collect();
+        self.domain_account_subjects = domain_subjects.into_iter().collect();
     }
 
     fn rebuild_domain_selector_index(&mut self) -> Result<(), String> {
@@ -9267,6 +9338,8 @@ impl World {
             domains: self.domains.view(),
             domain_selectors: self.domain_selectors.view(),
             accounts: self.accounts.view(),
+            account_subject_domains: self.account_subject_domains.view(),
+            domain_account_subjects: self.domain_account_subjects.view(),
             uaid_accounts: self.uaid_accounts.view(),
             account_aliases: self.account_aliases.view(),
             opaque_uaids: self.opaque_uaids.view(),
@@ -9404,6 +9477,14 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<DomainId, Vec<HashOf<DomainEndorsement>>>;
     /// Account storage (read-only).
     fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue>;
+    /// Domain memberships keyed by account subject (read-only).
+    fn account_subject_domains(
+        &self,
+    ) -> &impl StorageReadOnly<AccountSubjectId, BTreeSet<DomainId>>;
+    /// Account-subject memberships keyed by domain (read-only).
+    fn domain_account_subjects(
+        &self,
+    ) -> &impl StorageReadOnly<DomainId, BTreeSet<AccountSubjectId>>;
     /// UAID to account index (read-only).
     fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId>;
     /// Account alias index (read-only).
@@ -9745,9 +9826,22 @@ pub trait WorldReadOnly {
     /// Iterate accounts in domain
     #[allow(clippy::type_complexity)]
     fn accounts_in_domain_iter(&self, id: &DomainId) -> impl Iterator<Item = AccountEntry<'_>> {
-        self.accounts()
+        let mut account_ids = BTreeSet::new();
+        if let Some(subjects) = self.domain_account_subjects().get(id) {
+            for subject in subjects {
+                account_ids.insert(subject.to_account_id(id.clone()));
+            }
+        }
+        for (account_id, _) in self
+            .accounts()
             .range::<dyn AsAccountIdDomainCompare>(AccountByDomainBounds::new(id))
-            .map(|(id, value)| AccountEntry::new(id, value))
+        {
+            account_ids.insert(account_id.clone());
+        }
+        self.accounts()
+            .iter()
+            .filter(move |(account_id, _)| account_ids.contains(*account_id))
+            .map(|(account_id, value)| AccountEntry::new(account_id, value))
     }
 
     /// Returns reference for accounts map
@@ -9756,6 +9850,52 @@ pub trait WorldReadOnly {
         self.accounts()
             .iter()
             .map(|(id, value)| AccountEntry::new(id, value))
+    }
+
+    /// Iterate scoped accounts that belong to a domainless account subject.
+    fn accounts_for_subject_iter(
+        &self,
+        subject: &AccountSubjectId,
+    ) -> impl Iterator<Item = AccountEntry<'_>> {
+        let mut account_ids = BTreeSet::new();
+        if let Some(domains) = self.account_subject_domains().get(subject) {
+            for domain in domains {
+                account_ids.insert(subject.to_account_id(domain.clone()));
+            }
+        }
+        for account in self.accounts_iter() {
+            if account.id().subject_id() == *subject {
+                account_ids.insert(account.id().clone());
+            }
+        }
+        self.accounts()
+            .iter()
+            .filter(move |(account_id, _)| account_ids.contains(*account_id))
+            .map(|(account_id, value)| AccountEntry::new(account_id, value))
+    }
+
+    /// List linked domains for a domainless account subject.
+    fn domains_for_subject(&self, subject: &AccountSubjectId) -> Vec<DomainId> {
+        let mut domains = BTreeSet::new();
+        if let Some(linked_domains) = self.account_subject_domains().get(subject) {
+            domains.extend(linked_domains.iter().cloned());
+        }
+        for account in self.accounts_for_subject_iter(subject) {
+            domains.insert(account.id().domain().clone());
+        }
+        domains.into_iter().collect()
+    }
+
+    /// List account subjects linked to a specific domain.
+    fn account_subjects_in_domain(&self, id: &DomainId) -> Vec<AccountSubjectId> {
+        let mut subjects = BTreeSet::new();
+        if let Some(linked_subjects) = self.domain_account_subjects().get(id) {
+            subjects.extend(linked_subjects.iter().cloned());
+        }
+        for account in self.accounts_in_domain_iter(id) {
+            subjects.insert(account.id().subject_id());
+        }
+        subjects.into_iter().collect()
     }
 
     /// Iterate asset definitions in domain
@@ -10026,6 +10166,16 @@ macro_rules! impl_world_ro {
             }
             fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue> {
                 &self.accounts
+            }
+            fn account_subject_domains(
+                &self,
+            ) -> &impl StorageReadOnly<AccountSubjectId, BTreeSet<DomainId>> {
+                &self.account_subject_domains
+            }
+            fn domain_account_subjects(
+                &self,
+            ) -> &impl StorageReadOnly<DomainId, BTreeSet<AccountSubjectId>> {
+                &self.domain_account_subjects
             }
             fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId> {
                 &self.uaid_accounts
@@ -10543,6 +10693,8 @@ impl<'world> WorldBlock<'world> {
             domains,
             domain_selectors,
             accounts,
+            account_subject_domains,
+            domain_account_subjects,
             uaid_accounts,
             account_aliases,
             opaque_uaids,
@@ -10754,6 +10906,8 @@ impl<'world> WorldBlock<'world> {
         asset_metadata.commit();
         asset_definitions.commit();
         accounts.commit();
+        account_subject_domains.commit();
+        domain_account_subjects.commit();
         uaid_accounts.commit();
         account_aliases.commit();
         opaque_uaids.commit();
@@ -11513,6 +11667,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             domains,
             domain_selectors,
             accounts,
+            account_subject_domains,
+            domain_account_subjects,
             uaid_accounts,
             account_aliases,
             opaque_uaids,
@@ -11700,6 +11856,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         assets.apply();
         asset_definitions.apply();
         accounts.apply();
+        account_subject_domains.apply();
+        domain_account_subjects.apply();
         uaid_accounts.apply();
         account_aliases.apply();
         opaque_uaids.apply();
@@ -11729,6 +11887,66 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.accounts
             .get_mut(id)
             .ok_or_else(|| FindError::Account(id.clone()))
+    }
+
+    /// Insert or replace an account and synchronize subject/domain membership indexes.
+    pub fn insert_account_with_links(
+        &mut self,
+        account_id: AccountId,
+        account_value: AccountValue,
+    ) -> Option<AccountValue> {
+        self.link_account_subject_domain(&account_id);
+        self.accounts.insert(account_id, account_value)
+    }
+
+    /// Remove an account and synchronize subject/domain membership indexes.
+    pub fn remove_account_with_links(&mut self, account_id: &AccountId) -> Option<AccountValue> {
+        let removed = self.accounts.remove(account_id.clone());
+        if removed.is_some() {
+            self.unlink_account_subject_domain(account_id);
+        }
+        removed
+    }
+
+    /// Link a domain-scoped account subject to its domain membership indexes.
+    pub fn link_account_subject_domain(&mut self, account_id: &AccountId) {
+        let subject = account_id.subject_id();
+        let domain = account_id.domain().clone();
+
+        if let Some(domains) = self.account_subject_domains.get_mut(&subject) {
+            domains.insert(domain.clone());
+        } else {
+            self.account_subject_domains
+                .insert(subject.clone(), BTreeSet::from([domain.clone()]));
+        }
+
+        if let Some(subjects) = self.domain_account_subjects.get_mut(&domain) {
+            subjects.insert(subject);
+        } else {
+            self.domain_account_subjects
+                .insert(domain, BTreeSet::from([subject]));
+        }
+    }
+
+    /// Unlink a domain-scoped account subject from its domain membership indexes.
+    pub fn unlink_account_subject_domain(&mut self, account_id: &AccountId) {
+        let subject = account_id.subject_id();
+        let domain = account_id.domain().clone();
+
+        if let Some(domains) = self.account_subject_domains.get_mut(&subject) {
+            domains.remove(&domain);
+        }
+
+        let drop_domain_entry =
+            self.domain_account_subjects
+                .get_mut(&domain)
+                .is_some_and(|subjects| {
+                    subjects.remove(&subject);
+                    subjects.is_empty()
+                });
+        if drop_domain_entry {
+            self.domain_account_subjects.remove(domain);
+        }
     }
 
     /// Add [`permission`](Permission) to the [`Account`] if the account does not have this permission yet.
@@ -13211,11 +13429,12 @@ impl State {
     #[inline]
     #[allow(clippy::too_many_lines)]
     fn new_inner(
-        world: World,
+        mut world: World,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Self {
+        world.rebuild_account_subject_domain_indexes();
         #[cfg(feature = "telemetry")]
         let telemetry_seed = telemetry.clone();
         let initial_crypto = iroha_config::parameters::actual::Crypto::default();
@@ -13490,16 +13709,13 @@ impl State {
                     .expect("valid default citizenship asset id"),
                 citizenship_bond_amount:
                     iroha_config::parameters::defaults::governance::CITIZENSHIP_BOND_AMOUNT,
-                citizenship_escrow_account: iroha_config::parameters::defaults::governance::CITIZENSHIP_ESCROW_ACCOUNT
-                    .parse()
-                    .expect("valid default citizenship escrow account id"),
+                citizenship_escrow_account:
+                    iroha_config::parameters::defaults::governance::citizenship_escrow_account_id(),
                 min_bond_amount: 150,
-                bond_escrow_account: iroha_config::parameters::defaults::governance::BOND_ESCROW_ACCOUNT
-                    .parse()
-                    .expect("valid default governance bond escrow account"),
-                slash_receiver_account: iroha_config::parameters::defaults::governance::SLASH_RECEIVER_ACCOUNT
-                    .parse()
-                    .expect("valid default governance slash receiver account"),
+                bond_escrow_account:
+                    iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
+                slash_receiver_account:
+                    iroha_config::parameters::defaults::governance::slash_receiver_account_id(),
                 slash_double_vote_bps:
                     iroha_config::parameters::defaults::governance::slash_policy::DOUBLE_VOTE_BPS,
                 slash_invalid_proof_bps:
@@ -16385,135 +16601,14 @@ fn sumeragi_npos_parameters_from_parameters(params: &Parameters) -> Option<Sumer
 
     match payload.try_into_any_norito::<SumeragiNposParameters>() {
         Ok(parsed) => Some(parsed),
-        Err(primary_error) => {
-            // Backward-compatibility: some legacy payloads persisted the NPoS JSON
-            // object as a JSON string. Attempt that decode path before giving up.
-            if let Ok(inner_json) = payload.try_into_any_norito::<String>() {
-                match norito::json::from_str::<SumeragiNposParameters>(&inner_json) {
-                    Ok(parsed) => {
-                        warn!(
-                            "Decoded `sumeragi_npos_parameters` from legacy string-wrapped payload"
-                        );
-                        return Some(parsed);
-                    }
-                    Err(fallback_error) => {
-                        warn!(
-                            ?primary_error,
-                            ?fallback_error,
-                            "Failed to decode `sumeragi_npos_parameters` custom parameter payload; payload_preview={payload_preview}"
-                        );
-                        return None;
-                    }
-                }
-            }
-
-            // Backward-compatibility: some historical payloads encoded numeric fields
-            // as JSON strings inside the object. Coerce those fields and retry.
-            if let Ok(value) = payload.try_into_any_norito::<norito::json::Value>() {
-                match decode_npos_parameters_with_numeric_string_compat(value) {
-                    Ok(parsed) => {
-                        warn!(
-                            "Decoded `sumeragi_npos_parameters` from numeric-string compatibility payload"
-                        );
-                        return Some(parsed);
-                    }
-                    Err(compat_error) => {
-                        warn!(
-                            ?primary_error,
-                            ?compat_error,
-                            "Failed to decode `sumeragi_npos_parameters` custom parameter payload; payload_preview={payload_preview}"
-                        );
-                        return None;
-                    }
-                }
-            }
-
+        Err(error) => {
             warn!(
-                ?primary_error,
+                ?error,
                 "Failed to decode `sumeragi_npos_parameters` custom parameter payload; payload_preview={payload_preview}"
             );
             None
         }
     }
-}
-
-fn npos_numeric_string_compat_fields() -> &'static [&'static str] {
-    &[
-        "k_aggregators",
-        "redundant_send_r",
-        "vrf_commit_window_blocks",
-        "vrf_reveal_window_blocks",
-        "max_validators",
-        "min_self_bond",
-        "min_nomination_bond",
-        "max_nominator_concentration_pct",
-        "seat_band_pct",
-        "max_entity_correlation_pct",
-        "finality_margin_blocks",
-        "evidence_horizon_blocks",
-        "activation_lag_blocks",
-        "slashing_delay_blocks",
-        "epoch_length_blocks",
-    ]
-}
-
-fn decode_npos_parameters_with_numeric_string_compat(
-    mut value: norito::json::Value,
-) -> Result<SumeragiNposParameters, norito::json::Error> {
-    if let Some(map) = value.as_object_mut() {
-        for field in npos_numeric_string_compat_fields() {
-            let Some(raw_value) = map.get_mut(*field) else {
-                continue;
-            };
-            let Some(raw_string) = raw_value.as_str() else {
-                continue;
-            };
-            if let Ok(parsed) = raw_string.parse::<u64>() {
-                *raw_value = norito::json::Value::from(parsed);
-            }
-        }
-    }
-
-    if let Ok(parsed) = norito::json::value::from_value(value.clone()) {
-        return Ok(parsed);
-    }
-
-    if let Some(map) = value.as_object_mut()
-        && let Some(epoch_seed_value) = map.get_mut("epoch_seed")
-        && let Some(raw_seed) = epoch_seed_value.as_str()
-        && let Some(seed_bytes) = decode_epoch_seed_hex_string(raw_seed)
-    {
-        let mut normalized = String::with_capacity(64);
-        for byte in seed_bytes {
-            normalized.push_str(&format!("{byte:02X}"));
-        }
-        *epoch_seed_value = norito::json::Value::String(normalized);
-    }
-
-    norito::json::value::from_value(value)
-}
-
-fn decode_epoch_seed_hex_string(raw: &str) -> Option<[u8; 32]> {
-    let raw = raw.trim();
-    let raw = raw
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .unwrap_or(raw);
-    let hex = raw
-        .strip_prefix("0x")
-        .or_else(|| raw.strip_prefix("0X"))
-        .unwrap_or(raw);
-    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-
-    let mut out = [0_u8; 32];
-    for idx in 0..32 {
-        let start = idx * 2;
-        let end = start + 2;
-        out[idx] = u8::from_str_radix(&hex[start..end], 16).ok()?;
-    }
-    Some(out)
 }
 
 /// Read the per-block gas limit from on-chain parameters, falling back to defaults on errors.
@@ -23199,93 +23294,11 @@ mod range_bounds {
 }
 
 pub(crate) mod deserialize {
-    use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
+    use std::marker::PhantomData;
 
     use norito::json::{self, JsonDeserialize};
 
     use super::{default_oracle, *};
-
-    fn install_domain_selector_resolver(
-        domains: &Storage<DomainId, Domain>,
-    ) -> Result<(), json::Error> {
-        let mut index = BTreeMap::new();
-        let view = domains.view();
-        for (domain_id, _) in view.iter() {
-            let selector = AccountDomainSelector::from_domain(domain_id).map_err(|err| {
-                json::Error::InvalidField {
-                    field: "domains".into(),
-                    message: err.to_string(),
-                }
-            })?;
-            if let Some(existing) = index.get(&selector) {
-                if existing != domain_id {
-                    return Err(json::Error::InvalidField {
-                        field: "domains".into(),
-                        message: format!(
-                            "Domain selector {selector:?} already bound to domain {existing}"
-                        ),
-                    });
-                }
-                continue;
-            }
-            index.insert(selector, domain_id.clone());
-        }
-        let index = Arc::new(index);
-        iroha_data_model::account::set_account_domain_selector_resolver(Arc::new(
-            move |selector| index.get(selector).cloned(),
-        ));
-        Ok(())
-    }
-
-    fn install_domain_selector_resolver_from_snapshot(
-        domains_value: &json::Value,
-    ) -> Result<(), json::Error> {
-        let json::Value::Object(domains_map) = domains_value else {
-            return Err(json::Error::InvalidField {
-                field: "domains".into(),
-                message: "expected object".into(),
-            });
-        };
-        let Some(blocks_value) = domains_map.get("blocks") else {
-            return Err(json::Error::missing_field("domains.blocks"));
-        };
-        let json::Value::Object(blocks_map) = blocks_value else {
-            return Err(json::Error::InvalidField {
-                field: "domains.blocks".into(),
-                message: "expected object".into(),
-            });
-        };
-        let mut index = BTreeMap::new();
-        for key in blocks_map.keys() {
-            let domain_id: DomainId = key.parse().map_err(|_| json::Error::InvalidField {
-                field: "domains".into(),
-                message: format!("failed to parse domain id `{key}`"),
-            })?;
-            let selector = AccountDomainSelector::from_domain(&domain_id).map_err(|err| {
-                json::Error::InvalidField {
-                    field: "domains".into(),
-                    message: err.to_string(),
-                }
-            })?;
-            if let Some(existing) = index.get(&selector) {
-                if existing != &domain_id {
-                    return Err(json::Error::InvalidField {
-                        field: "domains".into(),
-                        message: format!(
-                            "Domain selector {selector:?} already bound to domain {existing}"
-                        ),
-                    });
-                }
-                continue;
-            }
-            index.insert(selector, domain_id);
-        }
-        let index = Arc::new(index);
-        iroha_data_model::account::set_account_domain_selector_resolver(Arc::new(
-            move |selector| index.get(selector).cloned(),
-        ));
-        Ok(())
-    }
 
     #[derive(Clone, Copy)]
     pub struct IvmSeed<'e, T> {
@@ -23391,33 +23404,6 @@ pub(crate) mod deserialize {
         )
     }
 
-    fn parse_legacy_parameters_cell(value: json::Value) -> Result<Cell<Parameters>, json::Error> {
-        let json::Value::Object(mut envelope) = value else {
-            return Err(json::Error::InvalidField {
-                field: "parameters".into(),
-                message: "expected object".into(),
-            });
-        };
-
-        let Some(blocks) = envelope.remove("blocks") else {
-            return Err(json::Error::missing_field("blocks"));
-        };
-
-        if let Some(revert) = envelope.remove("revert")
-            && !matches!(revert, json::Value::Null)
-        {
-            trace!(
-                target: "state::deserialize",
-                value = ?revert,
-                "ignoring legacy non-null parameters.revert payload"
-            );
-        }
-
-        drain_unknown(&envelope, "parameters");
-        let parsed: Parameters = json::value::from_value(blocks)?;
-        Ok(Cell::new(parsed))
-    }
-
     fn take_parameters_cell(
         map: &mut json::native::Map,
         key: &str,
@@ -23425,21 +23411,18 @@ pub(crate) mod deserialize {
         let value = map
             .remove(key)
             .ok_or_else(|| json::Error::missing_field(key))?;
-
-        match json::value::from_value::<Cell<Parameters>>(value.clone()) {
-            Ok(parameters) => Ok(parameters),
-            Err(primary_error) => match parse_legacy_parameters_cell(value) {
-                Ok(parameters) => {
-                    trace!(
-                        target: "state::deserialize",
-                        field = key,
-                        "decoded legacy parameters envelope"
-                    );
-                    Ok(parameters)
-                }
-                Err(_) => Err(primary_error),
-            },
+        if let json::Value::Object(parameters) = &value
+            && (parameters.contains_key("blocks") || parameters.contains_key("revert"))
+        {
+            return Err(json::Error::InvalidField {
+                field: key.to_owned(),
+                message: "legacy parameters envelope is not supported".to_owned(),
+            });
         }
+        json::value::from_value(value).map_err(|err| json::Error::InvalidField {
+            field: key.to_owned(),
+            message: err.to_string(),
+        })
     }
 
     fn take_topology_cell(
@@ -23472,13 +23455,10 @@ pub(crate) mod deserialize {
 
         let parameters = take_parameters_cell(&mut map, "parameters")?;
         let peers: Cell<Peers> = take_required(&mut map, "peers")?;
-        if let Some(domains_value) = map.get("domains") {
-            // Install a resolver so domainless IH58 accounts parse during snapshot load.
-            install_domain_selector_resolver_from_snapshot(domains_value)?;
-        }
         let domains: Storage<DomainId, Domain> = take_required(&mut map, "domains")?;
-        install_domain_selector_resolver(&domains)?;
         let accounts: Storage<AccountId, AccountValue> = take_required(&mut map, "accounts")?;
+        let account_subject_domains = take_optional_default(&mut map, "account_subject_domains")?;
+        let domain_account_subjects = take_optional_default(&mut map, "domain_account_subjects")?;
         let asset_definitions: Storage<AssetDefinitionId, AssetDefinition> =
             take_required(&mut map, "asset_definitions")?;
         let assets: Storage<AssetId, AssetValue> = take_required(&mut map, "assets")?;
@@ -23566,6 +23546,8 @@ pub(crate) mod deserialize {
             domains,
             domain_selectors: Storage::default(),
             accounts,
+            account_subject_domains,
+            domain_account_subjects,
             uaid_accounts: Storage::default(),
             account_aliases: Storage::default(),
             opaque_uaids: Storage::default(),
@@ -23680,6 +23662,7 @@ pub(crate) mod deserialize {
                 field: "domain_selectors".into(),
                 message,
             })?;
+        world.rebuild_account_subject_domain_indexes();
         world
             .rebuild_uaid_account_index()
             .map_err(|message| json::Error::InvalidField {
@@ -24025,18 +24008,12 @@ pub(crate) mod deserialize {
             citizenship_bond_amount:
                 iroha_config::parameters::defaults::governance::citizenship_bond_amount(),
             citizenship_escrow_account:
-                iroha_config::parameters::defaults::governance::citizenship_escrow_account()
-                    .parse()
-                    .expect("valid default citizenship escrow account id"),
+                iroha_config::parameters::defaults::governance::citizenship_escrow_account_id(),
             min_bond_amount: 150,
             bond_escrow_account:
-                iroha_config::parameters::defaults::governance::bond_escrow_account()
-                    .parse()
-                    .expect("valid default bond escrow account id"),
+                iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
             slash_receiver_account:
-                iroha_config::parameters::defaults::governance::slash_receiver_account()
-                    .parse()
-                    .expect("valid default governance slash receiver account id"),
+                iroha_config::parameters::defaults::governance::slash_receiver_account_id(),
             slash_double_vote_bps:
                 iroha_config::parameters::defaults::governance::slash_policy::DOUBLE_VOTE_BPS,
             slash_invalid_proof_bps:
@@ -24131,11 +24108,13 @@ pub(crate) mod deserialize {
     }
 
     #[cfg(test)]
-    mod compatibility_tests {
+    mod decode_tests {
+        use iroha_crypto::KeyPair;
+
         use super::*;
 
         #[test]
-        fn take_parameters_cell_accepts_legacy_blocks_envelope() {
+        fn take_parameters_cell_rejects_legacy_blocks_envelope() {
             let expected = Parameters::default();
             let blocks = norito::json::to_value(&expected).expect("serialize parameters");
             let mut legacy_map = json::native::Map::new();
@@ -24146,9 +24125,55 @@ pub(crate) mod deserialize {
             let mut map = json::native::Map::new();
             map.insert("parameters".to_owned(), legacy);
 
-            let parsed = take_parameters_cell(&mut map, "parameters")
-                .expect("decode legacy parameters envelope");
-            assert_eq!(*parsed.view().get(), expected);
+            let err = match take_parameters_cell(&mut map, "parameters") {
+                Ok(_) => panic!("legacy parameters envelope must be rejected"),
+                Err(err) => err,
+            };
+            let message = err.to_string();
+            assert!(
+                message.contains("parameters"),
+                "unexpected decode error: {message}"
+            );
+        }
+
+        #[test]
+        fn take_optional_default_decodes_subject_domain_index_storages() {
+            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let account = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+            let subject = account.subject_id();
+
+            let mut subject_domains: Storage<AccountSubjectId, BTreeSet<DomainId>> =
+                Storage::default();
+            subject_domains.insert(subject.clone(), BTreeSet::new());
+            let mut domain_subjects: Storage<DomainId, BTreeSet<AccountSubjectId>> =
+                Storage::default();
+            domain_subjects.insert(domain_id.clone(), BTreeSet::from([subject.clone()]));
+
+            let mut map = json::native::Map::new();
+            map.insert(
+                "account_subject_domains".to_owned(),
+                norito::json::to_value(&subject_domains).expect("serialize subject domains"),
+            );
+            map.insert(
+                "domain_account_subjects".to_owned(),
+                norito::json::to_value(&domain_subjects).expect("serialize domain subjects"),
+            );
+
+            let decoded_subject_domains: Storage<AccountSubjectId, BTreeSet<DomainId>> =
+                take_optional_default(&mut map, "account_subject_domains")
+                    .expect("decode subject domains");
+            let decoded_domain_subjects: Storage<DomainId, BTreeSet<AccountSubjectId>> =
+                take_optional_default(&mut map, "domain_account_subjects")
+                    .expect("decode domain subjects");
+
+            assert_eq!(
+                decoded_subject_domains.view().get(&subject),
+                Some(&BTreeSet::new())
+            );
+            assert_eq!(
+                decoded_domain_subjects.view().get(&domain_id),
+                Some(&BTreeSet::from([subject]))
+            );
         }
     }
 }
@@ -24684,6 +24709,140 @@ mod tests {
         assert!(summary.fee_sponsors.contains(&account_id));
     }
 
+    #[test]
+    fn world_view_exposes_subject_domain_links() {
+        let keypair = KeyPair::random();
+        let wonderland: DomainId = "wonderland".parse().expect("domain id");
+        let acme: DomainId = "acme".parse().expect("domain id");
+
+        let wonderland_account = AccountId::new(wonderland.clone(), keypair.public_key().clone());
+        let acme_account = AccountId::new(acme.clone(), keypair.public_key().clone());
+        let second_subject_account =
+            AccountId::new(wonderland.clone(), KeyPair::random().public_key().clone());
+        let shared_subject = wonderland_account.subject_id();
+
+        let world = World::with(
+            [
+                Domain::new(wonderland.clone()).build(&wonderland_account),
+                Domain::new(acme.clone()).build(&acme_account),
+            ],
+            [
+                Account::new(wonderland_account.clone()).build(&wonderland_account),
+                Account::new(acme_account.clone()).build(&acme_account),
+                Account::new(second_subject_account.clone()).build(&second_subject_account),
+            ],
+            [],
+        );
+        let world_view = world.view();
+
+        let linked_domains = world_view.domains_for_subject(&shared_subject);
+        assert_eq!(linked_domains, vec![acme.clone(), wonderland.clone()]);
+
+        let subjects_in_wonderland = world_view.account_subjects_in_domain(&wonderland);
+        assert!(subjects_in_wonderland.contains(&shared_subject));
+        assert!(subjects_in_wonderland.contains(&second_subject_account.subject_id()));
+        assert_eq!(subjects_in_wonderland.len(), 2);
+    }
+
+    #[test]
+    fn unlink_last_domain_keeps_subject_record_materialized() {
+        let keypair = KeyPair::random();
+        let solo: DomainId = "solo".parse().expect("domain id");
+        let scoped = AccountId::new(solo.clone(), keypair.public_key().clone());
+        let subject = scoped.subject_id();
+
+        let world = World::with(
+            [Domain::new(solo.clone()).build(&scoped)],
+            [Account::new(scoped.clone()).build(&scoped)],
+            [],
+        );
+
+        let mut block = world.block();
+        #[cfg(feature = "telemetry")]
+        let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
+        #[cfg(not(feature = "telemetry"))]
+        let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
+        let removed = tx.remove_account_with_links(&scoped);
+        assert!(removed.is_some(), "scoped account must be removed");
+        let linked_domains = tx
+            .account_subject_domains
+            .get(&subject)
+            .expect("subject record should remain materialized");
+        assert!(
+            linked_domains.is_empty(),
+            "subject should remain with no linked domains after last unlink"
+        );
+        assert!(
+            tx.domain_account_subjects.get(&solo).is_none(),
+            "domain subject index should be empty after unlink"
+        );
+        tx.apply();
+        block.commit();
+
+        let view = world.view();
+        assert!(view.accounts.get(&scoped).is_none());
+        let linked_domains = view
+            .account_subject_domains
+            .get(&subject)
+            .expect("subject record should persist post-commit");
+        assert!(
+            linked_domains.is_empty(),
+            "subject should persist with an empty domain set"
+        );
+    }
+
+    #[test]
+    fn unlink_one_domain_preserves_other_subject_links() {
+        let keypair = KeyPair::random();
+        let wonderland: DomainId = "wonderland".parse().expect("domain id");
+        let acme: DomainId = "acme".parse().expect("domain id");
+
+        let wonderland_account = AccountId::new(wonderland.clone(), keypair.public_key().clone());
+        let acme_account = AccountId::new(acme.clone(), keypair.public_key().clone());
+        let subject = wonderland_account.subject_id();
+
+        let world = World::with(
+            [
+                Domain::new(wonderland.clone()).build(&wonderland_account),
+                Domain::new(acme.clone()).build(&acme_account),
+            ],
+            [
+                Account::new(wonderland_account.clone()).build(&wonderland_account),
+                Account::new(acme_account.clone()).build(&acme_account),
+            ],
+            [],
+        );
+
+        let mut block = world.block();
+        #[cfg(feature = "telemetry")]
+        let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
+        #[cfg(not(feature = "telemetry"))]
+        let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
+        let removed = tx.remove_account_with_links(&wonderland_account);
+        assert!(removed.is_some(), "linked scoped account must be removed");
+        let linked_domains = tx
+            .account_subject_domains
+            .get(&subject)
+            .expect("subject record should remain materialized");
+        assert_eq!(linked_domains, &BTreeSet::from([acme.clone()]));
+        let subjects_in_acme = tx
+            .domain_account_subjects
+            .get(&acme)
+            .expect("remaining domain should still reference subject");
+        assert!(subjects_in_acme.contains(&subject));
+        assert!(
+            tx.domain_account_subjects.get(&wonderland).is_none(),
+            "unlinked domain should have no subject references"
+        );
+        tx.apply();
+        block.commit();
+
+        let view = world.view();
+        assert!(view.accounts.get(&wonderland_account).is_none());
+        assert!(view.accounts.get(&acme_account).is_some());
+        assert_eq!(view.domains_for_subject(&subject), vec![acme]);
+    }
+
     fn dataspace_catalog_for_lane_catalog(catalog: &LaneCatalog) -> DataSpaceCatalog {
         let mut ids: BTreeSet<DataSpaceId> = catalog
             .lanes()
@@ -24856,6 +25015,7 @@ mod tests {
         world
             .rebuild_domain_selector_index()
             .expect("domain selector rebuild");
+        world.rebuild_account_subject_domain_indexes();
         world
             .rebuild_uaid_account_index()
             .expect("UAID index rebuild");
@@ -24871,9 +25031,50 @@ mod tests {
             world.domain_selectors.view().get(&selector),
             Some(&domain_id)
         );
+        let subject = owner_id.subject_id();
+        assert_eq!(
+            world.account_subject_domains.view().get(&subject),
+            Some(&BTreeSet::from([domain_id.clone()]))
+        );
+        assert_eq!(
+            world.domain_account_subjects.view().get(&domain_id),
+            Some(&BTreeSet::from([subject]))
+        );
         assert_eq!(world.uaid_accounts.view().get(&uaid), Some(&owner_id));
         assert_eq!(world.account_aliases.view().get(&label), Some(&owner_id));
         assert_eq!(world.opaque_uaids.view().get(&opaque), Some(&uaid));
+    }
+
+    #[test]
+    fn world_rebuild_account_indexes_preserves_materialized_empty_subject_records() {
+        let mut world = World::default();
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let keypair = KeyPair::random();
+        let scoped = AccountId::new(domain_id, keypair.public_key().clone());
+        let subject = scoped.subject_id();
+
+        world
+            .account_subject_domains
+            .insert(subject.clone(), BTreeSet::new());
+
+        world.rebuild_account_subject_domain_indexes();
+
+        assert_eq!(
+            world.account_subject_domains.view().get(&subject),
+            Some(&BTreeSet::new())
+        );
+        assert!(
+            world.domain_account_subjects.view().iter().next().is_none(),
+            "empty-subject materialization must not emit phantom domain entries"
+        );
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        assert_eq!(
+            state.world.account_subject_domains.view().get(&subject),
+            Some(&BTreeSet::new())
+        );
     }
 
     #[test]
@@ -29790,10 +29991,12 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn axt_replay_ledger_survives_state_restart() {
-        let authority: AccountId =
-            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
+        let authority: AccountId = AccountId::new(
+            "wonder".parse().expect("domain id"),
+            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
                 .parse()
-                .unwrap();
+                .expect("public key"),
+        );
         let dsid = DataSpaceId::new(71);
         let lane = LaneId::new(0);
         let manifest_root = [0x44; 32];
@@ -30027,10 +30230,12 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn axt_replay_ledger_prunes_after_retention_window() {
-        let authority: AccountId =
-            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
+        let authority: AccountId = AccountId::new(
+            "wonder".parse().expect("domain id"),
+            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
                 .parse()
-                .unwrap();
+                .expect("public key"),
+        );
         let dsid = DataSpaceId::new(72);
         let lane = LaneId::new(0);
         let manifest_root = [0x55; 32];
@@ -30965,10 +31170,12 @@ mod tests {
             (committed, ledger_keys)
         }
 
-        let authority: AccountId =
-            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
+        let authority: AccountId = AccountId::new(
+            "wonder".parse().expect("domain id"),
+            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
                 .parse()
-                .expect("account id");
+                .expect("public key"),
+        );
         let merchant_id = gen_account_in("wonderland").0;
         let dsid = DataSpaceId::new(81);
         let lane = LaneId::new(0);

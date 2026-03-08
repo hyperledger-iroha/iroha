@@ -1559,7 +1559,7 @@ fn explorer_assets_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "owned_by",
-        "Filter assets by account owner (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+        "Filter assets by account owner (accepts IH58 (preferred)/sora (second-best) literals).",
     ));
     params.push(string_query_param(
         "definition",
@@ -1576,7 +1576,7 @@ fn explorer_transactions_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "authority",
-        "Filter transactions by authority account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+        "Filter transactions by authority account (accepts IH58 (preferred)/sora (second-best) literals).",
     ));
     params.push(integer_query_param(
         "block",
@@ -1598,11 +1598,11 @@ fn explorer_instructions_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "authority",
-        "Filter instructions by authority account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+        "Filter instructions by authority account (accepts IH58 (preferred)/sora (second-best) literals).",
     ));
     params.push(string_query_param(
         "account",
-        "Filter transfer instructions by participant account (source or destination; accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+        "Filter transfer instructions by participant account (source or destination; accepts IH58 (preferred)/sora (second-best) literals).",
     ));
     params.push(string_query_param(
         "transaction_hash",
@@ -1661,7 +1661,7 @@ fn offline_allowance_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter allowances by controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "Filter allowances by controller account (accepts IH58 (preferred)/sora (second-best) literals).",
         ),
         string_query_param("asset_id", "Filter allowances by asset identifier."),
         integer_query_param(
@@ -1721,15 +1721,15 @@ fn offline_transfer_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter bundles by originating controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "Filter bundles by originating controller account (accepts IH58 (preferred)/sora (second-best) literals).",
         ),
         string_query_param(
             "receiver_id",
-            "Filter bundles by receiver account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "Filter bundles by receiver account (accepts IH58 (preferred)/sora (second-best) literals).",
         ),
         string_query_param(
             "deposit_account_id",
-            "Filter bundles by deposit account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "Filter bundles by deposit account (accepts IH58 (preferred)/sora (second-best) literals).",
         ),
         string_query_param("asset_id", "Filter bundles by asset identifier."),
         string_query_param(
@@ -1793,11 +1793,11 @@ fn offline_receipt_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter receipts by sender/controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "Filter receipts by sender/controller account (accepts IH58 (preferred)/sora (second-best) literals).",
         ),
         string_query_param(
             "receiver_id",
-            "Filter receipts by receiver account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "Filter receipts by receiver account (accepts IH58 (preferred)/sora (second-best) literals).",
         ),
         string_query_param(
             "bundle_id_hex",
@@ -3577,17 +3577,6 @@ fn account_paths() -> Map {
             "Query accounts with JSON envelope.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/accounts/resolve".to_owned(),
-        Value::Object(json_post_operation(
-            "Accounts",
-            "Resolve account literals.",
-            "Resolve account literals into canonical IH58 identifiers.",
-            "#/components/schemas/AccountResolveRequest",
-            "#/components/schemas/AccountResolveResponse",
             Vec::new(),
         )),
     );
@@ -6316,7 +6305,7 @@ fn nexus_dataspaces_account_summary_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Resolves the supplied account literal (IH58 (preferred)/sora (second-best)/alias/public-key) \
+            "Resolves the supplied account literal (IH58 (preferred)/sora (second-best)) \
              and returns a joined view of UAID bindings, space-directory manifests, \
              portfolio counters, and per-dataspace consensus commitments."
                 .to_owned(),
@@ -6331,7 +6320,7 @@ fn nexus_dataspaces_account_summary_operation() -> Map {
         Value::Array(vec![
             string_path_param(
                 "literal",
-                "Account literal to resolve (IH58 (preferred)/sora (second-best)/alias/public-key).",
+                "Account literal to resolve (IH58 (preferred)/sora (second-best)).",
             ),
             address_format_query_param(),
         ]),
@@ -6404,7 +6393,10 @@ fn kaigi_relay_id_parameter() -> Map {
     param.insert("required".into(), Value::Bool(true));
     param.insert(
         "description".into(),
-        Value::String("Relay account identifier (e.g., `relay@kaigi`).".to_owned()),
+        Value::String(
+            "Relay account identifier encoded as IH58 (preferred) or compressed sora literal."
+                .to_owned(),
+        ),
     );
     let mut schema = Map::new();
     schema.insert("type".into(), Value::String("string".to_owned()));
@@ -7753,47 +7745,6 @@ fn openapi_schemas() -> Map {
                 "source": {
                     "type": "string",
                     "description": "Backend source for the alias mapping."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "AccountResolveRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["literal"],
-            "additionalProperties": false,
-            "properties": {
-                "literal": {
-                    "type": "string",
-                    "description": "Account literal to resolve."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "AccountResolveResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["account_id", "domain", "source"],
-            "additionalProperties": false,
-            "properties": {
-                "account_id": {
-                    "type": "string",
-                    "description": "Canonical IH58 account identifier."
-                },
-                "domain": {
-                    "type": "string",
-                    "description": "Resolved domain label."
-                },
-                "source": {
-                    "type": "string",
-                    "description": "Resolution source (encoded, alias, public_key, uaid, opaque)."
-                },
-                "format": {
-                    "type": "string",
-                    "enum": ["ih58", "compressed", "canonical_hex"],
-                    "description": "Address format when source is encoded."
                 }
             }
         }),
@@ -9346,7 +9297,7 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "relay_id": {
                     "type": "string",
-                    "description": "Relay account identifier (IH58 or `<alias|public_key>@domain`)."
+                    "description": "Relay account identifier (IH58 or `sora...` compressed literal)."
                 },
                 "domain": {
                     "type": "string",
@@ -10402,7 +10353,6 @@ mod tests {
         assert!(paths.contains_key("/v1/telemetry/live"));
         assert!(paths.contains_key("/v1/runtime/abi/active"));
         assert!(paths.contains_key("/v1/accounts"));
-        assert!(paths.contains_key("/v1/accounts/resolve"));
         assert!(paths.contains_key("/v1/assets/definitions"));
         assert!(paths.contains_key("/v1/explorer/accounts"));
         assert!(paths.contains_key("/v1/sorafs/providers"));

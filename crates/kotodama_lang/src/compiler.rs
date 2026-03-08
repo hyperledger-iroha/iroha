@@ -393,7 +393,9 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
 
     let (type_id, payload) = match kind {
         DRK::Account => {
-            let id: iroha_data_model::account::AccountId = raw.parse().ok()?;
+            let id = iroha_data_model::account::AccountId::parse_encoded(raw)
+                .ok()?
+                .into_account_id();
             (PointerType::AccountId, to_bytes(&id).ok()?)
         }
         DRK::AssetDef => {
@@ -1010,10 +1012,12 @@ seiyaku Test {
             isi::{InstructionBox, Mint},
         };
 
-        let account: AccountId =
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+        let account = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
-                .unwrap();
+                .expect("public key"),
+        );
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
         let isi = InstructionBox::from(Mint::asset_numeric(1u32, asset_id.clone()));
@@ -1147,10 +1151,12 @@ seiyaku Test {
             query::{QueryRequest, SingularQueryBox},
         };
 
-        let account: AccountId =
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+        let account = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
-                .unwrap();
+                .expect("public key"),
+        );
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
         let request = QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById::new(
@@ -1188,13 +1194,16 @@ seiyaku Test {
 
     #[test]
     fn manifest_access_set_hints_include_transfer_domain_literal() {
-        use iroha_data_model::{account::AccountId, domain::DomainId};
+        use iroha_data_model::{
+            account::{AccountId, ParsedAccountId},
+            domain::DomainId,
+        };
 
-        let from_literal =
-            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland";
-        let to_literal =
-            "ed0120CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC@wonderland";
-        let to: AccountId = to_literal.parse().unwrap();
+        let from_literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+        let to_literal = "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU";
+        let to = AccountId::parse_encoded(to_literal)
+            .map(ParsedAccountId::into_account_id)
+            .expect("recipient account literal");
         let domain: DomainId = "wonderland".parse().unwrap();
         let src = format!(
             "fn main() {{ transfer_domain(account_id(\"{from_literal}\"), domain(\"{domain}\"), account_id(\"{to_literal}\")); }}"
@@ -1280,9 +1289,7 @@ seiyaku Test {
 
     #[test]
     fn manifest_trigger_decl_sets_authority() {
-        use std::str::FromStr;
-
-        use iroha_data_model::account::AccountId;
+        use iroha_data_model::account::{AccountId, ParsedAccountId};
 
         let src = r#"
 seiyaku Test {
@@ -1290,7 +1297,7 @@ seiyaku Test {
   register_trigger wake {
     call run;
     on time pre_commit;
-    authority "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland";
+    authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
   }
 }
 "#;
@@ -1309,10 +1316,9 @@ seiyaku Test {
         assert_eq!(
             trigger.authority,
             Some(
-                AccountId::from_str(
-                    "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-                )
-                .expect("authority")
+                AccountId::parse_encoded("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                    .map(ParsedAccountId::into_account_id)
+                    .expect("authority literal"),
             )
         );
     }
@@ -1336,9 +1342,10 @@ seiyaku Test {
 
     #[test]
     fn manifest_access_set_hints_include_explicit_access() {
+        const ACCOUNT_KEY: &str = "account:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
         let src = r#"
 seiyaku Test {
-  #[access(read="account:alice@wonderland", write="account:alice@wonderland")]
+  #[access(read="account:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn", write="account:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")]
   kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {
     transfer_asset(from, to, asset, amount);
   }
@@ -1351,29 +1358,15 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert!(
-            hints
-                .read_keys
-                .contains(&"account:alice@wonderland".to_string())
-        );
-        assert!(
-            hints
-                .write_keys
-                .contains(&"account:alice@wonderland".to_string())
-        );
+        assert!(hints.read_keys.contains(&ACCOUNT_KEY.to_string()));
+        assert!(hints.write_keys.contains(&ACCOUNT_KEY.to_string()));
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|e| e.name == "move")
             .expect("entrypoint present");
-        assert!(
-            main.read_keys
-                .contains(&"account:alice@wonderland".to_string())
-        );
-        assert!(
-            main.write_keys
-                .contains(&"account:alice@wonderland".to_string())
-        );
+        assert!(main.read_keys.contains(&ACCOUNT_KEY.to_string()));
+        assert!(main.write_keys.contains(&ACCOUNT_KEY.to_string()));
     }
 
     #[test]
@@ -1477,10 +1470,12 @@ seiyaku Test {
         };
 
         let trigger_id = TriggerId::new(Name::from_str("wake").expect("trigger name"));
-        let authority = AccountId::from_str(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland",
-        )
-        .expect("authority");
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                .parse()
+                .expect("public key"),
+        );
         let filter = EventFilterBox::ExecuteTrigger(ExecuteTriggerEventFilter::new());
         let action = Action::new(
             Executable::Ivm(IvmBytecode::from_compiled(Vec::new())),
@@ -3388,12 +3383,14 @@ impl Compiler {
                                 );
                                 i18n::translate(self.lang, Message::SemanticError(&err))
                             })?;
-                            let acct: AccountId = to_str.parse().map_err(|e| {
-                                let err = format!(
-                                    "build_unshield_inline invalid AccountId literal `{to_str}`: {e}"
-                                );
-                                i18n::translate(self.lang, Message::SemanticError(&err))
-                            })?;
+                            let acct = AccountId::parse_encoded(&to_str)
+                                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                                .map_err(|e| {
+                                    let err = format!(
+                                        "build_unshield_inline invalid AccountId literal `{to_str}`: {e}"
+                                    );
+                                    i18n::translate(self.lang, Message::SemanticError(&err))
+                                })?;
                             // inputs: require exactly one 32-byte chunk
                             let inputs_literal = require_literal("inputs", inputs)?;
                             let in_bytes =
@@ -6033,10 +6030,12 @@ impl Compiler {
             }
             let (type_id, mut payload) = match key {
                 DataKey(DataKind::Account, s) => {
-                    let id: AccountId = s.parse().map_err(|e| {
-                        let err = format!("invalid AccountId literal `{s}`: {e}");
-                        i18n::translate(self.lang, Message::SemanticError(&err))
-                    })?;
+                    let id = AccountId::parse_encoded(s)
+                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                        .map_err(|e| {
+                            let err = format!("invalid AccountId literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?;
                     (
                         1u16,
                         to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
@@ -6579,8 +6578,8 @@ fn record_isi_access(
             from, to, asset, ..
         } => {
             let (Some(from), Some(to), Some(asset_def)) = (
-                parse_temp::<AccountId>(string_map, func_idx, *from),
-                parse_temp::<AccountId>(string_map, func_idx, *to),
+                parse_account_temp(string_map, func_idx, *from),
+                parse_account_temp(string_map, func_idx, *to),
                 parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset),
             ) else {
                 return apply_fallback(access_set, hint_diagnostics);
@@ -6593,7 +6592,7 @@ fn record_isi_access(
         ir::Instr::MintAsset { account, asset, .. }
         | ir::Instr::BurnAsset { account, asset, .. } => {
             let (Some(account), Some(asset_def)) = (
-                parse_temp::<AccountId>(string_map, func_idx, *account),
+                parse_account_temp(string_map, func_idx, *account),
                 parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset),
             ) else {
                 return apply_fallback(access_set, hint_diagnostics);
@@ -6609,7 +6608,7 @@ fn record_isi_access(
             add_domain_rw(access_set, &id);
         }
         ir::Instr::RegisterAccount { account } | ir::Instr::UnregisterAccount { account } => {
-            let Some(id) = parse_temp::<AccountId>(string_map, func_idx, *account) else {
+            let Some(id) = parse_account_temp(string_map, func_idx, *account) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
             add_domain_r(access_set, id.domain());
@@ -6624,7 +6623,7 @@ fn record_isi_access(
         }
         ir::Instr::SetAccountDetail { account, key, .. } => {
             let (Some(id), Some(key)) = (
-                parse_temp(string_map, func_idx, *account),
+                parse_account_temp(string_map, func_idx, *account),
                 parse_temp(string_map, func_idx, *key),
             ) else {
                 return apply_fallback(access_set, hint_diagnostics);
@@ -6639,8 +6638,8 @@ fn record_isi_access(
         }
         ir::Instr::TransferNft { from, nft, to } => {
             let (Some(from), Some(to), Some(id)) = (
-                parse_temp(string_map, func_idx, *from),
-                parse_temp(string_map, func_idx, *to),
+                parse_account_temp(string_map, func_idx, *from),
+                parse_account_temp(string_map, func_idx, *to),
                 parse_temp(string_map, func_idx, *nft),
             ) else {
                 return apply_fallback(access_set, hint_diagnostics);
@@ -6663,7 +6662,7 @@ fn record_isi_access(
         }
         ir::Instr::GrantRole { account, name } | ir::Instr::RevokeRole { account, name } => {
             let (Some(account), Some(role)) = (
-                parse_temp(string_map, func_idx, *account),
+                parse_account_temp(string_map, func_idx, *account),
                 parse_temp(string_map, func_idx, *name),
             ) else {
                 return apply_fallback(access_set, hint_diagnostics);
@@ -6674,7 +6673,7 @@ fn record_isi_access(
         }
         ir::Instr::GrantPermission { account, token }
         | ir::Instr::RevokePermission { account, token } => {
-            let Some(account) = parse_temp(string_map, func_idx, *account) else {
+            let Some(account) = parse_account_temp(string_map, func_idx, *account) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
             let Some(perm) =
@@ -6723,7 +6722,7 @@ fn record_isi_access(
         ir::Instr::TransferDomain { domain, to } => {
             let (Some(domain), Some(to)) = (
                 parse_temp::<DomainId>(string_map, func_idx, *domain),
-                parse_temp::<AccountId>(string_map, func_idx, *to),
+                parse_account_temp(string_map, func_idx, *to),
             ) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
@@ -6988,12 +6987,32 @@ fn record_singular_query_access(
     }
 }
 
-fn parse_temp<T: std::str::FromStr>(
+trait ParseTempLiteral: Sized {
+    fn parse_temp_literal(raw: &str) -> Option<Self>;
+}
+
+impl<T: std::str::FromStr> ParseTempLiteral for T {
+    fn parse_temp_literal(raw: &str) -> Option<Self> {
+        raw.parse().ok()
+    }
+}
+
+fn parse_temp<T: ParseTempLiteral>(
     string_map: &HashMap<(usize, ir::Temp), String>,
     func_idx: usize,
     temp: ir::Temp,
 ) -> Option<T> {
-    string_map.get(&(func_idx, temp))?.parse().ok()
+    T::parse_temp_literal(string_map.get(&(func_idx, temp))?)
+}
+
+fn parse_account_temp(
+    string_map: &HashMap<(usize, ir::Temp), String>,
+    func_idx: usize,
+    temp: ir::Temp,
+) -> Option<AccountId> {
+    AccountId::parse_encoded(string_map.get(&(func_idx, temp))?)
+        .ok()
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
 }
 
 fn permission_name_from_token(

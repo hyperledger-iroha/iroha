@@ -2,123 +2,73 @@ import XCTest
 @testable import IrohaSwift
 
 final class OfflineNoritoEncodingTests: XCTestCase {
-    func testAssetIdParseAcceptsShorthandDefinition() throws {
-        let parts = try OfflineAssetIdParts.parse("xor##alice@wonderland")
-        XCTAssertEqual(parts, OfflineAssetIdParts(accountId: "alice@wonderland",
-                                                  definitionName: "xor",
-                                                  definitionDomain: "wonderland"))
+    private func makeAddress(seed: UInt8,
+                             domain: String = AccountAddress.defaultDomainName) throws -> AccountAddress {
+        let keypair = try Keypair(privateKeyBytes: Data(repeating: seed, count: 32))
+        return try AccountAddress.fromAccount(publicKey: keypair.publicKey)
     }
 
-    func testAssetIdParseAcceptsExplicitDefinition() throws {
-        let parts = try OfflineAssetIdParts.parse("rose#wonderland#alice@wonderland")
-        XCTAssertEqual(parts, OfflineAssetIdParts(accountId: "alice@wonderland",
-                                                  definitionName: "rose",
-                                                  definitionDomain: "wonderland"))
+    private func makeIH58(seed: UInt8,
+                          domain: String = AccountAddress.defaultDomainName) throws -> String {
+        let address = try makeAddress(seed: seed, domain: domain)
+        return try address.toIH58(networkPrefix: 0x02F1)
     }
 
-    func testAssetIdParseAcceptsExplicitDefinitionWithIh58Account() throws {
-        let keypair = try Keypair(privateKeyBytes: Data(repeating: 1, count: 32))
-        let address = try AccountAddress.fromAccount(domain: "wonderland", publicKey: keypair.publicKey)
+    func testEncodeAssetIdAcceptsNoritoHexLiteral() throws {
+        let encoded = try OfflineNorito.encodeAssetId("norito:0A0B")
+        XCTAssertEqual(encoded, Data([0x0A, 0x0B]))
+    }
+
+    func testEncodeAssetIdRejectsTextualForms() {
+        assertInvalidAssetId("rose#wonderland#alice@wonderland")
+        assertInvalidAssetId("xor##alice@wonderland")
+        assertInvalidAssetId("rose##alice@wonderland")
+    }
+
+    func testEncodeAssetIdRejectsInvalidHexPayload() {
+        assertInvalidAssetId("norito:GG")
+        assertInvalidAssetId("norito:abc")
+        assertInvalidAssetId("norito:")
+    }
+
+    func testEncodeAccountIdAcceptsIh58AndCompressedForms() throws {
+        let address = try makeAddress(seed: 1)
         let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-        let parts = try OfflineAssetIdParts.parse("rose#wonderland#\(ih58)")
-        XCTAssertEqual(parts, OfflineAssetIdParts(accountId: ih58,
-                                                  definitionName: "rose",
-                                                  definitionDomain: "wonderland"))
+        let compressed = try address.toCompressedSora()
+        let encodedFromIh58 = try OfflineNorito.encodeAccountId(ih58)
+        let encodedFromCompressed = try OfflineNorito.encodeAccountId(compressed)
+        XCTAssertEqual(encodedFromCompressed, encodedFromIh58)
     }
 
-    func testAssetIdParseAcceptsShorthandWithDefaultDomainIh58Account() throws {
-        let keypair = try Keypair(privateKeyBytes: Data(repeating: 2, count: 32))
-        let address = try AccountAddress.fromAccount(domain: AccountAddress.defaultDomainName,
-                                                     publicKey: keypair.publicKey)
-        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-        let parts = try OfflineAssetIdParts.parse("xor##\(ih58)")
-        XCTAssertEqual(parts, OfflineAssetIdParts(accountId: ih58,
-                                                  definitionName: "xor",
-                                                  definitionDomain: AccountAddress.defaultDomainName))
+    func testEncodeAccountIdRejectsAliasLiteral() {
+        let literal = "alice@wonderland"
+        assertInvalidAccountId(literal, expected: literal)
     }
 
-    func testAssetIdParseRejectsEmptyAccountName() {
-        assertInvalidAccountId("rose#wonderland#@wonderland", expected: "@wonderland")
+    func testEncodeAccountIdRejectsIh58WithDomainSuffix() throws {
+        let ih58 = try makeIH58(seed: 2)
+        let providedLiteral = "\(ih58)@hbl"
+        assertInvalidAccountId(providedLiteral, expected: providedLiteral)
     }
 
-    func testAssetIdParseRejectsExtraAtSign() {
-        assertInvalidAccountId("rose#wonderland#alice@wonderland@extra",
-                               expected: "alice@wonderland@extra")
-    }
-
-    func testAssetIdParseRejectsReservedCharacterInDefinition() {
-        assertInvalidAssetId("rose$#wonderland#alice@wonderland")
-    }
-
-    func testAssetIdParseRejectsExtraDefinitionSeparator() {
-        assertInvalidAssetId("rose#won#der#alice@wonderland")
-    }
-
-    func testAssetIdParseRejectsReservedCharacterInAccountName() {
-        assertInvalidAccountId("rose#wonderland#alice$@wonderland", expected: "alice$@wonderland")
-    }
-
-    func testAccountIdResolutionViaUaidResolver() throws {
-        let keypair = try Keypair(privateKeyBytes: Data(repeating: 3, count: 32))
-        let address = try AccountAddress.fromAccount(domain: "wonderland", publicKey: keypair.publicKey)
-        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
+    func testEncodeAccountIdRejectsUaidLiteral() {
         let uaid = "uaid:" + String(repeating: "0", count: 63) + "1"
-        OfflineAccountResolvers.setAccountResolver { kind, value in
-            switch kind {
-            case .uaid:
-                XCTAssertEqual(value, uaid)
-                return ih58
-            case .opaque:
-                return nil
-            }
-        }
-        defer { OfflineAccountResolvers.setAccountResolver(nil) }
-
-        let resolved = try OfflineNorito.encodeAccountId(uaid)
-        let expected = try OfflineNorito.encodeAccountId(ih58)
-        XCTAssertEqual(resolved, expected)
+        assertInvalidAccountId(uaid, expected: uaid)
     }
 
-    func testAccountIdResolutionViaOpaqueResolver() throws {
-        let keypair = try Keypair(privateKeyBytes: Data(repeating: 4, count: 32))
-        let address = try AccountAddress.fromAccount(domain: "wonderland", publicKey: keypair.publicKey)
-        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
+    func testEncodeAccountIdRejectsOpaqueLiteral() {
         let opaque = "opaque:" + String(repeating: "0", count: 64)
-        OfflineAccountResolvers.setAccountResolver { kind, value in
-            switch kind {
-            case .uaid:
-                return nil
-            case .opaque:
-                XCTAssertEqual(value, opaque)
-                return ih58
-            }
-        }
-        defer { OfflineAccountResolvers.setAccountResolver(nil) }
-
-        let resolved = try OfflineNorito.encodeAccountId(opaque)
-        let expected = try OfflineNorito.encodeAccountId(ih58)
-        XCTAssertEqual(resolved, expected)
+        assertInvalidAccountId(opaque, expected: opaque)
     }
 
-    func testEncodeAccountIdRebasesDefaultDomainIh58WhenExplicitDomainProvided() throws {
-        let keypair = try Keypair(privateKeyBytes: Data(repeating: 5, count: 32))
-        let defaultAddress = try AccountAddress.fromAccount(
-            domain: AccountAddress.defaultDomainName,
-            publicKey: keypair.publicKey
-        )
-        let defaultIh58 = try defaultAddress.toIH58(networkPrefix: 0x02F1)
-        let providedLiteral = "\(defaultIh58)@bank1"
-
-        let expectedAddress = try defaultAddress.rebasedFromDefaultDomain(to: "bank1")
-        let expectedIh58 = try expectedAddress.toIH58(networkPrefix: 0x02F1)
-        let expected = try OfflineNorito.encodeAccountId("\(expectedIh58)@bank1")
-
-        let encoded = try OfflineNorito.encodeAccountId(providedLiteral)
-        XCTAssertEqual(encoded, expected)
+    func testEncodeAccountIdRejectsCanonicalHexLiteral() throws {
+        let address = try makeAddress(seed: 3, domain: "wonderland")
+        let canonical = try address.canonicalHex()
+        assertInvalidAccountId(canonical, expected: canonical)
     }
 
     private func assertInvalidAssetId(_ value: String) {
-        XCTAssertThrowsError(try OfflineAssetIdParts.parse(value)) { error in
+        XCTAssertThrowsError(try OfflineNorito.encodeAssetId(value)) { error in
             guard case let OfflineNoritoError.invalidAssetId(raw) = error else {
                 return XCTFail("Expected invalidAssetId error, got \(error)")
             }
@@ -127,7 +77,7 @@ final class OfflineNoritoEncodingTests: XCTestCase {
     }
 
     private func assertInvalidAccountId(_ value: String, expected: String) {
-        XCTAssertThrowsError(try OfflineAssetIdParts.parse(value)) { error in
+        XCTAssertThrowsError(try OfflineNorito.encodeAccountId(value)) { error in
             guard case let OfflineNoritoError.invalidAccountId(actual) = error else {
                 return XCTFail("Expected invalidAccountId error, got \(error)")
             }

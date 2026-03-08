@@ -13,6 +13,12 @@ use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as 
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
 
+fn fixture_account(hex_public_key: &str) -> AccountId {
+    let domain: DomainId = "wonderland".parse().expect("domain id");
+    let public_key = hex_public_key.parse().expect("public key");
+    AccountId::new(domain, public_key)
+}
+
 fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {
     let payload = norito::to_bytes(val).expect("encode payload");
     let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + iroha_crypto::Hash::LENGTH);
@@ -28,14 +34,10 @@ fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {
 #[test]
 fn apply_queued_isis_from_corehost_transfer_asset() {
     // Build a minimal IVM program that performs SCALL TRANSFER_ASSET and HALT
-    let from: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-            .parse()
-            .unwrap();
-    let to: AccountId =
-        "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
-            .parse()
-            .unwrap();
+    let from =
+        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let to =
+        fixture_account("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
     let asset_def: AssetDefinitionId = "coin#wonderland".parse().unwrap();
     let from_bytes = tlv_envelope(PointerType::AccountId, &from);
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);

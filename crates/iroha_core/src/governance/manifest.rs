@@ -454,7 +454,8 @@ impl GovernanceRules {
                 if trimmed.is_empty() {
                     return Err("validator entry cannot be blank".into());
                 }
-                let account = AccountId::from_str(trimmed)
+                let account = AccountId::parse_encoded(trimmed)
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .map_err(|err| format!("invalid validator id `{trimmed}`: {err}"))?;
                 if seen.insert(account.clone()) {
                     validators.push(account);
@@ -1181,7 +1182,7 @@ mod tests {
         GovernanceCatalog, GovernanceModule as ConfigGovernanceModule, LaneRegistry,
     };
     use iroha_data_model::{
-        account::{AccountAddress, AccountId, address},
+        account::AccountId,
         nexus::{LaneCatalog, LaneConfig},
         prelude::Name,
     };
@@ -1192,10 +1193,7 @@ mod tests {
     use super::*;
 
     fn account_id_literal(account: &AccountId) -> String {
-        let address = AccountAddress::from_account_id(account)
-            .and_then(|addr| addr.to_ih58(address::chain_discriminant()))
-            .expect("account id should encode as IH58 address");
-        format!("{address}@{}", account.domain())
+        account.to_string()
     }
 
     #[test]

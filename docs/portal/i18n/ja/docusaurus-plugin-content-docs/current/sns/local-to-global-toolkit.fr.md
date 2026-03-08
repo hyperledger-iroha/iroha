@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 オプション:
 
 - `--format compressed (`sora`)` 出撃 `sora...` IH58 を使用します。
-- `--no-append-domain` を注いでください。
+- `domainless output (default)` を注いでください。
 - `--audit-only` 無視者が変換を実行します。
 - `--allow-errors` は、不正な形式の機器のスキャンを継続します (CLI の対応)。
 
@@ -48,7 +48,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 2. ブロックは、Quand `audit.json` signale des selecteurs Local (`domain.kind = local12`) をマージします。
    デフォルトの `true` の値 (クラスタの開発/テスト期間中は `false` に合格)
    回帰診断) et ajoutez
-   `iroha tools address normalize --fail-on-warning --only-local` CI プール クエリ回帰
+   `iroha tools address normalize` CI プール クエリ回帰
    エコーエント・アヴァン・ラ・プロダクション。
 
 文書ソースと詳細、証拠とスニペットのチェックリストを閲覧する

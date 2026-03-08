@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, PublicKey};
 use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, WsvHost},
+    mock_wsv::{AssetDefinitionId, DomainId, MockWorldStateView, ScopedAccountId, WsvHost},
     syscalls,
 };
+use norito::to_bytes;
 
 mod common;
 use common::assemble_syscalls;
@@ -29,34 +30,52 @@ fn make_raw_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn account(domain: &str, public_key: &str) -> ScopedAccountId {
+    let domain: DomainId = domain.parse().unwrap();
+    let public_key: PublicKey = public_key.parse().unwrap();
+    ScopedAccountId::new(domain, public_key)
+}
+
+fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
+    let buf = to_bytes(account).expect("encode account into Norito");
+    make_tlv(PointerType::AccountId as u16, &buf)
+}
+
 #[test]
 fn grant_revoke_permission_with_tlv() {
     // alice has the balance; bob is the subject for grant/revoke
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
-    let bob: AccountId =
-        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4@domain"
-            .parse()
-            .unwrap();
-    let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
-    let alice_literal = norito::json::to_value(&alice)
-        .expect("serialize account id")
+    let alice_input = account(
+        "wonderland",
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+    );
+    let alice_literal_value = norito::json::to_value(&alice_input).expect("serialize account id");
+    let alice_literal = alice_literal_value
         .as_str()
         .expect("account id string")
         .to_owned();
+    let alice = ScopedAccountId::parse_encoded(&alice_literal)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("canonical account id must parse");
+    let bob = account(
+        "wonderland",
+        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+    );
+    let asset: AssetDefinitionId = "asset#wonderland".parse().unwrap();
 
     let wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), asset.clone()),
         Numeric::from(50_u64),
     )]);
-    let host = WsvHost::new(wsv, bob.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&bob.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
     // Step 1: grant ReadAccountAssets(alice) to bob via Name TLV
-    let subj = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let subj = make_account_tlv(&bob);
     vm.memory.preload_input(0, &subj).expect("preload input");
     let perm_name = make_raw_tlv(
         PointerType::Name as u16,
@@ -72,7 +91,7 @@ fn grant_revoke_permission_with_tlv() {
     vm.run().expect("grant permission failed");
 
     // Step 2: verify balance with granted permission via TLVs for alice & asset
-    let acc = make_tlv(PointerType::AccountId as u16, alice.to_string().as_bytes());
+    let acc = make_account_tlv(&alice);
     vm.memory.preload_input(0, &acc).expect("preload input");
     let asset_tlv = make_tlv(
         PointerType::AssetDefinitionId as u16,
@@ -95,7 +114,7 @@ fn grant_revoke_permission_with_tlv() {
     assert_eq!(value, Numeric::from(50_u64));
 
     // Step 3: revoke the same permission via Json TLV
-    let subj = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let subj = make_account_tlv(&bob);
     let perm_json = make_tlv(
         PointerType::Json as u16,
         format!("{{\"type\":\"read_assets\",\"target\":\"{alice_literal}\"}}").as_bytes(),
@@ -111,7 +130,7 @@ fn grant_revoke_permission_with_tlv() {
     vm.run().expect("revoke permission failed");
 
     // Step 4: balance call should now fail (no permission)
-    let acc = make_tlv(PointerType::AccountId as u16, alice.to_string().as_bytes());
+    let acc = make_account_tlv(&alice);
     vm.memory.preload_input(0, &acc).expect("preload input");
     let asset_tlv = make_tlv(
         PointerType::AssetDefinitionId as u16,

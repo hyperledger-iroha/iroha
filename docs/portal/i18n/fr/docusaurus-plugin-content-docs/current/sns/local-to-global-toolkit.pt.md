@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Opcoes :
 
 - `--format compressed (`sora`)` pour `sora...` à la place de IH58.
-- `--no-append-domain` pour émettre des lettres sans domicile.
+- `domainless output (default)` pour émettre des lettres sans domicile.
 - `--audit-only` pour l'étape de conversation.
 - `--allow-errors` pour continuer la réparation lorsque des lignes malformées apparaissent (même avec le comportement de la CLI).Le script écrit les chemins des artistes jusqu'à l'exécution finale. Anexe os dois arquivos ao
 votre ticket de gestao de mudancas avec la capture d'écran de Grafana qui comprend zéro
@@ -46,7 +46,7 @@ détecte Local-8 et zéro colis Local-12 pour >=30 dias.
 2. Bloqueie fusionne quando `audit.json` reporte les sélecteurs locaux (`domain.kind = local12`).
    aucune valeur n'est attribuée à `true` (donc à modifier pour `false` dans les clusters de développement/test pour le diagnostic
    régressions) et ajout
-   `iroha tools address normalize --fail-on-warning --only-local` à CI pour les régressions
+   `iroha tools address normalize` à CI pour les régressions
    falhem avant de commencer à produire.
 
 Voir le document contenant plus de détails, les listes de contrôle des preuves et l'extrait de

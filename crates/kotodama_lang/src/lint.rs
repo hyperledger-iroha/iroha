@@ -1578,7 +1578,7 @@ mod tests {
     #[test]
     fn lint_duplicate_pointer_literals_warns() {
         let program = parse(
-            "fn main() { let a = account_id(\"alice@wonderland\"); let b = account_id(\"alice@wonderland\"); }",
+            "fn main() { let a = account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"); let b = account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"); }",
         )
         .unwrap();
         let warnings = lint_program(&program);
@@ -1591,7 +1591,9 @@ mod tests {
 
     #[test]
     fn lint_unused_pointer_constructor_warns() {
-        let program = parse("fn main() { account_id(\"alice@wonderland\"); }").unwrap();
+        let program =
+            parse("fn main() { account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"); }")
+                .unwrap();
         let warnings = lint_program(&program);
         assert!(
             warnings
@@ -1698,10 +1700,12 @@ fn main() { subscription_bill(); }"#,
             isi::{InstructionBox, Mint},
         };
 
-        let account: AccountId =
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+        let account = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
-                .unwrap();
+                .expect("public key"),
+        );
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = AssetId::of(asset_def, account);
         let isi = InstructionBox::from(Mint::asset_numeric(1u32, asset_id));
@@ -1726,10 +1730,12 @@ fn main() { subscription_bill(); }"#,
             query::{QueryRequest, SingularQueryBox},
         };
 
-        let account: AccountId =
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+        let account = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
-                .unwrap();
+                .expect("public key"),
+        );
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = AssetId::of(asset_def, account);
         let request = QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById::new(

@@ -62,6 +62,9 @@ javascript/iroha_js/native/*.node
 javascript/iroha_js/scripts/release_matrix.targets.json
 build/*
 dist/*
+# Keep the dist directory itself tracked via marker file when tooling needs it.
+# Strict corridor/build tooling may require repository-root dist/ to exist.
+!dist/.gitkeep
 fastpq.trace/*
 cargo_err.txt
 cargo_out.txt
@@ -96,6 +99,7 @@ docs/source/da/_generated/threat_model_report.json
 # Developer-local caches and sandboxes
 .cargo-temp/
 .cache/
+.swift_test_home/
 .chat_history
 .pytest_cache/
 .swift-module-cache/
@@ -110,7 +114,19 @@ target-sm/
 **/.pytest_cache/
 **/.mypy_cache/
 **/.ruff_cache/
+**/__pycache__/
 java/iroha_android/.gradle/
+
+# JavaScript package artifacts
+javascript/iroha_js/node_modules/
+javascript/iroha_js/dist/
+javascript/iroha_js/target-cargo/
+
+# Python build artifacts
+python/norito_py/build/
+python/iroha_python/dist/
+python/iroha_python/src/iroha_python/*.so
+scripts/__pycache__/
 
 # Swift Package Manager scratch artefacts
 IrohaSwift/.cache/

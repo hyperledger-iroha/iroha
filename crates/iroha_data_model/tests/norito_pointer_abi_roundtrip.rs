@@ -29,6 +29,10 @@ fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
 
 #[test]
 fn manifest_pointer_roundtrip() {
+    let account_id = AccountId::new(
+        "wonderland".parse().expect("domain id"),
+        KeyPair::random().public_key().clone(),
+    );
     let manifest = ContractManifest {
         code_hash: Some(Hash::new(b"code-bytes")),
         abi_hash: Some(Hash::new(b"abi-policy")),
@@ -36,7 +40,7 @@ fn manifest_pointer_roundtrip() {
         features_bitmap: Some(0b1010_0101),
         access_set_hints: Some(AccessSetHints {
             read_keys: vec![
-                "account:alice@wonderland".to_owned(),
+                format!("account:{account_id}"),
                 "asset:rose#wonderland".to_owned(),
             ],
             write_keys: vec!["asset.detail:rose#wonderland:balance".to_owned()],

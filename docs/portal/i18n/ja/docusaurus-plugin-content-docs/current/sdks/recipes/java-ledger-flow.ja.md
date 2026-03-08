@@ -187,5 +187,5 @@ public final class LedgerFlow {
 ## 5. パリティの確認
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` でトランザクションハッシュを確認します。
-- CLI で残高を取得します（`asset list filter '{"id":"coffee#wonderland##<account>"}'`）。
+- CLI で残高を取得します（`asset list filter '{"id":"norito:4e52543000000002"}'`）。
 - Rust/Python/JavaScript/Swift のレシピと結果を比較して、各 SDK がデモフローで同一の Norito ペイロードを生成することを確認します。

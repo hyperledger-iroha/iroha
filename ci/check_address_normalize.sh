@@ -6,6 +6,7 @@ FIXTURE_PATH="${REPO_ROOT}/fixtures/account/address_vectors.json"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/address-normalize.XXXXXX")"
 RAW_PATH="${WORK_DIR}/local_raw.txt"
 NORMALIZED_PATH="${WORK_DIR}/normalized.txt"
+AUDIT_PATH="${WORK_DIR}/audit.json"
 
 cleanup() {
   rm -rf "${WORK_DIR}"
@@ -46,32 +47,25 @@ for group in data.get("cases", {}).values():
             raise SystemExit(
                 f"local12 case {case.get('case_id')} missing ih58 encoding"
             )
-        inputs = case.get("input") or {}
-        domain = (
-            inputs.get("normalized_domain")
-            or inputs.get("equivalent_domain")
-            or inputs.get("raw_domain")
-            or inputs.get("domain")
-        )
-        if not domain:
-            raise SystemExit(
-                f"local12 case {case.get('case_id')} missing domain metadata"
-            )
-        entries.append(f"{ih58_value}@{domain}")
+        entries.append(ih58_value)
 
-if not entries:
-    raise SystemExit("no local12 selectors discovered in fixture")
-
-raw_path.write_text("\n".join(entries) + "\n", encoding="utf-8")
+payload = ""
+if entries:
+    payload = "\n".join(entries) + "\n"
+raw_path.write_text(payload, encoding="utf-8")
 PY
 
-echo "[addr-normalize] converting $(wc -l < "${RAW_PATH}") Local selectors..."
+ENTRY_COUNT="$(wc -l < "${RAW_PATH}")"
+if [[ "${ENTRY_COUNT}" -eq 0 ]]; then
+  echo "[addr-normalize] no local selectors discovered in fixture; selector-free canonical fixture detected."
+  exit 0
+fi
+
+echo "[addr-normalize] converting ${ENTRY_COUNT} Local selectors..."
 cargo run -p iroha_cli -- \
   address normalize \
   --input "${RAW_PATH}" \
   --output "${NORMALIZED_PATH}" \
-  --only-local \
-  --append-domain \
   --network-prefix 753 \
   --format ih58 >/dev/null
 
@@ -80,6 +74,30 @@ cargo run -p iroha_cli -- \
   address audit \
   --input "${NORMALIZED_PATH}" \
   --network-prefix 753 \
-  --fail-on-warning >/dev/null
+  --format json >"${AUDIT_PATH}"
+
+export AUDIT_PATH
+python3 <<'PY'
+import json
+import os
+from pathlib import Path
+
+audit_path = Path(os.environ["AUDIT_PATH"])
+with audit_path.open("r", encoding="utf-8") as handle:
+    report = json.load(handle)
+
+stats = report.get("stats") or {}
+errors = int(stats.get("errors", 0))
+if errors:
+    raise SystemExit(f"address audit reported {errors} parse error(s)")
+
+for entry in report.get("entries", []):
+    if entry.get("status") != "parsed":
+        continue
+    summary = entry.get("summary") or {}
+    domain = summary.get("domain") or {}
+    if domain.get("kind") == "local12":
+        raise SystemExit("address audit reported residual local12 domain entries")
+PY
 
 echo "[addr-normalize] completed successfully."

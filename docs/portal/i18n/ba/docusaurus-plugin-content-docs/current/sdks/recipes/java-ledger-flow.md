@@ -182,5 +182,5 @@ public final class LedgerFlow {
 ## 5. Паритетты раҫлау
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` аша операция хештарын тикшерергә.
-- CLI менән баланслаштырыу (`asset list filter '{"id":"coffee#wonderland##<account>"}'`).
+- CLI менән баланслаштырыу (`asset list filter '{"id":"norito:4e52543000000002"}'`).
 - Һөҙөмтәләрҙе сағыштырыу менән сағыштырырға Rust/Python/JavaScript/Swift рецептары тәьмин итеү өсөн һәр SDK етештереү бер үк I18NT0000000001X файҙалы йөкләмәләр өсөн демо ағымы.

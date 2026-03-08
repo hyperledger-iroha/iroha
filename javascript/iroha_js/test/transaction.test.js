@@ -18,27 +18,57 @@ import { makeNativeTest } from "./helpers/native.js";
 
 const BASE_URL = "http://localhost:8080";
 const AUTHORITY_ID_RAW =
-  "ED0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland";
+  "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
 const AUTHORITY_ID = ih58FromEd25519AccountId(AUTHORITY_ID_RAW);
-const AUTHORITY_ID_INPUT = AUTHORITY_ID_RAW.toLowerCase();
+const AUTHORITY_ID_INPUT = ih58FromEd25519AccountId(AUTHORITY_ID_RAW);
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
-const ASSET_ID = `rose##${AUTHORITY_ID}`;
-const ASSET_ID_INPUT = `rose##${AUTHORITY_ID_INPUT}`;
+const CANONICAL_ASSET_ID_INPUT =
+  "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c4000000000000006165e1e191d7b79c00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323045444636443742353243373033324430334145433639364632303638424435333130313532384633433742363038314246463035413136363244374643323435330000000000000017000000000000000f00000000000000070000000000000064656661756c740c000000000000000400000000000000726f7365";
+const SECOND_CANONICAL_ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT.replace(
+  "6165e1e191d7b79c",
+  "7165e1e191d7b79c",
+);
+const ASSET_ID = CANONICAL_ASSET_ID_INPUT;
+const ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT;
 const NEW_ACCOUNT_ID_RAW =
-  "ED0120C0F6FA775885F8FFB5F203C10EAA90E1B49FB4CD39C0F95CCA1E5A02B5E45F61@wonderland";
+  "6cmzPVPX8kKbxWFadZoh6wnVFcy1Po6PtHt5KJ8i9j6ovCJWDM7rWN7";
 const NEW_ACCOUNT_ID = ih58FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
-const NEW_ACCOUNT_ID_INPUT = NEW_ACCOUNT_ID_RAW.toLowerCase();
+const NEW_ACCOUNT_ID_INPUT = ih58FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
 const ASSET_DEFINITION_ID = "rose#wonderland";
 const ASSET_DEFINITION_ID_INPUT = ASSET_DEFINITION_ID.toLowerCase();
+const NODE_CAPABILITIES = {
+  supported_abi_versions: [1],
+  default_compile_target: 1,
+  data_model_version: 1,
+  crypto: {
+    sm: {
+      enabled: false,
+      allowed_signing: [],
+      acceleration: {
+        scalar: true,
+        neon_sm3: false,
+        neon_sm4: false,
+        policy: "scalar",
+      },
+    },
+    curves: {
+      registry_version: 1,
+      allowed_curve_ids: [1],
+      allowed_curve_bitmap: [],
+    },
+  },
+};
 const test = makeNativeTest(baseTest);
 
 function ih58FromEd25519AccountId(raw) {
-  const atIndex = raw.lastIndexOf("@");
+  const trimmed = raw.trim();
+  const atIndex = trimmed.lastIndexOf("@");
   if (atIndex === -1) {
-    throw new Error("expected <signatory>@<domain> format");
+    const { address } = AccountAddress.parseEncoded(trimmed);
+    return address.toIH58();
   }
-  const signatory = raw.slice(0, atIndex).trim().toUpperCase();
-  const domain = raw.slice(atIndex + 1).trim();
+  const signatory = trimmed.slice(0, atIndex).trim().toUpperCase();
+  const domain = trimmed.slice(atIndex + 1).trim();
   if (!signatory.startsWith("ED0120")) {
     throw new Error("expected ed25519 multihash signatory");
   }
@@ -85,6 +115,13 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url, init });
+    if (url.endsWith("/v1/node/capabilities")) {
+      return createResponse({
+        status: 200,
+        jsonData: NODE_CAPABILITIES,
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (url.endsWith("/v1/pipeline/transactions")) {
       assert.ok(Buffer.isBuffer(init.body));
       assert.deepEqual([...init.body.values()], [...signedBytes.values()]);
@@ -120,12 +157,20 @@ test("submitSignedTransaction times out when no terminal status", async () => {
     hashSignedTransaction: () => Buffer.alloc(32, 0x42),
     signTransaction: () => txBytes,
   };
-  const fetchImpl = async () =>
-    createResponse({
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/v1/node/capabilities")) {
+      return createResponse({
+        status: 200,
+        jsonData: NODE_CAPABILITIES,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return createResponse({
       status: 202,
       jsonData: { status: "Accepted" },
       headers: { "content-type": "application/json" },
     });
+  };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   await withNativeBinding(binding, async () => {
@@ -156,10 +201,26 @@ test("submitSignedTransaction ignores state-only terminal fields", async () => {
   });
   const statusResponse = createResponse({
     status: 200,
-    jsonData: { state: "Committed" },
+    jsonData: {
+      kind: "TransactionStatus",
+      content: {
+        hash: "00".repeat(32),
+        status: {
+          kind: "Committed",
+          content: { state: "Committed" },
+        },
+      },
+    },
     headers: { "content-type": "application/json" },
   });
   const fetchImpl = async (url) => {
+    if (url.endsWith("/v1/node/capabilities")) {
+      return createResponse({
+        status: 200,
+        jsonData: NODE_CAPABILITIES,
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (url.endsWith("/v1/pipeline/transactions")) {
       return submissionResponse;
     }
@@ -325,7 +386,7 @@ test("buildMintAndTransferTransaction supports transfer arrays", () => {
         transfers: [
           { quantity: "5", destinationAccountId: AUTHORITY_ID_INPUT },
           {
-            sourceAssetId: `${ASSET_DEFINITION_ID_INPUT}#${NEW_ACCOUNT_ID_INPUT}`,
+            sourceAssetId: SECOND_CANONICAL_ASSET_ID_INPUT,
             quantity: "1",
             destinationAccountId: NEW_ACCOUNT_ID_INPUT,
           },
@@ -351,7 +412,7 @@ test("buildMintAndTransferTransaction supports transfer arrays", () => {
   assert.deepEqual(instructions[2], {
     Transfer: {
       Asset: {
-        source: `${ASSET_DEFINITION_ID}#${NEW_ACCOUNT_ID}`,
+        source: SECOND_CANONICAL_ASSET_ID_INPUT,
         object: "1",
         destination: NEW_ACCOUNT_ID,
       },
@@ -444,7 +505,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
         domain: { domainId: "garden_of_live_flowers" },
         mints: [
           { assetId: ASSET_ID_INPUT, quantity: "3" },
-          { assetId: `${ASSET_DEFINITION_ID_INPUT}#${AUTHORITY_ID_INPUT}`, quantity: "1" },
+          { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "1" },
         ],
         privateKey: PRIVATE_KEY,
       }),
@@ -459,7 +520,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
   assert.deepEqual(instructions[2], {
     Mint: {
       Asset: {
-        destination: `${ASSET_DEFINITION_ID}#${AUTHORITY_ID}`,
+        destination: CANONICAL_ASSET_ID_INPUT,
         object: "1",
       },
     },
@@ -545,7 +606,7 @@ test("buildRegisterAccountAndTransferTransaction expands registration and transf
 test("buildRegisterAccountAndTransferTransaction supports transfer arrays", () => {
   const captures = [];
   const secondAccountIdRaw =
-    "ED0120935DC855E1977DB7CF24E7C4E0015CBAC9D4A2DDB814C3F23A4A032B11D8EBFD@wonderland";
+    "6cmzPVPX7iXwUZwgBeaKv96unyGNU1Z5xSmzKApk6TUXv7bTs4t4wZm";
   const secondAccountId = ih58FromEd25519AccountId(secondAccountIdRaw);
   withNativeBinding(
     {
@@ -650,7 +711,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
         },
         mint: {
           accountId: NEW_ACCOUNT_ID_INPUT,
-          assetId: `${ASSET_DEFINITION_ID_INPUT}#${NEW_ACCOUNT_ID_INPUT}`,
+          assetId: SECOND_CANONICAL_ASSET_ID_INPUT,
           quantity: "9",
         },
         privateKey: PRIVATE_KEY,
@@ -681,7 +742,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
     Mint: {
       Asset: {
         object: "9",
-        destination: `${ASSET_DEFINITION_ID}#${NEW_ACCOUNT_ID}`,
+        destination: SECOND_CANONICAL_ASSET_ID_INPUT,
       },
     },
   });
@@ -706,7 +767,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "4" },
-          { assetId: `${ASSET_DEFINITION_ID_INPUT}#${AUTHORITY_ID_INPUT}`, quantity: "2" },
+          { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "2" },
         ],
         privateKey: PRIVATE_KEY,
       }),
@@ -718,7 +779,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
     Mint: {
       Asset: {
         object: "4",
-        destination: `${ASSET_DEFINITION_ID}#${NEW_ACCOUNT_ID}`,
+        destination: SECOND_CANONICAL_ASSET_ID_INPUT,
       },
     },
   });
@@ -726,7 +787,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
     Mint: {
       Asset: {
         object: "2",
-        destination: `${ASSET_DEFINITION_ID}#${AUTHORITY_ID}`,
+        destination: CANONICAL_ASSET_ID_INPUT,
       },
     },
   });
@@ -771,7 +832,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects mismatched assetId/
         mints: [
           {
             accountId: NEW_ACCOUNT_ID_INPUT,
-            assetId: `${ASSET_DEFINITION_ID}#someone_else`,
+            assetId: `${ASSET_DEFINITION_ID}##someone_else`,
             quantity: "1",
           },
         ],
@@ -810,7 +871,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
   assert.deepEqual(instructions[1], {
     Mint: {
       Asset: {
-        destination: `${ASSET_DEFINITION_ID}#${NEW_ACCOUNT_ID}`,
+        destination: SECOND_CANONICAL_ASSET_ID_INPUT,
         object: "5",
       },
     },
@@ -818,7 +879,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
   assert.deepEqual(instructions[2], {
     Transfer: {
       Asset: {
-        source: `${ASSET_DEFINITION_ID}#${NEW_ACCOUNT_ID}`,
+        source: SECOND_CANONICAL_ASSET_ID_INPUT,
         object: "2",
         destination: AUTHORITY_ID,
       },
@@ -829,9 +890,9 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
 test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer arrays", () => {
   const captures = [];
   const secondAccountIdRaw =
-    "ED0120A4353E54CDB155483A4A52DEA5FE335DBA74DEFF0E977B5D5F2C3960F4660E21@wonderland";
+    "6cmzPVPX86ciDcsUqr72LcRWgsSERqXqGjJQBUKCsLfodfx5S5NEEsA";
   const secondAccountId = ih58FromEd25519AccountId(secondAccountIdRaw);
-  const secondAccountIdInput = secondAccountIdRaw.toLowerCase();
+  const secondAccountIdInput = ih58FromEd25519AccountId(secondAccountIdRaw);
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {
@@ -849,12 +910,12 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "6" },
-          { assetId: `${ASSET_DEFINITION_ID_INPUT}#${AUTHORITY_ID_INPUT}`, quantity: "1" },
+          { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "1" },
         ],
         transfers: [
           { quantity: "4", destinationAccountId: AUTHORITY_ID_INPUT },
           {
-            sourceAssetId: `${ASSET_DEFINITION_ID_INPUT}#${AUTHORITY_ID_INPUT}`,
+            sourceAssetId: CANONICAL_ASSET_ID_INPUT,
             destinationAccountId: secondAccountIdInput,
             quantity: "1",
           },
@@ -868,7 +929,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   assert.deepEqual(instructions[3], {
     Transfer: {
       Asset: {
-        source: `${ASSET_DEFINITION_ID}#${NEW_ACCOUNT_ID}`,
+        source: SECOND_CANONICAL_ASSET_ID_INPUT,
         object: "4",
         destination: AUTHORITY_ID,
       },
@@ -877,7 +938,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   assert.deepEqual(instructions[4], {
     Transfer: {
       Asset: {
-        source: `${ASSET_DEFINITION_ID}#${AUTHORITY_ID}`,
+        source: CANONICAL_ASSET_ID_INPUT,
         object: "1",
         destination: secondAccountId,
       },
@@ -956,7 +1017,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects mismatched 
         mints: [
           {
             accountId: NEW_ACCOUNT_ID_INPUT,
-            assetId: `${ASSET_DEFINITION_ID}#someone_else`,
+            assetId: `${ASSET_DEFINITION_ID}##someone_else`,
             quantity: "1",
           },
         ],

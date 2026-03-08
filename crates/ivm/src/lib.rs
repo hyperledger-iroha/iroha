@@ -154,7 +154,8 @@ pub use crate::vector::{
 };
 pub use crate::{
     mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
+        AccountSubjectId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken,
+        ScopedAccountId, WsvHost,
     },
     registers::Registers,
     segmented_memory::{Memory as SegmentedMemory, Segment},
@@ -170,6 +171,12 @@ pub use crate::{
     },
     zk::{MemEvent, RegEvent, RegisterState},
 };
+
+/// Domainless account identity used by `ivm` crate APIs.
+///
+/// For domain-scoped data-model account identifiers used in host/syscall payloads,
+/// use [`ScopedAccountId`].
+pub type AccountId = AccountSubjectId;
 
 /// Public Norito-typed request envelopes for VRF syscalls.
 pub mod vrf;

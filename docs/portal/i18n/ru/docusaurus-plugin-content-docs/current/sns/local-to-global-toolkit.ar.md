@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Сообщение:
 
 - `--format compressed (`sora`)` для `sora...` на IH58.
-- `--no-append-domain` لاصدار литералы بدون نطاق.
+- `domainless output (default)` لاصدار литералы بدون نطاق.
 - `--audit-only` لتخطي خطوة التحويل.
 - `--allow-errors` был запущен в режиме CLI.
 
@@ -48,7 +48,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 2. Установите флажок `audit.json` для локальных селекторов (`domain.kind = local12`).
    Установите `true` (в разделе dev/test `false`). عند
    تشخيص التراجعات) واضف
-   `iroha tools address normalize --fail-on-warning --only-local` в CI حتى تفشل
+   `iroha tools address normalize` в CI حتى تفشل
    Начало производства.
 
 Сообщение о выпуске журнала в разделе «Примечание к выпуску» и фрагмент примечания к выпуску

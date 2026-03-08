@@ -56,10 +56,15 @@ enum NoritoBridgeLoader {
 
     static let expectedVersion = "0.1.0"
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "407f4a279856fa063546d7822154cea369a88e0ea6524cc88b11a70a25fd6bc0",
-        "ios-arm64": "979922bbcb4de2334b662dd34d37dbe75cef1384d8d5d3bba23a90c8d018c78a",
-        "ios-arm64_x86_64-simulator": "7ec00db281461365e2a3acaf7bc7094f9751f23a25f0a2ab992a9b27cd004356"
+        "macos-arm64": "fcdcb9f488985556ae82f2d2ef48a92f5ebc9ae6739ff9e3cc3b47830c7d1f8f",
+        "ios-arm64": "3ca37e78caa09db893547238c25f1d33b2ef4d47f882c21727f58d78a8862991",
+        "ios-arm64_x86_64-simulator": "5f14995fc47746f93dcc7a3768791a74043ff946371fd8ff5a73567d6501e362"
     ]
+
+    private struct ArtifactManifest {
+        let version: String
+        let hashes: [String: String]
+    }
 
     static func openHandle() -> (UnsafeMutableRawPointer?, ValidationStatus) {
         if BridgeBuildMode.current == .disabled {
@@ -136,13 +141,16 @@ enum NoritoBridgeLoader {
         guard allowUntrustedLocation || isTrustedLocation(url) else {
             return .pathDenied(path: path)
         }
-        guard let identifier = identifier(for: url),
-              let expectedHash = expectedHashes[identifier] else {
+        guard let identifier = identifier(for: url) else {
             return .pathDenied(path: path)
         }
 
-        if let version = versionMetadata(near: url), version != expectedVersion {
+        let manifest = artifactManifest(near: url)
+        if let version = manifest?.version, version != expectedVersion {
             return .versionMismatch(path: path, expected: expectedVersion, actual: version)
+        }
+        guard let expectedHash = manifest?.hashes[identifier] ?? expectedHashes[identifier] else {
+            return .pathDenied(path: path)
         }
 
         let actualHash = sha256(url: url)
@@ -153,18 +161,30 @@ enum NoritoBridgeLoader {
         return .valid(path: path, identifier: identifier)
     }
 
-    private static func versionMetadata(near binaryURL: URL) -> String? {
-        let candidate = binaryURL
-            .deletingLastPathComponent() // NoritoBridge.framework
-            .deletingLastPathComponent() // platform folder
-            .deletingLastPathComponent() // NoritoBridge.xcframework
-            .appendingPathComponent("NoritoBridge.artifacts.json")
-        guard let data = try? Data(contentsOf: candidate),
+    private static func artifactManifest(near binaryURL: URL) -> ArtifactManifest? {
+        let frameworkDir = binaryURL.deletingLastPathComponent()
+        let platformDir = frameworkDir.deletingLastPathComponent()
+        let xcframeworkDir = platformDir.deletingLastPathComponent()
+        let candidates = [
+            xcframeworkDir.appendingPathComponent("NoritoBridge.artifacts.json"),
+            xcframeworkDir.deletingLastPathComponent().appendingPathComponent("NoritoBridge.artifacts.json")
+        ]
+        for candidate in candidates {
+            if let manifest = parseArtifactManifest(at: candidate) {
+                return manifest
+            }
+        }
+        return nil
+    }
+
+    private static func parseArtifactManifest(at url: URL) -> ArtifactManifest? {
+        guard let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let version = json["version"] as? String else {
             return nil
         }
-        return version
+        let hashes = json["hashes"] as? [String: String] ?? [:]
+        return ArtifactManifest(version: version, hashes: hashes)
     }
 
     private static func sha256(url: URL) -> String? {
@@ -228,6 +248,13 @@ enum NoritoBridgeLoader {
             addIfExisting(URL(fileURLWithPath: appendBinaryIfNeeded(override)))
         }
         #endif
+
+        for framework in Bundle.allFrameworks
+            where framework.bundleURL.lastPathComponent == "NoritoBridge.framework" {
+            if let executableURL = framework.executableURL {
+                addIfExisting(executableURL)
+            }
+        }
 
         for root in trustedSearchRoots() {
             addIfExisting(root.appendingPathComponent("NoritoBridge.framework/NoritoBridge"))
@@ -1782,6 +1809,27 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
+    private func inferredAuthorityDiscriminant(_ authority: String) -> UInt16? {
+        #if canImport(Darwin)
+        guard let parsed = try? parseAccountAddress(literal: authority, expectedPrefix: nil) else {
+            return nil
+        }
+        guard parsed.format == .ih58 else {
+            return nil
+        }
+        return parsed.networkPrefix
+        #else
+        return nil
+        #endif
+    }
+
+    private func withAuthorityChainDiscriminant<R>(
+        authority: String,
+        _ body: () throws -> R
+    ) throws -> R {
+        try withChainDiscriminant(inferredAuthorityDiscriminant(authority), body)
+    }
+
     private init() {
         #if canImport(Darwin)
         let loadResult = NoritoBridgeLoader.openHandle()
@@ -3024,7 +3072,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let hashLength = UInt(hashBytes.count)
         let algorithmRaw = algorithm.noritoDiscriminant
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
                     quantity.withCString { quantityPtr in
@@ -3083,6 +3132,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr { freeFn(signedPtr) }
@@ -3130,7 +3180,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let hashLength = UInt(hashBytes.count)
         let algorithmRaw = algorithm.noritoDiscriminant
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
                     privateKey.withUnsafeBytes { keyBuffer -> Int32 in
@@ -3204,6 +3255,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr {
@@ -3250,7 +3302,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let hashLength = UInt(hashBytes.count)
         let algorithmRaw = algorithm.noritoDiscriminant
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
                     quantity.withCString { quantityPtr in
@@ -3309,6 +3362,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr { freeFn(signedPtr) }
@@ -3360,7 +3414,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let hashLength = UInt(hashBytes.count)
         let algorithmRaw = algorithm.noritoDiscriminant
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
                     fromAccountId.withCString { fromPtr in
@@ -3433,6 +3488,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr { freeFn(signedPtr) }
@@ -3476,7 +3532,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let hashLength = UInt(hashBytes.count)
         let algorithmRaw = algorithm.noritoDiscriminant
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
                     destinationAccountId.withCString { destinationPtr in
@@ -3554,6 +3611,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr { freeFn(signedPtr) }
@@ -3596,7 +3654,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let hashLength = UInt(hashBytes.count)
         let algorithmRaw = algorithm.noritoDiscriminant
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
                     inputs.withUnsafeBytes { inputBuffer -> Int32 in
@@ -3673,6 +3732,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr { freeFn(signedPtr) }
@@ -3713,8 +3773,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
 
-        let status = chainId.withCString { chainPtr -> Int32 in
-            return authority.withCString { authorityPtr -> Int32 in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr -> Int32 in
+                return authority.withCString { authorityPtr -> Int32 in
                 return accountId.withCString { accountPtr -> Int32 in
                     return specJSON.withUnsafeBytes { specBuffer -> Int32 in
                         guard let specPtr = specBuffer.bindMemory(to: CChar.self).baseAddress else {
@@ -3773,6 +3834,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr { freeFn(signedPtr) }
@@ -3817,7 +3879,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let hashLength = UInt(hashBytes.count)
         let algorithmRaw = algorithm.noritoDiscriminant
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
                     quantity.withCString { quantityPtr in
@@ -3876,6 +3939,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr { freeFn(signedPtr) }
@@ -3918,7 +3982,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let hashLength = UInt(hashBytes.count)
         let algorithmRaw = algorithm.noritoDiscriminant
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 objectId.withCString { objectPtr in
                     key.withCString { keyCStrPtr in
@@ -3981,6 +4046,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr { freeFn(signedPtr) }
@@ -4022,7 +4088,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let hashLength = UInt(hashBytes.count)
         let algorithmRaw = algorithm.noritoDiscriminant
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 objectId.withCString { objectPtr in
                     key.withCString { keyPtr in
@@ -4079,6 +4146,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr { freeFn(signedPtr) }
@@ -4124,7 +4192,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let hashLength = UInt(hashBytes.count)
         let algorithmRaw = algorithm.noritoDiscriminant
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 namespace.withCString { namespacePtr in
                     contractId.withCString { contractPtr in
@@ -4204,6 +4273,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr { freeFn(signedPtr) }
@@ -4247,7 +4317,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let hashLength = UInt(hashBytes.count)
         let algorithmRaw = algorithm.noritoDiscriminant
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 referendumId.withCString { referendumPtr in
                     owner.withCString { ownerPtr in
@@ -4309,6 +4380,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr { freeFn(signedPtr) }
@@ -4349,7 +4421,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         var hashBytes = [UInt8](repeating: 0, count: 32)
         let hashLength = UInt(hashBytes.count)
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 electionId.withCString { electionPtr in
                     proofB64.withCString { proofPtr in
@@ -4409,6 +4482,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr { freeFn(signedPtr) }
@@ -4451,7 +4525,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let hashLength = UInt(hashBytes.count)
         let algorithmRaw = algorithm.noritoDiscriminant
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 referendumIdHex.withCString { referendumPtr in
                     preimageHashHex.withCString { preimagePtr in
@@ -4509,6 +4584,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr { freeFn(signedPtr) }
@@ -4549,7 +4625,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let hashLength = UInt(hashBytes.count)
         let algorithmRaw = algorithm.noritoDiscriminant
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 referendumId.withCString { referendumPtr in
                     proposalIdHex.withCString { proposalPtr in
@@ -4603,6 +4680,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
 
         if status != 0 {
             if let signedPtr { freeFn(signedPtr) }
@@ -4645,7 +4723,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let hashLength = UInt(hashBytes.count)
         let algorithmRaw = algorithm.noritoDiscriminant
 
-        let status = chainId.withCString { chainPtr in
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 membersJson.withUnsafeBytes { membersBuffer -> Int32 in
                     guard let membersPtr = membersBuffer.bindMemory(to: UInt8.self).baseAddress else {
@@ -4703,6 +4782,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                     }
                 }
             }
+        }
         }
 
         if status != 0 {

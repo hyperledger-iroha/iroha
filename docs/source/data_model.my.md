@@ -35,9 +35,9 @@ translator: machine-google-reviewed
 - `IdBox`- ပံ့ပိုးထားသော မည်သည့် ID အတွက်မဆို ပေါင်းလဒ်အမျိုးအစား စာအိတ် (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, Norito, Norito, Norito, Norito `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`)။ generic flows နှင့် Norito encoding အမျိုးအစားတစ်ခုတည်းအတွက် အသုံးဝင်သည်။
 - `ChainId`- အရောင်းအ၀ယ်များတွင် ပြန်ဖွင့်ခြင်းအား အကာအကွယ်အတွက် အသုံးပြုသော ရောင်စုံကွင်းဆက်အမှတ်အသား။ID မျဉ်းပုံစံများ (`Display`/`FromStr` ဖြင့် အသွားအပြန်သုံးနိုင်သော)
 - `DomainId`: `name` (e.g., `wonderland`)။
-- `AccountId`- IH58၊ Sora compressed (`sora…`) နှင့် canonical hex codecs (`AccountAddress::to_ih58`, I180NI800X၊ I180NI800) မှတဆင့် `AccountAddress` မှတဆင့် ကုဒ်လုပ်ထားသော canonical identifier `canonical_hex`၊ `parse_any`)။ IH58 သည် ဦးစားပေးအကောင့်ဖော်မတ်ဖြစ်သည်။ `sora…` ဖောင်သည် Sora-only UX အတွက် ဒုတိယအကောင်းဆုံးဖြစ်သည်။ လူသားဆန်ဆန် လမ်းကြောင်းပြောင်းခြင်း alias `alias@domain` ကို UX အတွက် ထိန်းသိမ်းထားသော်လည်း တရားဝင်သတ်မှတ်မှုအဖြစ် မခံယူတော့ပါ။ Torii သည် `AccountAddress::parse_any` မှတဆင့် အဝင်လိုင်းများကို ပုံမှန်ဖြစ်စေသည်။ အကောင့် ID များသည် single-key နှင့် multisig controllers များကို ပံ့ပိုးပေးသည်။
+- `AccountId`- IH58၊ Sora compressed (`sora…`) နှင့် canonical hex codecs (`AccountAddress::to_ih58`, I180NI800X၊ I180NI800) မှတဆင့် `AccountAddress` မှတဆင့် ကုဒ်လုပ်ထားသော canonical identifier `canonical_hex`၊ `parse_encoded`)။ IH58 သည် ဦးစားပေးအကောင့်ဖော်မတ်ဖြစ်သည်။ `sora…` ဖောင်သည် Sora-only UX အတွက် ဒုတိယအကောင်းဆုံးဖြစ်သည်။ လူသားဆန်ဆန် လမ်းကြောင်းပြောင်းခြင်း alias `alias` (rejected legacy form) ကို UX အတွက် ထိန်းသိမ်းထားသော်လည်း တရားဝင်သတ်မှတ်မှုအဖြစ် မခံယူတော့ပါ။ Torii သည် `AccountAddress::parse_encoded` မှတဆင့် အဝင်လိုင်းများကို ပုံမှန်ဖြစ်စေသည်။ အကောင့် ID များသည် single-key နှင့် multisig controllers များကို ပံ့ပိုးပေးသည်။
 - `AssetDefinitionId`: `asset#domain` (e.g., `xor#soramitsu`)။
-- `AssetId`: `asset#domain#account` သို့မဟုတ် အတိုကောက် `asset##account` သည် အကောင့်ဒိုမိန်းနှင့် ညီမျှပါက `account` သည် canonical `AccountId` string (IH58 ဦးစားပေး) ဖြစ်သည်။
+- `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`: `nft$domain` (e.g., `rose$garden`)။
 - `PeerId`: `public_key` (ရွယ်တူတန်းတူရေးသည် အများသူငှာသော့အားဖြင့်)။
 

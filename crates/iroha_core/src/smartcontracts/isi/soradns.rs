@@ -617,13 +617,22 @@ mod tests {
         (record, keypair)
     }
 
+    fn authority_account() -> AccountId {
+        AccountId::new(
+            "sora".parse().expect("domain"),
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                .parse()
+                .expect("public key"),
+        )
+    }
+
     #[test]
     fn submit_directory_draft_succeeds() {
         crate::test_alias::ensure();
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
-        let authority = AccountId::from_str("council@sora").expect("account");
+        let authority = authority_account();
         let (record, keypair) = signed_record();
         stx.world
             .soradns_release_signers
@@ -651,7 +660,7 @@ mod tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
-        let authority = AccountId::from_str("council@sora").expect("account");
+        let authority = authority_account();
         let (record, keypair) = signed_record();
         stx.world
             .soradns_release_signers

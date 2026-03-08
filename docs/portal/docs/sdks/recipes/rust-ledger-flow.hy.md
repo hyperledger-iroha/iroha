@@ -135,6 +135,6 @@ ih58... now holds:
 - Օգտագործեք `iroha --config defaults/client.toml transaction get --hash <hash>` դեպի
   ստուգել SDK-ի կողմից ներկայացված գործարքները:
 - Խաչաձև ստուգեք մնացորդները `iroha --config defaults/client.toml asset list all --table`-ով
-  կամ `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+  կամ `asset list filter '{"id":"norito:4e52543000000002"}'`.
 - Կրկնեք նույն հոսքը CLI-ից՝ երկու մակերևույթների արտադրությունը հաստատելու համար
   նույն Norito ծանրաբեռնվածությունը և գործարքի կարգավիճակները:

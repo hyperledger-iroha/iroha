@@ -1327,10 +1327,12 @@ mod tests {
     #[test]
     fn signed_block_is_not_empty_with_time_triggers() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
-        let authority: crate::account::AccountId =
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland"
+        let authority = crate::account::AccountId::new(
+            "wonderland".parse().expect("domain id"),
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
-                .expect("authority parses");
+                .expect("public key"),
+        );
         let entrypoint = crate::trigger::TimeTriggerEntrypoint {
             id: "time_trigger".parse().expect("trigger id parses"),
             instructions: crate::transaction::ExecutionStep(

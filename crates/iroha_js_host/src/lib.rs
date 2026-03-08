@@ -42,7 +42,7 @@ use iroha_data_model::da::types::DaRentQuote;
 use iroha_data_model::{
     ChainId,
     account::{
-        Account, AccountId, NewAccount,
+        Account, NewAccount, ScopedAccountId,
         address::{AccountAddress, AccountAddressError, AccountAddressFormat},
     },
     asset::{
@@ -58,10 +58,10 @@ use iroha_data_model::{
     domain::{Domain, DomainId, NewDomain},
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
-        Burn, BurnBox, CreateKaigi, EndKaigi, Instruction as InstructionTrait, InstructionBox,
-        JoinKaigi, LeaveKaigi, Mint, MintBox, RecordKaigiUsage, Register, RegisterBox,
-        RegisterKaigiRelay, RegisterPeerWithPop, ReportKaigiRelayHealth, SetKaigiRelayManifest,
-        Transfer, TransferBox, Unregister, UnregisterBox,
+        Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, Instruction as InstructionTrait,
+        InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox, RecordKaigiUsage, Register,
+        RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop, ReportKaigiRelayHealth,
+        SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
@@ -277,7 +277,7 @@ pub struct JsAliasEvaluation {
 pub struct JsAccountAddressParse {
     /// Canonical bytes for the parsed account address.
     pub canonical_bytes: Buffer,
-    /// Detected textual format (`ih58`, `compressed`, or `canonical_hex`).
+    /// Detected textual format (`ih58` or `compressed`).
     pub detected_format: String,
     /// Network prefix when the source was IH58.
     pub network_prefix: Option<u16>,
@@ -431,15 +431,16 @@ pub fn soradns_derive_gateway_hosts(fqdn: String) -> napi::Result<JsGatewayHosts
     })
 }
 
-/// Parse an account address string (IH58 (preferred), compressed (`sora`, second-best), or canonical hex).
+/// Parse an account address string in strict encoded form
+/// (IH58 (preferred) or compressed (`sora`, second-best)).
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for bindings
-pub fn account_address_parse_any(
+pub fn account_address_parse_encoded(
     input: String,
     expected_prefix: Option<u16>,
 ) -> napi::Result<JsAccountAddressParse> {
     let (address, format) =
-        AccountAddress::parse_any(&input, expected_prefix).map_err(account_address_err)?;
+        AccountAddress::parse_encoded(&input, expected_prefix).map_err(account_address_err)?;
     let canonical_hex = address.canonical_hex().map_err(account_address_err)?;
     let hex_body = canonical_hex
         .strip_prefix("0x")
@@ -449,7 +450,6 @@ pub fn account_address_parse_any(
     let (detected_format, network_prefix) = match format {
         AccountAddressFormat::IH58 { network_prefix } => ("ih58".to_owned(), Some(network_prefix)),
         AccountAddressFormat::Compressed => ("compressed".to_owned(), None),
-        AccountAddressFormat::CanonicalHex => ("canonical_hex".to_owned(), None),
     };
     Ok(JsAccountAddressParse {
         canonical_bytes: Buffer::from(canonical),
@@ -4740,7 +4740,7 @@ fn ensure_zk_public_input_owner_canonical(map: &json::Map, context: &str) -> nap
             format!("{context}.owner must be a canonical account id"),
         )
     })?;
-    let canonical = AccountId::canonicalize(owner).map_err(|_| {
+    let canonical = ScopedAccountId::canonicalize(owner).map_err(|_| {
         napi::Error::new(
             napi::Status::InvalidArg,
             format!("{context}.owner must be a canonical account id"),
@@ -5091,7 +5091,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     return Ok(InstructionBox::from(unregister_box));
                 }
                 if let Some(account_value) = unregister_map.remove("Account") {
-                    let account_id: AccountId =
+                    let account_id: ScopedAccountId =
                         json::from_value(account_value).map_err(norito_to_napi)?;
                     let unregister_box =
                         UnregisterBox::Account(Unregister::<Account>::account(account_id));
@@ -5202,7 +5202,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     let source: AssetId = json::from_value(source_value).map_err(norito_to_napi)?;
                     let quantity: Numeric =
                         json::from_value(quantity_value).map_err(norito_to_napi)?;
-                    let destination: AccountId =
+                    let destination: ScopedAccountId =
                         json::from_value(destination_value).map_err(norito_to_napi)?;
                     let transfer = Transfer::asset_numeric(source, quantity, destination);
                     return Ok(InstructionBox::from(TransferBox::Asset(transfer)));
@@ -5228,11 +5228,11 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                                 "Transfer.Domain.destination field missing",
                             )
                         })?;
-                    let source: AccountId =
+                    let source: ScopedAccountId =
                         json::from_value(source_value).map_err(norito_to_napi)?;
                     let domain_id: DomainId =
                         json::from_value(object_value).map_err(norito_to_napi)?;
-                    let destination: AccountId =
+                    let destination: ScopedAccountId =
                         json::from_value(destination_value).map_err(norito_to_napi)?;
                     let transfer = Transfer::domain(source, domain_id, destination);
                     return Ok(InstructionBox::from(TransferBox::Domain(transfer)));
@@ -5259,11 +5259,11 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                                 "Transfer.AssetDefinition.destination field missing",
                             )
                         })?;
-                    let source: AccountId =
+                    let source: ScopedAccountId =
                         json::from_value(source_value).map_err(norito_to_napi)?;
                     let definition: AssetDefinitionId =
                         json::from_value(object_value).map_err(norito_to_napi)?;
-                    let destination: AccountId =
+                    let destination: ScopedAccountId =
                         json::from_value(destination_value).map_err(norito_to_napi)?;
                     let transfer = Transfer::asset_definition(source, definition, destination);
                     return Ok(InstructionBox::from(TransferBox::AssetDefinition(transfer)));
@@ -5287,10 +5287,10 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             "Transfer.Nft.destination field missing",
                         )
                     })?;
-                    let source: AccountId =
+                    let source: ScopedAccountId =
                         json::from_value(source_value).map_err(norito_to_napi)?;
                     let nft_id: NftId = json::from_value(object_value).map_err(norito_to_napi)?;
-                    let destination: AccountId =
+                    let destination: ScopedAccountId =
                         json::from_value(destination_value).map_err(norito_to_napi)?;
                     let transfer = Transfer::nft(source, nft_id, destination);
                     return Ok(InstructionBox::from(TransferBox::Nft(transfer)));
@@ -5331,7 +5331,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             "JoinKaigi.participant field missing",
                         )
                     })?;
-                    let participant: AccountId =
+                    let participant: ScopedAccountId =
                         json::from_value(participant_value).map_err(norito_to_napi)?;
                     let commitment =
                         parse_optional_commitment(join_fields.remove("commitment"), "JoinKaigi")?;
@@ -5370,7 +5370,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                                 "LeaveKaigi.participant field missing",
                             )
                         })?;
-                    let participant: AccountId =
+                    let participant: ScopedAccountId =
                         json::from_value(participant_value).map_err(norito_to_napi)?;
                     let commitment =
                         parse_optional_commitment(leave_fields.remove("commitment"), "LeaveKaigi")?;
@@ -5504,7 +5504,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             "ReportKaigiRelayHealth.relay_id field missing",
                         )
                     })?;
-                    let relay_id: AccountId =
+                    let relay_id: ScopedAccountId =
                         json::from_value(relay_id_value).map_err(norito_to_napi)?;
                     let status_value = health_fields.remove("status").ok_or_else(|| {
                         napi::Error::new(
@@ -5616,7 +5616,8 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     "CastPlainBallot.referendum_id",
                 )?;
                 let owner_value = required_value(&mut fields, "owner", "CastPlainBallot")?;
-                let owner: AccountId = json::from_value(owner_value).map_err(norito_to_napi)?;
+                let owner: ScopedAccountId =
+                    json::from_value(owner_value).map_err(norito_to_napi)?;
                 let amount = parse_u128_value(
                     required_value(&mut fields, "amount", "CastPlainBallot")?,
                     "CastPlainBallot.amount",
@@ -5641,7 +5642,8 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
 
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterCitizen") {
                 let owner_value = required_value(&mut fields, "owner", "RegisterCitizen")?;
-                let owner: AccountId = json::from_value(owner_value).map_err(norito_to_napi)?;
+                let owner: ScopedAccountId =
+                    json::from_value(owner_value).map_err(norito_to_napi)?;
                 let amount = parse_u128_value(
                     required_value(&mut fields, "amount", "RegisterCitizen")?,
                     "RegisterCitizen.amount",
@@ -5669,12 +5671,12 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 )?;
                 let members_value =
                     required_value(&mut fields, "members", "PersistCouncilForEpoch")?;
-                let members: Vec<AccountId> =
+                let members: Vec<ScopedAccountId> =
                     json::from_value(members_value).map_err(norito_to_napi)?;
                 let alternates_value = fields
                     .remove("alternates")
                     .unwrap_or_else(|| json::Value::Array(Vec::new()));
-                let alternates: Vec<AccountId> =
+                let alternates: Vec<ScopedAccountId> =
                     json::from_value(alternates_value).map_err(norito_to_napi)?;
                 let verified = parse_u32_value(
                     fields
@@ -5844,6 +5846,93 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 return Ok(Box::new(instruction).into_instruction_box());
             }
 
+            if let Some(custom_value) = remove_case_insensitive(&mut map, "Custom") {
+                let mut custom_map = match custom_value {
+                    json::Value::Object(map) => map,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "Custom instruction payload must be an object (found {other:?})"
+                            ),
+                        ));
+                    }
+                };
+                let payload =
+                    remove_case_insensitive(&mut custom_map, "payload").ok_or_else(|| {
+                        napi::Error::new(napi::Status::InvalidArg, "Custom.payload field missing")
+                    })?;
+                return Ok(InstructionBox::from(CustomInstruction::new(payload)));
+            }
+
+            if let Some(multisig_value) = remove_case_insensitive(&mut map, "Multisig") {
+                let multisig_map = match multisig_value {
+                    json::Value::Object(map) => map,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "Multisig instruction payload must be an object (found {other:?})"
+                            ),
+                        ));
+                    }
+                };
+                return Ok(InstructionBox::from(CustomInstruction::new(
+                    json::Value::Object(multisig_map),
+                )));
+            }
+
+            if let Some(propose_value) = remove_case_insensitive(&mut map, "MultisigPropose") {
+                let propose_fields = match propose_value {
+                    json::Value::Object(map) => map,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!("MultisigPropose payload must be an object (found {other:?})"),
+                        ));
+                    }
+                };
+                let mut payload = json::Map::new();
+                payload.insert("Propose".to_owned(), json::Value::Object(propose_fields));
+                return Ok(InstructionBox::from(CustomInstruction::new(
+                    json::Value::Object(payload),
+                )));
+            }
+
+            if let Some(approve_value) = remove_case_insensitive(&mut map, "MultisigApprove") {
+                let approve_fields = match approve_value {
+                    json::Value::Object(map) => map,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!("MultisigApprove payload must be an object (found {other:?})"),
+                        ));
+                    }
+                };
+                let mut payload = json::Map::new();
+                payload.insert("Approve".to_owned(), json::Value::Object(approve_fields));
+                return Ok(InstructionBox::from(CustomInstruction::new(
+                    json::Value::Object(payload),
+                )));
+            }
+
+            if let Some(register_value) = remove_case_insensitive(&mut map, "MultisigRegister") {
+                let register_fields = match register_value {
+                    json::Value::Object(map) => map,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!("MultisigRegister payload must be an object (found {other:?})"),
+                        ));
+                    }
+                };
+                let mut payload = json::Map::new();
+                payload.insert("Register".to_owned(), json::Value::Object(register_fields));
+                return Ok(InstructionBox::from(CustomInstruction::new(
+                    json::Value::Object(payload),
+                )));
+            }
+
             if let Some(zk_value) = remove_case_insensitive(&mut map, "Zk") {
                 let mut zk_map = match zk_value {
                     json::Value::Object(map) => map,
@@ -6002,7 +6091,7 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         if let MintBox::Asset(mint) = mint_box {
             let mut asset_fields = json::Map::new();
             let object = json::to_value(mint.object()).map_err(norito_to_napi)?;
-            let destination = json::to_value(mint.destination()).map_err(norito_to_napi)?;
+            let destination = json::Value::String(mint.destination().canonical_encoded());
             asset_fields.insert("object".to_owned(), object);
             asset_fields.insert("destination".to_owned(), destination);
             mint_map.insert("Asset".to_owned(), json::Value::Object(asset_fields));
@@ -6029,7 +6118,7 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         let mut transfer_map = json::Map::new();
         if let TransferBox::Asset(transfer) = transfer_box {
             let mut asset_fields = json::Map::new();
-            let source = json::to_value(transfer.source()).map_err(norito_to_napi)?;
+            let source = json::Value::String(transfer.source().canonical_encoded());
             let quantity = json::to_value(transfer.object()).map_err(norito_to_napi)?;
             let destination = json::to_value(transfer.destination()).map_err(norito_to_napi)?;
             asset_fields.insert("source".to_owned(), source);
@@ -6082,7 +6171,7 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         if let BurnBox::Asset(burn) = burn_box {
             let mut asset_fields = json::Map::new();
             let object = json::to_value(burn.object()).map_err(norito_to_napi)?;
-            let destination = json::to_value(burn.destination()).map_err(norito_to_napi)?;
+            let destination = json::Value::String(burn.destination().canonical_encoded());
             asset_fields.insert("object".to_owned(), object);
             asset_fields.insert("destination".to_owned(), destination);
             burn_map.insert("Asset".to_owned(), json::Value::Object(asset_fields));
@@ -6103,6 +6192,17 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             outer.insert("Burn".to_owned(), json::Value::Object(burn_map));
             return Ok(json::Value::Object(outer));
         }
+    }
+
+    if let Some(custom_instruction) = instruction_ref.as_any().downcast_ref::<CustomInstruction>() {
+        let payload_json =
+            json::parse_value(custom_instruction.payload.get()).map_err(|error| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    format!("Custom.payload is not valid JSON: {error}"),
+                )
+            })?;
+        return Ok(custom_json_value(payload_json));
     }
 
     if let Some(propose) = instruction_ref
@@ -6681,6 +6781,14 @@ fn kaigi_json_value(tag: &str, payload: json::Value) -> json::Value {
     json::Value::Object(outer)
 }
 
+fn custom_json_value(payload: json::Value) -> json::Value {
+    let mut custom = json::Map::new();
+    custom.insert("payload".to_owned(), payload);
+    let mut outer = json::Map::new();
+    outer.insert("Custom".to_owned(), json::Value::Object(custom));
+    json::Value::Object(outer)
+}
+
 fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
     let mut variant = json::Map::new();
     variant.insert(tag.to_owned(), payload);
@@ -6697,7 +6805,7 @@ fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
 fn assemble_transaction(
     chain_id: ChainId,
-    authority: AccountId,
+    authority: ScopedAccountId,
     instructions: Vec<InstructionBox>,
     metadata: Metadata,
     creation_time_ms: Option<i64>,
@@ -6846,12 +6954,14 @@ pub fn build_register_domain_transaction(
     let chain_id: ChainId = chain_id.parse().map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
-    let authority: AccountId = authority.parse().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid authority account id: {err}"),
-        )
-    })?;
+    let authority: ScopedAccountId = ScopedAccountId::parse_encoded(&authority)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid authority account id: {err}"),
+            )
+        })?;
     let domain_id: DomainId = domain_id.parse().map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
@@ -6877,7 +6987,7 @@ pub fn build_register_domain_transaction(
 #[allow(clippy::too_many_arguments)] // helper mirrors the JS surface for clarity
 fn build_transaction_from_instructions_json(
     chain_id: ChainId,
-    authority: AccountId,
+    authority: ScopedAccountId,
     instructions_json: Vec<String>,
     metadata_json: Option<String>,
     creation_time_ms: Option<i64>,
@@ -6916,12 +7026,14 @@ pub fn build_transaction(
     let chain_id: ChainId = chain_id.parse().map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
-    let authority: AccountId = authority.parse().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid authority account id: {err}"),
-        )
-    })?;
+    let authority: ScopedAccountId = ScopedAccountId::parse_encoded(&authority)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid authority account id: {err}"),
+            )
+        })?;
 
     build_transaction_from_instructions_json(
         chain_id,
@@ -6976,12 +7088,14 @@ pub fn build_time_trigger_action(
         None
     };
 
-    let authority: AccountId = authority.parse().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid trigger authority: {err}"),
-        )
-    })?;
+    let authority: ScopedAccountId = ScopedAccountId::parse_encoded(&authority)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid trigger authority: {err}"),
+            )
+        })?;
     let instructions = parse_instruction_payloads(instructions_json)?;
     let executable = Executable::from(instructions);
     let repeats = match repeats {
@@ -7020,12 +7134,14 @@ pub fn build_precommit_trigger_action(
     repeats: Option<u32>,
     metadata_json: Option<String>,
 ) -> napi::Result<String> {
-    let authority: AccountId = authority.parse().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid trigger authority: {err}"),
-        )
-    })?;
+    let authority: ScopedAccountId = ScopedAccountId::parse_encoded(&authority)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid trigger authority: {err}"),
+            )
+        })?;
     let instructions = parse_instruction_payloads(instructions_json)?;
     let executable = Executable::from(instructions);
     let repeats = match repeats {
@@ -7058,7 +7174,7 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         HasMetadata,
-        account::AccountId,
+        account::ScopedAccountId,
         asset::id::{AssetDefinitionId, AssetId},
         da::{
             manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
@@ -7070,8 +7186,8 @@ mod tests {
         domain::DomainId,
         events::EventFilterBox,
         isi::{
-            Burn, BurnBox, CreateKaigi, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
-            RecordKaigiUsage, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
+            Burn, BurnBox, CreateKaigi, CustomInstruction, InstructionBox, JoinKaigi, LeaveKaigi,
+            Mint, MintBox, RecordKaigiUsage, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
             SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
             governance::{
                 AtWindow, CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
@@ -7142,13 +7258,13 @@ mod tests {
         buf
     }
 
-    fn sample_account(domain: &str) -> AccountId {
+    fn sample_account(domain: &str) -> ScopedAccountId {
         let keypair = KeyPair::random();
         let domain_id: DomainId = domain.parse().expect("valid domain id");
-        AccountId::new(domain_id, keypair.public_key().clone())
+        ScopedAccountId::new(domain_id, keypair.public_key().clone())
     }
 
-    fn account_json_literal(account: &AccountId) -> String {
+    fn account_json_literal(account: &ScopedAccountId) -> String {
         json::to_value(account)
             .expect("serialize account id")
             .as_str()
@@ -7576,6 +7692,101 @@ mod tests {
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize instruction from json");
         assert_eq!(reconstructed, instruction);
+    }
+
+    #[test]
+    fn custom_instruction_json_roundtrip() {
+        let account = sample_account("wonderland");
+        let mut propose = json::Map::new();
+        propose.insert(
+            "account".to_owned(),
+            json::Value::String(account_json_literal(&account)),
+        );
+        propose.insert(
+            "instructions".to_owned(),
+            json::Value::Array(vec![norito_json!({
+                "Log": "hello-custom"
+            })]),
+        );
+        propose.insert(
+            "transaction_ttl_ms".to_owned(),
+            json::Value::Number(json::Number::from(30_000_u64)),
+        );
+        let mut payload = json::Map::new();
+        payload.insert("Propose".to_owned(), json::Value::Object(propose));
+        let instruction_json = custom_json_value(json::Value::Object(payload));
+
+        let instruction =
+            value_to_instruction(instruction_json.clone()).expect("parse Custom instruction");
+        assert!(
+            instruction
+                .as_any()
+                .downcast_ref::<CustomInstruction>()
+                .is_some(),
+            "instruction must decode as CustomInstruction"
+        );
+
+        let rendered =
+            instruction_to_json_value(&instruction).expect("render custom instruction to JSON");
+        assert_eq!(rendered, instruction_json);
+    }
+
+    #[test]
+    fn multisig_alias_payloads_decode_as_custom_instruction() {
+        let account = sample_account("wonderland");
+        let account_literal = account_json_literal(&account);
+
+        let mut propose_fields = json::Map::new();
+        propose_fields.insert(
+            "account".to_owned(),
+            json::Value::String(account_literal.clone()),
+        );
+        propose_fields.insert(
+            "instructions".to_owned(),
+            json::Value::Array(vec![norito_json!({
+                "Log": "multisig-propose"
+            })]),
+        );
+        let mut propose_outer = json::Map::new();
+        propose_outer.insert(
+            "MultisigPropose".to_owned(),
+            json::Value::Object(propose_fields),
+        );
+        let propose_instruction = value_to_instruction(json::Value::Object(propose_outer))
+            .expect("parse MultisigPropose alias");
+        let propose_rendered =
+            instruction_to_json_value(&propose_instruction).expect("render MultisigPropose alias");
+        assert!(
+            propose_rendered
+                .get("Custom")
+                .and_then(|value| value.get("payload"))
+                .and_then(|value| value.get("Propose"))
+                .is_some(),
+            "MultisigPropose alias must map to Custom.payload.Propose"
+        );
+
+        let mut approve_fields = json::Map::new();
+        approve_fields.insert("account".to_owned(), json::Value::String(account_literal));
+        approve_fields.insert(
+            "instructions_hash".to_owned(),
+            json::Value::String(hash_literal(0xCC)),
+        );
+        let mut multisig_payload = json::Map::new();
+        multisig_payload.insert("Approve".to_owned(), json::Value::Object(approve_fields));
+        let mut approve_outer = json::Map::new();
+        approve_outer.insert("Multisig".to_owned(), json::Value::Object(multisig_payload));
+        let approve_instruction =
+            value_to_instruction(json::Value::Object(approve_outer)).expect("parse Multisig alias");
+        let approve_rendered =
+            instruction_to_json_value(&approve_instruction).expect("render Multisig alias");
+        assert!(
+            approve_rendered
+                .get("Custom")
+                .and_then(|value| value.get("payload"))
+                .and_then(|value| value.get("Approve"))
+                .is_some(),
+            "Multisig alias must map to Custom.payload.Approve"
+        );
     }
 
     #[test]
@@ -8280,10 +8491,7 @@ mod tests {
         nullifier.insert("digest".into(), Value::String(hash_literal(0x22)));
         nullifier.insert("issued_at_ms".into(), Value::Number(json::Number::U64(99)));
 
-        let participant: AccountId =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                .parse()
-                .expect("canonical account address must parse");
+        let participant = sample_account("wonderland");
 
         let mut join = json::Map::new();
         join.insert("call_id".into(), Value::Object(call_id));
@@ -9222,45 +9430,47 @@ mod tests {
     #[test]
     fn js_builder_create_kaigi_payload_matches() {
         // Mirrors the payload assembled by the JavaScript builders/tests.
-        let json_payload = r#"{
-            "Kaigi": {
-                "CreateKaigi": {
-                    "call": {
-                        "id": {
+        let host = account_json_literal(&sample_account("wonderland"));
+        let billing_account = account_json_literal(&sample_account("wonderland"));
+        let relay_id = account_json_literal(&sample_account("wonderland"));
+        let payload = norito_json!({
+            "Kaigi": norito_json!({
+                "CreateKaigi": norito_json!({
+                    "call": norito_json!({
+                        "id": norito_json!({
                             "domain_id": "wonderland",
                             "call_name": "weekly-sync"
-                        },
-                        "host": "ed0120BC35289D74AF3796470409268AFD7ADDA7BB2A4627B10C24BE17864D1116DA31@wonderland",
+                        }),
+                        "host": host,
                         "title": "Weekly Sync",
                         "description": "Roadmap alignment",
                         "max_participants": 16,
                         "gas_rate_per_minute": 120,
-                        "metadata": {
+                        "metadata": norito_json!({
                             "topic": "status"
-                        },
-                        "scheduled_start_ms": 1700000000000,
-                        "billing_account": "ed0120BC35289D74AF3796470409268AFD7ADDA7BB2A4627B10C24BE17864D1116DA31@wonderland",
-                        "privacy_mode": {
+                        }),
+                        "scheduled_start_ms": 1700000000000_u64,
+                        "billing_account": billing_account,
+                        "privacy_mode": norito_json!({
                             "mode": "ZkRosterV1",
-                            "state": null
-                        },
-                        "relay_manifest": {
-                            "hops": [
-                                {
-                                    "relay_id": "ed012004F0B5D18313224ACA936EEAD1D08610F26C0F2727AD36C0425DB3415C84F4CF@wonderland",
-                                    "hpke_public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
-                                    "weight": 5
-                                }
-                            ],
-                            "expiry_ms": 1700111000000
-                        }
-                    }
-                }
-            }
-        }"#;
+                            "state": json::Value::Null
+                        }),
+                        "relay_manifest": norito_json!({
+                            "hops": vec![norito_json!({
+                                "relay_id": relay_id,
+                                "hpke_public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+                                "weight": 5
+                            })],
+                            "expiry_ms": 1700111000000_u64
+                        })
+                    })
+                })
+            })
+        });
+        let json_payload = json::to_json(&payload).expect("serialize payload to json");
 
         let value: json::Value =
-            norito::json::from_json(json_payload).expect("parse builder json into Value");
+            norito::json::from_json(&json_payload).expect("parse builder json into Value");
         if let Some(host) = value
             .get("Kaigi")
             .and_then(|v| v.get("CreateKaigi"))
@@ -9268,7 +9478,9 @@ mod tests {
             .and_then(|v| v.get("host"))
             .and_then(|v| v.as_str())
         {
-            host.parse::<AccountId>().expect("host account id");
+            ScopedAccountId::parse_encoded(host)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("host account id");
         }
         if let Some(billing) = value
             .get("Kaigi")
@@ -9277,7 +9489,9 @@ mod tests {
             .and_then(|v| v.get("billing_account"))
             .and_then(|v| v.as_str())
         {
-            billing.parse::<AccountId>().expect("billing account id");
+            ScopedAccountId::parse_encoded(billing)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("billing account id");
         }
         if let Some(relay_id) = value
             .get("Kaigi")
@@ -9289,10 +9503,12 @@ mod tests {
             .and_then(|v| v.get("relay_id"))
             .and_then(|v| v.as_str())
         {
-            relay_id.parse::<AccountId>().expect("relay account id");
+            ScopedAccountId::parse_encoded(relay_id)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("relay account id");
         }
 
-        instruction_from_json(json_payload).expect("JS builder payload must be parsable");
+        instruction_from_json(&json_payload).expect("JS builder payload must be parsable");
     }
 
     #[test]
@@ -9301,7 +9517,7 @@ mod tests {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
-        let authority = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+        let authority = ScopedAccountId::new(domain_id.clone(), keypair.public_key().clone());
 
         let asset_definition: AssetDefinitionId = "rose#wonderland"
             .parse()
@@ -9369,7 +9585,7 @@ mod tests {
     fn build_transaction_with_empty_instructions_fails() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
-        let authority = AccountId::new(domain_id, keypair.public_key().clone());
+        let authority = ScopedAccountId::new(domain_id, keypair.public_key().clone());
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let (_, secret_bytes) = keypair.private_key().to_bytes();
 
@@ -9391,7 +9607,7 @@ mod tests {
     fn build_time_trigger_action_encodes_expected_schedule() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
-        let authority_id = AccountId::new(domain_id, keypair.public_key().clone());
+        let authority_id = ScopedAccountId::new(domain_id, keypair.public_key().clone());
         let encoded = build_time_trigger_action(
             account_json_literal(&authority_id),
             vec![
@@ -9427,7 +9643,7 @@ mod tests {
     fn build_precommit_trigger_action_encodes_filter() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
-        let authority_id = AccountId::new(domain_id, keypair.public_key().clone());
+        let authority_id = ScopedAccountId::new(domain_id, keypair.public_key().clone());
         let encoded = build_precommit_trigger_action(
             account_json_literal(&authority_id),
             vec![

@@ -5,10 +5,7 @@ use std::{path::Path, str::FromStr};
 use hex::{FromHex, encode_upper};
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
-    account::{
-        AccountAddress, AccountAddressError, AccountAddressFormat, AccountId, MultisigMember,
-        MultisigPolicy,
-    },
+    account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
     domain::DomainId,
     name::Name,
 };
@@ -221,18 +218,12 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         case.case_id
     );
 
-    // Canonical parse via parse_any
-    let (parsed_any, format_any) = AccountAddress::parse_any(&case.encodings.canonical_hex, None)
-        .expect("parse canonical hex");
-    assert_eq!(
-        format_any,
-        AccountAddressFormat::CanonicalHex,
-        "{} parse_any should detect canonical hex",
-        case.case_id
-    );
-    assert_eq!(
-        parsed_any, canonical_address,
-        "{} canonical hex mismatch",
+    // Strict parser must reject canonical hex literals.
+    let err = AccountAddress::parse_encoded(&case.encodings.canonical_hex, None)
+        .expect_err("canonical hex must be rejected by strict parser");
+    assert!(
+        matches!(err, AccountAddressError::UnsupportedAddressFormat),
+        "{} canonical hex should be unsupported",
         case.case_id
     );
 
@@ -253,64 +244,26 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         other => panic!("unknown positive category {other}"),
     }
 
-    match canonical_bytes
-        .get(1)
-        .copied()
-        .expect("selector tag present")
-    {
-        0x00 => assert_eq!(
-            case.selector.kind, "default",
-            "{} selector kind mismatch",
-            case.case_id
-        ),
-        0x01 => {
-            assert_eq!(
-                case.selector.kind, "local12",
-                "{} selector kind mismatch",
-                case.case_id
-            );
-            let digest = &canonical_bytes[2..14];
-            let expected = case
-                .selector
-                .digest_hex
-                .as_deref()
-                .expect("local selector requires digest");
-            assert_eq!(
-                encode_upper(digest),
-                expected.to_ascii_uppercase(),
-                "{} selector digest mismatch",
-                case.case_id
-            );
-        }
-        0x02 => {
-            assert_eq!(
-                case.selector.kind, "global",
-                "{} selector kind mismatch",
-                case.case_id
-            );
-            let registry_id =
-                u32::from_be_bytes(canonical_bytes[2..6].try_into().expect("registry id bytes"));
-            assert_eq!(
-                Some(registry_id),
-                case.selector.registry_id,
-                "{} selector registry mismatch",
-                case.case_id
-            );
-            if let Some(equivalent) = case.input.equivalent_domain.as_deref() {
-                let equivalents = case
-                    .selector
-                    .domain_equivalents
-                    .as_ref()
-                    .expect("global selector must list equivalents");
-                assert!(
-                    equivalents.iter().any(|domain| domain == equivalent),
-                    "{} global selector missing equivalent {equivalent}",
-                    case.case_id
-                );
-            }
-        }
-        other => panic!("{} unexpected selector tag {other:#x}", case.case_id),
-    }
+    assert_eq!(
+        case.selector.kind, "default",
+        "{} selector kind mismatch",
+        case.case_id
+    );
+    assert!(
+        case.selector.digest_hex.is_none(),
+        "{} selector digest should be absent for selector-free canonical payloads",
+        case.case_id
+    );
+    assert!(
+        case.selector.registry_id.is_none(),
+        "{} selector registry should be absent for selector-free canonical payloads",
+        case.case_id
+    );
+    assert!(
+        case.selector.domain_equivalents.is_none(),
+        "{} selector equivalents should be absent for selector-free canonical payloads",
+        case.case_id
+    );
 }
 
 fn validate_single_case(case: &PositiveCase, address: &AccountAddress) {
@@ -327,17 +280,6 @@ fn validate_single_case(case: &PositiveCase, address: &AccountAddress) {
         assert_eq!(
             rebuilt, *address,
             "{} single-key canonical mismatch",
-            case.case_id
-        );
-    } else if let Some(equivalent) = case.input.equivalent_domain.as_deref() {
-        let equivalents = case
-            .selector
-            .domain_equivalents
-            .as_ref()
-            .expect("global selector must include equivalents");
-        assert!(
-            equivalents.iter().any(|domain| domain == equivalent),
-            "{} global selector missing equivalent domain",
             case.case_id
         );
     }
@@ -439,7 +381,7 @@ fn validate_negative_case(case: &NegativeCase, default_prefix: u16) {
             assert_error(&err, &case.expected_error, &case.case_id);
         }
         "canonical_hex" => {
-            let err = AccountAddress::parse_any(&case.input, None)
+            let err = AccountAddress::parse_encoded(&case.input, None)
                 .expect_err("canonical case should fail");
             assert_error(&err, &case.expected_error, &case.case_id);
         }

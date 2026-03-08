@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 الخيارات:
 
 - `--format compressed (`sora`)` للطلعة `sora...` بدلاً من IH58.
-- `--no-append-domain` من أجل محو أحرفنا.
+- `domainless output (default)` من أجل محو أحرفنا.
 - `--audit-only` لتجاهل شريط التحويل.
 - `--allow-errors` لمواصلة المسح عندما تظهر الخطوط غير النموذجية (تتوافق مع سلوك CLI).يكتب النص سلاسل المصنوعات اليدوية في نهاية التنفيذ. Joignez les deux fichiers a
 تذكرة إدارة التغيير الخاصة بك مع الالتقاط Grafana مما يثبت الصفر
@@ -46,7 +46,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 2. قم بقفل الدمج عند إشارة `audit.json` للمحددات المحلية (`domain.kind = local12`).
    القيمة الافتراضية هي `true` (لا تمر على `false` فيما يتعلق بتطوير/اختبار المجموعات أثناء قيامك بذلك
    تشخيص الانحدارات) والإضافة
-   `iroha tools address normalize --fail-on-warning --only-local` a CI للانحدارات
+   `iroha tools address normalize` a CI للانحدارات
    صدى أمام الإنتاج.
 
 شاهد مصدر المستند لمزيد من التفاصيل وقوائم التحقق من الأدلة والمقتطف

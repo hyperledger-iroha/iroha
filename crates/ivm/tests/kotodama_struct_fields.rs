@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use ivm::{
     IVM, KotodamaCompiler,
-    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
+    mock_wsv::{MockWorldStateView, ScopedAccountId, WsvHost},
 };
 
 #[test]
@@ -22,7 +22,7 @@ fn struct_fields_lower_to_syscall_args() {
             fn main() {
                 let args = TransferArgs(
                     domain("wonderland"),
-                    account_id("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland")
+                    account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
                 );
                 transfer_domain(authority(), args.domain, args.to);
             }
@@ -33,12 +33,18 @@ fn struct_fields_lower_to_syscall_args() {
     let prog = compiler.compile_source(src).expect("compile kotodama");
     let mut wsv = MockWorldStateView::new();
     // Ensure the target account exists in mock WSV to pass validation in host
-    let bob: AccountId =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+    let bob: ScopedAccountId = ScopedAccountId::new(
+        "wonderland".parse().expect("domain id"),
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
-            .unwrap();
+            .expect("public key"),
+    );
     wsv.add_account_unchecked(bob.clone());
-    let host = WsvHost::new(wsv, bob, HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&bob),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");

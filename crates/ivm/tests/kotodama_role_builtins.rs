@@ -11,28 +11,35 @@ fn kotodama_create_and_grant_role_enables_mint() {
     let src = r#"
         fn main() {
           // Bootstrap domain/account/asset
-          register_domain(domain("wonderland"));
-          register_account(account_id("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"));
+          register_domain(domain("default"));
+          register_account(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"));
           register_asset("rose", "ROSE", 0, 1);
           // Create role with mint permission and grant to authority
           create_role(name("minter"), json("{\"perms\":[\"mint_asset:rose#wonderland\"]}"));
-          grant_role(account_id("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"), name("minter"));
+          grant_role(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), name("minter"));
           // Mint using role permission
-          mint_asset(account_id("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"), asset_definition("rose#wonderland"), 1);
+          mint_asset(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), asset_definition("rose#wonderland"), 1);
         }
     "#;
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile");
-    let caller: ivm::AccountId =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+    let caller: ivm::mock_wsv::ScopedAccountId = ivm::mock_wsv::ScopedAccountId::new(
+        "wonderland".parse().expect("domain id"),
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
-            .unwrap();
+            .expect("public key"),
+    );
     let mut wsv = MockWorldStateView::new();
+    wsv.add_account_unchecked(caller.clone());
     // Permissions to bootstrap objects
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
-    let host = WsvHost::new(wsv, caller, HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");

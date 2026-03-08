@@ -572,9 +572,11 @@ fn build_ledger_projection(
     asset_definition: &str,
     total_micros: u64,
 ) -> Result<LedgerProjection> {
-    let payer: AccountId = AccountId::from_str(payer)
+    let payer: AccountId = AccountId::parse_encoded(payer)
+        .map(|parsed| parsed.into_account_id())
         .wrap_err_with(|| format!("failed to parse payer account id `{payer}`"))?;
-    let treasury: AccountId = AccountId::from_str(treasury)
+    let treasury: AccountId = AccountId::parse_encoded(treasury)
+        .map(|parsed| parsed.into_account_id())
         .wrap_err_with(|| format!("failed to parse treasury account id `{treasury}`"))?;
     let asset_definition: AssetDefinitionId = AssetDefinitionId::from_str(asset_definition)
         .wrap_err_with(|| format!("failed to parse asset definition `{asset_definition}`"))?;
@@ -721,12 +723,8 @@ mod tests {
             catalog_path,
             guardrails_path: Some(guardrails_path),
             output_dir: output_dir.clone(),
-            payer:
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .to_string(),
-            treasury:
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .to_string(),
+            payer: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string(),
+            treasury: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string(),
             asset_definition: "xor#wonderland".to_string(),
             allow_hard_cap: false,
         })
@@ -810,12 +808,8 @@ mod tests {
             catalog_path,
             guardrails_path: Some(guardrails_path),
             output_dir,
-            payer:
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .to_string(),
-            treasury:
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .to_string(),
+            payer: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string(),
+            treasury: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string(),
             asset_definition: "xor#wonderland".to_string(),
             allow_hard_cap: false,
         });

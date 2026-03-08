@@ -75,7 +75,7 @@ pub mod queue {
 
     #[derive(Debug, Clone, Args)]
     pub struct Inspect {
-        /// Connect session identifier (base64/base64url/hex). Required unless `--snapshot` is provided.
+        /// Connect session identifier (base64url, no padding). Required unless `--snapshot` is provided.
         #[arg(long)]
         pub sid: Option<String>,
         /// Path to an explicit snapshot JSON file (defaults to `<root>/<sid>/state.json`).
@@ -119,11 +119,17 @@ pub mod queue {
 
         let snapshot_bytes = fs::read(&snapshot_path)
             .wrap_err_with(|| format!("failed to read snapshot {}", snapshot_path.display()))?;
-        let mut snapshot: ConnectQueueSnapshot = json::from_slice(&snapshot_bytes)
+        let snapshot_value: json::Value =
+            json::from_slice(&snapshot_bytes).wrap_err("failed to parse snapshot JSON value")?;
+        validate_snapshot_schema_keys(&snapshot_value)
+            .wrap_err("failed to validate snapshot JSON schema keys")?;
+        let snapshot: ConnectQueueSnapshot = json::from_value(snapshot_value)
             .wrap_err("failed to parse snapshot JSON (expected Norito schema)")?;
-
-        if snapshot.schema_version == 0 {
-            snapshot.schema_version = 1;
+        if snapshot.schema_version != 1 {
+            return Err(eyre!(
+                "unsupported connect snapshot schema_version {}; expected 1",
+                snapshot.schema_version
+            ));
         }
 
         let session_dir = snapshot_path
@@ -208,19 +214,97 @@ pub mod queue {
             if line.trim().is_empty() {
                 continue;
             }
-            match json::from_str::<ConnectQueueMetricsSample>(&line) {
-                Ok(sample) => summary.record(&sample),
-                Err(err) => {
-                    return Err(err).wrap_err_with(|| {
-                        format!(
-                            "failed to parse metrics line `{line}` in {}",
-                            path.display()
-                        )
-                    });
-                }
-            }
+            let sample_value: json::Value = json::from_str(&line).wrap_err_with(|| {
+                format!(
+                    "failed to parse metrics line `{line}` in {}",
+                    path.display()
+                )
+            })?;
+            validate_metrics_sample_schema_keys(&sample_value).wrap_err_with(|| {
+                format!(
+                    "failed to validate metrics line `{line}` in {}",
+                    path.display()
+                )
+            })?;
+            let sample: ConnectQueueMetricsSample =
+                json::from_value(sample_value).wrap_err_with(|| {
+                    format!(
+                        "failed to decode metrics line `{line}` in {}",
+                        path.display()
+                    )
+                })?;
+            summary.record(&sample);
         }
         Ok(Some(summary))
+    }
+
+    fn validate_snapshot_schema_keys(snapshot: &json::Value) -> Result<()> {
+        let root = snapshot
+            .as_object()
+            .ok_or_else(|| eyre!("snapshot JSON must be an object"))?;
+        for field in [
+            "schema_version",
+            "session_id_base64",
+            "state",
+            "reason",
+            "warning_watermark",
+            "drop_watermark",
+            "last_updated_ms",
+            "app_to_wallet",
+            "wallet_to_app",
+        ] {
+            if !root.contains_key(field) {
+                return Err(eyre!("snapshot missing required field `{field}`"));
+            }
+        }
+        let app_to_wallet = root
+            .get("app_to_wallet")
+            .expect("checked app_to_wallet presence");
+        let wallet_to_app = root
+            .get("wallet_to_app")
+            .expect("checked wallet_to_app presence");
+        validate_direction_stats_schema_keys(app_to_wallet, "app_to_wallet")?;
+        validate_direction_stats_schema_keys(wallet_to_app, "wallet_to_app")?;
+        Ok(())
+    }
+
+    fn validate_direction_stats_schema_keys(value: &json::Value, label: &str) -> Result<()> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| eyre!("snapshot field `{label}` must be an object"))?;
+        for field in [
+            "depth",
+            "bytes",
+            "oldest_sequence",
+            "newest_sequence",
+            "oldest_timestamp_ms",
+            "newest_timestamp_ms",
+        ] {
+            if !object.contains_key(field) {
+                return Err(eyre!(
+                    "snapshot field `{label}` missing required key `{field}`"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_metrics_sample_schema_keys(sample: &json::Value) -> Result<()> {
+        let object = sample
+            .as_object()
+            .ok_or_else(|| eyre!("metrics line must be a JSON object"))?;
+        for field in [
+            "timestamp_ms",
+            "state",
+            "app_to_wallet_depth",
+            "wallet_to_app_depth",
+            "reason",
+        ] {
+            if !object.contains_key(field) {
+                return Err(eyre!("metrics line missing required key `{field}`"));
+            }
+        }
+        Ok(())
     }
 
     fn derive_session_dir(root: &Path, sid: &str) -> Result<PathBuf> {
@@ -234,16 +318,9 @@ pub mod queue {
         if trimmed.is_empty() {
             return Err(eyre!("sid must be non-empty"));
         }
-        if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(trimmed) {
-            return Ok(bytes);
-        }
-        if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE.decode(trimmed) {
-            return Ok(bytes);
-        }
-        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(trimmed) {
-            return Ok(bytes);
-        }
-        Ok(trimmed.as_bytes().to_vec())
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(trimmed)
+            .map_err(|err| eyre!("sid must be base64url (no padding): {err}"))
     }
 
     #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
@@ -252,7 +329,6 @@ pub mod queue {
         pub schema_version: u32,
         pub session_id_base64: String,
         pub state: ConnectQueueState,
-        #[norito(default)]
         pub reason: Option<String>,
         pub warning_watermark: f64,
         pub drop_watermark: f64,
@@ -266,13 +342,9 @@ pub mod queue {
     pub struct ConnectQueueDirectionStats {
         pub depth: i64,
         pub bytes: i64,
-        #[norito(default)]
         pub oldest_sequence: Option<u64>,
-        #[norito(default)]
         pub newest_sequence: Option<u64>,
-        #[norito(default)]
         pub oldest_timestamp_ms: Option<u64>,
-        #[norito(default)]
         pub newest_timestamp_ms: Option<u64>,
     }
 
@@ -366,11 +438,8 @@ pub mod queue {
     pub struct ConnectQueueMetricsSample {
         pub timestamp_ms: u64,
         pub state: ConnectQueueState,
-        #[norito(default)]
         pub app_to_wallet_depth: i64,
-        #[norito(default)]
         pub wallet_to_app_depth: i64,
-        #[norito(default)]
         pub reason: Option<String>,
     }
 
@@ -506,6 +575,77 @@ pub mod queue {
         }
 
         #[test]
+        fn inspect_rejects_snapshot_missing_reason_field() {
+            let tmp = TempDir::new().unwrap();
+            let sid = "AQID";
+            let path = tmp.path().join(sid).join("state.json");
+            fs::create_dir_all(path.parent().expect("parent")).unwrap();
+            fs::write(
+                &path,
+                r#"{
+  "schema_version": 1,
+  "session_id_base64": "AQID",
+  "state": "healthy",
+  "warning_watermark": 0.6,
+  "drop_watermark": 0.85,
+  "last_updated_ms": 123,
+  "app_to_wallet": {
+    "depth": 1,
+    "bytes": 64,
+    "oldest_sequence": null,
+    "newest_sequence": null,
+    "oldest_timestamp_ms": null,
+    "newest_timestamp_ms": null
+  },
+  "wallet_to_app": {
+    "depth": 0,
+    "bytes": 0,
+    "oldest_sequence": null,
+    "newest_sequence": null,
+    "oldest_timestamp_ms": null,
+    "newest_timestamp_ms": null
+  }
+}"#,
+            )
+            .unwrap();
+            let args = Inspect {
+                sid: Some(sid.to_string()),
+                snapshot: Some(path),
+                root: Some(tmp.path().to_path_buf()),
+                metrics: false,
+                format: OutputFormat::Table,
+            };
+            let err = build_report(&args, tmp.path()).expect_err("missing reason field must fail");
+            assert!(
+                err.to_string()
+                    .contains("failed to validate snapshot JSON schema keys"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn inspect_rejects_legacy_schema_version_zero() {
+            let tmp = TempDir::new().unwrap();
+            let sid = "AQID";
+            let mut snapshot = sample_snapshot(sid);
+            snapshot.schema_version = 0;
+            let path = write_snapshot(&tmp, sid, &snapshot);
+            let args = Inspect {
+                sid: Some(sid.to_string()),
+                snapshot: Some(path),
+                root: Some(tmp.path().to_path_buf()),
+                metrics: false,
+                format: OutputFormat::Table,
+            };
+            let err = build_report(&args, tmp.path()).expect_err("legacy schema must be rejected");
+            assert!(
+                err.to_string()
+                    .contains("unsupported connect snapshot schema_version 0"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
         fn inspect_uses_connect_root_when_root_not_provided() {
             let tmp = TempDir::new().unwrap();
             let sid = "AQID";
@@ -565,6 +705,28 @@ pub mod queue {
                     .and_then(|v| v.get("state"))
                     .and_then(|v| v.as_str()),
                 Some("healthy")
+            );
+        }
+
+        #[test]
+        fn decode_session_id_rejects_non_base64url() {
+            let err = decode_session_id("plain-text").expect_err("must reject plain text sid");
+            assert!(
+                err.to_string()
+                    .contains("sid must be base64url (no padding)"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn read_metrics_summary_rejects_missing_required_depth_fields() {
+            let tmp = TempDir::new().unwrap();
+            let path = tmp.path().join("metrics.ndjson");
+            fs::write(&path, "{\"timestamp_ms\":1,\"state\":\"healthy\"}\n").unwrap();
+            let err = read_metrics_summary(&path).expect_err("legacy metrics shape must fail");
+            assert!(
+                err.to_string().contains("failed to validate metrics line"),
+                "unexpected error: {err}"
             );
         }
     }

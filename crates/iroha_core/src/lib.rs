@@ -168,34 +168,9 @@ pub fn validate_genesis_block(
 #[cfg(test)]
 /// Test-only helpers shared across core modules.
 pub mod test_alias {
-    use std::{
-        fmt::Write as _,
-        sync::{Arc, LazyLock},
-    };
-
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::{
-        account::{AccountId, set_account_alias_resolver},
-        domain::DomainId,
-    };
-
-    static INSTALL: LazyLock<()> = LazyLock::new(|| {
-        set_account_alias_resolver(Arc::new(|label, domain| {
-            Some(deterministic_account(label, domain))
-        }));
-    });
-
-    /// Install the deterministic alias resolver for tests.
+    /// Legacy helper retained for callers; account alias resolvers are no longer installed.
     pub fn ensure() {
-        LazyLock::force(&INSTALL);
-    }
-
-    fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
-        let mut material = String::new();
-        let _ = write!(&mut material, "{label}@{domain}");
-        let seed_bytes: [u8; Hash::LENGTH] = Hash::new(material).into();
-        let keypair = KeyPair::from_seed(seed_bytes.to_vec(), Algorithm::default());
-        AccountId::new(domain.clone(), keypair.public_key().clone())
+        // No-op by design.
     }
 }
 
@@ -449,12 +424,7 @@ pub mod role {
 
     impl fmt::Display for RoleIdWithOwner {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            let account_literal = self
-                .account
-                .to_account_address()
-                .and_then(|address| address.canonical_hex())
-                .map_err(|_| fmt::Error)?;
-            write!(f, "{account_literal}@{}|{}", self.account.domain(), self.id)
+            write!(f, "{}|{}", self.account, self.id)
         }
     }
 
@@ -468,9 +438,13 @@ pub mod role {
                     .ok_or(iroha_data_model::ParseError::new(
                         "RoleIdWithOwner must be formatted as `account|role`",
                     ))?;
-            let account = account_raw.parse().map_err(|_| {
-                iroha_data_model::ParseError::new("Invalid account component in RoleIdWithOwner")
-            })?;
+            let account = AccountId::parse_encoded(account_raw)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .map_err(|_| {
+                    iroha_data_model::ParseError::new(
+                        "Invalid account component in RoleIdWithOwner",
+                    )
+                })?;
             let id = role_raw.parse().map_err(|_| {
                 iroha_data_model::ParseError::new("Invalid role component in RoleIdWithOwner")
             })?;

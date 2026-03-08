@@ -109,6 +109,6 @@ Build with `swift build -c release` and run using `swift run LedgerFlow`.
 ## 5. Verify parity
 
 - Inspect the transactions through `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Compare holdings with `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- Compare holdings with `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'`.
 - Combine this recipe with the Rust/Python/JavaScript ones to confirm every SDK
   produces the same hashes for the demo flow.

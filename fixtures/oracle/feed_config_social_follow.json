@@ -25,8 +25,8 @@
     }
   },
   "providers": [
-    "34mSYnLrmfrui7Ba2h9RbAPY1hEmiRkVrwZHkQoV3strxstsSi6Y7dzv12tGLVKWBERUKmwf6@validators",
-    "34mSYnLrmfrui7Ba2h9RbAPY1hGHWxgENSD7ARQ5vtCjpEYjBoUFiku1vKkRgdYZpAZzxKyuS@validators"
+    "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "6cmzPVPX8j6hZ4dceSGxHX65vr3iK4RG3em7w24HeJ9BbQXmKFVrykC"
   ],
   "replay_window_slots": 3,
   "risk_class": {

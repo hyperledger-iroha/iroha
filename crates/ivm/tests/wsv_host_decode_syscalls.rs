@@ -3,11 +3,12 @@
 
 use std::str::FromStr;
 
+use iroha_crypto::PublicKey;
 use iroha_data_model::prelude::Name;
 use iroha_primitives::json::Json;
 use ivm::{
     IVM, PointerType,
-    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
+    mock_wsv::{DomainId, MockWorldStateView, ScopedAccountId, WsvHost},
     syscalls,
 };
 mod common;
@@ -24,13 +25,23 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v
 }
 
+fn account(domain: &str, public_key: &str) -> ScopedAccountId {
+    let domain: DomainId = domain.parse().expect("domain id");
+    let public_key: PublicKey = public_key.parse().expect("public key");
+    ScopedAccountId::new(domain, public_key)
+}
+
 fn wsv_host() -> WsvHost {
     let wsv = MockWorldStateView::new();
-    let caller: AccountId =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-            .parse()
-            .expect("caller id");
-    WsvHost::new(wsv, caller, Default::default(), Default::default())
+    let caller = account(
+        "wonderland",
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    );
+    WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        Default::default(),
+    )
 }
 
 #[test]

@@ -35,9 +35,9 @@ translator: manual
 
 **文字列表現 (Display/FromStr 往復可)**
 - `DomainId`: `wonderland`
-- `AccountId`: 正規のアドレスは `AccountAddress` が提供する IH58 / Sora 圧縮（`sora…`）/ 16 進表現（`canonical_hex`）コードックを利用する。IH58 を推奨し、`sora…` は Sora 専用の次善策とする。`alias@domain` 形式はルーティング用エイリアスとして維持される。Torii は `AccountAddress::parse_any` で入力を正規バイト列に揃える。 Supports single-key and multisig controllers.
+- `AccountId`: 正規のアドレスは `AccountAddress` が提供する IH58 / Sora 圧縮（`sora…`）/ 16 進表現（`canonical_hex`）コードックを利用する。IH58 を推奨し、`sora…` は Sora 専用の次善策とする。`alias` (rejected legacy form) 形式はルーティング用エイリアスとして維持される。Torii は `AccountAddress::parse_encoded` で入力を正規バイト列に揃える。 Supports single-key and multisig controllers.
 - `AssetDefinitionId`: `asset#domain`
-- `AssetId`: `asset#domain#account`（同一ドメインなら `asset##account`）
+- `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`: `nft$domain`
 - `PeerId`: 公開鍵文字列
 

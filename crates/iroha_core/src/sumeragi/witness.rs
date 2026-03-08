@@ -335,7 +335,8 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         let mut it = rest.splitn(2, ':');
         if let (Some(acc_s), Some(name_s)) = (it.next(), it.next()) {
             if let (Ok(acc), Ok(name)) = (
-                iroha_data_model::account::AccountId::from_str(acc_s),
+                iroha_data_model::account::AccountId::parse_encoded(acc_s)
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id),
                 Name::from_str(name_s),
             ) {
                 if let Ok(acct) = state_block.world.account(&acc) {
@@ -400,7 +401,8 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         let mut it = rest.splitn(2, ':');
         if let (Some(acc_s), Some(role_s)) = (it.next(), it.next()) {
             if let (Ok(acc), Ok(role)) = (
-                iroha_data_model::account::AccountId::from_str(acc_s),
+                iroha_data_model::account::AccountId::parse_encoded(acc_s)
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id),
                 iroha_data_model::role::RoleId::from_str(role_s),
             ) {
                 let present = state_block
@@ -429,14 +431,16 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         // perm.account:{account}:{perm}
         let mut it = rest.splitn(2, ':');
         if let (Some(acc_s), Some(perm_s)) = (it.next(), it.next())
-            && let Ok(acc) = iroha_data_model::account::AccountId::from_str(acc_s)
+            && let Ok(acc) = iroha_data_model::account::AccountId::parse_encoded(acc_s)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         {
             let present = state_block
                 .world
                 .account_permissions_iter(&acc)
                 .ok()
                 .is_some_and(|mut it| it.any(|p| p.name() == perm_s));
-            let k = enc_key_prefix(0xC3, acc_s, perm_s);
+            let canonical_account = acc.to_string();
+            let k = enc_key_prefix(0xC3, &canonical_account, perm_s);
             let v = Json::new(present).get().as_bytes().to_vec();
             let mut g = slot().lock().unwrap();
             g.reads.entry(k).or_insert(v);
@@ -460,7 +464,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         }
     }
     if let Some(rest) = access_key.strip_prefix("asset:")
-        && let Ok(id) = iroha_data_model::asset::AssetId::from_str(rest)
+        && let Ok(id) = iroha_data_model::asset::AssetId::parse_encoded(rest)
     {
         let pre = state_block.world.assets().get(&id).map(|v| &**v);
         record_read_asset(&id, pre);

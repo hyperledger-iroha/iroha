@@ -72,11 +72,14 @@ function buildCommand() {
     return;
   }
 
-  const sponsorId = sponsorInput.value.trim() || "sponsor@wonderland";
+  const sponsorId =
+    sponsorInput.value.trim() || "6cmzPVPXA9wQAqZuZTNQr7fWhci8nVVkG6zQBHnHVK7RPo2Dfe1WG9B";
   const torii = toriiInput.value.trim() || "http://localhost:8080";
   const chainId = chainInput.value.trim() || "dev-chain";
   const amount = amountInput.value.trim() || "10";
-  const sessionAccount = sessionAccountInput.value.trim() || "session@walletless";
+  const sessionAccount =
+    sessionAccountInput.value.trim() ||
+    "6cmzPVPX4dvqvHwePuzkRqyn6qVMHNkGgjHcFLict547HbtMBuPBdWY";
 
   const payload = {
     chain_id: chainId,

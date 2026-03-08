@@ -34,8 +34,8 @@ string matching.
 - `ERR_INVALID_STRING` — empty or whitespace-only string input.
 - `ERR_INVALID_HEX` — malformed or odd-length hexadecimal strings.
 - `ERR_INVALID_MULTIHASH` — multihash parsing failed.
-- `ERR_INVALID_ACCOUNT_ID` — account identifiers not in a supported format (IH58 (preferred)/`sora` (second-best)/`0x`, `uaid:`, `opaque:`, or `<alias|public_key>@domain`).
-- `ERR_INVALID_ASSET_ID` — asset identifiers missing required account segments or using invalid separators.
+- `ERR_INVALID_ACCOUNT_ID` — account identifiers must be encoded account addresses (IH58 preferred, compressed `sora...` accepted); `@domain`, canonical hex, `uaid:`, `opaque:`, and alias forms are rejected.
+- `ERR_INVALID_ASSET_ID` — asset identifiers must be encoded `norito:<hex>` literals; textual legacy forms are rejected.
 - `ERR_INVALID_IBAN` — IBAN parsing/normalization failed (bad country code, length, or checksum).
 - `ERR_INVALID_OBJECT` — unexpected object shape or missing required keys.
 - `ERR_INVALID_METADATA` — metadata entries failed validation.
@@ -67,7 +67,7 @@ try {
 } catch (error) {
   if (error instanceof ValidationError) {
     if (error.code === ValidationErrorCode.INVALID_ACCOUNT_ID) {
-      console.error("Account IDs must be IH58/sora/0x, uaid:, opaque:, or alias@domain", {
+      console.error("Account IDs must be encoded IH58/sora literals (no @domain suffix)", {
         field: error.path,
         cause: error.cause,
       });

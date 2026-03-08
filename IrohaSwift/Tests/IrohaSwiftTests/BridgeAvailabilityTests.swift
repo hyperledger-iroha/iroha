@@ -23,14 +23,17 @@ final class BridgeAvailabilityTests: XCTestCase {
 
     func testTransactionEncoderUnavailableWhenBridgeDisabled() throws {
         NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
+        let privateKey = Data(repeating: 1, count: 32)
+        let keypair = try Keypair(privateKeyBytes: privateKey)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = TransferRequest(chainId: "chain",
-                                      authority: "alice@wonderland",
+                                      authority: authority,
                                       assetDefinitionId: "xor#test",
                                       quantity: "1",
-                                      destination: "bob@wonderland",
+                                      destination: authority,
                                       description: nil,
                                       ttlMs: nil)
-        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 1, count: 32))
+        let signingKey = try SigningKey.ed25519(privateKey: privateKey)
 
         XCTAssertThrowsError(
             try SwiftTransactionEncoder.encodeTransfer(

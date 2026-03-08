@@ -14,8 +14,7 @@ use ivm::{
     },
     host::DefaultHost,
     mock_wsv::{
-        AccountId as HostAccountId, DataspaceAxtPolicy, DomainId as HostDomainId,
-        MockWorldStateView, WsvHost,
+        DataspaceAxtPolicy, DomainId as HostDomainId, MockWorldStateView, ScopedAccountId, WsvHost,
     },
     syscalls,
 };
@@ -36,11 +35,11 @@ fn store_tlv(vm: &mut IVM, ty: PointerType, value: &[u8]) -> u64 {
     vm.alloc_input_tlv(&tlv).expect("alloc input")
 }
 
-fn sample_wsv_caller() -> HostAccountId {
+fn sample_wsv_caller() -> ScopedAccountId {
     let kp = KeyPair::random();
     let (public_key, _) = kp.into_parts();
     let domain: HostDomainId = "wonderland".parse().expect("domain id");
-    HostAccountId::new(domain, public_key)
+    ScopedAccountId::new(domain, public_key)
 }
 
 fn begin_with_touch<T: IVMHost>(
@@ -175,7 +174,7 @@ fn default_host_axt_flow_happy_path() {
     let handle = AssetHandle {
         scope: vec!["transfer".into()],
         subject: HandleSubject {
-            account: "alice@wonderland".into(),
+            account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
@@ -201,8 +200,8 @@ fn default_host_axt_flow_happy_path() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "200".into(),
         },
     };
@@ -251,7 +250,7 @@ fn asset_handle_roundtrip_preserves_origin_dsid() {
         dsid,
         binding,
         &["transfer"],
-        "alice@wonderland",
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
         10,
         Some(10),
     );
@@ -267,7 +266,7 @@ fn asset_handle_roundtrip_preserves_origin_dsid() {
 fn handle_subject_roundtrip() {
     let dsid = DataSpaceId::new(11);
     let subject = HandleSubject {
-        account: "bob@wonderland".to_string(),
+        account: "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".to_string(),
         origin_dsid: Some(dsid),
     };
 
@@ -307,7 +306,14 @@ fn default_host_rejects_binding_mismatch() {
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let mut handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     handle.axt_binding = vec![9; 32];
     handle.axt_binding[0] ^= 0xFF;
 
@@ -315,8 +321,8 @@ fn default_host_rejects_binding_mismatch() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -348,7 +354,7 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
         dsid,
         binding,
         &["transfer"],
-        "alice@wonderland",
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
         300,
         Some(200),
     );
@@ -361,8 +367,8 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "150".into(),
         },
     };
@@ -375,8 +381,8 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "vendor@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV".into(),
             amount: "40".into(),
         },
     };
@@ -422,7 +428,14 @@ fn default_host_rejects_handle_scope_mismatch() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 50, None);
+    let handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        50,
+        None,
+    );
     let proof = axt::ProofBlob {
         payload: vec![1],
         expiry_slot: None,
@@ -431,8 +444,8 @@ fn default_host_rejects_handle_scope_mismatch() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "burn".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "10".into(),
         },
     };
@@ -464,7 +477,14 @@ fn default_host_rejects_handle_subject_mismatch() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 80, None);
+    let handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        80,
+        None,
+    );
     let proof = axt::ProofBlob {
         payload: vec![1],
         expiry_slot: None,
@@ -473,8 +493,8 @@ fn default_host_rejects_handle_subject_mismatch() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "bob@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "10".into(),
         },
     };
@@ -506,13 +526,20 @@ fn default_host_rejects_commit_without_required_proof() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 60, None);
+    let handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        60,
+        None,
+    );
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "10".into(),
         },
     };
@@ -547,7 +574,14 @@ fn handle_proof_satisfies_dataspace_requirement() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 90, None);
+    let handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        90,
+        None,
+    );
     let proof = axt::ProofBlob {
         payload: vec![7],
         expiry_slot: None,
@@ -556,8 +590,8 @@ fn handle_proof_satisfies_dataspace_requirement() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "15".into(),
         },
     };
@@ -590,7 +624,14 @@ fn default_host_rejects_handle_with_invalid_manifest_root() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let mut handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 50, None);
+    let mut handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        50,
+        None,
+    );
     handle.manifest_view_root = vec![1, 2, 3]; // invalid length
     let proof = axt::ProofBlob {
         payload: vec![3],
@@ -600,8 +641,8 @@ fn default_host_rejects_handle_with_invalid_manifest_root() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "10".into(),
         },
     };
@@ -633,7 +674,14 @@ fn default_host_rejects_handle_with_empty_scope() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let mut handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     handle.scope.clear();
     let proof = axt::ProofBlob {
         payload: vec![4],
@@ -643,8 +691,8 @@ fn default_host_rejects_handle_with_empty_scope() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -676,7 +724,14 @@ fn default_host_rejects_handle_with_zero_era_or_nonce_or_expiry() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let base = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let base = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     let proof = axt::ProofBlob {
         payload: vec![5],
         expiry_slot: None,
@@ -685,8 +740,8 @@ fn default_host_rejects_handle_with_zero_era_or_nonce_or_expiry() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -734,7 +789,14 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let mut base = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut base = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     let proof = axt::ProofBlob {
         payload: vec![6],
         expiry_slot: None,
@@ -743,8 +805,8 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -755,7 +817,14 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
         Err(VMError::PermissionDenied)
     ));
 
-    let mut empty_group = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut empty_group = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     empty_group.group_binding.composability_group_id.clear();
     assert!(matches!(
         use_handle(&mut vm, &mut host, &empty_group, &intent, Some(&proof)),
@@ -833,8 +902,22 @@ fn commit_requires_proof_for_every_dataspace() {
     assert_eq!(host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm), Ok(0));
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let handle_a = build_handle(ds_a, binding, &["transfer"], "alice@wonderland", 10, None);
-    let mut handle_b = build_handle(ds_b, binding, &["transfer"], "alice@wonderland", 10, None);
+    let handle_a = build_handle(
+        ds_a,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
+    let mut handle_b = build_handle(
+        ds_b,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     handle_b.sub_nonce = handle_a.sub_nonce + 1;
     let proof_a = axt::ProofBlob {
         payload: vec![8],
@@ -850,8 +933,8 @@ fn commit_requires_proof_for_every_dataspace() {
         asset_dsid: ds_a,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -863,8 +946,8 @@ fn commit_requires_proof_for_every_dataspace() {
         asset_dsid: ds_b,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -1088,10 +1171,9 @@ fn wsv_host_policy_checks_root_and_expiry() {
     let caller = sample_wsv_caller();
     let dsid = DataSpaceId::new(120);
     let manifest_root = [9u8; 32];
-    let mut host = WsvHost::new(
+    let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        caller,
-        HashMap::new(),
+        ivm::mock_wsv::AccountSubjectId::from(&caller),
         HashMap::new(),
     )
     .with_axt_manifest_root(dsid, manifest_root);
@@ -1112,15 +1194,21 @@ fn wsv_host_policy_checks_root_and_expiry() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let mut expired_handle =
-        build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut expired_handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     expired_handle.expiry_slot = 40; // before current slot
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -1133,7 +1221,14 @@ fn wsv_host_policy_checks_root_and_expiry() {
         Err(VMError::PermissionDenied)
     ));
 
-    let mut bad_root = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut bad_root = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     bad_root.expiry_slot = 60;
     bad_root.manifest_view_root = vec![1; 32];
     assert!(matches!(
@@ -1141,7 +1236,14 @@ fn wsv_host_policy_checks_root_and_expiry() {
         Err(VMError::PermissionDenied)
     ));
 
-    let mut ok_handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut ok_handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     ok_handle.expiry_slot = 60;
     ok_handle.manifest_view_root = manifest_root.to_vec();
     assert_eq!(
@@ -1170,7 +1272,11 @@ fn wsv_host_uses_slot_length_and_skew_for_expiry() {
             current_slot: 0,
         },
     );
-    let mut host = WsvHost::new(wsv, caller, HashMap::new(), HashMap::new());
+    let mut host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        HashMap::new(),
+    );
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1187,7 +1293,14 @@ fn wsv_host_uses_slot_length_and_skew_for_expiry() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let mut handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     handle.expiry_slot = 1;
     handle.max_clock_skew_ms = Some(15);
     handle.manifest_view_root = manifest_root.to_vec();
@@ -1195,8 +1308,8 @@ fn wsv_host_uses_slot_length_and_skew_for_expiry() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -1230,7 +1343,11 @@ fn wsv_host_rejects_handle_skew_above_config() {
             current_slot: 0,
         },
     );
-    let mut host = WsvHost::new(wsv, caller, HashMap::new(), HashMap::new());
+    let mut host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        HashMap::new(),
+    );
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1247,7 +1364,14 @@ fn wsv_host_rejects_handle_skew_above_config() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let mut handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     handle.expiry_slot = 10;
     handle.max_clock_skew_ms = Some(10);
     handle.manifest_view_root = manifest_root.to_vec();
@@ -1255,8 +1379,8 @@ fn wsv_host_rejects_handle_skew_above_config() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -1290,7 +1414,11 @@ fn wsv_host_accepts_proof_within_skew() {
             current_slot: 0,
         },
     );
-    let mut host = WsvHost::new(wsv, caller, HashMap::new(), HashMap::new());
+    let mut host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        HashMap::new(),
+    );
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1343,7 +1471,11 @@ fn wsv_host_rejects_inline_proof_expired_with_skew() {
             current_slot: 0,
         },
     );
-    let mut host = WsvHost::new(wsv, caller, HashMap::new(), HashMap::new());
+    let mut host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        HashMap::new(),
+    );
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1360,15 +1492,22 @@ fn wsv_host_rejects_inline_proof_expired_with_skew() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let mut handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     handle.expiry_slot = 20;
     handle.manifest_view_root = manifest_root.to_vec();
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -1387,10 +1526,9 @@ fn wsv_host_rejects_zero_manifest_root_and_handle_root() {
     let mut vm = IVM::new(1_000_000);
     let caller = sample_wsv_caller();
     let dsid = DataSpaceId::new(125);
-    let mut host = WsvHost::new(
+    let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        caller.clone(),
-        HashMap::new(),
+        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
         HashMap::new(),
     )
     .with_axt_manifest_root(dsid, [0; 32]);
@@ -1420,7 +1558,7 @@ fn wsv_host_rejects_zero_manifest_root_and_handle_root() {
         op: SpendOp {
             kind: "transfer".into(),
             from: caller.to_string(),
-            to: "merchant@wonderland".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -1439,10 +1577,9 @@ fn wsv_host_rejects_missing_policy_binding() {
     let mut vm = IVM::new(1_000_000);
     let caller = sample_wsv_caller();
     let dsid = DataSpaceId::new(126);
-    let mut host = WsvHost::new(
+    let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        caller.clone(),
-        HashMap::new(),
+        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
         HashMap::new(),
     );
     host.set_current_time_ms(5);
@@ -1470,7 +1607,7 @@ fn wsv_host_rejects_missing_policy_binding() {
         op: SpendOp {
             kind: "transfer".into(),
             from: caller.to_string(),
-            to: "merchant@wonderland".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -1490,10 +1627,9 @@ fn wsv_host_policy_checks_target_lane() {
     let caller = sample_wsv_caller();
     let dsid = DataSpaceId::new(121);
     let manifest_root = [1u8; 32];
-    let mut host = WsvHost::new(
+    let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        caller,
-        HashMap::new(),
+        ivm::mock_wsv::AccountSubjectId::from(&caller),
         HashMap::new(),
     )
     .with_axt_target_lane(dsid, 7);
@@ -1514,14 +1650,21 @@ fn wsv_host_policy_checks_target_lane() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let mut wrong_lane = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut wrong_lane = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     wrong_lane.target_lane = LaneId::new(1);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -1534,7 +1677,14 @@ fn wsv_host_policy_checks_target_lane() {
         Err(VMError::PermissionDenied)
     ));
 
-    let mut ok_lane = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut ok_lane = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     ok_lane.target_lane = LaneId::new(7);
     assert_eq!(
         use_handle(&mut vm, &mut host, &ok_lane, &intent, Some(&proof)),
@@ -1562,10 +1712,9 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
         version: AxtPolicySnapshot::compute_version(&entries),
         entries,
     };
-    let mut host = WsvHost::new(
+    let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        caller.clone(),
-        HashMap::new(),
+        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
         HashMap::new(),
     )
     .with_axt_policy_snapshot(policy_snapshot);
@@ -1590,7 +1739,7 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
         op: SpendOp {
             kind: "transfer".into(),
             from: caller.to_string(),
-            to: "merchant@wonderland".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -1634,7 +1783,11 @@ fn wsv_host_respects_explicit_policy_slot_over_time() {
             current_slot: 5,
         },
     );
-    let mut host = WsvHost::new(wsv, caller, HashMap::new(), HashMap::new());
+    let mut host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        HashMap::new(),
+    );
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1651,15 +1804,22 @@ fn wsv_host_respects_explicit_policy_slot_over_time() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let mut handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     handle.expiry_slot = 10;
     handle.manifest_view_root = manifest_root.to_vec();
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -1679,10 +1839,9 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
     let caller = sample_wsv_caller();
     let dsid = DataSpaceId::new(122);
     let manifest_root = [1u8; 32];
-    let mut host = WsvHost::new(
+    let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        caller,
-        HashMap::new(),
+        ivm::mock_wsv::AccountSubjectId::from(&caller),
         HashMap::new(),
     )
     .with_axt_min_handle_era(dsid, 3)
@@ -1708,8 +1867,8 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -1718,21 +1877,42 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         expiry_slot: None,
     };
 
-    let mut low_era = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut low_era = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     low_era.handle_era = 2;
     assert!(matches!(
         use_handle(&mut vm, &mut host, &low_era, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
     ));
 
-    let mut low_nonce = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut low_nonce = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     low_nonce.sub_nonce = 4;
     assert!(matches!(
         use_handle(&mut vm, &mut host, &low_nonce, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
     ));
 
-    let mut ok = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let mut ok = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     ok.handle_era = 3;
     ok.sub_nonce = 5;
     assert_eq!(
@@ -1762,13 +1942,20 @@ fn axt_policy_rejects_handle_usage() {
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    let handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        10,
+        None,
+    );
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "alice@wonderland".into(),
-            to: "merchant@wonderland".into(),
+            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
             amount: "1".into(),
         },
     };
@@ -1780,10 +1967,9 @@ fn axt_policy_rejects_handle_usage() {
 fn wsv_host_rejects_invalid_descriptor() {
     let mut vm = IVM::new(1_000_000);
     let caller = sample_wsv_caller();
-    let mut host = WsvHost::new(
+    let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        caller,
-        HashMap::new(),
+        ivm::mock_wsv::AccountSubjectId::from(&caller),
         HashMap::new(),
     );
 
@@ -1809,10 +1995,9 @@ fn wsv_host_applies_axt_policy() {
     let caller = sample_wsv_caller();
     let dsid = DataSpaceId::new(99);
     let policy = Arc::new(DenyTouchPolicy { denied: dsid });
-    let mut host = WsvHost::new(
+    let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        caller,
-        HashMap::new(),
+        ivm::mock_wsv::AccountSubjectId::from(&caller),
         HashMap::new(),
     )
     .with_axt_policy(policy);

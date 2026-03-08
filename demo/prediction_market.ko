@@ -18,11 +18,11 @@ seiyaku PredictionMarket {
   kotoage fn main() permission(MarketUser) {
     let caller = authority();
     let asset = asset_definition("xor#sora");
-    let pool = account_id("ed0120ED3087AAB496692A600E5735ABCF2DB085FCA63EB9FA86F64061DD18D92041BA@sora");
-    let alice = account_id("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@sora");
-    let bob = account_id("ed0120D3D9F703379EB55F8F5D72132BDE68728EE2079DFAECC1D86D483D93D6DCB1FB@sora");
-    let oracle_yes = account_id("ed0120C66111F5F366A6120A3960B391335749B81AB1BEC21CFAA2B86DB0F4AE65F273@sora");
-    let oracle_no = account_id("ed0120F07D458B9063399929881FF2A40F3CD3816BBA02C6B9AEF473327B2D3C59A32A@sora");
+    let pool = account_id("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw");
+    let alice = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+    let bob = account_id("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU");
+    let oracle_yes = account_id("6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH");
+    let oracle_no = account_id("6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV");
 
     if (caller == oracle_yes) {
       if (!resolved && alice_staked && bob_staked) {

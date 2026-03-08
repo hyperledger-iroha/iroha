@@ -1,0 +1,4 @@
+extends = ["minimal_with_trusted_peers.toml"]
+
+default_account_domain_label = "wonderland"
+chain_discriminant = 777

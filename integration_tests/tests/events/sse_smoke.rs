@@ -89,6 +89,7 @@ fn sse_smoke_scenarios() -> Result<()> {
 
         let trigger_id: TriggerId = "sse_smoke_trigger_exec".parse()?;
         let asset_id = AssetId::new("rose#wonderland".parse()?, ALICE_ID.clone());
+        let asset_id_literal = asset_id.canonical_encoded();
         let register = Register::trigger(Trigger::new(
             trigger_id.clone(),
             Action::new(
@@ -122,11 +123,10 @@ fn sse_smoke_scenarios() -> Result<()> {
                 summary_contains(val, "ExecuteTriggerEvent")
             })?;
             assert_eq!(exec_evt["category"].as_str(), Some("Other"));
-            let alice = &*ALICE_ID;
             let data_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
                 val["category"].as_str() == Some("Data")
                     && summary_contains(val, "Asset(Added")
-                    && summary_contains(val, &format!("rose##{alice}"))
+                    && summary_contains(val, &asset_id_literal)
             })?;
             assert_eq!(data_evt["category"].as_str(), Some("Data"));
             Ok(())

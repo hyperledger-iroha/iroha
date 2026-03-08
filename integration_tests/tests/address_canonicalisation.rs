@@ -5,7 +5,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -26,7 +25,6 @@ use iroha_crypto::{Hash, Signature};
 use iroha_data_model::account::{
     AccountDomainSelector,
     address::{AccountAddress, AccountAddressFormat},
-    clear_account_domain_selector_resolver, set_account_domain_selector_resolver,
 };
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::prelude::RepoInstructionBox;
@@ -156,7 +154,7 @@ fn extract_account_transaction_authorities(value: &norito::json::Value) -> Vec<S
 
 fn assert_authorities_are_ih58(authorities: &[String]) -> Result<()> {
     for literal in authorities {
-        let (_, format) = AccountAddress::parse_any(literal, None)
+        let (_, format) = AccountAddress::parse_encoded(literal, None)
             .wrap_err_with(|| format!("authority {literal} should parse as account address"))?;
         if !matches!(format, AccountAddressFormat::IH58 { .. }) {
             return Err(eyre!(
@@ -191,42 +189,7 @@ fn find_offline_allowance_entry<'a>(
         })
 }
 
-struct DomainSelectorResolverGuard;
-
-impl DomainSelectorResolverGuard {
-    fn install(domains: &[DomainId]) -> Result<Self> {
-        let mut selectors = Vec::with_capacity(domains.len());
-        for domain in domains {
-            let selector = AccountDomainSelector::from_domain(domain)
-                .map_err(|err| eyre!("failed to derive domain selector for {domain}: {err}"))?;
-            selectors.push((selector, domain.clone()));
-        }
-        set_account_domain_selector_resolver(Arc::new(move |candidate| {
-            selectors.iter().find_map(|(selector, domain)| {
-                if candidate == selector {
-                    Some(domain.clone())
-                } else {
-                    None
-                }
-            })
-        }));
-        Ok(Self)
-    }
-}
-
-impl Drop for DomainSelectorResolverGuard {
-    fn drop(&mut self) {
-        clear_account_domain_selector_resolver();
-    }
-}
-
 fn load_offline_certificate_fixture() -> Result<OfflineWalletCertificate> {
-    let domains: Vec<DomainId> = ["wonderland", "treasury"]
-        .into_iter()
-        .map(|label| label.parse())
-        .collect::<Result<_, _>>()
-        .map_err(|err| eyre!("failed to parse fixture domain label: {err}"))?;
-    let _resolver_guard = DomainSelectorResolverGuard::install(&domains)?;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../fixtures/offline_allowance/android-demo");
 
@@ -324,8 +287,8 @@ fn parse_offline_certificate_fixture(
                 path.display()
             )
         })?;
-    let controller = controller
-        .parse()
+    let controller = AccountId::parse_encoded(controller)
+        .map(|parsed| parsed.into_account_id())
         .map_err(|err| eyre!("failed to parse controller `{controller}`: {err}"))?;
 
     let operator = obj
@@ -337,8 +300,8 @@ fn parse_offline_certificate_fixture(
                 path.display()
             )
         })?;
-    let operator = operator
-        .parse()
+    let operator = AccountId::parse_encoded(operator)
+        .map(|parsed| parsed.into_account_id())
         .map_err(|err| eyre!("failed to parse operator `{operator}`: {err}"))?;
 
     let allowance = obj
@@ -602,10 +565,22 @@ fn local8_literal() -> String {
     let canonical_hex = account_address
         .canonical_hex()
         .expect("canonical hex encoding");
-    let mut canonical = hex::decode(&canonical_hex[2..]).expect("canonical hex decoding succeeds");
-    let digest_start = 2;
-    canonical.drain(digest_start + 8..digest_start + 12);
-    format!("0x{}", hex::encode(canonical))
+    let canonical = hex::decode(&canonical_hex[2..]).expect("canonical hex decoding succeeds");
+
+    let digest = match AccountDomainSelector::from_domain(ALICE_ID.domain()).expect("selector") {
+        AccountDomainSelector::LocalDigest12(bytes) => bytes,
+        other => panic!("expected LocalDigest12 selector for legacy local8 fixture, got {other:?}"),
+    };
+
+    // Construct a legacy Local-12 layout and then truncate it to Local-8 to emulate
+    // a pre-cutover payload shape that must be rejected by the parser.
+    let mut legacy = Vec::with_capacity(canonical.len() + digest.len());
+    legacy.push(canonical[0]); // header
+    legacy.push(0x01); // local selector tag
+    legacy.extend_from_slice(&digest);
+    legacy.extend_from_slice(&canonical[2..]); // controller payload
+    legacy.drain(10..14); // trim digest bytes to Local-8 legacy width
+    format!("0x{}", hex::encode(legacy))
 }
 
 fn public_key_literal() -> String {
@@ -1013,6 +988,10 @@ async fn account_path_endpoints_reject_local8_literals() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let literal = local8_literal();
+    let local8_reason = AccountId::parse_encoded(&literal)
+        .expect_err("local8 literal must fail to parse")
+        .reason()
+        .to_owned();
     let http = http_client();
     let surfaces: [SurfaceSpec; 3] = [
         (&["assets"], &[("limit", "4")]),
@@ -1040,8 +1019,8 @@ async fn account_path_endpoints_reject_local8_literals() -> Result<()> {
         );
         let body = resp.text().await.unwrap_or_default();
         assert!(
-            body.contains("ERR_LOCAL8_DEPRECATED"),
-            "response body should mention ERR_LOCAL8_DEPRECATED, got {body}"
+            body.contains(&local8_reason),
+            "response body should mention {local8_reason}, got {body}"
         );
     }
 
@@ -1049,10 +1028,10 @@ async fn account_path_endpoints_reject_local8_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn account_path_endpoints_accept_public_key_literals() -> Result<()> {
+async fn account_path_endpoints_reject_public_key_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(account_path_endpoints_accept_public_key_literals),
+        stringify!(account_path_endpoints_reject_public_key_literals),
     )
     .await?
     else {
@@ -1061,6 +1040,10 @@ async fn account_path_endpoints_accept_public_key_literals() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let literal = public_key_literal();
+    let reason = AccountId::parse_encoded(&literal)
+        .expect_err("public-key@domain literal must fail strict parsing")
+        .reason()
+        .to_string();
     let http = http_client();
     let surfaces: [SurfaceSpec; 3] = [
         (&["assets"], &[("limit", "4")]),
@@ -1081,10 +1064,15 @@ async fn account_path_endpoints_accept_public_key_literals() -> Result<()> {
             .header("Accept", "application/json")
             .send()
             .await?;
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "public-key@domain literal should be rejected for {url}"
+        );
+        let body = resp.text().await.unwrap_or_default();
         assert!(
-            resp.status().is_success(),
-            "public-key literal should be accepted for {url}, got {}",
-            resp.status()
+            body.contains(&reason),
+            "response body should mention {reason}, got {body}"
         );
     }
 
@@ -1853,6 +1841,10 @@ async fn accounts_query_rejects_local8_filter_literals() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let literal = local8_literal();
+    let local8_reason = AccountId::parse_encoded(&literal)
+        .expect_err("local8 literal must fail to parse")
+        .reason()
+        .to_owned();
     let body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
@@ -1876,18 +1868,18 @@ async fn accounts_query_rejects_local8_filter_literals() -> Result<()> {
     );
     let body = resp.text().await.unwrap_or_default();
     assert!(
-        body.contains("ERR_LOCAL8_DEPRECATED"),
-        "response body should mention ERR_LOCAL8_DEPRECATED, got {body}"
+        body.contains(&local8_reason),
+        "response body should mention {local8_reason}, got {body}"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn accounts_query_accepts_public_key_filter_literals() -> Result<()> {
+async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_query_accepts_public_key_filter_literals),
+        stringify!(accounts_query_rejects_public_key_filter_literals),
     )
     .await?
     else {
@@ -1896,6 +1888,10 @@ async fn accounts_query_accepts_public_key_filter_literals() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let literal = public_key_literal();
+    let reason = AccountId::parse_encoded(&literal)
+        .expect_err("public-key@domain literal must fail strict parsing")
+        .reason()
+        .to_string();
     let body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
@@ -1912,24 +1908,22 @@ async fn accounts_query_accepts_public_key_filter_literals() -> Result<()> {
         .body(body)
         .send()
         .await?;
-    assert!(
-        resp.status().is_success(),
-        "public-key literal in filter should be accepted, got {}",
-        resp.status()
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "public-key@domain literal in filter should be rejected"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let ids = extract_account_ids(&parsed);
-    let expected = ALICE_ID.to_string();
+    let body = resp.text().await.unwrap_or_default();
     assert!(
-        ids.iter().any(|id| id == &expected),
-        "public-key literal should resolve to {expected}, got {ids:?}"
+        body.contains(&reason),
+        "response body should mention {reason}, got {body}"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result<()> {
+async fn accounts_query_rejects_alias_and_accepts_compressed_filter_literals() -> Result<()> {
     let domain_id: DomainId = "aliases".parse()?;
     let label = AccountLabel::new(domain_id.clone(), "primary".parse()?);
     let keypair = KeyPair::random();
@@ -1941,7 +1935,7 @@ async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result
         .with_genesis_instruction(Register::account(account));
     let Some(network) = start_network_async_or_skip(
         builder,
-        stringify!(accounts_query_accepts_alias_and_compressed_filter_literals),
+        stringify!(accounts_query_rejects_alias_and_accepts_compressed_filter_literals),
     )
     .await?
     else {
@@ -1965,34 +1959,48 @@ async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result
         .to_compressed_sora()
         .expect("compressed address encoding");
 
-    for literal in [alias_literal, compressed_literal] {
-        let body = format!(
-            r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
-        );
-        let resp = http
-            .post(url.clone())
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            .body(body)
-            .send()
-            .await?;
-        let status = resp.status();
-        let body = resp.text().await?;
-        assert!(
-            status.is_success(),
-            "alias/compressed literal should be accepted, got {status} body={body}"
-        );
-        let parsed: norito::json::Value = norito::json::from_str(&body)?;
-        let ids = extract_account_ids(&parsed);
-        assert!(
-            ids.iter().any(|id| id == &expected),
-            "literal {literal} should resolve to {expected}, got {ids:?}"
-        );
-        assert!(
-            ids.iter().all(|id| !id.contains('@')),
-            "response should return canonical IH58 ids, got {ids:?}"
-        );
-    }
+    let alias_body = format!(
+        r#"{{"filter":{{"op":"eq","args":["id","{alias_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
+    );
+    let alias_resp = http
+        .post(url.clone())
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .body(alias_body)
+        .send()
+        .await?;
+    assert_eq!(
+        alias_resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "alias literal should be rejected"
+    );
+
+    let body = format!(
+        r#"{{"filter":{{"op":"eq","args":["id","{compressed_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
+    );
+    let resp = http
+        .post(url.clone())
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .body(body)
+        .send()
+        .await?;
+    let status = resp.status();
+    let body = resp.text().await?;
+    assert!(
+        status.is_success(),
+        "compressed literal should be accepted, got {status} body={body}"
+    );
+    let parsed: norito::json::Value = norito::json::from_str(&body)?;
+    let ids = extract_account_ids(&parsed);
+    assert!(
+        ids.iter().any(|id| id == &expected),
+        "compressed literal should resolve to {expected}, got {ids:?}"
+    );
+    assert!(
+        ids.iter().all(|id| !id.contains('@')),
+        "response should return canonical IH58 ids, got {ids:?}"
+    );
 
     Ok(())
 }

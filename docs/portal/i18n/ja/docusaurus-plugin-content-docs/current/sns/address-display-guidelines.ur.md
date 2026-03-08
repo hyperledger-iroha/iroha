@@ -147,7 +147,7 @@ UI SDK とセレクターの説明:
 
 |セレクター |正規の 16 進数 |
 |---------------|---------------|
-| और देखें `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| और देखें `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 |ダイジェスト (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | और देखें `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -164,7 +164,7 @@ ADDR-5 の概要 CLI ワークフローの概要:
    ありがとうございます`kind` `local12` ہو تو CLI stderr پر وارننگ دیتا ہے اور JSON
    概要 فنمائی دہراتا ہے تاکہ CI パイプライン اور SDK surface کر سکیں۔
    エンコードを変換する `<ih58>@<domain>` を再生する
-   فاہیں تو `--append-domain` دیں۔
+   فاہیں تو `legacy  suffix` دیں۔
 2. SDK の説明/概要 JavaScript ヘルパーの説明:
 
    ```js
@@ -192,18 +192,18 @@ ADDR-5 の概要 CLI ワークフローの概要:
    ہوتے ہیں، اور `--input -` یا کوئی فلیگ نہ ہو تو STDIN استعمال ہوتا ہے)، ہر
    正規/IH58 (評価)/圧縮 (`sora`) (`sora`、2 番目に優れた) 要約 JSON 形式の要約
    行数 `--allow-errors` ローカル セレクター
-   CI میں بلاک کرنے کے لئے تیار ہوں تو `--fail-on-warning` سے آٹومیشن گیٹ کریں۔
+   CI میں بلاک کرنے کے لئے تیار ہوں تو `strict CI post-check` سے آٹومیشن گیٹ کریں۔
 6. 改行から改行への書き換え
   ローカルセレクター修復スプレッドシート
   `input,status,format,...` CSV の標準エンコーディング
   警告 解析失敗 پاس میں نمایاں کرے۔ヘルパー ڈیفالٹ طور پر
   ローカル以外の行、エントリ、エンコード (IH58/圧縮 (`sora`) 2 番目/16 進数/JSON)
-  میں بدلتا ہے، اور `--append-domain` پر اصل ڈومین محفوظ رکھتا ہے۔ `--allow-errors`
+  میں بدلتا ہے، اور `legacy  suffix` پر اصل ڈومین محفوظ رکھتا ہے۔ `--allow-errors`
   ٩ے ساتھ جوڑیں تاکہ خراب リテラル والے ダンプ پر بھی スキャン جاری رہے۔
 7. CI/lint 自動化 `ci/check_address_normalize.sh` 開発者
    `fixtures/account/address_vectors.json` ローカル セレクター
    `iroha tools address normalize` 認証済み
-   `iroha tools address audit --fail-on-warning` دوبارہ چلاتی ہے تاکہ ثابت ہو کہ
+   `iroha tools address audit` دوبارہ چلاتی ہے تاکہ ثابت ہو کہ
    ローカルダイジェストをリリース`torii_address_local8_total{endpoint}` いいえ
 `torii_address_collision_total{endpoint,kind="local12_digest"}`×
 `torii_address_collision_domain_total{endpoint,domain}` ボード Grafana ボード
@@ -235,7 +235,7 @@ ADDR-7 証拠パック ثابت کر سکے کہ ADDR-7 証拠パック
 
 カットオーバー شامل کریں:
 
-> **アドレス:** `iroha tools address normalize --only-local --append-domain` ヘルパー
+> **アドレス:** `iroha tools address normalize` ヘルパー
 > ٩یا گیا اور اسے CI (`ci/check_address_normalize.sh`) میں وائر کیا گیا تاکہ
 > میں تبدیل کر سکیں، قبل اس کے کہ Local-8/Local-12 メインネット پر بلاک ہوں۔ああ、
 > カスタム エクスポート ٩و اپ ڈیٹ کریں تاکہ کمانڈ چلائی جائے اور 正規化されたリスト

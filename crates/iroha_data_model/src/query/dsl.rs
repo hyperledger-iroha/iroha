@@ -1218,10 +1218,11 @@ mod committed_tx_predicate_tests {
         let result_proof: MerkleProof<transaction::TransactionResult> =
             MerkleProof::from_audit_path(0, vec![]);
 
-        let authority: account::AccountId =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                .parse()
-                .unwrap();
+        let authority = account::AccountId::parse_encoded(
+            "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+        )
+        .expect("valid authority")
+        .into_account_id();
         let trigger_id: trigger::TriggerId = "test_trigger".parse().unwrap();
         let time_entry = trigger::TimeTriggerEntrypoint {
             id: trigger_id,
@@ -1254,15 +1255,21 @@ mod committed_tx_predicate_tests {
         let authority_b = TestAuthority::new(0x22);
         let a = authority_a.id_str();
         let b = authority_b.id_str();
+        let account_a = account::AccountId::parse_encoded(&a)
+            .expect("authority A")
+            .into_account_id();
+        let account_b = account::AccountId::parse_encoded(&b)
+            .expect("authority B")
+            .into_account_id();
         let tx_a = make_ext_tx(&authority_a, 1000, true);
         let tx_b = make_ext_tx(&authority_b, 2000, false);
 
-        assert!(P::AuthorityEq(a.parse().unwrap()).applies(&tx_a));
-        assert!(!P::AuthorityEq(a.parse().unwrap()).applies(&tx_b));
-        assert!(P::AuthorityIn(vec![a.parse().unwrap()]).applies(&tx_a));
-        assert!(!P::AuthorityIn(vec![a.parse().unwrap()]).applies(&tx_b));
-        assert!(P::AuthorityNin(vec![a.parse().unwrap()]).applies(&tx_b));
-        assert!(!P::AuthorityNin(vec![b.parse().unwrap()]).applies(&tx_b));
+        assert!(P::AuthorityEq(account_a.clone()).applies(&tx_a));
+        assert!(!P::AuthorityEq(account_a.clone()).applies(&tx_b));
+        assert!(P::AuthorityIn(vec![account_a.clone()]).applies(&tx_a));
+        assert!(!P::AuthorityIn(vec![account_a.clone()]).applies(&tx_b));
+        assert!(P::AuthorityNin(vec![account_a]).applies(&tx_b));
+        assert!(!P::AuthorityNin(vec![account_b]).applies(&tx_b));
         assert!(P::AuthorityExists(true).applies(&tx_a));
         assert!(P::AuthorityExists(true).applies(&tx_b));
         assert!(!P::AuthorityExists(false).applies(&tx_a));
@@ -1311,11 +1318,14 @@ mod committed_tx_predicate_tests {
         let authority_a = TestAuthority::new(0x66);
         let authority_b = TestAuthority::new(0x77);
         let a = authority_a.id_str();
+        let account_a = account::AccountId::parse_encoded(&a)
+            .expect("authority A")
+            .into_account_id();
         let tx_a_true = make_ext_tx(&authority_a, 1500, true);
         let tx_b_false = make_ext_tx(&authority_b, 500, false);
 
         // (authority == A AND ts >= 1000) OR (result_ok == false)
-        let left = P::And(vec![P::AuthorityEq(a.parse().unwrap()), P::TsGte(1000)]);
+        let left = P::And(vec![P::AuthorityEq(account_a), P::TsGte(1000)]);
         let pred = P::Or(vec![left, P::ResultEq(false)]);
         assert!(pred.applies(&tx_a_true));
         assert!(pred.applies(&tx_b_false));

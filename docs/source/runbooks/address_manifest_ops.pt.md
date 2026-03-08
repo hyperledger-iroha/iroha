@@ -98,7 +98,7 @@ Campos de cabeçalho de `manifest.json`:
    - Entradas `local_alias` DEVEM embutir o digest de 12 bytes produzido pelo Norm v1
      (use `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
      para confirmar; o resumo JSON ecoa o domínio fornecido via `input_domain` e
-     `--append-domain` reproduz a codificação convertida como `<ih58>@<domain>` para manifestos).
+     `legacy  suffix` reproduz a codificação convertida como `<ih58>@<domain>` para manifestos).
    - Entradas `tombstone` DEVEM referenciar exatamente o selector que será retirado,
      incluir `reason_code`, `ticket` e `replaces_sequence`.
 
@@ -133,8 +133,8 @@ Campos de cabeçalho de `manifest.json`:
 2. **Derivar payloads canônicos.** Para cada alias a ser atualizado, execute:
 
    ```bash
-   iroha tools address convert sora...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .input_domain' /tmp/alias.json
+   iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
+   jq '.canonical_hex, .ih58' /tmp/alias.json
    ```
 
 3. **Rascunhar entrada de manifesto.** Acrescente um registro JSON como:

@@ -5,19 +5,12 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use hex::encode_upper;
 use iroha_crypto::{Hash, Signature};
-use iroha_data_model::{
-    account::{
-        AccountDomainSelector, clear_account_domain_selector_resolver,
-        set_account_domain_selector_resolver,
-    },
-    domain::DomainId,
-};
+use iroha_data_model::{account::AccountId, asset::AssetId};
 use iroha_data_model::{
     metadata::Metadata,
     offline::{OfflineAllowanceCommitment, OfflineWalletCertificate, OfflineWalletPolicy},
@@ -29,7 +22,6 @@ use norito::{
 
 #[test]
 fn offline_allowance_fixtures_roundtrip() {
-    let _resolver_guard = install_domain_selector_resolver();
     let root = fixture_root();
     let manifest_bytes =
         fs::read(root.join("allowance_fixtures.manifest.json")).expect("read fixture manifest");
@@ -51,7 +43,9 @@ fn offline_allowance_fixtures_roundtrip() {
         let certificate = decode_from_bytes::<OfflineWalletCertificate>(&certificate_bytes)
             .expect("decode certificate");
 
-        let disk_value = normalize_certificate_json(read_json_value(&certificate_json_path));
+        let disk_certificate =
+            parse_certificate_json(&read_json_value(&certificate_json_path), label);
+        let disk_value = normalize_certificate_json(certificate_to_value(&disk_certificate));
         let canonical_value = normalize_certificate_json(certificate_to_value(&certificate));
         assert_eq!(
             disk_value, canonical_value,
@@ -98,7 +92,6 @@ fn offline_allowance_fixtures_roundtrip() {
 #[test]
 #[ignore = "regenerates fixtures for offline allowances"]
 fn regenerate_offline_allowance_certificates() {
-    let _resolver_guard = install_domain_selector_resolver();
     let root = fixture_root();
     let manifest_bytes =
         fs::read(root.join("allowance_fixtures.manifest.json")).expect("read fixture manifest");
@@ -125,33 +118,6 @@ fn regenerate_offline_allowance_certificates() {
         let certificate_out = fixture_path(&root, entry, "certificate_norito");
         fs::write(&certificate_out, encoded)
             .unwrap_or_else(|err| panic!("write certificate norito for `{label}`: {err}"));
-    }
-}
-
-fn install_domain_selector_resolver() -> DomainSelectorResolverGuard {
-    let candidates = ["wonderland", "treasury", "sora"];
-    let mappings: Vec<(AccountDomainSelector, DomainId)> = candidates
-        .iter()
-        .filter_map(|label| {
-            let domain: DomainId = (*label).parse().ok()?;
-            let selector = AccountDomainSelector::from_domain(&domain).ok()?;
-            Some((selector, domain))
-        })
-        .collect();
-    set_account_domain_selector_resolver(Arc::new(move |selector| {
-        mappings
-            .iter()
-            .find(|(candidate, _)| candidate == selector)
-            .map(|(_, domain)| domain.clone())
-    }));
-    DomainSelectorResolverGuard
-}
-
-struct DomainSelectorResolverGuard;
-
-impl Drop for DomainSelectorResolverGuard {
-    fn drop(&mut self) {
-        clear_account_domain_selector_resolver();
     }
 }
 
@@ -185,20 +151,6 @@ fn parse_certificate_json(value: &JsonValue, label: &str) -> OfflineWalletCertif
     let obj = value
         .as_object()
         .unwrap_or_else(|| panic!("certificate `{label}` JSON must be an object"));
-    let controller = obj
-        .get("controller")
-        .and_then(|v| v.as_str())
-        .unwrap_or_else(|| panic!("certificate `{label}` missing controller"));
-    let controller = controller
-        .parse()
-        .unwrap_or_else(|err| panic!("parse controller `{controller}` for `{label}`: {err}"));
-    let operator = obj
-        .get("operator")
-        .and_then(|v| v.as_str())
-        .unwrap_or_else(|| panic!("certificate `{label}` missing operator"));
-    let operator = operator
-        .parse()
-        .unwrap_or_else(|err| panic!("parse operator `{operator}` for `{label}`: {err}"));
     let allowance = obj
         .get("allowance")
         .and_then(|v| v.as_object())
@@ -207,9 +159,21 @@ fn parse_certificate_json(value: &JsonValue, label: &str) -> OfflineWalletCertif
         .get("asset")
         .and_then(|v| v.as_str())
         .unwrap_or_else(|| panic!("certificate `{label}` allowance missing asset"));
-    let asset = allowance_asset
-        .parse()
-        .unwrap_or_else(|err| panic!("parse allowance asset `{allowance_asset}`: {err}"));
+    let controller = parse_account_literal_strict(
+        obj.get("controller")
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| panic!("certificate `{label}` missing controller")),
+        label,
+        "controller",
+    );
+    let operator = parse_account_literal_strict(
+        obj.get("operator")
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| panic!("certificate `{label}` missing operator")),
+        label,
+        "operator",
+    );
+    let asset = parse_asset_literal_strict(allowance_asset, label, "allowance asset");
     let amount_str = allowance
         .get("amount")
         .and_then(|v| v.as_str())
@@ -306,6 +270,19 @@ fn parse_certificate_json(value: &JsonValue, label: &str) -> OfflineWalletCertif
     }
 }
 
+fn parse_account_literal_strict(account_literal: &str, label: &str, field: &str) -> AccountId {
+    AccountId::parse_encoded(account_literal)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .unwrap_or_else(|err| {
+            panic!("parse {field} `{account_literal}` for `{label}` failed: {err}")
+        })
+}
+
+fn parse_asset_literal_strict(asset_literal: &str, label: &str, field: &str) -> AssetId {
+    AssetId::parse_encoded(asset_literal)
+        .unwrap_or_else(|err| panic!("parse {field} `{asset_literal}` for `{label}` failed: {err}"))
+}
+
 fn parse_optional_hash(value: Option<&JsonValue>, label: &str) -> Option<Hash> {
     value.and_then(|v| {
         v.as_str().map(|hex| {
@@ -317,7 +294,24 @@ fn parse_optional_hash(value: Option<&JsonValue>, label: &str) -> Option<Hash> {
 
 fn normalize_certificate_json(mut value: JsonValue) -> JsonValue {
     if let Some(root) = value.as_object_mut() {
+        if let Some(JsonValue::String(controller)) = root.get_mut("controller")
+            && let Ok(account) = AccountId::parse_encoded(controller)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        {
+            *controller = account.to_string();
+        }
+        if let Some(JsonValue::String(operator)) = root.get_mut("operator")
+            && let Ok(account) = AccountId::parse_encoded(operator)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        {
+            *operator = account.to_string();
+        }
         if let Some(JsonValue::Object(allowance)) = root.get_mut("allowance") {
+            if let Some(JsonValue::String(asset)) = allowance.get_mut("asset")
+                && let Ok(parsed_asset) = AssetId::parse_encoded(asset)
+            {
+                *asset = parsed_asset.to_string();
+            }
             allowance.remove("commitment");
         }
         root.remove("attestation_report");

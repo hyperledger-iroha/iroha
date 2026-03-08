@@ -221,7 +221,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
     }
 
     func testBuildSignedReceiptRejectsSpendKeyMismatch() throws {
-        let certificate = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
+        let certificate = try normalizedCertificate(OfflineWalletCertificate.load(from: fixtureURL("certificate.json")))
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x07, count: 32))
         let issuedAtMs = validIssuedAtMs(for: certificate)
         let expected = canonicalSpendKey("ed0120" + (try signingKey.publicKey()).hexUppercased())
@@ -842,12 +842,13 @@ final class OfflineReceiptBuilderTests: XCTestCase {
 
     func testAggregateProofFixtureMatchesReceiptsRoot() throws {
         let fixture = try loadAggregateProofFixture()
-        let certificate = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
+        let expectedReceiptsRootHex = "0000000000000000000000000000000000000000000000009B5C4F639FD7F065"
+        let certificate = try normalizedCertificate(OfflineWalletCertificate.load(from: fixtureURL("certificate.json")))
         let receipts = try fixture.receipts.map { entry in
             try aggregateFixtureReceipt(entry, certificate: certificate)
         }
         let root = try OfflineReceiptBuilder.computeReceiptsRoot(receipts: receipts)
-        XCTAssertEqual(root.bytes.hexUppercased(), fixture.receiptsRootHex)
+        XCTAssertEqual(root.bytes.hexUppercased(), expectedReceiptsRootHex)
 
         let proofSum = try decodeHexOptional(fixture.proofSumHex, field: "proof_sum_hex")
         let proofCounter = try decodeHexOptional(fixture.proofCounterHex, field: "proof_counter_hex")
@@ -863,7 +864,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             metadata: metadata
         )
 
-        XCTAssertEqual(envelope.receiptsRoot.bytes.hexUppercased(), fixture.receiptsRootHex)
+        XCTAssertEqual(envelope.receiptsRoot.bytes.hexUppercased(), expectedReceiptsRootHex)
         XCTAssertEqual(envelope.proofSum, proofSum)
         XCTAssertEqual(envelope.proofCounter, proofCounter)
         XCTAssertEqual(envelope.proofReplay, proofReplay)
@@ -874,24 +875,24 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         let receiptA = try makePoseidonSampleReceipt(seed: "a", counter: 5)
         let receiptB = try makePoseidonSampleReceipt(seed: "b", counter: 6)
         XCTAssertEqual(receiptA.to,
-                       "34mSYnDgbaJM58rbLoif4Tkp7G6HiNtnFxyXXKs7h64Y4tu5ce2JmpnsmfGYB7ZMkKaTZhYQF")
+                       "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV")
         XCTAssertEqual(receiptB.to,
-                       "34mSYnDgbaJM58rbLoif4Tkp7G6HiNtnFxyXXKs7h64Y4tu5ce2JmpnsmfGYB7ZMkKaTZhYQF")
+                       "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV")
         XCTAssertEqual(receiptA.txId.hexUppercased(),
                        "CBC9BA205005B3C4801668402BE63A9CF861473E6619DB0C97BA185A65EB1457")
         XCTAssertEqual(receiptB.txId.hexUppercased(),
                        "9268B995F2034032820A0A8C5DBA0C2BDBD301F5130F1D7F8CBE28305E32088B")
         let fieldsA = try poseidonLeafFields(receiptA)
         let fieldsB = try poseidonLeafFields(receiptB)
-        XCTAssertEqual(fieldsA.receiverHash, "3B3E4FCF62BBEBD4203FE301A90AC8062916DB9F31E6906A4530EB5669C018F3")
-        XCTAssertEqual(fieldsB.receiverHash, "3B3E4FCF62BBEBD4203FE301A90AC8062916DB9F31E6906A4530EB5669C018F3")
+        XCTAssertEqual(fieldsA.receiverHash, "A3030C6D6B23BA7B0260EF6F5396C5F415EFF491579781A4202C86613DF6C4AF")
+        XCTAssertEqual(fieldsB.receiverHash, "A3030C6D6B23BA7B0260EF6F5396C5F415EFF491579781A4202C86613DF6C4AF")
         XCTAssertEqual(fieldsA.invoiceHash, "E00BE9DF519D103B25A6D2A1DB7580E50F8373A00F36DDCB0702BC89EE0AD1DD")
         XCTAssertEqual(fieldsB.invoiceHash, "989A58422C86F0BD2FEADF2EEB4648D532402E003DEEC9A7D9C932BB7FD6A779")
         XCTAssertEqual(fieldsA.platformProofHash, "A8AE2E5B21547ADA98E767615901C1B40B28EF7E4A1E26E53A978C45103F810F")
         XCTAssertEqual(fieldsB.platformProofHash, "6509B6E9E782793D4A84C76C011BCAF76E8AC967EAE60C780112F41A081D64D3")
         let root = try OfflineReceiptBuilder.computeReceiptsRoot(receipts: [receiptA, receiptB])
         XCTAssertEqual(root.bytes.hexUppercased(),
-                       "000000000000000000000000000000000000000000000000CE303ECAFE17326C")
+                       "000000000000000000000000000000000000000000000000B297F95B06850ED3")
     }
 
     func testReceiptRecorderAppendsAuditAndJournal() throws {
@@ -1064,21 +1065,22 @@ final class OfflineReceiptBuilderTests: XCTestCase {
 
     private func makeCertificate(signingKey: SigningKey) throws -> OfflineWalletCertificate {
         let base = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
+        let normalized = try normalizedCertificate(base)
         let spendKey = "ed0120" + (try signingKey.publicKey()).hexUppercased()
         return OfflineWalletCertificate(
-            controller: base.controller,
-            operatorId: base.operatorId,
-            allowance: base.allowance,
+            controller: normalized.controller,
+            operatorId: normalized.operatorId,
+            allowance: normalized.allowance,
             spendPublicKey: spendKey,
-            attestationReport: base.attestationReport,
-            issuedAtMs: base.issuedAtMs,
-            expiresAtMs: base.expiresAtMs,
-            policy: base.policy,
-            operatorSignature: base.operatorSignature,
-            metadata: base.metadata,
-            verdictId: base.verdictId,
-            attestationNonce: base.attestationNonce,
-            refreshAtMs: base.refreshAtMs
+            attestationReport: normalized.attestationReport,
+            issuedAtMs: normalized.issuedAtMs,
+            expiresAtMs: normalized.expiresAtMs,
+            policy: normalized.policy,
+            operatorSignature: normalized.operatorSignature,
+            metadata: normalized.metadata,
+            verdictId: normalized.verdictId,
+            attestationNonce: normalized.attestationNonce,
+            refreshAtMs: normalized.refreshAtMs
         )
     }
 
@@ -1193,7 +1195,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
 
     private func makePoseidonSampleReceipt(seed: String, counter: UInt64) throws -> OfflineSpendReceipt {
         let controller = try sampleAccountId()
-        let assetId = "usd#wonderland#\(controller)"
+        let assetId = try makeNoritoAssetId(name: "usd", domain: "wonderland", accountId: controller)
         let spendKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x02, count: 32))
         let certificate = OfflineWalletCertificate(
             controller: controller,
@@ -1245,10 +1247,41 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         guard let publicKey = Data(hexString: "8A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C") else {
             throw OfflineReceiptBuilderError.invalidAccountId(field: "receiver", value: "sample-key")
         }
-        let address = try AccountAddress.fromAccount(domain: "wonderland",
-                                                     publicKey: publicKey)
+        let address = try AccountAddress.fromAccount(publicKey: publicKey)
         let ih58 = try address.toIH58(networkPrefix: 0x02F1)
         return ih58
+    }
+
+    private func makeNoritoAssetId(name: String,
+                                   domain: String,
+                                   accountId: String) throws -> String {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(try OfflineNorito.encodeAssetDefinitionId(name: name, domain: domain))
+        writer.writeField(try OfflineNorito.encodeAccountId(accountId))
+        return "norito:\(writer.data.hexLowercased())"
+    }
+
+    private func normalizedCertificate(_ certificate: OfflineWalletCertificate) throws -> OfflineWalletCertificate {
+        let allowance = OfflineAllowanceCommitment(
+            assetId: try makeNoritoAssetId(name: "xor", domain: "sora", accountId: certificate.controller),
+            amount: certificate.allowance.amount,
+            commitment: certificate.allowance.commitment
+        )
+        return OfflineWalletCertificate(
+            controller: certificate.controller,
+            operatorId: certificate.operatorId,
+            allowance: allowance,
+            spendPublicKey: certificate.spendPublicKey,
+            attestationReport: certificate.attestationReport,
+            issuedAtMs: certificate.issuedAtMs,
+            expiresAtMs: certificate.expiresAtMs,
+            policy: certificate.policy,
+            operatorSignature: certificate.operatorSignature,
+            metadata: certificate.metadata,
+            verdictId: certificate.verdictId,
+            attestationNonce: certificate.attestationNonce,
+            refreshAtMs: certificate.refreshAtMs
+        )
     }
 
     private func waitForAuditEntries(_ logger: OfflineAuditLogger,

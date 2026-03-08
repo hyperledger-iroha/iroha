@@ -106,7 +106,7 @@ final class DemoConnectViewModel: ObservableObject {
     let sampleDomain = AccountAddress.defaultDomainName
     do {
       let sampleKey = makeSampleKeyMaterial()
-      let address = try AccountAddress.fromAccount(domain: sampleDomain, publicKey: sampleKey, algorithm: "ed25519")
+      let address = try AccountAddress.fromAccount(publicKey: sampleKey, algorithm: "ed25519")
       let formats = try address.displayFormats()
       return AddressPreview(
         ih58: formats.ih58,

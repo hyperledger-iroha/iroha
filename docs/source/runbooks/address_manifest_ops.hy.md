@@ -101,7 +101,7 @@ address-manifest-<REVISION>/
    - `local_alias` entries MUST embed the 12-byte digest produced by Norm v1
      (use `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
      to confirm; the JSON summary echoes the provided domain via `input_domain` and
-     `--append-domain` replays the converted encoding as `<ih58>@<domain>` for manifests).
+     `legacy  suffix` replays the converted encoding as `<ih58>@<domain>` for manifests).
    - `tombstone` entries MUST reference the exact selector being retired,
      include a `reason_code`, `ticket`, and `replaces_sequence` field.
 
@@ -135,8 +135,8 @@ address-manifest-<REVISION>/
 2. **Derive canonical payloads.** For each alias being updated, run:
 
    ```bash
-   iroha tools address convert sora...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .input_domain' /tmp/alias.json
+   iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
+   jq '.canonical_hex, .ih58' /tmp/alias.json
    ```
 
 3. **Draft manifest entry.** Append a JSON record similar to:

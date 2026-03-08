@@ -118,6 +118,6 @@ struct LedgerFlow {
 ## 5. Paritetni tekshiring
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` orqali tranzaktsiyalarni tekshiring.
-- Holdinglarni `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` bilan solishtiring.
+- Holdinglarni `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'` bilan solishtiring.
 - Har bir SDK ni tasdiqlash uchun ushbu retseptni Rust/Python/JavaScript retseptlari bilan birlashtiring
   demo oqimi uchun bir xil xeshlarni ishlab chiqaradi.

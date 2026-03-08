@@ -97,7 +97,7 @@ address-manifest-<REVISION>/
 6. **انٹری sanity۔**
    - `global_domain` انٹری لازماً `{ "domain": "example", "chain": "sora:nexus:global", "selector": "global" }` شامل کرے۔
    - `local_alias` انٹری لازماً Norm v1 سے بنے 12 بائٹ digest کو شامل کرے
-     (تصدیق کے لیے `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753` استعمال کریں؛ JSON خلاصہ `input_domain` کے ذریعے domain دکھاتا ہے اور `--append-domain` `<ih58>@<domain>` کے طور پر دوبارہ انکوڈ دکھاتا ہے)۔
+     (تصدیق کے لیے `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753` استعمال کریں؛ JSON خلاصہ `input_domain` کے ذریعے domain دکھاتا ہے اور `legacy  suffix` `<ih58>@<domain>` کے طور پر دوبارہ انکوڈ دکھاتا ہے)۔
    - `tombstone` انٹری لازماً درست selector کو ریفرنس کرے اور `reason_code`, `ticket`, `replaces_sequence` شامل کرے۔
 
 7. **Fixture parity۔** canonical vectors دوبارہ بنائیں اور دیکھیں کہ Local digest
@@ -129,8 +129,8 @@ address-manifest-<REVISION>/
 2. **Canonical payloads نکالیں۔** ہر alias کے لیے یہ چلائیں:
 
    ```bash
-   iroha tools address convert sora...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .input_domain' /tmp/alias.json
+   iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
+   jq '.canonical_hex, .ih58' /tmp/alias.json
    ```
 
 3. **مینی فیسٹ انٹری ڈرافٹ۔** JSON ریکارڈ اس طرح شامل کریں:

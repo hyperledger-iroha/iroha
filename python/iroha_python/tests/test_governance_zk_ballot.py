@@ -9,16 +9,17 @@ from iroha_python.client import ToriiClient
 
 from .helpers import RecordingSession, StubResponse
 
+CANONICAL_AUTHORITY = "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
+
 
 def _canonical_owner_literal(domain: str = "wonderland") -> str:
     address = AccountAddress.from_account(domain=domain, public_key=bytes([0x11] * 32))
-    ih58 = address.to_ih58(0x02F1)
-    return f"{ih58}@{domain}"
+    return address.to_ih58(0x02F1)
 
 
 def _noncanonical_owner_literal(domain: str = "wonderland") -> str:
     address = AccountAddress.from_account(domain=domain, public_key=bytes([0x22] * 32))
-    return f"{address.canonical_hex()}@{domain}"
+    return address.canonical_hex()
 
 
 def test_governance_submit_zk_ballot_rejects_deprecated_public_inputs() -> None:
@@ -28,7 +29,7 @@ def test_governance_submit_zk_ballot_rejects_deprecated_public_inputs() -> None:
     with pytest.raises(ValueError, match="durationBlocks"):
         client.governance_submit_zk_ballot(
             {
-                "authority": "alice@wonderland",
+                "authority": CANONICAL_AUTHORITY,
                 "chain_id": "chain",
                 "election_id": "election-1",
                 "proof_b64": "AAAA",
@@ -47,7 +48,7 @@ def test_governance_submit_zk_ballot_normalizes_public_inputs() -> None:
 
     client.governance_submit_zk_ballot(
         {
-            "authority": "alice@wonderland",
+            "authority": CANONICAL_AUTHORITY,
             "chain_id": "chain",
             "election_id": "election-1",
             "proof_b64": "AAAA",
@@ -74,7 +75,7 @@ def test_governance_submit_zk_ballot_rejects_incomplete_lock_hints() -> None:
     with pytest.raises(ValueError, match="owner, amount, duration_blocks"):
         client.governance_submit_zk_ballot(
             {
-                "authority": "alice@wonderland",
+                "authority": CANONICAL_AUTHORITY,
                 "chain_id": "chain",
                 "election_id": "election-1",
                 "proof_b64": "AAAA",
@@ -90,7 +91,7 @@ def test_governance_submit_zk_ballot_v1_rejects_incomplete_lock_hints() -> None:
     with pytest.raises(ValueError, match="owner, amount, duration_blocks"):
         client.governance_submit_zk_ballot_v1(
             {
-                "authority": "alice@wonderland",
+                "authority": CANONICAL_AUTHORITY,
                 "chain_id": "chain",
                 "election_id": "election-1",
                 "backend": "halo2/ipa",
@@ -104,10 +105,10 @@ def test_governance_submit_zk_ballot_v1_rejects_noncanonical_owner() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="canonical account id form"):
+    with pytest.raises(ValueError, match="canonical IH58 account id"):
         client.governance_submit_zk_ballot_v1(
             {
-                "authority": "alice@wonderland",
+                "authority": CANONICAL_AUTHORITY,
                 "chain_id": "chain",
                 "election_id": "election-1",
                 "backend": "halo2/ipa",
@@ -126,7 +127,7 @@ def test_governance_submit_zk_ballot_proof_v1_rejects_incomplete_lock_hints() ->
     with pytest.raises(ValueError, match="owner, amount, duration_blocks"):
         client.governance_submit_zk_ballot_proof_v1(
             {
-                "authority": "alice@wonderland",
+                "authority": CANONICAL_AUTHORITY,
                 "chain_id": "chain",
                 "election_id": "election-1",
                 "ballot": {"owner": _canonical_owner_literal()},
@@ -138,10 +139,10 @@ def test_governance_submit_zk_ballot_proof_v1_rejects_noncanonical_owner() -> No
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="canonical account id form"):
+    with pytest.raises(ValueError, match="canonical IH58 account id"):
         client.governance_submit_zk_ballot_proof_v1(
             {
-                "authority": "alice@wonderland",
+                "authority": CANONICAL_AUTHORITY,
                 "chain_id": "chain",
                 "election_id": "election-1",
                 "ballot": {
@@ -159,7 +160,7 @@ def test_governance_submit_zk_ballot_proof_v1_normalizes_hex_hints() -> None:
 
     client.governance_submit_zk_ballot_proof_v1(
         {
-            "authority": "alice@wonderland",
+            "authority": CANONICAL_AUTHORITY,
             "chain_id": "chain",
             "election_id": "election-1",
             "ballot": {
@@ -183,7 +184,7 @@ def test_governance_submit_zk_ballot_v1_normalizes_hex_hints() -> None:
 
     client.governance_submit_zk_ballot_v1(
         {
-            "authority": "alice@wonderland",
+            "authority": CANONICAL_AUTHORITY,
             "chain_id": "chain",
             "election_id": "election-1",
             "backend": "halo2/ipa",
@@ -205,7 +206,7 @@ def test_governance_submit_zk_ballot_v1_rejects_invalid_hex_hints() -> None:
     with pytest.raises(ValueError, match="root_hint"):
         client.governance_submit_zk_ballot_v1(
             {
-                "authority": "alice@wonderland",
+                "authority": CANONICAL_AUTHORITY,
                 "chain_id": "chain",
                 "election_id": "election-1",
                 "backend": "halo2/ipa",
@@ -222,7 +223,7 @@ def test_governance_submit_zk_ballot_rejects_invalid_hex_hints() -> None:
     with pytest.raises(ValueError, match="root_hint"):
         client.governance_submit_zk_ballot(
             {
-                "authority": "alice@wonderland",
+                "authority": CANONICAL_AUTHORITY,
                 "chain_id": "chain",
                 "election_id": "election-1",
                 "proof_b64": "AAAA",
@@ -240,10 +241,10 @@ def test_governance_submit_zk_ballot_rejects_noncanonical_owner() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="canonical account id form"):
+    with pytest.raises(ValueError, match="canonical IH58 account id"):
         client.governance_submit_zk_ballot(
             {
-                "authority": "alice@wonderland",
+                "authority": CANONICAL_AUTHORITY,
                 "chain_id": "chain",
                 "election_id": "election-1",
                 "proof_b64": "AAAA",

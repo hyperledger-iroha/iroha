@@ -194,7 +194,12 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_config_layer(|layer| {
-            let gas_account_str = format!("{}@ivm", SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key());
+            let ivm_domain: DomainId = "ivm".parse().expect("ivm domain should parse");
+            let gas_account_str = AccountId::new(
+                ivm_domain,
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            )
+            .to_string();
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)

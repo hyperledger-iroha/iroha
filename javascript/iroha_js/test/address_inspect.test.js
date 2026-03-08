@@ -29,14 +29,13 @@ function buildAccountForDomain(domain) {
   };
 }
 
-test("inspectAccountId reports Local selector warning", () => {
+test("inspectAccountId reports selector-free domain summary", () => {
   const { ih58, canonicalHex, compressed } = buildAccountForDomain("wonderland");
   const summary = inspectAccountId(ih58);
 
-  assert.equal(summary.domain.kind, "local12");
-  assert(summary.domain.warning);
-  assert(summary.domain.warning.includes("local-domain selector detected"));
-  assert.deepEqual(summary.warnings, [summary.domain.warning]);
+  assert.equal(summary.domain.kind, "default");
+  assert.equal(summary.domain.warning, null);
+  assert.deepEqual(summary.warnings, []);
   assert.equal(summary.ih58.value, ih58);
   assert.equal(summary.ih58.networkPrefix, 753);
   assert.equal(summary.compressed, compressed);
@@ -44,8 +43,12 @@ test("inspectAccountId reports Local selector warning", () => {
   assert.equal(summary.detectedFormat.kind, "ih58");
   assert.equal(summary.inputDomain, null);
 
-  const canonicalSummary = inspectAccountId(canonicalHex);
-  assert.equal(canonicalSummary.detectedFormat.kind, "canonical-hex");
+  assert.throws(
+    () => inspectAccountId(canonicalHex),
+    (error) =>
+      error instanceof AccountAddressError &&
+      error.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+  );
 });
 
 test("inspectAccountId handles default-domain addresses without warnings", () => {
@@ -76,7 +79,7 @@ test("inspectAccountId warns when a compressed literal is provided", () => {
 
 test("inspectAccountId rejects malformed literals", () => {
   assert.throws(
-    () => inspectAccountId("@wonderland"),
+    () => inspectAccountId("@invalid-domain"),
     (error) => error instanceof TypeError && error.message.includes("must not include '@domain'"),
   );
   assert.throws(

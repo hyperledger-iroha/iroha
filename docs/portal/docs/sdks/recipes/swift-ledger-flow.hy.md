@@ -118,6 +118,6 @@ struct LedgerFlow {
 ## 5. Ստուգեք հավասարությունը
 
 - Ստուգեք գործարքները `iroha --config defaults/client.toml transaction get --hash <hash>`-ի միջոցով:
-- Համեմատեք ունեցվածքը `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`-ի հետ:
+- Համեմատեք ունեցվածքը `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'`-ի հետ:
 - Համատեղեք այս բաղադրատոմսը Rust/Python/JavaScript-ի հետ՝ յուրաքանչյուր SDK-ն հաստատելու համար
   արտադրում է նույն հեշերը ցուցադրական հոսքի համար:

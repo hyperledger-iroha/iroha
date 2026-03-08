@@ -85,7 +85,7 @@ final class OfflineWalletRevocationTests: XCTestCase {
     }
 
     func testSyncOfflineStatePopulatesVerdictsFromAllowances() async throws {
-        let certificate = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
+        let certificate = try normalizedCertificate(OfflineWalletCertificate.load(from: fixtureURL("certificate.json")))
         let certificateIdHex = try certificate.certificateIdHex().lowercased()
         let verdictHex = String(repeating: "b", count: 64)
         let verdictLiteral = try SocialKeyedHash(pepperId: "pepper", digest: verdictHex).digest
@@ -181,7 +181,7 @@ final class OfflineWalletRevocationTests: XCTestCase {
 
     private func sampleIssuerId(seed: UInt8) throws -> String {
         let publicKey = Data(repeating: seed, count: 32)
-        return try AccountId.makeIH58(publicKey: publicKey, domain: "wonderland")
+        return try AccountId.makeIH58(publicKey: publicKey)
     }
 
     private func fixtureURL(_ name: String) -> URL {
@@ -195,7 +195,8 @@ final class OfflineWalletRevocationTests: XCTestCase {
     private func makeRawAllowanceRecord(certificate: OfflineWalletCertificate,
                                         verdictLiteral: String,
                                         remainingAmount: String) throws -> [String: Any] {
-        let certificateData = try JSONEncoder().encode(certificate)
+        let normalized = try normalizedCertificate(certificate)
+        let certificateData = try JSONEncoder().encode(normalized)
         guard let certificateObject = try JSONSerialization.jsonObject(with: certificateData) as? [String: Any] else {
             throw XCTSkip("certificate fixture failed to encode as JSON object")
         }
@@ -212,5 +213,37 @@ final class OfflineWalletRevocationTests: XCTestCase {
             "attestation_nonce_hex": verdictLiteral,
             "refresh_at_ms": NSNumber(value: 777)
         ]
+    }
+
+    private func normalizedCertificate(_ certificate: OfflineWalletCertificate) throws -> OfflineWalletCertificate {
+        let allowance = OfflineAllowanceCommitment(
+            assetId: try makeNoritoAssetId(name: "xor", domain: "sora", accountId: certificate.controller),
+            amount: certificate.allowance.amount,
+            commitment: certificate.allowance.commitment
+        )
+        return OfflineWalletCertificate(
+            controller: certificate.controller,
+            operatorId: certificate.operatorId,
+            allowance: allowance,
+            spendPublicKey: certificate.spendPublicKey,
+            attestationReport: certificate.attestationReport,
+            issuedAtMs: certificate.issuedAtMs,
+            expiresAtMs: certificate.expiresAtMs,
+            policy: certificate.policy,
+            operatorSignature: certificate.operatorSignature,
+            metadata: certificate.metadata,
+            verdictId: certificate.verdictId,
+            attestationNonce: certificate.attestationNonce,
+            refreshAtMs: certificate.refreshAtMs
+        )
+    }
+
+    private func makeNoritoAssetId(name: String,
+                                   domain: String,
+                                   accountId: String) throws -> String {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(try OfflineNorito.encodeAssetDefinitionId(name: name, domain: domain))
+        writer.writeField(try OfflineNorito.encodeAccountId(accountId))
+        return "norito:\(writer.data.hexLowercased())"
     }
 }

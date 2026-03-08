@@ -129,6 +129,6 @@ I18NF0000008X
 - `iroha --config defaults/client.toml transaction get --hash <hash>` ལུ་ལག་ལེན་འཐབ།
   ཨེསི་ཌི་ཀེ་གིས་ ཕུལ་མི་ ཚོང་འབྲེལ་ཚུ་ བརྟག་དཔྱད་འབད།
 - `iroha --config defaults/client.toml asset list all --table` དང་མཉམ་པའི་ བཤེར་ཡིག་འདྲ་མཉམ་ཚུ།
-  ཡང་ན་ `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+  ཡང་ན་ `asset list filter '{"id":"norito:4e52543000000002"}'`.
 - ཁ་ཐོག་གཉིས་ཆ་རའི་ཐོན་སྐྱེད་ངེས་གཏན་བཟོ་ནིའི་དོན་ལུ་ སི་ཨེལ་ཨའི་ འགྲུལ་བསྐྱོད་ལས་ འདྲ་མཚུངས་ཀྱི་ རྒྱུན་འགྲུལ་འདི་ བསྐྱར་ལོག་འབད།
   དེ་དང་འདྲ་བའི་I1NT0000001X དངུལ་སྤྲོད་འབབ་དང་ཚོང་འབྲེལ་གྱི་གནས་ཚད།

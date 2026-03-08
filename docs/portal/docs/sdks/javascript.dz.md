@@ -62,12 +62,12 @@ import {
 } from "@iroha/iroha-js";
 
 const mint = buildMintAssetInstruction({
-  assetId: "rose#wonderland#alice",
+  assetId: "norito:4e52543000000001",
   quantity: "10",
 });
 
 const transfer = buildTransferAssetInstruction({
-  sourceAssetId: "rose#wonderland#alice",
+  sourceAssetId: "norito:4e52543000000001",
   destinationAccountId: "ih58...",
   quantity: "5",
 });
@@ -75,7 +75,7 @@ const transfer = buildTransferAssetInstruction({
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
   authority: "ih58...",
-  mint: { assetId: "rose#wonderland#alice", quantity: "10" },
+  mint: { assetId: "norito:4e52543000000001", quantity: "10" },
   transfers: [{ destinationAccountId: "ih58...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
@@ -174,7 +174,7 @@ I18NF0000023X
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
-  authority: "alice@wonderland",
+  authority: "<account_ih58>",
   privateKeyHex: alicePrivateKey,
   certificate: draftCertificate,
 });
@@ -184,7 +184,7 @@ console.log(topUp.registration.certificate_id_hex);
 const renewed = await torii.topUpOfflineAllowanceRenewal(
   topUp.registration.certificate_id_hex,
   {
-    authority: "alice@wonderland",
+    authority: "<account_ih58>",
     privateKeyHex: alicePrivateKey,
     certificate: draftCertificate,
   },
@@ -433,7 +433,7 @@ import { promises as fs } from "node:fs";
 const uaid = "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
 
 const portfolio = await torii.getUaidPortfolio(uaid, {
-  assetId: "cash#global::holder@global",
+  assetId: "norito:4e52543000000002",
 });
 portfolio.dataspaces.forEach((entry) => {
   console.log(entry.dataspace_alias ?? entry.dataspace_id, entry.accounts.length);

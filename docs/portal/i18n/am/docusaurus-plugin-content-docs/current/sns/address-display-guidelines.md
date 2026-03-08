@@ -150,7 +150,7 @@ payload bit: │version  │ class  │  norm  │ext │
 
 | መራጭ አይነት | ቀኖናዊ ሄክስ |
 |------------|-----------|
-| ስውር ነባሪ | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| ስውር ነባሪ | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | የአካባቢ መፍጨት (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | ዓለም አቀፍ መዝገብ ቤት (I18NI0000074X) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -166,7 +166,7 @@ payload bit: │version  │ class  │  norm  │ext │
    ከ `kind`/`warning` መስኮች ያለው ነገር እና ማንኛውንም የቀረበውን ጎራ በ
    `input_domain` መስክ. `kind` `local12` ሲሆን CLI ማስጠንቀቂያ ያትማል ለ
    stderr እና JSON ማጠቃለያ የCI ቧንቧዎች እና ኤስዲኬዎች ተመሳሳይ መመሪያ ያስተጋባል
-   ሊገለጽ ይችላል. የተቀየረውን በፈለጉት ጊዜ `--append-domain` ይለፉ
+   ሊገለጽ ይችላል. የተቀየረውን በፈለጉት ጊዜ `legacy  suffix` ይለፉ
    ኢንኮዲንግ እንደ `<ih58>@<domain>` እንደገና ተጫውቷል።
 2. ኤስዲኬዎች በጃቫስክሪፕት ረዳት በኩል ተመሳሳይ ማስጠንቀቂያ/ማጠቃለያ ሊያወጡ ይችላሉ፡-
 
@@ -201,12 +201,12 @@ payload bit: │version  │ class  │  norm  │ext │
   ቀኖናዊ ኢንኮዲንግ፣ ማስጠንቀቂያዎች እና ድክመቶችን በአንድ ማለፊያ የሚያጎላ `input,status,format,…` CSV ወደ ውጭ ለመላክ።
    ረዳቱ አካባቢያዊ ያልሆኑ ረድፎችን በነባሪ ይዘላል፣ የቀረውን ግቤት ሁሉ ይለውጣል
    ወደ ተጠየቀው ኢንኮዲንግ (IH58 ተመራጭ/የተጨመቀ (`sora`) ሁለተኛ-ምርጥ/ሄክስ/JSON)፣ እና ያስቀምጣል።
-   `--append-domain` ሲዋቀር ኦሪጅናል ጎራ። ከ `--allow-errors` ጋር ያጣምሩት።
+   `legacy  suffix` ሲዋቀር ኦሪጅናል ጎራ። ከ `--allow-errors` ጋር ያጣምሩት።
    የቆሻሻ መጣያ የተበላሹ ፊደሎችን ቢይዝም መቃኘትን ለመቀጠል።
 7. CI/lint አውቶሜሽን `ci/check_address_normalize.sh`ን ማስኬድ ይችላል፣ ይህም የሚያወጣው
    ከ `fixtures/account/address_vectors.json` ውስጥ ያሉ የአካባቢያዊ መምረጫዎች, ይቀየራሉ
    እነሱን በ `iroha tools address normalize` ፣ እና ድጋሚ ማጫወት
-   `iroha tools address audit --fail-on-warning` ልቀቶች ከአሁን በኋላ እንደማይለቀቁ ለማረጋገጥ
+   `iroha tools address audit` ልቀቶች ከአሁን በኋላ እንደማይለቀቁ ለማረጋገጥ
    የአካባቢ መሟጠጥ.`torii_address_local8_total{endpoint}` ሲደመር
 `torii_address_collision_total{endpoint,kind="local12_digest"}`፣
 `torii_address_collision_domain_total{endpoint,domain}` እና የ
@@ -239,7 +239,7 @@ Grafana ቦርድ `dashboards/grafana/address_ingest.json` ማስፈጸሚያው
 በሚላክበት ጊዜ የሚከተለውን ጥይት በኪስ ቦርሳ/አሳሽ ውስጥ ያካትቱ
 መቁረጫው:
 
-> ** አድራሻዎች:** `iroha tools address normalize --only-local --append-domain` ታክሏል።
+> ** አድራሻዎች:** `iroha tools address normalize` ታክሏል።
 > ረዳት እና ወደ CI (`ci/check_address_normalize.sh`) በሽቦ ሰራው
 > Local-8/Local-12 በሜይንኔት ከመታገዱ በፊት። ወደ ውጭ የሚላኩ ማናቸውንም ያዘምኑ
 > ትዕዛዙን ያሂዱ እና የተለመደውን ዝርዝር ከመልቀቂያ ማስረጃ ጥቅል ጋር ያያይዙ።

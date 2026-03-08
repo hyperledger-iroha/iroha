@@ -190,5 +190,5 @@ public final class LedgerFlow {
 ## 5. Проверьте паритет
 
 - Просмотрите хеши транзакций через `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Получите балансы через CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`).
+- Получите балансы через CLI (`asset list filter '{"id":"norito:4e52543000000002"}'`).
 - Сравните результаты с рецептами Rust/Python/JavaScript/Swift, чтобы убедиться, что каждый SDK создает идентичные payloads Norito для демо-потока.

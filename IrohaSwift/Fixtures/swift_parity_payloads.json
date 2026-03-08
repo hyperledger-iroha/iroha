@@ -3,7 +3,7 @@
     "name": "swift_transfer_asset_basic",
     "payload": {
       "chain": "00000042",
-      "authority": "ed01201F857FE980524A2EE4FE65E5D346F7AAADCB636A640F1D191D1C6E158607BA1E@wonderland",
+      "authority": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
       "creation_time_ms": 1736000000000,
       "executable": {
         "Instructions": [
@@ -11,9 +11,9 @@
             "kind": "Transfer",
             "arguments": {
               "action": "TransferAsset",
-              "asset": "rose#wonderland#ed01201F857FE980524A2EE4FE65E5D346F7AAADCB636A640F1D191D1C6E158607BA1E@wonderland",
+              "asset_definition_id": "rose#wonderland",
               "quantity": "15.7500",
-              "destination": "ed01201F857FE980524A2EE4FE65E5D346F7AAADCB636A640F1D191D1C6E158607BA1E@wonderland"
+              "destination": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"
             }
           }
         ]
@@ -27,7 +27,7 @@
     "name": "swift_mint_asset_basic",
     "payload": {
       "chain": "00000043",
-      "authority": "ed01201F857FE980524A2EE4FE65E5D346F7AAADCB636A640F1D191D1C6E158607BA1E@wonderland",
+      "authority": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
       "creation_time_ms": 1736001000000,
       "executable": {
         "Instructions": [
@@ -35,8 +35,9 @@
             "kind": "Mint",
             "arguments": {
               "action": "MintAsset",
-              "asset": "rose#wonderland#ed01201F857FE980524A2EE4FE65E5D346F7AAADCB636A640F1D191D1C6E158607BA1E@wonderland",
-              "quantity": "42.0100"
+              "asset_definition_id": "rose#wonderland",
+              "quantity": "42.0100",
+              "destination": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"
             }
           }
         ]
@@ -50,7 +51,7 @@
     "name": "swift_burn_asset_basic",
     "payload": {
       "chain": "00000044",
-      "authority": "ed01201F857FE980524A2EE4FE65E5D346F7AAADCB636A640F1D191D1C6E158607BA1E@wonderland",
+      "authority": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
       "creation_time_ms": 1736002000000,
       "executable": {
         "Instructions": [
@@ -58,8 +59,9 @@
             "kind": "Burn",
             "arguments": {
               "action": "BurnAsset",
-              "asset": "rose#wonderland#ed01201F857FE980524A2EE4FE65E5D346F7AAADCB636A640F1D191D1C6E158607BA1E@wonderland",
-              "quantity": "5.2500"
+              "asset_definition_id": "rose#wonderland",
+              "quantity": "5.2500",
+              "destination": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"
             }
           }
         ]

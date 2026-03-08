@@ -106,9 +106,8 @@ async fn proofs_query_find_by_id_returns_norito() {
     );
 
     let private_key = iroha_crypto::ExposedPrivateKey(key_pair.private_key().clone()).to_string();
-    let authority_literal = format!("{}@{domain_name}", key_pair.public_key());
     let dto = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", authority_literal),
+        iroha_torii::json_entry("authority", authority.to_string()),
         iroha_torii::json_entry("private_key", private_key),
         iroha_torii::json_entry("backend", backend),
         iroha_torii::json_entry("hash_hex", hex::encode(proof_hash)),

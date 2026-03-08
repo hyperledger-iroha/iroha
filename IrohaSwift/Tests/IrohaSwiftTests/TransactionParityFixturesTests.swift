@@ -9,15 +9,22 @@ final class TransactionParityFixturesTests: XCTestCase {
         try ensureBridgeAvailable()
         try assertFixture(named: "swift_transfer_asset_basic") { fixture, keypair in
             let instruction = try fixture.payload.instruction(kind: "Transfer", action: "TransferAsset")
-            let assetLiteral = try instruction.argument(named: "asset")
+            let assetDefinitionId = try instruction.argument(named: "asset_definition_id")
             let destination = try instruction.argument(named: "destination")
             let quantity = try instruction.argument(named: "quantity")
-            let components = try TransactionParityFixturesTests.parseAssetLiteral(assetLiteral)
+            let authority = try TransactionParityFixturesTests.canonicalAccountId(
+                fixture.payload.authority,
+                field: "payload.authority"
+            )
+            let canonicalDestination = try TransactionParityFixturesTests.canonicalAccountId(
+                destination,
+                field: "Transfer.TransferAsset.destination"
+            )
             let request = TransferRequest(chainId: fixture.payload.chain,
-                                          authority: fixture.payload.authority,
-                                          assetDefinitionId: components.definitionId,
+                                          authority: authority,
+                                          assetDefinitionId: assetDefinitionId,
                                           quantity: quantity,
-                                          destination: destination,
+                                          destination: canonicalDestination,
                                           description: fixture.payload.metadata["memo"],
                                           ttlMs: fixture.payload.timeToLiveMs,
                                           nonce: fixture.payload.nonce)
@@ -31,14 +38,22 @@ final class TransactionParityFixturesTests: XCTestCase {
         try ensureBridgeAvailable()
         try assertFixture(named: "swift_mint_asset_basic") { fixture, keypair in
             let instruction = try fixture.payload.instruction(kind: "Mint", action: "MintAsset")
-            let assetLiteral = try instruction.argument(named: "asset")
+            let assetDefinitionId = try instruction.argument(named: "asset_definition_id")
+            let destination = try instruction.argument(named: "destination")
             let quantity = try instruction.argument(named: "quantity")
-            let components = try TransactionParityFixturesTests.parseAssetLiteral(assetLiteral)
+            let authority = try TransactionParityFixturesTests.canonicalAccountId(
+                fixture.payload.authority,
+                field: "payload.authority"
+            )
+            let canonicalDestination = try TransactionParityFixturesTests.canonicalAccountId(
+                destination,
+                field: "Mint.MintAsset.destination"
+            )
             let request = MintRequest(chainId: fixture.payload.chain,
-                                      authority: fixture.payload.authority,
-                                      assetDefinitionId: components.definitionId,
+                                      authority: authority,
+                                      assetDefinitionId: assetDefinitionId,
                                       quantity: quantity,
-                                      destination: components.accountId,
+                                      destination: canonicalDestination,
                                       ttlMs: fixture.payload.timeToLiveMs,
                                       nonce: fixture.payload.nonce)
             return try SwiftTransactionEncoder.encodeMint(request: request,
@@ -51,14 +66,22 @@ final class TransactionParityFixturesTests: XCTestCase {
         try ensureBridgeAvailable()
         try assertFixture(named: "swift_burn_asset_basic") { fixture, keypair in
             let instruction = try fixture.payload.instruction(kind: "Burn", action: "BurnAsset")
-            let assetLiteral = try instruction.argument(named: "asset")
+            let assetDefinitionId = try instruction.argument(named: "asset_definition_id")
+            let destination = try instruction.argument(named: "destination")
             let quantity = try instruction.argument(named: "quantity")
-            let components = try TransactionParityFixturesTests.parseAssetLiteral(assetLiteral)
+            let authority = try TransactionParityFixturesTests.canonicalAccountId(
+                fixture.payload.authority,
+                field: "payload.authority"
+            )
+            let canonicalDestination = try TransactionParityFixturesTests.canonicalAccountId(
+                destination,
+                field: "Burn.BurnAsset.destination"
+            )
             let request = BurnRequest(chainId: fixture.payload.chain,
-                                      authority: fixture.payload.authority,
-                                      assetDefinitionId: components.definitionId,
+                                      authority: authority,
+                                      assetDefinitionId: assetDefinitionId,
                                       quantity: quantity,
-                                      destination: components.accountId,
+                                      destination: canonicalDestination,
                                       ttlMs: fixture.payload.timeToLiveMs,
                                       nonce: fixture.payload.nonce)
             return try SwiftTransactionEncoder.encodeBurn(request: request,
@@ -105,8 +128,14 @@ final class TransactionParityFixturesTests: XCTestCase {
     }
 
     private func ensureBridgeAvailable() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
+        guard NoritoNativeBridge.shared.supportsTransactions(using: .ed25519) else {
+            throw XCTSkip("NoritoBridge ed25519 transaction encoder unavailable")
+        }
+        guard let seed = Data(hexString: FixtureConstants.signingSeedHex) else {
+            throw FixtureError.invalidSigningSeed
+        }
+        guard NoritoNativeBridge.shared.keypairFromSeed(algorithm: .ed25519, seed: seed) != nil else {
+            throw XCTSkip("NoritoBridge ed25519 seed derivation unavailable")
         }
     }
 
@@ -130,17 +159,17 @@ final class TransactionParityFixturesTests: XCTestCase {
         return keypair
     }
 
-    private static func parseAssetLiteral(_ literal: String) throws -> AssetLiteral {
-        let parts = literal.split(separator: "#", omittingEmptySubsequences: false)
-        guard parts.count >= 3 else {
-            throw FixtureError.invalidAssetLiteral(literal)
+    private static func canonicalAccountId(_ value: String, field: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw FixtureError.invalidAccountId(field: field, value: value)
         }
-        let definitionId = parts[0...1].joined(separator: "#")
-        let accountId = parts[2...].joined(separator: "#")
-        guard !definitionId.isEmpty, !accountId.isEmpty else {
-            throw FixtureError.invalidAssetLiteral(literal)
+        do {
+            _ = try AccountAddress.parseEncoded(trimmed)
+            return trimmed
+        } catch {
+            throw FixtureError.invalidAccountId(field: field, value: value)
         }
-        return AssetLiteral(definitionId: String(definitionId), accountId: String(accountId))
     }
 }
 
@@ -297,17 +326,12 @@ private struct TransactionInstruction: Decodable {
     }
 }
 
-private struct AssetLiteral {
-    let definitionId: String
-    let accountId: String
-}
-
 private enum FixtureError: Error, LocalizedError {
     case missingFixture(String)
     case unsupportedExecutable(String)
     case missingInstruction(String)
     case missingArgument(String, instruction: String)
-    case invalidAssetLiteral(String)
+    case invalidAccountId(field: String, value: String)
     case invalidSigningSeed
     case bridgeKeypairUnavailable
 
@@ -321,8 +345,8 @@ private enum FixtureError: Error, LocalizedError {
             return "instruction \(label) not found in fixture"
         case let .missingArgument(arg, instruction):
             return "instruction \(instruction) missing argument '\(arg)'"
-        case let .invalidAssetLiteral(literal):
-            return "asset literal '\(literal)' is invalid"
+        case let .invalidAccountId(field, value):
+            return "account id for \(field) must be encoded-only (received '\(value)')"
         case .invalidSigningSeed:
             return "fixture signing seed could not be decoded"
         case .bridgeKeypairUnavailable:

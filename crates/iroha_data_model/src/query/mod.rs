@@ -75,10 +75,12 @@ mod signature_tests {
 
     #[test]
     fn query_signature_decode_from_slice_roundtrip() {
-        let authority: AccountId =
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland"
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain id"),
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
-                .unwrap();
+                .expect("public key"),
+        );
         let private_key: iroha_crypto::PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -2123,9 +2125,10 @@ mod candidate {
         }
 
         static ALICE_ID: LazyLock<AccountId> = LazyLock::new(|| {
-            format!("{}@{}", ALICE_KEYPAIR.public_key(), "wonderland")
-                .parse()
-                .unwrap()
+            AccountId::new(
+                "wonderland".parse().expect("domain id"),
+                ALICE_KEYPAIR.public_key().clone(),
+            )
         });
         static ALICE_KEYPAIR: LazyLock<KeyPair> = LazyLock::new(|| {
             KeyPair::new(
@@ -2235,9 +2238,10 @@ mod json_roundtrip_tests {
     };
 
     static ALICE_ID: LazyLock<AccountId> = LazyLock::new(|| {
-        format!("{}@{}", ALICE_KEYPAIR.public_key(), "wonderland")
-            .parse()
-            .unwrap()
+        AccountId::new(
+            "wonderland".parse().expect("domain id"),
+            ALICE_KEYPAIR.public_key().clone(),
+        )
     });
     static ALICE_KEYPAIR: LazyLock<KeyPair> = LazyLock::new(|| {
         KeyPair::new(
@@ -3523,9 +3527,10 @@ mod fault_injection_tests {
         let entry = TransactionEntrypoint::Time(TimeTriggerEntrypoint {
             id: TriggerId::from_str("fault_trigger").expect("valid trigger id"),
             instructions: ExecutionStep(Vec::<InstructionBox>::new().into()),
-            authority: AccountId::from_str(
-                "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland",
+            authority: AccountId::parse_encoded(
+                "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
             )
+            .map(crate::account::ParsedAccountId::into_account_id)
             .expect("valid authority"),
         });
 

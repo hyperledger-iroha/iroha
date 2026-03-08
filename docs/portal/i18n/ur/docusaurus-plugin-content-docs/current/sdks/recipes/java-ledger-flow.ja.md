@@ -187,5 +187,5 @@ public final class LedgerFlow {
 ## 5. برابری کی تصدیق
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` کے ذریعے ٹرانزیکشن ہیشز دیکھیں۔
-- CLI کے ذریعے بیلنس حاصل کریں (`asset list filter '{"id":"coffee#wonderland##<account>"}'`).
+- CLI کے ذریعے بیلنس حاصل کریں (`asset list filter '{"id":"norito:4e52543000000002"}'`).
 - Rust/Python/JavaScript/Swift ترکیبوں کے ساتھ نتائج کا موازنہ کریں تاکہ یہ یقینی ہو کہ ہر SDK ڈیمو فلو کے لیے ایک جیسے Norito payloads بناتا ہے۔

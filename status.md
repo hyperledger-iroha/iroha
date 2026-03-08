@@ -1,21 +1,21 @@
 # Status
 
 Last update: 2026-03-08
-- Latest sync (2026-03-08 roster-unavailability anti-loop FSM hardening):
+- Latest sync (2026-03-08 roster-unavailability anti-loop FSM alignment pass):
   - Implemented in:
     - `crates/iroha_core/src/sumeragi/main_loop.rs`
-    - `crates/iroha_core/src/sumeragi/main_loop/{commit.rs,mode.rs,tests.rs}`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+    - `crates/iroha_executor_data_model/src/isi.rs`
   - Changes:
-    - extended the finite recovery reducer with explicit `EscalateEpoch` flow (`CandidatesNoop -> EscalateEpoch -> RotateView`) to break repeated no-op re-election loops,
-    - switched consensus recovery slot identity from `(height, view)` to deterministic episode key `(height, latest_committed_hash)` so recovery context is preserved across view bumps in the same stalled tip episode,
-    - added deterministic no-op handling in re-election: no-op outcomes escalate instead of being treated as success, with dead-end order-only fallback for the `f=1` case and temporary target-size shrink (bounded by security floor) when candidates allow,
-    - added temporary-shrink baseline restore plumbing (`recovery_pending_baseline_restore`) applied on commit of the recovered height.
+    - aligned the roster-unavailability reducer/runtime path by removing unreachable roster-recovery branches (`CatchUpIsolated`/`Rejoin` + unused events) and keeping catch-up isolation in the dedicated round-liveness FSM only,
+    - restored anti-loop escalation semantics: `CandidatesNoop -> EscalateEpoch -> RotateView`, with deterministic target-size shrink per escalation down to a quorum-safe floor (`commit_quorum_from_len(baseline_len)`),
+    - canonicalized deterministic elected rosters before comparison/install so order-only differences do not masquerade as membership changes and cause churn,
+    - re-enabled temporary-shrink baseline restore wiring by recording `recovery_pending_baseline_restore[height]` when a shrunk roster is installed,
+    - prevented telemetry clobbering by removing round-liveness writes to the roster-recovery state status field.
   - Validation commands (current tree):
-    - `cargo test -p iroha_core --lib roster_recovery_transitions_are_total_and_finite -- --nocapture` (ok)
-    - `cargo test -p iroha_core --lib roster_unavailable_recovery_ -- --nocapture` (ok)
-    - `cargo test -p iroha_core --lib deterministic_roster_election_is_order_invariant_for_permissioned_and_npos -- --nocapture` (ok)
-    - `cargo test -p iroha_core --lib roster_recovery_wait_candidates_does_not_rotate -- --nocapture` (ok)
-    - Note: broad `cargo test -p iroha_core` still fails on unrelated pre-existing integration drift (`CoreHost::with_host` in `iroha_core/tests/*`) outside this tranche.
+    - `cargo fmt --all` (ok)
+    - `cargo check -p iroha_core --lib` (fails; blocked by pre-existing AccountId parsing API drift in `iroha_core` paths such as `executor.rs`, `queue.rs`, `tx.rs`, and `smartcontracts/isi/asset.rs`)
+    - blocker surfaced earlier in the same chain was fixed in `iroha_executor_data_model/src/isi.rs` (`AccountId::from_str` -> `AccountId::parse_encoded(...).into_account_id()`), but additional parse-callsite drift remains outside this tranche.
 - Latest sync (2026-03-07 deterministic roster-unavailability FSM unification):
   - Implemented in:
     - `crates/iroha_core/src/sumeragi/main_loop.rs`

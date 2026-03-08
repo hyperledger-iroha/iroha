@@ -1060,9 +1060,12 @@ mod tests {
     fn vote_choice_roundtrip() {
         let vote = Vote {
             referendum_id: ProposalId([0x42; 32]),
-            voter: "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland"
-                .parse()
-                .expect("account id"),
+            voter: AccountId::new(
+                "wonderland".parse().expect("domain id"),
+                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
+                    .parse()
+                    .expect("public key"),
+            ),
             conviction: 3,
             choice: VoteChoice::Aye,
         };

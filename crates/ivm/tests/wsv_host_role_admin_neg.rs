@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
+    mock_wsv::{
+        AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost,
+    },
     syscalls,
 };
+use norito::to_bytes;
 
 mod common;
 use common::assemble_syscalls;
@@ -24,16 +27,29 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn test_account(domain: DomainId, public_key: PublicKey) -> ScopedAccountId {
+    ScopedAccountId::new(domain, public_key)
+}
+
+fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
+    let buf = to_bytes(account).expect("encode account into Norito");
+    make_tlv(PointerType::AccountId as u16, &buf)
+}
+
 #[test]
 fn delete_role_with_assignees_fails() {
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
+    let alice_domain: DomainId = "domain".parse().unwrap();
+    let bob_domain: DomainId = "wonder".parse().unwrap();
+    let alice_pk: PublicKey =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
             .unwrap();
-    let bob: AccountId =
-        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4@wonder"
+    let bob_pk: PublicKey =
+        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
             .parse()
             .unwrap();
+    let alice = test_account(alice_domain, alice_pk);
+    let bob = test_account(bob_domain, bob_pk);
     let rose: AssetDefinitionId = "rose#wonder".parse().unwrap();
 
     let mut wsv = MockWorldStateView::new();
@@ -41,7 +57,11 @@ fn delete_role_with_assignees_fails() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -53,7 +73,7 @@ fn delete_role_with_assignees_fails() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    let acc = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -84,7 +104,7 @@ fn delete_role_with_assignees_fails() {
     vm.load_program(&prog_crole).unwrap();
     vm.run().expect("create role");
 
-    let tlv_alice = make_tlv(PointerType::AccountId as u16, alice.to_string().as_bytes());
+    let tlv_alice = make_account_tlv(&alice);
     let rname = make_tlv(PointerType::Name as u16, b"minter");
     vm.memory
         .preload_input(0, &tlv_alice)
@@ -108,20 +128,28 @@ fn delete_role_with_assignees_fails() {
 
 #[test]
 fn grant_nonexistent_role_fails() {
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
+    let alice_domain: DomainId = "domain".parse().unwrap();
+    let bob_domain: DomainId = "wonder".parse().unwrap();
+    let alice_pk: PublicKey =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
             .unwrap();
-    let bob: AccountId =
-        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4@wonder"
+    let bob_pk: PublicKey =
+        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
             .parse()
             .unwrap();
+    let alice = test_account(alice_domain, alice_pk);
+    let bob = test_account(bob_domain, bob_pk);
 
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -133,7 +161,7 @@ fn grant_nonexistent_role_fails() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    let acc = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
+    let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -141,7 +169,7 @@ fn grant_nonexistent_role_fails() {
     vm.run().expect("register account");
 
     // Grant a role that does not exist
-    let tlv_alice = make_tlv(PointerType::AccountId as u16, alice.to_string().as_bytes());
+    let tlv_alice = make_account_tlv(&alice);
     let rname = make_tlv(PointerType::Name as u16, b"ghost");
     vm.memory
         .preload_input(0, &tlv_alice)

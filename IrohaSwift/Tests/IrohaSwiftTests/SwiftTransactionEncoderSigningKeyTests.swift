@@ -11,7 +11,9 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let domain = "wonderland"
         let chainId = "00000000-0000-0000-0000-000000000000"
         let assetDefinitionId = "xor#\(domain)"
-        let authority = try "\(sm2Keypair.publicKeyPrefixed())@\(domain)"
+        guard let authority = try? AccountId.makeIH58(publicKey: sm2Keypair.publicKey, algorithm: "sm2") else {
+            throw XCTSkip("SM2 account-id encoding is unavailable in this build.")
+        }
         let request = TransferRequest(chainId: chainId,
                                       authority: authority,
                                       assetDefinitionId: assetDefinitionId,
@@ -35,7 +37,9 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let domain = "wonderland"
         let chainId = "00000000-0000-0000-0000-000000000000"
         let assetDefinitionId = "xor#\(domain)"
-        let authority = try "\(sm2Keypair.publicKeyPrefixed())@\(domain)"
+        guard let authority = try? AccountId.makeIH58(publicKey: sm2Keypair.publicKey, algorithm: "sm2") else {
+            throw XCTSkip("SM2 account-id encoding is unavailable in this build.")
+        }
         let request = MintRequest(chainId: chainId,
                                   authority: authority,
                                   assetDefinitionId: assetDefinitionId,
@@ -58,11 +62,7 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let domain = "wonderland"
         let chainId = "00000000-0000-0000-0000-000000000000"
         let assetDefinitionId = "xor#\(domain)"
-        let address = try AccountAddress.fromAccount(domain: domain,
-                                                     publicKey: keypair.publicKey,
-                                                     algorithm: "secp256k1")
-        let ih58 = try address.toIH58(networkPrefix: 753)
-        let authority = "\(ih58)@\(domain)"
+        let authority = try AccountId.makeIH58(publicKey: keypair.publicKey, algorithm: "secp256k1")
         let request = TransferRequest(chainId: chainId,
                                       authority: authority,
                                       assetDefinitionId: assetDefinitionId,

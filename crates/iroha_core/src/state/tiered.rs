@@ -4497,8 +4497,8 @@ mod tests {
             r#"{
                 "domain": "wonderland",
                 "accounts": [
-                    {"id": "alice@wonderland", "metadata": {"email": "alice@example.com"}},
-                    {"id": "bob@wonderland", "metadata": {"roles": ["admin", "auditor"]}}
+                    {"id": "ih58-subject-alice", "metadata": {"email": "alice@example.com"}},
+                    {"id": "ih58-subject-bob", "metadata": {"roles": ["admin", "auditor"]}}
                 ],
                 "supply": 42,
                 "flags": {

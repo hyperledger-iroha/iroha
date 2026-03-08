@@ -38,7 +38,7 @@ scripts/address_local_toolkit.sh \
 Seçimlər:
 
 - IH58 əvəzinə `sora…` çıxışı üçün `--format compressed`.
-- `--no-append-domain` çılpaq hərflər yaymaq üçün.
+- `domainless output (default)` çılpaq hərflər yaymaq üçün.
 - Dönüşüm addımını atlamaq üçün `--audit-only`.
 - `--allow-errors` xətalı sətirlər görünəndə skan etməyə davam etmək üçün (CLI davranışına uyğundur).
 
@@ -52,7 +52,7 @@ Sıfırı sübut edən Grafana ekran görüntüsü ilə birlikdə dəyişiklik i
 2. `audit.json` Yerli seçiciləri (`domain.kind = local12`) bildirdikdə blok birləşir.
    defolt `true` dəyərində (yalnız inkişaf/sınaq qruplarında `false`-ə keçin
    reqressiyaların diaqnostikası) və əlavə edin
-   `iroha tools address normalize --fail-on-warning --only-local`-dən CI-yə belə reqressiya
+   `iroha tools address normalize`-dən CI-yə belə reqressiya
    cəhdlər istehsala çatmazdan əvvəl uğursuz olur.
 
 Ətraflı təfərrüatlar, nümunə sübut yoxlama siyahıları və müştərilərə kəsilməni elan edərkən təkrar istifadə edə biləcəyiniz buraxılış qeydi parçası üçün mənbə sənədinə baxın.

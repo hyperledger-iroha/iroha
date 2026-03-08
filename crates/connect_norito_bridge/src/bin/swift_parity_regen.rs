@@ -8,7 +8,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use iroha_crypto::{Algorithm, HashOf, KeyPair};
 use iroha_data_model::{
     account::{AccountId, address},
-    asset::{AssetDefinitionId, AssetId},
+    asset::{AssetId, id::AssetDefinitionId},
     isi::{Burn, InstructionBox, Mint, Transfer},
     metadata::Metadata,
     name::Name,
@@ -28,7 +28,7 @@ const DEFAULT_MANIFEST_NAME: &str = "swift_parity_manifest.json";
 const PAYLOAD_SCHEMA_NAME: &str = "iroha.android.transaction.Payload.v1";
 const SIGNED_SCHEMA_NAME: &str = "iroha.transaction.SignedTransaction.v1";
 const SIGNING_SEED_HEX: &str = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
-const DEFAULT_CHAIN_DISCRIMINANT: u16 = 42;
+const DEFAULT_CHAIN_DISCRIMINANT: u16 = 0x02F1;
 
 #[derive(Debug, norito::json::JsonDeserialize)]
 struct PayloadFileEntry {
@@ -88,11 +88,10 @@ impl PayloadSpec {
             .chain
             .parse()
             .map_err(|_| format!("invalid chain id '{}'", self.chain))?;
-        let authority = self
-            .authority
-            .parse()
+        let authority = AccountId::parse_encoded(&self.authority)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .map_err(|_| format!("invalid authority id '{}'", self.authority))?;
-        let mut builder = TransactionBuilder::new(chain_id, authority);
+        let mut builder = TransactionBuilder::new(chain_id, authority.clone());
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
         if let Some(ttl_ms) = self.time_to_live_ms {
             builder.set_ttl(Duration::from_millis(ttl_ms));
@@ -121,7 +120,7 @@ impl PayloadSpec {
                 json::from_value(value.clone()).map_err(|err| err.to_string())?;
             let mut instructions = Vec::with_capacity(raws.len());
             for raw in raws {
-                instructions.push(raw.to_instruction()?);
+                instructions.push(raw.to_instruction(&authority)?);
             }
             builder = builder.with_instructions(instructions);
         } else if let Some(value) = executable.get("Ivm") {
@@ -141,7 +140,7 @@ impl PayloadSpec {
 }
 
 impl InstructionSpec {
-    fn to_instruction(&self) -> Result<InstructionBox, String> {
+    fn to_instruction(&self, authority: &AccountId) -> Result<InstructionBox, String> {
         let action = self
             .arguments
             .get("action")
@@ -154,10 +153,10 @@ impl InstructionSpec {
                         self.kind
                     ));
                 }
-                let asset = self
+                let asset_definition = self
                     .arguments
-                    .get("asset")
-                    .ok_or_else(|| "missing 'asset' argument".to_string())?;
+                    .get("asset_definition_id")
+                    .ok_or_else(|| "missing 'asset_definition_id' argument".to_string())?;
                 let quantity = self
                     .arguments
                     .get("quantity")
@@ -166,13 +165,17 @@ impl InstructionSpec {
                     .arguments
                     .get("destination")
                     .ok_or_else(|| "missing 'destination' argument".to_string())?;
-                let asset_id = parse_asset_literal(asset)?;
+                let asset_definition: AssetDefinitionId =
+                    asset_definition.parse().map_err(|err| {
+                        format!("invalid asset definition '{asset_definition}': {err}")
+                    })?;
                 let quantity: Numeric = quantity
                     .parse()
                     .map_err(|err| format!("invalid quantity '{quantity}': {err}"))?;
-                let destination: AccountId = destination
-                    .parse()
+                let destination: AccountId = AccountId::parse_encoded(destination)
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .map_err(|_| format!("invalid destination account '{destination}'"))?;
+                let asset_id = AssetId::new(asset_definition, authority.clone());
                 Ok(Transfer::asset_numeric(asset_id, quantity, destination).into())
             }
             "MintAsset" => {
@@ -182,18 +185,29 @@ impl InstructionSpec {
                         self.kind
                     ));
                 }
-                let asset = self
+                let asset_definition = self
                     .arguments
-                    .get("asset")
-                    .ok_or_else(|| "missing 'asset' argument".to_string())?;
+                    .get("asset_definition_id")
+                    .ok_or_else(|| "missing 'asset_definition_id' argument".to_string())?;
                 let quantity = self
                     .arguments
                     .get("quantity")
                     .ok_or_else(|| "missing 'quantity' argument".to_string())?;
-                let asset_id = parse_asset_literal(asset)?;
+                let destination = self
+                    .arguments
+                    .get("destination")
+                    .ok_or_else(|| "missing 'destination' argument".to_string())?;
+                let asset_definition: AssetDefinitionId =
+                    asset_definition.parse().map_err(|err| {
+                        format!("invalid asset definition '{asset_definition}': {err}")
+                    })?;
                 let quantity: Numeric = quantity
                     .parse()
                     .map_err(|err| format!("invalid quantity '{quantity}': {err}"))?;
+                let destination: AccountId = AccountId::parse_encoded(destination)
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    .map_err(|_| format!("invalid destination account '{destination}'"))?;
+                let asset_id = AssetId::new(asset_definition, destination);
                 Ok(Mint::asset_numeric(quantity, asset_id).into())
             }
             "BurnAsset" => {
@@ -203,44 +217,34 @@ impl InstructionSpec {
                         self.kind
                     ));
                 }
-                let asset = self
+                let asset_definition = self
                     .arguments
-                    .get("asset")
-                    .ok_or_else(|| "missing 'asset' argument".to_string())?;
+                    .get("asset_definition_id")
+                    .ok_or_else(|| "missing 'asset_definition_id' argument".to_string())?;
                 let quantity = self
                     .arguments
                     .get("quantity")
                     .ok_or_else(|| "missing 'quantity' argument".to_string())?;
-                let asset_id = parse_asset_literal(asset)?;
+                let destination = self
+                    .arguments
+                    .get("destination")
+                    .ok_or_else(|| "missing 'destination' argument".to_string())?;
+                let asset_definition: AssetDefinitionId =
+                    asset_definition.parse().map_err(|err| {
+                        format!("invalid asset definition '{asset_definition}': {err}")
+                    })?;
                 let quantity: Numeric = quantity
                     .parse()
                     .map_err(|err| format!("invalid quantity '{quantity}': {err}"))?;
+                let destination: AccountId = AccountId::parse_encoded(destination)
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    .map_err(|_| format!("invalid destination account '{destination}'"))?;
+                let asset_id = AssetId::new(asset_definition, destination);
                 Ok(Burn::asset_numeric(quantity, asset_id).into())
             }
             other => Err(format!("unsupported instruction action '{other}'")),
         }
     }
-}
-
-fn parse_asset_literal(value: &str) -> Result<AssetId, String> {
-    let parts: Vec<&str> = value.split('#').collect();
-    if parts.len() < 3 {
-        return Err(format!(
-            "asset literal '{value}' missing definition/account"
-        ));
-    }
-    let definition = format!("{}#{}", parts[0], parts[1]);
-    let account = parts[2..].join("#");
-    if account.is_empty() {
-        return Err(format!("asset literal '{value}' missing owner"));
-    }
-    let definition_id: AssetDefinitionId = definition
-        .parse()
-        .map_err(|_| format!("invalid asset definition id '{definition}'"))?;
-    let account_id: AccountId = account
-        .parse()
-        .map_err(|_| format!("invalid asset account id '{account}'"))?;
-    Ok(AssetId::new(definition_id, account_id))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -396,20 +400,34 @@ mod tests {
 
     use super::*;
 
-    fn account_with_domain(account: &AccountId) -> String {
-        format!("{}@{}", account, account.domain())
+    fn account_literal(account: &AccountId) -> String {
+        account.to_string()
     }
 
     #[test]
-    fn parse_asset_literal_splits_definition_and_owner() {
+    fn instruction_builder_rejects_legacy_asset_literal_argument() {
         let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
         let domain: DomainId = "wonderland".parse().expect("valid domain");
-        let owner = AccountId::new(domain.clone(), keypair.public_key().clone());
-        let definition: AssetDefinitionId = "rose#wonderland".parse().expect("valid definition");
-        let asset_literal = format!("{definition}#{}", account_with_domain(&owner));
-        let parsed = parse_asset_literal(&asset_literal).expect("parse asset literal");
-        assert_eq!(parsed.definition, definition);
-        assert_eq!(parsed.account, owner);
+        let authority = AccountId::new(domain.clone(), keypair.public_key().clone());
+        let destination = AccountId::new(domain, keypair.public_key().clone());
+
+        let mut args = BTreeMap::new();
+        args.insert("action".into(), "TransferAsset".into());
+        args.insert("asset".into(), "rose#wonderland#alice@wonderland".into());
+        args.insert("quantity".into(), "1.2500".into());
+        args.insert("destination".into(), account_literal(&destination));
+        let instruction = InstructionSpec {
+            kind: "Transfer".into(),
+            arguments: args,
+        };
+
+        let err = instruction
+            .to_instruction(&authority)
+            .expect_err("legacy asset literal argument should fail");
+        assert!(
+            err.contains("missing 'asset_definition_id' argument"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -418,16 +436,14 @@ mod tests {
         let domain: DomainId = "wonderland".parse().expect("valid domain");
         let authority = AccountId::new(domain.clone(), keypair.public_key().clone());
         let destination = AccountId::new(domain, keypair.public_key().clone());
-        let definition: AssetDefinitionId = "rose#wonderland".parse().expect("valid definition");
-        let asset_literal = format!("{definition}#{}", account_with_domain(&authority));
         let mut args = BTreeMap::new();
         args.insert("action".into(), "TransferAsset".into());
-        args.insert("asset".into(), asset_literal);
+        args.insert("asset_definition_id".into(), "rose#wonderland".into());
         args.insert("quantity".into(), "1.2500".into());
-        args.insert("destination".into(), account_with_domain(&destination));
+        args.insert("destination".into(), account_literal(&destination));
         let payload = PayloadSpec {
             chain: "00000042".into(),
-            authority: account_with_domain(&authority),
+            authority: account_literal(&authority),
             creation_time_ms: 123,
             executable: {
                 let mut exec = Map::new();

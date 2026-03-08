@@ -35,9 +35,9 @@ translator: machine-google-reviewed
 - `IdBox`: Ямар ч дэмжигдсэн ID-д зориулсан нийлбэр төрлийн дугтуй (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `AssetId`, Kotodama `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Ерөнхий урсгал болон Norito кодчилолд нэг төрлийн хувьд хэрэгтэй.
 - `ChainId`: Гүйлгээнд дахин тоглуулах хамгаалалтад ашигладаг тунгалаг бус хэлхээ танигч.ID-н стринг маягтууд (`Display`/`FromStr`-ээр хоёр талдаа эргэх боломжтой):
 - `DomainId`: `name` (жишээ нь, `wonderland`).
-- `AccountId`: IH58, Sora шахагдсан (`sora…`) болон каноник hex кодлогч (`AccountAddress::to_ih58`, I1000030, `AccountAddress`, `AccountAddress`-ээр кодлогдсон каноник танигч. `canonical_hex`, `parse_any`). IH58 бол илүүд үздэг дансны формат юм; `sora…` хэлбэр нь зөвхөн Sora-д зориулагдсан UX-ийн хувьд хоёрдугаарт ордог. Хүнд ээлтэй чиглүүлэлтийн нэр `alias@domain` нь UX-д хадгалагдсан боловч эрх бүхий танигч гэж үзэхээ больсон. Torii нь `AccountAddress::parse_any`-ээр дамжуулан ирж буй мөрүүдийг хэвийн болгодог. Бүртгэлийн ID-ууд нь нэг түлхүүр болон олон талт хянагчийг дэмждэг.
+- `AccountId`: IH58, Sora шахагдсан (`sora…`) болон каноник hex кодлогч (`AccountAddress::to_ih58`, I1000030, `AccountAddress`, `AccountAddress`-ээр кодлогдсон каноник танигч. `canonical_hex`, `parse_encoded`). IH58 бол илүүд үздэг дансны формат юм; `sora…` хэлбэр нь зөвхөн Sora-д зориулагдсан UX-ийн хувьд хоёрдугаарт ордог. Хүнд ээлтэй чиглүүлэлтийн нэр `alias` (rejected legacy form) нь UX-д хадгалагдсан боловч эрх бүхий танигч гэж үзэхээ больсон. Torii нь `AccountAddress::parse_encoded`-ээр дамжуулан ирж буй мөрүүдийг хэвийн болгодог. Бүртгэлийн ID-ууд нь нэг түлхүүр болон олон талт хянагчийг дэмждэг.
 - `AssetDefinitionId`: `asset#domain` (жишээ нь, `xor#soramitsu`).
-- `AssetId`: `asset#domain#account` эсвэл тодорхойлолтын домэйн нь дансны домэйнтэй тэнцүү бол `asset##account` товчлол бөгөөд `account` нь `AccountId` канон мөр (IH58 илүү тохиромжтой).
+- `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`: `nft$domain` (жишээ нь, `rose$garden`).
 - `PeerId`: `public_key` (үе тэнгийн тэгш байдал нь нийтийн түлхүүрээр байдаг).
 

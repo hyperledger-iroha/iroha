@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Descrição:
 
 - `--format compressed (`sora`)` para você `sora...` em vez de IH58.
-- `--no-append-domain` para usar literais simples.
+- `domainless output (default)` para usar literais simples.
 - `--audit-only` é uma opção de conversão.
 - `--allow-errors` fornece uma verificação por meio de uma configuração padrão (suportado pela CLI).
 
@@ -47,7 +47,7 @@ Local-8 é detectado e não Local-12 é coletado no mínimo para >=30 dias.
 1. Crie um script no trabalho anterior e atualize as saídas.
 2. Блокируйте mescla, когда `audit.json` сообщает Seletores locais (`domain.kind = local12`).
    então use o `true` (instalado em `false` no dev/test para registro de diagnóstico) e
-   Instale `iroha tools address normalize --fail-on-warning --only-local` no CI, este registro é feito
+   Instale `iroha tools address normalize` no CI, este registro é feito
    падали до produção.
 
 Sim. um documento detalhado para detalhes, listas de evidências e trechos de notas de lançamento, que podem ser usados

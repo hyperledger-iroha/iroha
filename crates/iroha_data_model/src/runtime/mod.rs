@@ -412,10 +412,12 @@ mod tests {
         let rec = RuntimeUpgradeRecord {
             manifest: manifest.clone(),
             status: RuntimeUpgradeStatus::Proposed,
-            proposer:
-                "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4@wonderland"
+            proposer: crate::account::AccountId::new(
+                "wonderland".parse().expect("domain id"),
+                "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
                     .parse()
-                    .expect("account id"),
+                    .expect("public key"),
+            ),
             created_height: 999_900,
         };
         let expected_id = manifest.id();

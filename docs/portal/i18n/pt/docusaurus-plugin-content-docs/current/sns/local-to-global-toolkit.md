@@ -32,7 +32,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Opcoes:
 
 - `--format compressed (`sora`)` para saida `sora...` em vez de IH58.
-- `--no-append-domain` para emitir literais sem dominio.
+- `domainless output (default)` para emitir literais sem dominio.
 - `--audit-only` para pular a etapa de conversao.
 - `--allow-errors` para continuar a varredura quando linhas malformadas aparecerem (igual ao comportamento da CLI).
 
@@ -46,7 +46,7 @@ deteccoes Local-8 e zero colisoes Local-12 por >=30 dias.
 2. Bloqueie merges quando `audit.json` reportar selectores Local (`domain.kind = local12`).
    no valor padrao `true` (so altere para `false` em clusters dev/test ao diagnosticar
    regressoes) e adicione
-   `iroha tools address normalize --fail-on-warning --only-local` ao CI para que regressos
+   `iroha tools address normalize` ao CI para que regressos
    falhem antes de chegar a producao.
 
 Veja o documento fonte para mais detalhes, checklists de evidencia e o snippet de

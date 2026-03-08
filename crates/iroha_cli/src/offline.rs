@@ -704,21 +704,15 @@ fn apply_allowance_filters(
 }
 
 fn record_verdict_id(record: &OfflineAllowanceRecord) -> Option<&Hash> {
-    record
-        .verdict_id
-        .as_ref()
-        .or(record.certificate.verdict_id.as_ref())
+    record.verdict_id.as_ref()
 }
 
 fn record_attestation_nonce(record: &OfflineAllowanceRecord) -> Option<&Hash> {
-    record
-        .attestation_nonce
-        .as_ref()
-        .or(record.certificate.attestation_nonce.as_ref())
+    record.attestation_nonce.as_ref()
 }
 
 fn record_refresh_at(record: &OfflineAllowanceRecord) -> Option<u64> {
-    record.refresh_at_ms.or(record.certificate.refresh_at_ms)
+    record.refresh_at_ms
 }
 
 fn transfer_verdict_id(record: &OfflineTransferRecord) -> Option<&Hash> {
@@ -726,12 +720,6 @@ fn transfer_verdict_id(record: &OfflineTransferRecord) -> Option<&Hash> {
         .verdict_snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.verdict_id.as_ref())
-        .or_else(|| {
-            record
-                .pos_verdict_snapshots
-                .first()
-                .and_then(|snapshot| snapshot.verdict_id.as_ref())
-        })
 }
 
 fn transfer_attestation_nonce(record: &OfflineTransferRecord) -> Option<&Hash> {
@@ -739,12 +727,6 @@ fn transfer_attestation_nonce(record: &OfflineTransferRecord) -> Option<&Hash> {
         .verdict_snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.attestation_nonce.as_ref())
-        .or_else(|| {
-            record
-                .pos_verdict_snapshots
-                .first()
-                .and_then(|snapshot| snapshot.attestation_nonce.as_ref())
-        })
 }
 
 fn transfer_refresh_at(record: &OfflineTransferRecord) -> Option<u64> {
@@ -752,12 +734,6 @@ fn transfer_refresh_at(record: &OfflineTransferRecord) -> Option<u64> {
         .verdict_snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.refresh_at_ms)
-        .or_else(|| {
-            record
-                .pos_verdict_snapshots
-                .first()
-                .and_then(|snapshot| snapshot.refresh_at_ms)
-        })
 }
 
 fn transfer_certificate_expires(record: &OfflineTransferRecord) -> Option<u64> {
@@ -765,12 +741,6 @@ fn transfer_certificate_expires(record: &OfflineTransferRecord) -> Option<u64> {
         .verdict_snapshot
         .as_ref()
         .map(|snapshot| snapshot.certificate_expires_at_ms)
-        .or_else(|| {
-            record
-                .pos_verdict_snapshots
-                .first()
-                .map(|snapshot| snapshot.certificate_expires_at_ms)
-        })
 }
 
 fn transfer_policy_expires(record: &OfflineTransferRecord) -> Option<u64> {
@@ -778,12 +748,6 @@ fn transfer_policy_expires(record: &OfflineTransferRecord) -> Option<u64> {
         .verdict_snapshot
         .as_ref()
         .map(|snapshot| snapshot.policy_expires_at_ms)
-        .or_else(|| {
-            record
-                .pos_verdict_snapshots
-                .first()
-                .map(|snapshot| snapshot.policy_expires_at_ms)
-        })
 }
 
 fn map_verdict_snapshot(snapshot: &OfflineVerdictSnapshot) -> TransferVerdictSnapshot {
@@ -1474,18 +1438,20 @@ mod bundle_inspect_tests {
         use iroha_core::smartcontracts::isi::offline::{build_balance_proof, compute_commitment};
         use iroha_primitives::numeric::Numeric;
 
-        let controller: AccountId =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+        let domain: iroha::data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let controller_key: iroha_crypto::PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .unwrap();
-        let receiver: AccountId =
-            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D@wonderland"
+        let receiver_key: iroha_crypto::PublicKey =
+            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()
                 .unwrap();
+        let controller = AccountId::new(domain.clone(), controller_key);
+        let receiver = AccountId::new(domain, receiver_key);
         let deposit = receiver.clone();
-        let asset: AssetId = "xor#wonderland#ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-            .parse()
-            .unwrap();
+        let asset_definition: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let asset = AssetId::new(asset_definition, controller.clone());
 
         let allowance_amount = Numeric::from_str("500").unwrap();
         let expected_scale = allowance_amount.scale();
@@ -1945,8 +1911,8 @@ mod tests {
             recorded_at_height: 1,
             archived_at_height: None,
             history: Vec::new(),
-            pos_verdict_snapshots: vec![OfflineVerdictSnapshot::from_certificate(&certificate)],
-            verdict_snapshot: None,
+            pos_verdict_snapshots: vec![],
+            verdict_snapshot: Some(OfflineVerdictSnapshot::from_certificate(&certificate)),
             platform_snapshot: policy.map(|policy| OfflinePlatformTokenSnapshot {
                 policy: policy.to_string(),
                 attestation_jws_b64: "token".into(),
@@ -2280,6 +2246,50 @@ mod tests {
         assert_eq!(
             snapshot.policy(),
             Some(AndroidIntegrityPolicy::PlayIntegrity)
+        );
+    }
+
+    #[test]
+    fn allowance_filters_ignore_certificate_compatibility_fields() {
+        let mut record = sample_allowance_record();
+        record.verdict_id = None;
+        record.attestation_nonce = None;
+        record.refresh_at_ms = None;
+        assert!(record.certificate.verdict_id.is_some());
+        assert!(record.certificate.attestation_nonce.is_some());
+        assert!(record.certificate.refresh_at_ms.is_some());
+
+        let mut entries = vec![record];
+        let mut args = default_allowance_list_args();
+        args.verdict_id = Some(Hash::new(b"verdict"));
+        apply_allowance_filters(&mut entries, &args, None).expect("filters");
+        assert!(
+            entries.is_empty(),
+            "legacy certificate fields must not satisfy verdict filters"
+        );
+    }
+
+    #[test]
+    fn transfer_filters_ignore_pos_verdict_snapshot_compatibility_fields() {
+        let certificate = sample_certificate();
+        let mut record = sample_transfer_record(None);
+        record.verdict_snapshot = None;
+        record.pos_verdict_snapshots = vec![OfflineVerdictSnapshot::from_certificate(&certificate)];
+
+        let mut entries = vec![record];
+        let mut args = default_transfer_list_args();
+        args.require_verdict = true;
+        apply_transfer_filters(
+            &mut entries,
+            &args,
+            TransferFilterFlags::default(),
+            None,
+            None,
+        )
+        .expect("filters");
+        assert!(
+            entries.is_empty(),
+            "legacy pos_verdict_snapshots fields must not satisfy verdict filters"
         );
     }
 

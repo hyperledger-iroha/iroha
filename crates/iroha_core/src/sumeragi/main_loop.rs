@@ -5417,8 +5417,6 @@ enum RosterRecoveryState {
     ReelectRoster,
     WaitCandidates,
     EscalateEpoch,
-    CatchUpIsolated,
-    Rejoin,
     RotateView,
 }
 
@@ -5430,8 +5428,6 @@ impl RosterRecoveryState {
             Self::ReelectRoster => "reelect_roster",
             Self::WaitCandidates => "wait_candidates",
             Self::EscalateEpoch => "escalate_epoch",
-            Self::CatchUpIsolated => "catchup_isolated",
-            Self::Rejoin => "rejoin",
             Self::RotateView => "rotate_view",
         }
     }
@@ -5447,15 +5443,12 @@ enum RosterRecoveryEvent {
     CandidatesNoop,
     CandidatesEmpty,
     EscalationReady,
-    NoProgress,
-    CatchUpProgress,
-    CatchUpComplete,
     RoundAdvanced,
 }
 
 impl RosterRecoveryEvent {
     #[cfg(test)]
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 9] = [
         Self::DependencyMissing,
         Self::DependencyResolved,
         Self::DependencyTimeout,
@@ -5464,9 +5457,6 @@ impl RosterRecoveryEvent {
         Self::CandidatesNoop,
         Self::CandidatesEmpty,
         Self::EscalationReady,
-        Self::NoProgress,
-        Self::CatchUpProgress,
-        Self::CatchUpComplete,
         Self::RoundAdvanced,
     ];
 }
@@ -5495,7 +5485,7 @@ fn step_roster_recovery_state(
             RosterRecoveryState::RotateView
         }
         (RosterRecoveryState::ReelectRoster, RosterRecoveryEvent::CandidatesNoop) => {
-            RosterRecoveryState::RotateView
+            RosterRecoveryState::EscalateEpoch
         }
         (RosterRecoveryState::ReelectRoster, RosterRecoveryEvent::CandidatesEmpty) => {
             RosterRecoveryState::WaitCandidates
@@ -5509,17 +5499,6 @@ fn step_roster_recovery_state(
         (RosterRecoveryState::EscalateEpoch, RosterRecoveryEvent::EscalationReady) => {
             RosterRecoveryState::RotateView
         }
-        (RosterRecoveryState::RotateView, RosterRecoveryEvent::NoProgress) => {
-            RosterRecoveryState::CatchUpIsolated
-        }
-        (RosterRecoveryState::CatchUpIsolated, RosterRecoveryEvent::CatchUpProgress)
-        | (RosterRecoveryState::CatchUpIsolated, RosterRecoveryEvent::CatchUpComplete) => {
-            RosterRecoveryState::Rejoin
-        }
-        (RosterRecoveryState::Rejoin, RosterRecoveryEvent::RoundAdvanced)
-        | (RosterRecoveryState::Rejoin, RosterRecoveryEvent::CatchUpComplete) => {
-            RosterRecoveryState::Steady
-        }
         (RosterRecoveryState::RotateView, _) => RosterRecoveryState::Steady,
         _ => state,
     }
@@ -5530,16 +5509,6 @@ enum RoundLivenessState {
     Steady,
     CatchUpIsolated,
     Rejoin,
-}
-
-impl RoundLivenessState {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Steady => "steady",
-            Self::CatchUpIsolated => "catchup_isolated",
-            Self::Rejoin => "rejoin",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -21213,7 +21182,10 @@ impl Actor {
     }
 
     fn round_liveness_isolated(&self) -> bool {
-        matches!(self.round_liveness.state, RoundLivenessState::CatchUpIsolated)
+        matches!(
+            self.round_liveness.state,
+            RoundLivenessState::CatchUpIsolated
+        )
     }
 
     fn transition_round_liveness_state(&mut self, next: RoundLivenessState, now: Instant) {
@@ -21222,7 +21194,6 @@ impl Actor {
         }
         self.round_liveness.state = next;
         self.round_liveness.entered_at = now;
-        super::status::set_consensus_roster_recovery_state(next.as_str());
     }
 
     fn drive_round_liveness_fsm(&mut self, now: Instant) -> bool {
@@ -21232,7 +21203,9 @@ impl Actor {
             self.round_liveness.stagnation_windows = 0;
             self.round_liveness.last_window_at = now;
         } else {
-            let stall_window = self.frontier_catchup_stall_window().max(Duration::from_millis(1));
+            let stall_window = self
+                .frontier_catchup_stall_window()
+                .max(Duration::from_millis(1));
             let elapsed_windows = now
                 .saturating_duration_since(self.round_liveness.last_window_at)
                 .as_nanos()
@@ -21240,8 +21213,10 @@ impl Actor {
             if elapsed_windows > 0 {
                 self.round_liveness.last_window_at = now;
                 let increment = u32::try_from(elapsed_windows).unwrap_or(u32::MAX);
-                self.round_liveness.stagnation_windows =
-                    self.round_liveness.stagnation_windows.saturating_add(increment);
+                self.round_liveness.stagnation_windows = self
+                    .round_liveness
+                    .stagnation_windows
+                    .saturating_add(increment);
             }
         }
 
@@ -21251,8 +21226,9 @@ impl Actor {
             .map_or(local_height, |qc| qc.height.max(local_height));
         let gap = highest_height.saturating_sub(local_height);
         let frontier_height = self.frontier_catchup_target_height(local_height);
-        let unresolved = frontier_height
-            .is_some_and(|frontier_height| self.frontier_catchup_has_unresolved_dependency(frontier_height));
+        let unresolved = frontier_height.is_some_and(|frontier_height| {
+            self.frontier_catchup_has_unresolved_dependency(frontier_height)
+        });
 
         match self.round_liveness.state {
             RoundLivenessState::Steady => {
@@ -21416,7 +21392,7 @@ impl Actor {
         if candidates.len() > effective_target {
             candidates.truncate(effective_target);
         }
-        candidates
+        roster::canonicalize_roster_for_mode(candidates, consensus_mode)
     }
 
     pub(super) fn clear_consensus_recovery_for_round(&mut self, height: u64, view: u64) {
@@ -21660,7 +21636,6 @@ impl Actor {
                             RosterRecoveryEvent::CandidatesNoop,
                             now,
                         );
-                        should_rotate = matches!(entry.state, RosterRecoveryState::RotateView);
                     } else if let Err(err) = self.install_elected_roster(&elected) {
                         warn!(
                             ?err,
@@ -21670,6 +21645,11 @@ impl Actor {
                             "failed to install deterministically elected roster during recovery"
                         );
                     } else {
+                        if elected.len() < baseline_roster_len {
+                            self.recovery_pending_baseline_restore
+                                .entry(height)
+                                .or_insert_with(|| initial_roster.clone());
+                        }
                         let _ = self.refresh_commit_topology_state(&elected);
                         super::status::inc_consensus_roster_unavailable_election_success();
                         let _ = self.transition_roster_recovery_state(
@@ -21708,6 +21688,21 @@ impl Actor {
                 }
             }
             RosterRecoveryState::EscalateEpoch => {
+                let min_target_roster_len =
+                    network_topology::commit_quorum_from_len(baseline_roster_len).max(1);
+                if entry.target_roster_len > min_target_roster_len {
+                    entry.target_roster_len = entry
+                        .target_roster_len
+                        .saturating_sub(1)
+                        .max(min_target_roster_len);
+                    info!(
+                        height,
+                        view = canonical_view,
+                        min_target_roster_len,
+                        target_roster_len = entry.target_roster_len,
+                        "escalating roster recovery by shrinking election target length"
+                    );
+                }
                 let _ = self.transition_roster_recovery_state(
                     &mut entry,
                     RosterRecoveryEvent::EscalationReady,
@@ -21715,30 +21710,6 @@ impl Actor {
                 );
                 should_rotate = true;
                 handled = true;
-            }
-            RosterRecoveryState::CatchUpIsolated => {
-                handled = true;
-                let catchup_frontier_height = self.committed_height_snapshot().saturating_add(1);
-                let progressed = self.request_range_pull_from_anchor(
-                    catchup_frontier_height,
-                    "roster_recovery_catchup_isolated",
-                    now,
-                );
-                if progressed {
-                    let _ = self.transition_roster_recovery_state(
-                        &mut entry,
-                        RosterRecoveryEvent::CatchUpProgress,
-                        now,
-                    );
-                }
-            }
-            RosterRecoveryState::Rejoin => {
-                handled = true;
-                let _ = self.transition_roster_recovery_state(
-                    &mut entry,
-                    RosterRecoveryEvent::CatchUpComplete,
-                    now,
-                );
             }
             RosterRecoveryState::RotateView => {
                 should_rotate = true;

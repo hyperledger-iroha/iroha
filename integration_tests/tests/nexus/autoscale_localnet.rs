@@ -1388,6 +1388,15 @@ fn expansion_observed_on_storage(storage_snapshot: &[(usize, Vec<String>)]) -> b
     all_peers_have_storage_lane_count(storage_snapshot, EXPANDED_PROVISIONED_LANES)
 }
 
+fn expansion_observed_with_prior_scale_out_quorum_on_storage(
+    storage_snapshot: &[(usize, Vec<String>)],
+    baseline_transitions: &[AutoscaleTransitionStats],
+    quorum_required: usize,
+) -> bool {
+    expansion_observed_on_storage(storage_snapshot)
+        && peers_with_scale_out_transition(baseline_transitions, &[]) >= quorum_required
+}
+
 fn peer_has_contracted_profile(status: &PeerStatusSnapshot) -> bool {
     let primary_lane_active = status
         .lanes
@@ -1767,6 +1776,8 @@ fn wait_for_expanded_lanes_with_heartbeat(
     let mut last_transition_error = None::<String>;
     let mut last_scale_out_transition_peers = 0_usize;
     let mut post_grace_wait_logged = false;
+    let baseline_scale_out_transition_peers =
+        peers_with_scale_out_transition(baseline_autoscale_transitions, &[]);
 
     while started.elapsed() <= timeout {
         let storage_snapshot = lane_snapshot(network)?;
@@ -1787,6 +1798,20 @@ fn wait_for_expanded_lanes_with_heartbeat(
         let elapsed = started.elapsed();
         let fallback_ready_at =
             EXPANSION_STATUS_SIGNAL_GRACE + EXPANSION_POST_STORAGE_STATUS_WINDOW;
+
+        if require_scale_out_transition
+            && expansion_observed_with_prior_scale_out_quorum_on_storage(
+                &storage_snapshot,
+                baseline_autoscale_transitions,
+                quorum_required,
+            )
+        {
+            eprintln!(
+                "[autoscale-localnet] {context}: expansion accepted via persisted storage lane profile with previously satisfied deterministic autoscale scale-out transition quorum (baseline scale-out transitions {baseline_scale_out_transition_peers}/{quorum_required})"
+            );
+            return Ok(());
+        }
+
         let status_snapshot = match status_snapshot(network) {
             Ok(snapshot) => snapshot,
             Err(err) => {
@@ -1966,7 +1991,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
     Err(eyre!(
         "{context}: timed out waiting for expanded lane profile (lane {ELASTIC_LANE_ID} active via status `capacity>0 || committed>0`, sumeragi lane commitment `tx_count>0 || teu_total>0`, public-lane validator lifecycle activity (`active || pending_activation`), baseline transition via lane declaration/progress, or deterministic autoscale scale-out transitions on >= {quorum_required}/{TOTAL_PEERS} peers{}; storage lane count={EXPANDED_PROVISIONED_LANES} accepted only as fallback after grace {:?} + post-storage status window {:?} when elastic lane storage progresses on >= {quorum_required}/{TOTAL_PEERS} peers and scale-out transition quorum is not required); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last elastic storage snapshot: {last_elastic_storage_snapshot:?}; last autoscale transition snapshot: {last_transition_snapshot:?}; last scale-out transition peers: {last_scale_out_transition_peers}/{TOTAL_PEERS}; last status error: {last_status_error:?}; last transition error: {last_transition_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
         if require_scale_out_transition {
-            "; strict mode requires deterministic scale-out transition quorum"
+            "; strict mode requires deterministic scale-out transition quorum unless the cycle baseline already satisfies that quorum and the storage lane profile remains expanded"
         } else {
             ""
         },
@@ -2666,12 +2691,13 @@ mod tests {
         LaneStatusSnapshot, LaneValidatorSnapshot, PeerStatusSnapshot, SoakTimingSummary,
         contraction_observed_on_quorum_peers, elastic_lane_storage_progressed,
         expansion_observed_on_quorum_or_scale_out_transition, expansion_observed_on_quorum_peers,
-        expansion_observed_on_storage, expansion_probe_top_up_tx_count,
-        expansion_scaled_top_up_tx_count, expansion_top_up_tx_count,
-        parse_autoscale_transition_stats, peers_with_scale_in_transition,
-        peers_with_scale_out_transition, scale_in_transition_counts,
-        scale_out_transition_observed_on_quorum_peers, should_require_scale_in_transition,
-        should_run_cooldown_clearance, soak_cycle_load_tx_count, validate_load_submission_outcome,
+        expansion_observed_on_storage, expansion_observed_with_prior_scale_out_quorum_on_storage,
+        expansion_probe_top_up_tx_count, expansion_scaled_top_up_tx_count,
+        expansion_top_up_tx_count, parse_autoscale_transition_stats,
+        peers_with_scale_in_transition, peers_with_scale_out_transition,
+        scale_in_transition_counts, scale_out_transition_observed_on_quorum_peers,
+        should_require_scale_in_transition, should_run_cooldown_clearance,
+        soak_cycle_load_tx_count, validate_load_submission_outcome,
     };
 
     #[test]
@@ -4106,6 +4132,115 @@ mod tests {
             ),
         ];
         assert!(!expansion_observed_on_storage(&partial_storage));
+    }
+
+    #[test]
+    fn strict_expansion_accepts_prior_scale_out_quorum_with_expanded_storage() {
+        let expanded_storage = vec![
+            (
+                0,
+                vec![
+                    "lane_000_default".to_owned(),
+                    "lane_001_elastic_lane_1".to_owned(),
+                ],
+            ),
+            (
+                1,
+                vec![
+                    "lane_000_default".to_owned(),
+                    "lane_001_elastic_lane_1".to_owned(),
+                ],
+            ),
+            (
+                2,
+                vec![
+                    "lane_000_default".to_owned(),
+                    "lane_001_elastic_lane_1".to_owned(),
+                ],
+            ),
+            (
+                3,
+                vec![
+                    "lane_000_default".to_owned(),
+                    "lane_001_elastic_lane_1".to_owned(),
+                ],
+            ),
+        ];
+        let prior_transitions = vec![
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats::default(),
+        ];
+
+        assert!(expansion_observed_with_prior_scale_out_quorum_on_storage(
+            &expanded_storage,
+            &prior_transitions,
+            3
+        ));
+        assert!(!expansion_observed_with_prior_scale_out_quorum_on_storage(
+            &expanded_storage,
+            &prior_transitions,
+            4
+        ));
+    }
+
+    #[test]
+    fn strict_expansion_rejects_prior_scale_out_quorum_when_storage_not_expanded() {
+        let partial_storage = vec![
+            (
+                0,
+                vec![
+                    "lane_000_default".to_owned(),
+                    "lane_001_elastic_lane_1".to_owned(),
+                ],
+            ),
+            (
+                1,
+                vec![
+                    "lane_000_default".to_owned(),
+                    "lane_001_elastic_lane_1".to_owned(),
+                ],
+            ),
+            (2, vec!["lane_000_default".to_owned()]),
+            (
+                3,
+                vec![
+                    "lane_000_default".to_owned(),
+                    "lane_001_elastic_lane_1".to_owned(),
+                ],
+            ),
+        ];
+        let prior_transitions = vec![
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats::default(),
+        ];
+
+        assert!(!expansion_observed_with_prior_scale_out_quorum_on_storage(
+            &partial_storage,
+            &prior_transitions,
+            3
+        ));
     }
 
     #[test]

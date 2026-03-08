@@ -7,12 +7,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::{
-    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     process::Command,
     str::FromStr,
-    sync::Arc,
+    sync::LazyLock,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -50,10 +49,14 @@ fn cli_binary() -> &'static str {
     env!("CARGO_BIN_EXE_iroha")
 }
 
-const ALICE_ACCOUNT: &str =
-    "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
-const BOB_ACCOUNT: &str =
-    "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016@wonderland";
+const ALICE_PUBLIC_KEY: &str =
+    "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
+const BOB_PUBLIC_KEY: &str =
+    "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016";
+static ALICE_ACCOUNT_LITERAL: LazyLock<String> =
+    LazyLock::new(|| account_literal_from_public_key(ALICE_PUBLIC_KEY));
+static BOB_ACCOUNT_LITERAL: LazyLock<String> =
+    LazyLock::new(|| account_literal_from_public_key(BOB_PUBLIC_KEY));
 const SAMPLE_BUDGET_APPROVAL_ID: &str =
     "4f1a7b86d6c16245d9b5c0e9bd4732a6d01356f3172bbfa5ef5d9cde8790f221";
 
@@ -111,13 +114,33 @@ fn account_id(name: &str) -> AccountId {
     )
 }
 
+fn account_literal_from_public_key(public_key: &str) -> String {
+    let public_key = public_key.parse().expect("public key");
+    let domain = DomainId::new(Name::from_str("wonderland").expect("domain label canonicalises"));
+    AccountId::new(domain, public_key).to_string()
+}
+
+fn alice_account_literal() -> &'static str {
+    ALICE_ACCOUNT_LITERAL.as_str()
+}
+
+fn bob_account_literal() -> &'static str {
+    BOB_ACCOUNT_LITERAL.as_str()
+}
+
 fn account_literal(account: &AccountId) -> String {
-    format!("{}@{}", account.signatory(), account.domain())
+    account.to_string()
 }
 
 fn account_literal_for(name: &str) -> String {
     let account = account_id(name);
     account_literal(&account)
+}
+
+fn parse_account_literal(literal: &str) -> AccountId {
+    AccountId::parse_encoded(literal)
+        .expect("account literal should parse as encoded account id")
+        .into_account_id()
 }
 
 fn account_id_for_domain(label: &str, seed: u8) -> AccountId {
@@ -227,7 +250,7 @@ fn incentives_init_fails_without_budget_id() {
             "--config",
             config_path.to_str().unwrap(),
             "--treasury-account",
-            ALICE_ACCOUNT,
+            alice_account_literal(),
         ])
         .output()
         .expect("execute incentives service init");
@@ -331,46 +354,6 @@ fn state_path(dir: &torii_mock_support::TempDir, name: &str) -> std::path::PathB
 fn read_state(path: &std::path::Path) -> Value {
     let bytes = fs::read(path).expect("read incentives state");
     norito::json::from_slice(&bytes).expect("decode incentives state")
-}
-
-struct DomainSelectorResolverGuard {
-    active: bool,
-}
-
-impl Drop for DomainSelectorResolverGuard {
-    fn drop(&mut self) {
-        if self.active {
-            iroha_data_model::account::clear_account_domain_selector_resolver();
-        }
-    }
-}
-
-fn install_domain_selector_resolver(state_json: &Value) -> DomainSelectorResolverGuard {
-    use iroha_data_model::account::address::AccountDomainSelector;
-
-    let Some(entries) = state_json.get("domain_hints").and_then(Value::as_array) else {
-        return DomainSelectorResolverGuard { active: false };
-    };
-
-    let mut map = HashMap::new();
-    for entry in entries {
-        let literal = entry
-            .as_str()
-            .expect("domain_hints entries must be strings");
-        let domain: DomainId = literal.parse().expect("domain_hints entry");
-        if let Ok(selector) = AccountDomainSelector::from_domain(&domain) {
-            map.insert(selector, domain);
-        }
-    }
-    if map.is_empty() {
-        return DomainSelectorResolverGuard { active: false };
-    }
-
-    let map = Arc::new(map);
-    iroha_data_model::account::set_account_domain_selector_resolver(Arc::new(move |selector| {
-        map.get(selector).cloned()
-    }));
-    DomainSelectorResolverGuard { active: true }
 }
 
 fn settlement_instruction(instruction: &InstructionBox) -> &SettlementInstructionBox {
@@ -568,8 +551,8 @@ fn sorafs_reserve_ledger_emits_instructions() {
     let reserve_account = account_id("reserve-sorafs");
     let reserve_account_label = account_literal(&reserve_account);
 
-    let provider_account: AccountId = ALICE_ACCOUNT.parse().expect("alice account");
-    let treasury_account: AccountId = BOB_ACCOUNT.parse().expect("bob account");
+    let provider_account = parse_account_literal(alice_account_literal());
+    let treasury_account = parse_account_literal(bob_account_literal());
 
     let output = command()
         .args([
@@ -580,9 +563,9 @@ fn sorafs_reserve_ledger_emits_instructions() {
             "--quote",
             quote_arg,
             "--provider-account",
-            ALICE_ACCOUNT,
+            alice_account_literal(),
             "--treasury-account",
-            BOB_ACCOUNT,
+            bob_account_literal(),
             "--reserve-account",
             &reserve_account_label,
             "--asset-definition",
@@ -732,6 +715,8 @@ fn gov_deploy_meta_accepts_manifest_approvers() {
     let temp_dir = TempDir::new("gov_deploy_meta_approvers").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
+    let validator = account_literal_for("validator");
+    let bob = account_literal_for("bob");
 
     let output = command()
         .arg("--config")
@@ -745,11 +730,8 @@ fn gov_deploy_meta_accepts_manifest_approvers() {
             "apps",
             "--contract-id",
             "calc.v1",
-            "--approver",
-            "validator@wonderland",
-            "--approver",
-            "bob@wonderland",
         ])
+        .args(["--approver", validator.as_str(), "--approver", bob.as_str()])
         .output()
         .expect("failed to execute iroha app gov deploy meta");
     assert!(
@@ -768,7 +750,7 @@ fn gov_deploy_meta_accepts_manifest_approvers() {
         .iter()
         .map(|entry| entry.as_str().unwrap_or(""))
         .collect();
-    assert_eq!(collected, vec!["validator@wonderland", "bob@wonderland"]);
+    assert_eq!(collected, vec![validator.as_str(), bob.as_str()]);
 }
 
 #[test]
@@ -1265,18 +1247,21 @@ fn gov_governance_queries_against_mock() {
             "status": "Open"
         }
     })]);
+    let mut lock_accounts = json::Map::new();
+    lock_accounts.insert(
+        alice_account_literal().to_string(),
+        norito::json!({
+            "amount": "500",
+            "expiry_height": 10,
+            "direction": 0
+        }),
+    );
     let locks = norito::json!({
         "ref-plain": {
             "found": true,
             "referendum_id": "ref-plain",
             "locks": {
-                "locks": {
-                    "alice@wonderland": {
-                        "amount": "500",
-                        "expiry_height": 10,
-                        "direction": 0
-                    }
-                }
+                "locks": lock_accounts
             }
         }
     });
@@ -1432,21 +1417,27 @@ fn gov_council_vrf_commands_against_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
+    let guardian = account_literal_for("guardian-0");
 
-    let derive_response = norito::json!({
-        "epoch": 42,
-        "verified": 1,
-        "members": [{
-            "account_id": "guardian-0@wonderland"
-        }]
+    let member = Value::Object({
+        let mut map = Map::new();
+        map.insert("account_id".to_string(), Value::String(guardian.clone()));
+        map
     });
-    let persist_response = norito::json!({
-        "ok": true,
-        "epoch": 42,
-        "verified": 1,
-        "members": [{
-            "account_id": "guardian-0@wonderland"
-        }]
+    let derive_response = Value::Object({
+        let mut map = Map::new();
+        map.insert("epoch".to_string(), Value::from(42_u64));
+        map.insert("verified".to_string(), Value::from(1_u64));
+        map.insert("members".to_string(), Value::Array(vec![member.clone()]));
+        map
+    });
+    let persist_response = Value::Object({
+        let mut map = Map::new();
+        map.insert("ok".to_string(), Value::Bool(true));
+        map.insert("epoch".to_string(), Value::from(42_u64));
+        map.insert("verified".to_string(), Value::from(1_u64));
+        map.insert("members".to_string(), Value::Array(vec![member]));
+        map
     });
     let config_payload = norito::json!({
         "council_derive_response": derive_response,
@@ -1459,12 +1450,17 @@ fn gov_council_vrf_commands_against_mock() {
     write_client_config(&config_path, mock.base_url()).expect("write config");
 
     let candidates_path = temp_dir.path().join("candidates.json");
-    let candidates_json = norito::json!([{
-        "account_id": "guardian-0@wonderland",
-        "variant": "Normal",
-        "pk_b64": "UEtCQjQ=",
-        "proof_b64": "UFJPT0Y="
-    }]);
+    let candidates_json = Value::Array(vec![Value::Object({
+        let mut map = Map::new();
+        map.insert("account_id".to_string(), Value::String(guardian.clone()));
+        map.insert("variant".to_string(), Value::String("Normal".to_string()));
+        map.insert("pk_b64".to_string(), Value::String("UEtCQjQ=".to_string()));
+        map.insert(
+            "proof_b64".to_string(),
+            Value::String("UFJPT0Y=".to_string()),
+        );
+        map
+    })]);
     let candidate_bytes = norito::json::to_vec(&candidates_json).expect("serialize candidates");
     fs::write(&candidates_path, candidate_bytes).expect("write candidates file");
 
@@ -1491,10 +1487,11 @@ fn gov_council_vrf_commands_against_mock() {
         String::from_utf8_lossy(&derive.stderr)
     );
     let derive_out = String::from_utf8_lossy(&derive.stdout);
-    assert_eq!(
-        derive_out.trim_end(),
-        "council derive-vrf: epoch=42 verified=1 members=[guardian-0@wonderland] alternates=[]"
+    let expected_derive = format!(
+        "council derive-vrf: epoch=42 verified=1 members=[{}] alternates=[]",
+        guardian
     );
+    assert_eq!(derive_out.trim_end(), expected_derive);
 
     let persist = command()
         .arg("--config")
@@ -1511,7 +1508,7 @@ fn gov_council_vrf_commands_against_mock() {
             "--candidates-file",
             candidates_path.to_str().expect("utf8 path"),
             "--authority",
-            "guardian-0@wonderland",
+            guardian.as_str(),
             "--private-key",
             "deadbeef",
         ])
@@ -1541,7 +1538,7 @@ fn gov_council_vrf_commands_against_mock() {
             "--candidates-file",
             candidates_path.to_str().expect("utf8 path"),
             "--authority",
-            "guardian-0@wonderland",
+            guardian.as_str(),
             "--private-key",
             "cafebabe",
         ])
@@ -1708,12 +1705,7 @@ fn gov_activate_instance_emits_skeleton() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gov_vote_plain_against_mock() {
-    use std::str::FromStr;
-
-    use iroha::data_model::{
-        isi::{InstructionBox, governance::CastPlainBallot},
-        prelude::AccountId,
-    };
+    use iroha::data_model::isi::{InstructionBox, governance::CastPlainBallot};
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
@@ -1727,8 +1719,7 @@ fn gov_vote_plain_against_mock() {
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
 
-    let owner =
-        AccountId::from_str(ALICE_ACCOUNT).expect("ALICE_ACCOUNT constant should parse cleanly");
+    let owner = parse_account_literal(alice_account_literal());
     let owner_str = owner.to_string();
 
     let instruction = InstructionBox::from(CastPlainBallot {
@@ -1831,12 +1822,7 @@ fn gov_vote_plain_against_mock() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gov_vote_plain_emits_summary_and_json() {
-    use std::str::FromStr;
-
-    use iroha::data_model::{
-        isi::{InstructionBox, governance::CastPlainBallot},
-        prelude::AccountId,
-    };
+    use iroha::data_model::isi::{InstructionBox, governance::CastPlainBallot};
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
@@ -1850,8 +1836,7 @@ fn gov_vote_plain_emits_summary_and_json() {
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
 
-    let owner =
-        AccountId::from_str(ALICE_ACCOUNT).expect("ALICE_ACCOUNT constant should parse cleanly");
+    let owner = parse_account_literal(alice_account_literal());
     let owner_str = owner.to_string();
 
     let instruction = InstructionBox::from(CastPlainBallot {
@@ -2296,7 +2281,6 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
         2
     );
 
-    let _domain_guard = install_domain_selector_resolver(&state_json);
     let treasury_account = treasury.clone();
     let treasury_json_literal = format!(
         "{}@{}",
@@ -2375,12 +2359,7 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gov_vote_zk_against_mock() {
-    use std::str::FromStr;
-
-    use iroha::data_model::{
-        isi::{InstructionBox, governance::CastZkBallot},
-        prelude::AccountId,
-    };
+    use iroha::data_model::isi::{InstructionBox, governance::CastZkBallot};
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
@@ -2394,8 +2373,7 @@ fn gov_vote_zk_against_mock() {
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
 
-    let owner =
-        AccountId::from_str(ALICE_ACCOUNT).expect("ALICE_ACCOUNT constant should parse cleanly");
+    let owner = parse_account_literal(alice_account_literal());
     let owner_str = owner.to_string();
     let nullifier = "11".repeat(32);
     let hint_payload = norito::json!({
@@ -2516,12 +2494,7 @@ fn gov_vote_zk_against_mock() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gov_vote_zk_emits_summary_and_json() {
-    use std::str::FromStr;
-
-    use iroha::data_model::{
-        isi::{InstructionBox, governance::CastZkBallot},
-        prelude::AccountId,
-    };
+    use iroha::data_model::isi::{InstructionBox, governance::CastZkBallot};
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
@@ -2535,8 +2508,7 @@ fn gov_vote_zk_emits_summary_and_json() {
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
 
-    let owner =
-        AccountId::from_str(ALICE_ACCOUNT).expect("ALICE_ACCOUNT constant should parse cleanly");
+    let owner = parse_account_literal(alice_account_literal());
     let owner_str = owner.to_string();
     let amount = "900";
     let duration_blocks = 512u64;
@@ -2725,24 +2697,50 @@ fn gov_council_summary_against_mock() {
     let temp_dir = TempDir::new("gov_council_summary").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
+    let guardian_0 = account_literal_for("guardian-0");
+    let guardian_1 = account_literal_for("guardian-1");
 
     let seed_hex = "11".repeat(32);
     let beacon_hex = "22".repeat(32);
-    let config_payload = norito::json!({
-        "referenda": [],
-        "council_current": {
-            "epoch": 64,
-            "members": [
-                {"account_id": "guardian-0@wonderland"},
-                {"account_id": "guardian-1@wonderland"}
-            ]
-        },
-        "council_audit": {
-            "epoch": 64,
-            "seed_hex": seed_hex,
-            "chain_id": "00000000-0000-0000-0000-000000000000",
-            "beacon_hex": beacon_hex
-        }
+    let council_members = Value::Array(vec![
+        Value::Object({
+            let mut map = Map::new();
+            map.insert("account_id".to_string(), Value::String(guardian_0.clone()));
+            map
+        }),
+        Value::Object({
+            let mut map = Map::new();
+            map.insert("account_id".to_string(), Value::String(guardian_1.clone()));
+            map
+        }),
+    ]);
+    let config_payload = Value::Object({
+        let mut map = Map::new();
+        map.insert("referenda".to_string(), Value::Array(Vec::new()));
+        map.insert(
+            "council_current".to_string(),
+            Value::Object({
+                let mut current = Map::new();
+                current.insert("epoch".to_string(), Value::from(64_u64));
+                current.insert("members".to_string(), council_members);
+                current
+            }),
+        );
+        map.insert(
+            "council_audit".to_string(),
+            Value::Object({
+                let mut audit = Map::new();
+                audit.insert("epoch".to_string(), Value::from(64_u64));
+                audit.insert("seed_hex".to_string(), Value::String(seed_hex));
+                audit.insert(
+                    "chain_id".to_string(),
+                    Value::String("00000000-0000-0000-0000-000000000000".to_string()),
+                );
+                audit.insert("beacon_hex".to_string(), Value::String(beacon_hex));
+                audit
+            }),
+        );
+        map
     });
     configure_governance(mock.base_url(), &config_payload).expect("configure governance");
 
@@ -2760,10 +2758,11 @@ fn gov_council_summary_against_mock() {
         String::from_utf8_lossy(&summary.stderr)
     );
     let summary_line = String::from_utf8(summary.stdout).expect("summary output utf8");
-    assert_eq!(
-        summary_line.trim(),
-        "council: epoch=64 members_count=2 alternates_count=0 verified=0 derived_by=unknown members=[guardian-0@wonderland, guardian-1@wonderland] alternates=[]"
+    let expected_summary = format!(
+        "council: epoch=64 members_count=2 alternates_count=0 verified=0 derived_by=unknown members=[{}, {}] alternates=[]",
+        guardian_0, guardian_1
     );
+    assert_eq!(summary_line.trim(), expected_summary);
 
     let json_output = command()
         .arg("--config")
@@ -2795,10 +2794,7 @@ fn gov_council_summary_against_mock() {
                 .and_then(norito::json::Value::as_str)
         })
         .collect();
-    assert_eq!(
-        member_ids,
-        vec!["guardian-0@wonderland", "guardian-1@wonderland"]
-    );
+    assert_eq!(member_ids, vec![guardian_0.as_str(), guardian_1.as_str()]);
 }
 
 #[test]
@@ -3025,9 +3021,9 @@ fn repo_initiate_emits_instruction_payload() {
             "--agreement-id",
             "daily_repo",
             "--initiator",
-            ALICE_ACCOUNT,
+            alice_account_literal(),
             "--counterparty",
-            BOB_ACCOUNT,
+            bob_account_literal(),
             "--cash-asset",
             "usd#wonderland",
             "--cash-quantity",
@@ -3061,8 +3057,8 @@ fn repo_initiate_emits_instruction_payload() {
     let repo = repo_instruction(&instructions[0]);
     match repo {
         RepoInstructionBox::Initiate(isi) => {
-            let expected_initiator = ALICE_ACCOUNT.parse().expect("alice account id");
-            let expected_counterparty = BOB_ACCOUNT.parse().expect("bob account id");
+            let expected_initiator = parse_account_literal(alice_account_literal());
+            let expected_counterparty = parse_account_literal(bob_account_literal());
             assert_eq!(isi.agreement_id().to_string(), "daily_repo");
             assert_eq!(isi.initiator(), &expected_initiator);
             assert_eq!(isi.counterparty(), &expected_counterparty);
@@ -3577,8 +3573,8 @@ fn da_rent_ledger_emits_transfer_plan() {
         String::from_utf8_lossy(&quote_output.stderr)
     );
 
-    let payer_account: AccountId = ALICE_ACCOUNT.parse().expect("alice account id");
-    let treasury_account: AccountId = BOB_ACCOUNT.parse().expect("bob account id");
+    let payer_account = parse_account_literal(alice_account_literal());
+    let treasury_account = parse_account_literal(bob_account_literal());
     let protocol_account = account_id("protocol-da-ledger");
     let provider_account = account_id("provider-da-ledger");
     let pdp_account = account_id("pdp-da-ledger");
@@ -3725,9 +3721,9 @@ fn repo_unwind_emits_instruction_payload() {
             "--agreement-id",
             "daily_repo",
             "--initiator",
-            ALICE_ACCOUNT,
+            alice_account_literal(),
             "--counterparty",
-            BOB_ACCOUNT,
+            bob_account_literal(),
             "--cash-asset",
             "usd#wonderland",
             "--cash-quantity",
@@ -3753,8 +3749,8 @@ fn repo_unwind_emits_instruction_payload() {
     let repo = repo_instruction(&instructions[0]);
     match repo {
         RepoInstructionBox::Reverse(isi) => {
-            let expected_initiator = ALICE_ACCOUNT.parse().expect("alice account id");
-            let expected_counterparty = BOB_ACCOUNT.parse().expect("bob account id");
+            let expected_initiator = parse_account_literal(alice_account_literal());
+            let expected_counterparty = parse_account_literal(bob_account_literal());
             assert_eq!(isi.agreement_id().to_string(), "daily_repo");
             assert_eq!(isi.initiator(), &expected_initiator);
             assert_eq!(isi.counterparty(), &expected_counterparty);
@@ -3786,17 +3782,17 @@ fn settlement_dvp_emits_instruction_payload() {
             "--delivery-quantity",
             "10",
             "--delivery-from",
-            ALICE_ACCOUNT,
+            alice_account_literal(),
             "--delivery-to",
-            BOB_ACCOUNT,
+            bob_account_literal(),
             "--payment-asset",
             "usd#wonderland",
             "--payment-quantity",
             "1000",
             "--payment-from",
-            BOB_ACCOUNT,
+            bob_account_literal(),
             "--payment-to",
-            ALICE_ACCOUNT,
+            alice_account_literal(),
             "--order",
             "payment-then-delivery",
             "--atomicity",
@@ -3817,8 +3813,8 @@ fn settlement_dvp_emits_instruction_payload() {
     let settlement = settlement_instruction(&instructions[0]);
     match settlement {
         SettlementInstructionBox::Dvp(isi) => {
-            let expected_delivery_from = ALICE_ACCOUNT.parse().expect("alice account id");
-            let expected_payment_from = BOB_ACCOUNT.parse().expect("bob account id");
+            let expected_delivery_from = parse_account_literal(alice_account_literal());
+            let expected_payment_from = parse_account_literal(bob_account_literal());
             assert_eq!(isi.settlement_id().to_string(), "trade_dvp");
             assert_eq!(isi.delivery_leg().from(), &expected_delivery_from);
             assert_eq!(isi.payment_leg().from(), &expected_payment_from);
@@ -3850,17 +3846,17 @@ fn settlement_pvp_emits_instruction_payload() {
             "--primary-quantity",
             "500",
             "--primary-from",
-            ALICE_ACCOUNT,
+            alice_account_literal(),
             "--primary-to",
-            BOB_ACCOUNT,
+            bob_account_literal(),
             "--counter-asset",
             "eur#wonderland",
             "--counter-quantity",
             "460",
             "--counter-from",
-            BOB_ACCOUNT,
+            bob_account_literal(),
             "--counter-to",
-            ALICE_ACCOUNT,
+            alice_account_literal(),
         ])
         .output()
         .expect("failed to execute iroha settlement pvp");
@@ -3877,8 +3873,8 @@ fn settlement_pvp_emits_instruction_payload() {
     let settlement = settlement_instruction(&instructions[0]);
     match settlement {
         SettlementInstructionBox::Pvp(isi) => {
-            let expected_primary_from = ALICE_ACCOUNT.parse().expect("alice account id");
-            let expected_counter_from = BOB_ACCOUNT.parse().expect("bob account id");
+            let expected_primary_from = parse_account_literal(alice_account_literal());
+            let expected_counter_from = parse_account_literal(bob_account_literal());
             assert_eq!(isi.settlement_id().to_string(), "trade_pvp");
             assert_eq!(isi.primary_leg().from(), &expected_primary_from);
             assert_eq!(isi.counter_leg().from(), &expected_counter_from);
@@ -3911,17 +3907,17 @@ fn settlement_accepts_commit_atomicity() {
             "--delivery-quantity",
             "10",
             "--delivery-from",
-            ALICE_ACCOUNT,
+            alice_account_literal(),
             "--delivery-to",
-            BOB_ACCOUNT,
+            bob_account_literal(),
             "--payment-asset",
             "usd#wonderland",
             "--payment-quantity",
             "1000",
             "--payment-from",
-            BOB_ACCOUNT,
+            bob_account_literal(),
             "--payment-to",
-            ALICE_ACCOUNT,
+            alice_account_literal(),
             "--delivery-instrument-id",
             "US0378331005",
             "--atomicity",
@@ -4087,7 +4083,7 @@ fn incentives_daemon_processes_metrics_spool() {
             "--config",
             reward_config_path.to_str().unwrap(),
             "--treasury-account",
-            ALICE_ACCOUNT,
+            alice_account_literal(),
         ])
         .output()
         .expect("run incentives init");
@@ -4202,7 +4198,7 @@ fn incentives_daemon_processes_metrics_spool() {
         })
         .collect::<Vec<_>>();
 
-    let treasury_account = AccountId::from_str(ALICE_ACCOUNT).expect("treasury account id");
+    let treasury_account = parse_account_literal(alice_account_literal());
     let transfers = instructions
         .iter()
         .map(|instruction| LedgerTransferRecord {
@@ -4708,12 +4704,11 @@ fn address_convert_json_summary_contains_all_formats() {
 }
 
 #[test]
-fn address_convert_handles_account_id_and_append_domain() {
+fn address_convert_rejects_domain_suffix() {
     let domain: iroha::data_model::domain::DomainId = "sora".parse().expect("domain");
     let key_pair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
     let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
     let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical hex");
-    let ih58 = encode_account_id_to_ih58(&account, 753).expect("ih58 string");
     let literal = format!("{canonical}@{domain}");
 
     let output = Command::new(cli_binary())
@@ -4727,24 +4722,24 @@ fn address_convert_handles_account_id_and_append_domain() {
             &literal,
             "--format",
             "ih58",
-            "--append-domain",
         ])
         .output()
-        .expect("run address convert with append-domain");
+        .expect("run address convert");
     assert!(
-        output.status.success(),
-        "convert exited with {:?}: {}",
-        output.status.code(),
+        !output.status.success(),
+        "convert should reject domain suffix: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        format!("{ih58}@{domain}")
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("must not include '@domain'") || stderr.contains("parse error"),
+        "unexpected stderr: {stderr}"
     );
 }
 
 #[test]
-fn address_convert_json_summary_includes_domain() {
+fn address_convert_json_rejects_domain_suffix() {
     let domain: iroha::data_model::domain::DomainId = "nexus".parse().expect("domain");
     let key_pair = KeyPair::from_seed(vec![0xC4; 32], Algorithm::Ed25519);
     let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
@@ -4768,24 +4763,58 @@ fn address_convert_json_summary_includes_domain() {
         .output()
         .expect("run address convert json");
     assert!(
+        !output.status.success(),
+        "convert json should reject domain suffix: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("must not include '@domain'")
+            || stderr.contains("address audit encountered 1 parse error(s)"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn address_convert_json_summary_is_domainless() {
+    let domain: iroha::data_model::domain::DomainId = "nexus".parse().expect("domain");
+    let key_pair = KeyPair::from_seed(vec![0xC4; 32], Algorithm::Ed25519);
+    let account = AccountId::new(domain, key_pair.public_key().clone());
+    let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical hex");
+
+    let output = Command::new(cli_binary())
+        .current_dir(workspace_root())
+        .args([
+            "--config",
+            "defaults/client.toml",
+            "tools",
+            "address",
+            "convert",
+            &canonical,
+            "--network-prefix",
+            "753",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("run address convert json");
+    assert!(
         output.status.success(),
         "convert exited with {:?}: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    let summary: Value = norito::json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(
-        summary
-            .get("input_domain")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        Some(domain.to_string())
+        norito::json::from_slice::<Value>(&output.stdout)
+            .expect("summary json")
+            .get("input_domain"),
+        None
     );
 }
 
 #[test]
-fn address_audit_reports_warnings_and_errors() {
+fn address_audit_reports_parsed_and_errors() {
     use torii_mock_support::TempDir;
 
     let local_account = account_id_for_domain("sora", 0xC3);
@@ -4832,73 +4861,18 @@ fn address_audit_reports_warnings_and_errors() {
         .expect("entries");
     assert_eq!(entries.len(), 3);
 
-    assert_local_entry(entries, &local_hex);
-    assert_default_entry(entries, &default_ih58);
+    assert_parsed_entry_kind(entries, &local_hex, "default");
+    assert_parsed_entry_kind(entries, &default_ih58, "default");
     assert_error_entry(entries);
 }
 
 #[test]
-fn address_audit_honours_fail_on_warning_flag() {
-    use torii_mock_support::TempDir;
-
-    let account = account_id_for_domain("sora", 0xD4);
-    let ih58 = encode_account_id_to_ih58(&account, 753).expect("ih58");
-
-    let temp_dir = TempDir::new("address_audit_warning_flag").expect("temp dir");
-    let path = temp_dir.path().join("addresses.txt");
-    fs::write(&path, format!("{ih58}\n")).expect("write addresses");
-    let path_string = path.to_string_lossy().into_owned();
-
-    let ok = Command::new(cli_binary())
-        .args([
-            "--config",
-            "defaults/client.toml",
-            "tools",
-            "address",
-            "audit",
-            "--input",
-            &path_string,
-            "--network-prefix",
-            "753",
-        ])
-        .output()
-        .expect("run audit without warning flag");
-    assert!(
-        ok.status.success(),
-        "audit without flag should succeed: {}",
-        String::from_utf8_lossy(&ok.stderr)
-    );
-
-    let warn = Command::new(cli_binary())
-        .args([
-            "--config",
-            "defaults/client.toml",
-            "tools",
-            "address",
-            "audit",
-            "--input",
-            &path_string,
-            "--network-prefix",
-            "753",
-            "--fail-on-warning",
-        ])
-        .output()
-        .expect("run audit with warning flag");
-    assert!(
-        !warn.status.success(),
-        "audit should fail when --fail-on-warning is set: stdout={} stderr={}",
-        String::from_utf8_lossy(&warn.stdout),
-        String::from_utf8_lossy(&warn.stderr)
-    );
-}
-
-#[test]
-fn address_audit_summary_includes_input_domain() {
+fn address_audit_rejects_domain_suffix() {
     use torii_mock_support::TempDir;
 
     let account = account_id_for_domain("wonderland", 0xE5);
     let ih58 = encode_account_id_to_ih58(&account, 753).expect("ih58");
-    let literal = format!("{ih58}@wonderland");
+    let literal = format!("{ih58}@hbl");
 
     let temp_dir = TempDir::new("address_audit_domain").expect("temp dir");
     let path = temp_dir.path().join("addresses.txt");
@@ -4920,29 +4894,15 @@ fn address_audit_summary_includes_input_domain() {
         .output()
         .expect("run address audit");
     assert!(
-        output.status.success(),
-        "audit exited with {:?}: {}",
-        output.status.code(),
+        !output.status.success(),
+        "audit should reject domain suffix: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    let report: Value = norito::json::from_slice(&output.stdout).expect("report json");
-    let entry = report
-        .get("entries")
-        .and_then(Value::as_array)
-        .and_then(|entries| entries.first())
-        .and_then(Value::as_object)
-        .expect("first entry");
-    let summary = entry
-        .get("summary")
-        .and_then(Value::as_object)
-        .expect("summary");
-    assert_eq!(
-        summary
-            .get("input_domain")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        Some("wonderland".to_string())
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("must not include '@domain'") || stderr.contains("parse error"),
+        "unexpected stderr: {stderr}"
     );
 }
 
@@ -4987,7 +4947,7 @@ fn address_audit_supports_csv_output() {
     assert_eq!(
         lines.next(),
         Some(
-            "input,status,format,domain_kind,domain_warning,ih58,canonical_hex,compressed,error_code,error_message"
+            "input,status,format,domain_kind,ih58,canonical_hex,compressed,error_code,error_message"
         )
     );
     let rows: Vec<&str> = lines.collect();
@@ -5024,13 +4984,6 @@ fn assert_address_audit_stats(stats_value: &Value) {
     );
     assert_eq!(
         stats
-            .get("warnings")
-            .and_then(Value::as_u64)
-            .expect("warning count"),
-        1
-    );
-    assert_eq!(
-        stats
             .get("errors")
             .and_then(Value::as_u64)
             .expect("error count"),
@@ -5038,28 +4991,23 @@ fn assert_address_audit_stats(stats_value: &Value) {
     );
 }
 
-fn assert_local_entry(entries: &[Value], expected_input: &str) {
-    let parsed_local = entry_by_input(entries, expected_input);
+fn assert_parsed_entry_kind(entries: &[Value], expected_input: &str, expected_kind: &str) {
+    let parsed_entry = entry_by_input(entries, expected_input);
     assert_eq!(
-        parsed_local
+        parsed_entry
             .get("status")
             .and_then(Value::as_str)
             .expect("status"),
         "parsed"
     );
-    assert!(
-        domain_warning(parsed_local)
+    assert_eq!(
+        parsed_entry
+            .get("summary")
+            .and_then(|summary| summary.get("domain"))
+            .and_then(|domain| domain.get("kind"))
             .and_then(Value::as_str)
-            .is_some(),
-        "local entry should carry domain warning: {parsed_local:?}"
-    );
-}
-
-fn assert_default_entry(entries: &[Value], expected_input: &str) {
-    let entry = entry_by_input(entries, expected_input);
-    assert!(
-        domain_warning(entry).is_none(),
-        "default domain should not emit a warning"
+            .expect("domain kind"),
+        expected_kind
     );
 }
 
@@ -5092,14 +5040,6 @@ fn entry_by_status<'a>(entries: &'a [Value], status: &str) -> &'a Value {
         .iter()
         .find(|entry| entry.get("status").and_then(Value::as_str) == Some(status))
         .unwrap_or_else(|| panic!("missing entry with status {status}"))
-}
-
-fn domain_warning(entry: &Value) -> Option<&Value> {
-    entry
-        .get("summary")
-        .and_then(|summary| summary.get("domain"))
-        .and_then(|domain| domain.get("warning"))
-        .filter(|value| !value.is_null())
 }
 
 #[test]

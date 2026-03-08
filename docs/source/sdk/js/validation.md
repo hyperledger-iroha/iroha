@@ -23,8 +23,8 @@ string matching.
 - `ERR_INVALID_STRING` — empty or whitespace-only string input.
 - `ERR_INVALID_HEX` — malformed or odd-length hexadecimal strings.
 - `ERR_INVALID_MULTIHASH` — multihash parsing failed.
-- `ERR_INVALID_ACCOUNT_ID` — account identifiers not in a supported format (IH58 (preferred)/`sora` (second-best)/`0x`, `uaid:`, `opaque:`, or `<alias|public_key>@domain`).
-- `ERR_INVALID_ASSET_ID` — asset identifiers missing required account segments or using invalid separators.
+- `ERR_INVALID_ACCOUNT_ID` — account identifiers are not encoded account addresses (IH58 preferred, compressed `sora…` accepted). Domain suffixes (`@domain`), canonical hex, `uaid:`, and `opaque:` forms are rejected.
+- `ERR_INVALID_ASSET_ID` — asset identifiers are not encoded `norito:<hex>` values.
 - `ERR_INVALID_IBAN` — IBAN parsing/normalization failed (bad country code, length, or checksum).
 - `ERR_INVALID_OBJECT` — unexpected object shape or missing required keys.
 - `ERR_INVALID_METADATA` — metadata entries failed validation.
@@ -32,12 +32,10 @@ string matching.
 - `ERR_INVALID_NUMERIC` — numeric parsing failed.
 - `ERR_VALUE_OUT_OF_RANGE` — numeric bounds or domain-specific ranges violated.
 
-## Domain labels
+## Domain suffixes
 
-- Account/domain identifiers are canonicalised with UTS-46 + STD3 rules (NFC folding,
-  ASCII/punycode lower-casing, DNS label length checks, and hyphen placement rules).
-  Whitespace or reserved `@#$` characters, overlong labels, or invalid punycode raise
-  `ERR_INVALID_ACCOUNT_ID` with a `ERR_INVALID_DOMAIN_LABEL` cause from the address codec.
+- Account IDs are domainless on SDK surfaces. Any `@domain` suffix is rejected with
+  `ERR_INVALID_ACCOUNT_ID`.
 
 ## IBAN aliases
 
@@ -56,7 +54,7 @@ try {
 } catch (error) {
   if (error instanceof ValidationError) {
     if (error.code === ValidationErrorCode.INVALID_ACCOUNT_ID) {
-      console.error("Account IDs must be IH58/sora/0x, uaid:, opaque:, or alias@domain", {
+      console.error("Account IDs must be encoded IH58/sora literals (no @domain suffix)", {
         field: error.path,
         cause: error.cause,
       });

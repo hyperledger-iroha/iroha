@@ -4,25 +4,19 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { domainToASCII } from "node:url";
 import { blake2b256, blake2b512 } from "./blake2b.js";
-import { blake2sMac } from "./blake2s.js";
 import { getNativeBinding } from "./native.js";
 export const DEFAULT_DOMAIN_NAME = "default";
 const DEFAULT_IH58_PREFIX = 753;
 const IH58_PREFIX_MAX = 0x3fff;
-const LOCAL_DOMAIN_KEY = Buffer.from("SORA-LOCAL-K:v1", "utf8");
 const IH58_CHECKSUM_PREFIX = Buffer.from("IH58PRE", "ascii");
 const HEADER_VERSION_V1 = 0;
 const HEADER_NORM_VERSION_V1 = 1;
 const COMPRESSED_SENTINEL = "sora";
 const COMPRESSED_CHECKSUM_LEN = 6;
-const LOCAL_SELECTOR_DIGEST_LEN = 12;
-const LEGACY_LOCAL_DIGEST_DELTA = 4;
 const BECH32M_CONST = 0x2bc830a3;
 const IH58_CHECKSUM_BYTES = 2;
 const COMPRESSED_WARNING =
   "Compressed Sora addresses rely on half-width kana and are only interoperable inside Sora-aware apps. Prefer IH58 when sharing with explorers, wallets, or QR codes.";
-const LOCAL_SELECTOR_WARNING =
-  "local-domain selector detected: register the domain with the Nexus registry and refresh IH58 (preferred)/sora (second-best) copies before Local selectors are blocked. Refer to docs/source/sns/address_display_guidelines.md for the cutover schedule.";
 const IH58_ALPHABET = [
   "1",
   "2",
@@ -193,25 +187,6 @@ const SORA_KANA_FULLWIDTH = [
   "ス",
 ];
 
-function domainSelectorsEqual(left, right) {
-  if (!left || !right) {
-    return false;
-  }
-  if (left.tag !== right.tag) {
-    return false;
-  }
-  if (!left.payload && !right.payload) {
-    return true;
-  }
-  if (!left.payload || !right.payload) {
-    return false;
-  }
-  if (left.payload.length !== right.payload.length) {
-    return false;
-  }
-  return Buffer.compare(Buffer.from(left.payload), Buffer.from(right.payload)) === 0;
-}
-
 function domainSelectorDetails(selector) {
   if (!selector) {
     return { tag: null, digestHex: null, registryId: null, label: null };
@@ -225,15 +200,6 @@ function domainSelectorDetails(selector) {
     registryId: decodeRegistryId(selector),
     label: selector.tag === 0 ? DEFAULT_DOMAIN_NAME : null,
   };
-}
-
-function renderDomainSelector(selector) {
-  const summary = summarizeDomainSelector(selector ?? { tag: null, payload: null });
-  const details = domainSelectorDetails(selector);
-  if (details.digestHex) {
-    return `${summary.kind}:${details.digestHex}`;
-  }
-  return summary.kind;
 }
 
 function assertDomainMatches(address, expectedDomainName) {
@@ -251,22 +217,8 @@ function assertDomainMatches(address, expectedDomainName) {
       { details: { expectedDomain: expectedDomainName } },
     );
   }
-
-  const expectedSelector = encodeDomainFromName(normalizedDomain);
-  if (!domainSelectorsEqual(address._domain, expectedSelector)) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.DOMAIN_MISMATCH,
-      `account address domain selector does not match provided domain '${normalizedDomain}'`,
-      {
-        details: {
-          expectedDomain: normalizedDomain,
-          expectedSelector: domainSelectorDetails(expectedSelector),
-          addressSelector: domainSelectorDetails(address._domain),
-          addressSelectorRendered: renderDomainSelector(address._domain),
-        },
-      },
-    );
-  }
+  // Account IDs are globally scoped in v1; expectedDomain is validated but not bound to payload.
+  canonicalizeDomainLabel(normalizedDomain);
 }
 
 const COMPRESSED_ALPHABET = IH58_ALPHABET.concat(SORA_KANA);
@@ -330,7 +282,6 @@ export class AccountAddressError extends Error {
 export const AccountAddressFormat = Object.freeze({
   IH58: "ih58",
   COMPRESSED: "compressed",
-  CANONICAL_HEX: "canonical_hex",
 });
 
 const AddressClass = Object.freeze({
@@ -799,108 +750,6 @@ function decodeHeader(byte) {
   return { version, classId: classBits, normVersion, extFlag };
 }
 
-function encodeDomain(domain) {
-  if (domain.tag === 0) {
-    return Uint8Array.of(0x00);
-  }
-  if (domain.tag === 1) {
-    const length = domain.payload?.length ?? 0;
-    if (length !== LOCAL_SELECTOR_DIGEST_LEN) {
-      throw new AccountAddressError(
-        AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT,
-        "local domain digest must be 12 bytes",
-        { details: { expected: LOCAL_SELECTOR_DIGEST_LEN, found: length } },
-      );
-    }
-    const out = new Uint8Array(1 + LOCAL_SELECTOR_DIGEST_LEN);
-    out[0] = 0x01;
-    out.set(domain.payload, 1);
-    return out;
-  }
-  if (domain.tag === 2) {
-    if (!domain.payload || domain.payload.length !== 4) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "registry id must be 4 bytes");
-    }
-    const out = new Uint8Array(1 + 4);
-    out[0] = 0x02;
-    out.set(domain.payload, 1);
-    return out;
-  }
-  throw new AccountAddressError(
-    AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG,
-    `unknown domain selector tag: ${domain.tag}`,
-  );
-}
-
-function decodeDomain(bytes, cursor) {
-  if (cursor >= bytes.length) {
-    throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
-  }
-  const tag = bytes[cursor];
-  cursor += 1;
-  if (tag === 0x00) {
-    return [{ tag: 0, payload: null }, cursor];
-  }
-  if (tag === 0x01) {
-    const remaining = bytes.length - cursor;
-    if (remaining < LOCAL_SELECTOR_DIGEST_LEN) {
-      throw new AccountAddressError(
-        AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT,
-        "local domain digest must be 12 bytes",
-        { details: { expected: LOCAL_SELECTOR_DIGEST_LEN, found: remaining } },
-      );
-    }
-    const end = cursor + LOCAL_SELECTOR_DIGEST_LEN;
-    return [{ tag, payload: bytes.slice(cursor, end) }, end];
-  }
-  if (tag === 0x02) {
-    const end = cursor + 4;
-    if (end > bytes.length) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
-    }
-    return [{ tag, payload: bytes.slice(cursor, end) }, end];
-  }
-  throw new AccountAddressError(
-    AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG,
-    `unknown domain selector tag: ${tag}`,
-  );
-}
-
-function isValidControllerTag(tag) {
-  return tag === CONTROLLER_TAG_SINGLE || tag === CONTROLLER_TAG_MULTISIG;
-}
-
-function ensureLocalSelectorBoundary(bytes, controllerCursor) {
-  const candidate = bytes[controllerCursor];
-  if (candidate === undefined) {
-    const digestStart = Math.max(0, controllerCursor - LOCAL_SELECTOR_DIGEST_LEN);
-    const found = Math.min(bytes.length - digestStart, LOCAL_SELECTOR_DIGEST_LEN);
-    throw new AccountAddressError(
-      AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT,
-      "local domain digest must be 12 bytes",
-      { details: { expected: LOCAL_SELECTOR_DIGEST_LEN, found } },
-    );
-  }
-  if (isValidControllerTag(candidate)) {
-    return;
-  }
-  if (
-    controllerCursor >= LEGACY_LOCAL_DIGEST_DELTA &&
-    isValidControllerTag(bytes[controllerCursor - LEGACY_LOCAL_DIGEST_DELTA])
-  ) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT,
-      "local domain digest must be 12 bytes",
-      {
-        details: {
-          expected: LOCAL_SELECTOR_DIGEST_LEN,
-          found: LOCAL_SELECTOR_DIGEST_LEN - LEGACY_LOCAL_DIGEST_DELTA,
-        },
-      },
-    );
-  }
-}
-
 function encodeController(controller) {
   if (controller.tag === CONTROLLER_TAG_SINGLE) {
     validatePublicKeyForCurve(controller.curve, controller.publicKey, "controller public key");
@@ -1264,12 +1113,6 @@ export function canonicalizeDomainLabel(domain) {
   return canonical;
 }
 
-
-function computeLocalDigest(label) {
-  const mac = blake2sMac(Buffer.from(label, "utf8"), LOCAL_DOMAIN_KEY, 32);
-  return mac.subarray(0, LOCAL_SELECTOR_DIGEST_LEN);
-}
-
 function normalizeRegistryId(registryId) {
   let value = registryId;
   if (typeof value === "string") {
@@ -1302,13 +1145,9 @@ function normalizeRegistryId(registryId) {
 }
 
 function encodeDomainFromRegistryId(registryId) {
-  const id = normalizeRegistryId(registryId);
-  const payload = new Uint8Array(4);
-  payload[0] = (id >>> 24) & 0xff;
-  payload[1] = (id >>> 16) & 0xff;
-  payload[2] = (id >>> 8) & 0xff;
-  payload[3] = id & 0xff;
-  return { tag: 2, payload };
+  normalizeRegistryId(registryId);
+  // Canonical payloads are globally scoped and no longer encode registry selectors.
+  return { tag: 0, payload: null };
 }
 
 function decodeRegistryId(selector) {
@@ -1326,11 +1165,9 @@ function decodeRegistryId(selector) {
 }
 
 function encodeDomainFromName(domain) {
-  const canonicalLabel = canonicalizeDomainLabel(domain);
-  if (canonicalLabel === DEFAULT_DOMAIN_NAME) {
-    return { tag: 0, payload: null };
-  }
-  return { tag: 1, payload: computeLocalDigest(canonicalLabel) };
+  canonicalizeDomainLabel(domain);
+  // Canonical payloads are globally scoped and no longer encode local selectors.
+  return { tag: 0, payload: null };
 }
 
 function encodeDomainFromAccountInputs(domain, registryId) {
@@ -1376,40 +1213,16 @@ export class AccountAddress {
     }
     const data = Uint8Array.from(bytes);
     const header = decodeHeader(data[0]);
-    let cursor = 1;
-    const [domain, cursorAfterDomain] = decodeDomain(data, cursor);
-    cursor = cursorAfterDomain;
-    if (domain.tag === 1) {
-      ensureLocalSelectorBoundary(data, cursor);
+    let controllerCursor = 1;
+    const [controller, decodedCursor] = decodeController(data, controllerCursor);
+    controllerCursor = decodedCursor;
+    if (controllerCursor !== data.length) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
+        "unexpected trailing bytes in canonical payload",
+      );
     }
-    const [controller, cursorAfterController] = decodeController(data, cursor);
-    cursor = cursorAfterController;
-    if (cursor !== data.length) {
-      throw new AccountAddressError(AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES, "unexpected trailing bytes in canonical payload");
-    }
-    return new AccountAddress(header, domain, controller);
-  }
-
-  static fromCanonicalHex(encoded) {
-    const nativeParsed = parseWithNativeCodec(
-      encoded,
-      undefined,
-      AccountAddressFormat.CANONICAL_HEX,
-    );
-    if (nativeParsed) {
-      return AccountAddress.fromCanonicalBytes(nativeParsed.canonicalBytes);
-    }
-    const body = encoded.startsWith("0x") || encoded.startsWith("0X") ? encoded.slice(2) : encoded;
-    if (body.length === 0 || body.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(body)) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_HEX_ADDRESS, "invalid canonical hex account address");
-    }
-    let bytes;
-    try {
-      bytes = Buffer.from(body, "hex");
-    } catch (error) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_HEX_ADDRESS, "invalid canonical hex account address");
-    }
-    return AccountAddress.fromCanonicalBytes(bytes);
+    return new AccountAddress(header, { tag: 0, payload: null }, controller);
   }
 
   static fromIH58(encoded, expectedPrefix) {
@@ -1455,7 +1268,7 @@ export class AccountAddress {
     return AccountAddress.fromCanonicalBytes(canonical);
   }
 
-  static parseAny(input, expectedPrefix, expectedDomainName) {
+  static parseEncoded(input, expectedPrefix, expectedDomainName) {
     if (typeof input !== "string") {
       throw new TypeError("account address literal must be a string");
     }
@@ -1463,15 +1276,22 @@ export class AccountAddress {
     if (trimmed.length === 0) {
       throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
     }
+    if (trimmed.includes("@")) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+        "account address literals must not include '@domain'; use IH58 or compressed sora",
+      );
+    }
     if (trimmed.startsWith(COMPRESSED_SENTINEL)) {
       const address = AccountAddress.fromCompressedSora(trimmed);
       assertDomainMatches(address, expectedDomainName);
       return { address, format: AccountAddressFormat.COMPRESSED };
     }
     if (isCanonicalHexLiteral(trimmed)) {
-      const address = AccountAddress.fromCanonicalHex(trimmed);
-      assertDomainMatches(address, expectedDomainName);
-      return { address, format: AccountAddressFormat.CANONICAL_HEX };
+      throw new AccountAddressError(
+        AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+        "canonical hex account addresses are not accepted; use IH58 or compressed sora",
+      );
     }
     try {
       const address = AccountAddress.fromIH58(trimmed, expectedPrefix);
@@ -1499,12 +1319,10 @@ export class AccountAddress {
   canonicalBytes() {
     const headerByte = encodeHeader(this._header);
     const header = Uint8Array.of(headerByte);
-    const domain = encodeDomain(this._domain);
     const controller = encodeController(this._controller);
-    const out = new Uint8Array(header.length + domain.length + controller.length);
+    const out = new Uint8Array(header.length + controller.length);
     out.set(header, 0);
-    out.set(domain, header.length);
-    out.set(controller, header.length + domain.length);
+    out.set(controller, header.length);
     return out;
   }
 
@@ -1642,18 +1460,6 @@ function summarizeDomainSelector(selector) {
         warning: null,
         selector: Object.freeze(details),
       };
-    case 1:
-      return {
-        kind: "local12",
-        warning: LOCAL_SELECTOR_WARNING,
-        selector: Object.freeze(details),
-      };
-    case 2:
-      return {
-        kind: "global",
-        warning: null,
-        selector: Object.freeze(details),
-      };
     default:
       return {
         kind: "unknown",
@@ -1680,13 +1486,13 @@ function initNativeAddressCodec(binding) {
     return null;
   }
   if (
-    typeof binding.accountAddressParseAny !== "function" ||
+    typeof binding.accountAddressParseEncoded !== "function" ||
     typeof binding.accountAddressRender !== "function"
   ) {
     return null;
   }
   return {
-    parseAny: binding.accountAddressParseAny.bind(binding),
+    parseEncoded: binding.accountAddressParseEncoded.bind(binding),
     render: binding.accountAddressRender.bind(binding),
   };
 }
@@ -1696,7 +1502,7 @@ function parseWithNativeCodec(input, expectedPrefix, requiredFormat) {
     return null;
   }
   try {
-    const parsed = nativeAddressCodec.parseAny(String(input), expectedPrefix ?? null);
+    const parsed = nativeAddressCodec.parseEncoded(String(input), expectedPrefix ?? null);
     if (!parsed) {
       return null;
     }
@@ -1728,8 +1534,10 @@ function parseWithNativeCodec(input, expectedPrefix, requiredFormat) {
       (converted.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT ||
         converted.code === AccountAddressErrorCode.UNKNOWN_CURVE ||
         converted.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM ||
-        (converted.code === AccountAddressErrorCode.INVALID_LENGTH &&
-          /empty canonical bytes/i.test(converted.message)))
+        converted.code === AccountAddressErrorCode.UNKNOWN_CONTROLLER_TAG ||
+        converted.code === AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG ||
+        converted.code === AccountAddressErrorCode.INVALID_PUBLIC_KEY ||
+        converted.code === AccountAddressErrorCode.INVALID_LENGTH)
     ) {
       return null;
     }
@@ -1765,7 +1573,11 @@ function renderWithNativeCodec(canonicalBytes, networkPrefix = DEFAULT_IH58_PREF
       converted instanceof AccountAddressError &&
       (converted.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT ||
         converted.code === AccountAddressErrorCode.UNKNOWN_CURVE ||
-        converted.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM)
+        converted.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM ||
+        converted.code === AccountAddressErrorCode.UNKNOWN_CONTROLLER_TAG ||
+        converted.code === AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG ||
+        converted.code === AccountAddressErrorCode.INVALID_PUBLIC_KEY ||
+        converted.code === AccountAddressErrorCode.INVALID_LENGTH)
     ) {
       return null;
     }
@@ -1783,9 +1595,6 @@ function normalizeNativeAddressFormat(kind) {
       return AccountAddressFormat.IH58;
     case AccountAddressFormat.COMPRESSED:
       return AccountAddressFormat.COMPRESSED;
-    case AccountAddressFormat.CANONICAL_HEX:
-    case "canonical-hex":
-      return AccountAddressFormat.CANONICAL_HEX;
     default:
       return null;
   }
@@ -1842,8 +1651,6 @@ function classifyDetectedFormat(literal, format, networkPrefix) {
   switch (format) {
     case AccountAddressFormat.COMPRESSED:
       return { kind: "compressed" };
-    case AccountAddressFormat.CANONICAL_HEX:
-      return { kind: "canonical-hex" };
     case AccountAddressFormat.IH58:
       return {
         kind: "ih58",
@@ -1856,10 +1663,10 @@ function classifyDetectedFormat(literal, format, networkPrefix) {
 }
 
 /**
- * Inspect an account-id literal (IH58 (preferred)/sora (second-best)/canonical) and emit canonical
- * encodings plus domain warnings to aid the Local→Global cutover.
+ * Inspect an account-id literal (IH58 (preferred)/sora (second-best)) and emit canonical
+ * encodings plus compatibility warnings (for example compressed literals).
  *
- * @param {string} literal - Account literal (IH58 (preferred)/sora (second-best)/0x)
+ * @param {string} literal - Account literal (IH58 (preferred)/sora (second-best))
  * @param {{ networkPrefix?: number, expectPrefix?: number }} [options]
  * @returns {{
  *   detectedFormat: { kind: string, networkPrefix?: number },
@@ -1886,7 +1693,7 @@ export function inspectAccountId(literal, options = {}) {
   }
 
   const normalizedOptions = normalizeInspectAccountOptions(options);
-  const { address, format, networkPrefix: detectedPrefix } = AccountAddress.parseAny(
+  const { address, format, networkPrefix: detectedPrefix } = AccountAddress.parseEncoded(
     trimmed,
     normalizedOptions.expectPrefix,
   );

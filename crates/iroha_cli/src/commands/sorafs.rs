@@ -107,7 +107,6 @@ use tokio::runtime::Runtime;
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    domain::DomainId,
     isi::{InstructionBox, Transfer},
     metadata::Metadata,
     name::Name,
@@ -5231,26 +5230,6 @@ struct IncentivesState {
     norito::json::JsonDeserialize,
 )]
 #[norito(decode_from_slice)]
-struct IncentivesStateSnapshot {
-    version: u16,
-    reward_config: RewardConfigState,
-    treasury_account: AccountId,
-    payouts: Vec<RelayRewardInstructionV1>,
-    disputes: Vec<StoredDisputeRecord>,
-    #[norito(default)]
-    // Helps resolve IH58 domain selectors when reloading JSON snapshots.
-    domain_hints: Vec<DomainId>,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::json::JsonSerialize,
-    norito::json::JsonDeserialize,
-)]
-#[norito(decode_from_slice)]
 struct LedgerExportFile {
     version: u16,
     transfers: Vec<LedgerTransferRecord>,
@@ -5293,41 +5272,6 @@ impl IncentivesState {
             ));
         }
         Ok(())
-    }
-}
-
-fn incentives_domain_hints(state: &IncentivesState) -> Vec<DomainId> {
-    let mut domains = BTreeSet::new();
-    domains.insert(state.treasury_account.domain().clone());
-    for payout in &state.payouts {
-        domains.insert(payout.beneficiary.domain().clone());
-    }
-    for dispute in &state.disputes {
-        domains.insert(dispute.submitted_by.domain().clone());
-    }
-    domains.into_iter().collect()
-}
-
-impl IncentivesStateSnapshot {
-    fn from_state(state: &IncentivesState) -> Self {
-        Self {
-            version: IncentivesState::VERSION,
-            reward_config: state.reward_config.clone(),
-            treasury_account: state.treasury_account.clone(),
-            payouts: state.payouts.clone(),
-            disputes: state.disputes.clone(),
-            domain_hints: incentives_domain_hints(state),
-        }
-    }
-
-    fn into_state(self) -> IncentivesState {
-        IncentivesState {
-            version: self.version,
-            reward_config: self.reward_config,
-            treasury_account: self.treasury_account,
-            payouts: self.payouts,
-            disputes: self.disputes,
-        }
     }
 }
 
@@ -5594,78 +5538,21 @@ fn stored_resolution_to_resolution(
     })
 }
 
-struct DomainSelectorResolverGuard {
-    active: bool,
-}
-
-impl Drop for DomainSelectorResolverGuard {
-    fn drop(&mut self) {
-        if self.active {
-            iroha_data_model::account::clear_account_domain_selector_resolver();
-        }
-    }
-}
-
-fn install_domain_selector_resolver(domains: &[DomainId]) -> DomainSelectorResolverGuard {
-    use iroha_data_model::account::address::AccountDomainSelector;
-
-    if domains.is_empty() {
-        return DomainSelectorResolverGuard { active: false };
-    }
-
-    let mut map = HashMap::new();
-    for domain in domains {
-        if let Ok(selector) = AccountDomainSelector::from_domain(domain) {
-            map.insert(selector, domain.clone());
-        }
-    }
-    if map.is_empty() {
-        return DomainSelectorResolverGuard { active: false };
-    }
-
-    let map = std::sync::Arc::new(map);
-    iroha_data_model::account::set_account_domain_selector_resolver(std::sync::Arc::new(
-        move |selector| map.get(selector).cloned(),
-    ));
-    DomainSelectorResolverGuard { active: true }
-}
-
-fn parse_domain_hints(value: &Value) -> Result<Vec<DomainId>> {
-    let Some(entries) = value.get("domain_hints").and_then(Value::as_array) else {
-        return Ok(Vec::new());
-    };
-    let mut hints = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let literal = entry
-            .as_str()
-            .ok_or_else(|| eyre!("domain_hints entry must be a string"))?;
-        let domain: DomainId = literal.parse().wrap_err("invalid domain_hints entry")?;
-        hints.push(domain);
-    }
-    Ok(hints)
-}
-
-fn parse_incentives_state_snapshot(bytes: &[u8]) -> Result<IncentivesStateSnapshot> {
-    let value: Value =
-        norito::json::from_slice(bytes).wrap_err("failed to parse incentives state JSON")?;
-    let domain_hints = parse_domain_hints(&value)?;
-    let _guard = install_domain_selector_resolver(&domain_hints);
-    norito::json::from_value(value).wrap_err("failed to parse incentives state JSON")
+fn parse_incentives_state_snapshot(bytes: &[u8]) -> Result<IncentivesState> {
+    norito::json::from_slice(bytes).wrap_err("failed to parse incentives state JSON")
 }
 
 fn load_incentives_state(path: &Path) -> Result<IncentivesState> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read incentives state from `{}`", path.display()))?;
-    let snapshot = parse_incentives_state_snapshot(&bytes)?;
-    let state = snapshot.into_state();
+    let state = parse_incentives_state_snapshot(&bytes)?;
     state.ensure_current()?;
     Ok(state)
 }
 
 fn save_incentives_state(path: &Path, state: &IncentivesState) -> Result<()> {
-    let snapshot = IncentivesStateSnapshot::from_state(state);
-    let bytes = norito::json::to_vec_pretty(&snapshot)
-        .wrap_err("failed to render incentives state JSON")?;
+    let bytes =
+        norito::json::to_vec_pretty(state).wrap_err("failed to render incentives state JSON")?;
     fs::write(path, bytes)
         .wrap_err_with(|| format!("failed to write incentives state to `{}`", path.display()))
 }
@@ -6332,9 +6219,6 @@ impl ServiceDashboardRow {
 
 fn parse_account_id_str<C: RunContext>(context: &C, value: &str, flag: &str) -> Result<AccountId> {
     let trimmed = value.trim();
-    if let Ok(account) = AccountId::from_str(trimmed) {
-        return Ok(account);
-    }
     crate::resolve_account_id(context, trimmed)
         .wrap_err_with(|| format!("{flag} must be a valid account identifier"))
 }
@@ -10504,7 +10388,7 @@ impl GatewayDenylistRecord {
                 if trimmed.is_empty() {
                     return Err(eyre!("`account_id` must not be empty"));
                 }
-                // Resolve via `/v1/accounts/resolve` to accept alias/UAID/opaque literals.
+                // Validate as a strict encoded account literal (IH58/compressed only).
                 resolve(trimmed).wrap_err("failed to resolve `account_id`")?;
                 if let Some(alias) = self.account_alias.as_deref()
                     && alias.trim().is_empty()
@@ -10773,7 +10657,8 @@ mod gateway_tests {
     use tempfile::TempDir;
 
     fn resolve_account_literal(literal: &str) -> Result<AccountId> {
-        AccountId::from_str(literal)
+        AccountId::parse_encoded(literal)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .wrap_err_with(|| format!("invalid test account literal `{literal}`"))
     }
 
@@ -10863,14 +10748,14 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-30T00:00:00Z"
             },
             {
                 "kind": "account_alias",
-                "account_alias": "hotline@wonderland",
+                "account_alias": "hotline@hbl",
                 "policy_tier": "emergency",
                 "issued_at": "2026-01-15T00:00:00Z",
                 "expires_at": "2026-01-20T00:00:00Z",
@@ -10897,7 +10782,7 @@ mod gateway_tests {
         assert_eq!(report.emergency_reviews.len(), 1);
         assert_eq!(
             report.emergency_reviews[0].descriptor.as_deref(),
-            Some("hotline@wonderland")
+            Some("hotline@hbl")
         );
     }
 
@@ -10907,7 +10792,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-15T00:00:00Z"
@@ -10943,7 +10828,7 @@ mod gateway_tests {
         assert_eq!(summary_entries[0].kind, "account_id");
         assert_eq!(
             summary_entries[0].descriptor,
-            "account_id:ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+            "account_id:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         );
         assert_eq!(summary_entries[1].kind, "provider");
         assert_eq!(
@@ -10960,7 +10845,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-15T00:00:00Z"
@@ -10997,7 +10882,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                 "account_alias": "routing@sora",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
@@ -11038,7 +10923,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                 "account_alias": "routing@sora",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
@@ -11081,7 +10966,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                 "account_alias": "routing@sora",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
@@ -12208,7 +12093,8 @@ mod tests {
     }
 
     fn resolve_account_literal(literal: &str) -> Result<AccountId> {
-        AccountId::from_str(literal)
+        AccountId::parse_encoded(literal)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .wrap_err_with(|| format!("invalid test account literal `{literal}`"))
     }
 
@@ -12425,9 +12311,8 @@ mod tests {
 
         pub(super) fn with_output_format(output_format: CliOutputFormat) -> Self {
             let kp = KeyPair::random();
-            let account: AccountId = format!("{}@wonderland", kp.public_key())
-                .parse()
-                .expect("valid account");
+            let domain: DomainId = "wonderland".parse().expect("domain");
+            let account = AccountId::new(domain, kp.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
                 account,
@@ -12786,7 +12671,7 @@ mod tests {
 
     fn sample_account_literal(name: &str) -> String {
         let account = sample_account_id(name);
-        format!("{}@{}", account.signatory(), account.domain())
+        account.to_string()
     }
 
     fn xor_asset_id() -> AssetDefinitionId {

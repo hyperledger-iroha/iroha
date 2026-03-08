@@ -599,8 +599,8 @@ mod tests {
             (
                 "validator_ids".into(),
                 Value::Array(vec![
-                    Value::from("alice@wonderland"),
-                    Value::from("bob@wonderland"),
+                    Value::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+                    Value::from("6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV"),
                 ]),
             ),
             ("manifest_path".into(), Value::Null),
@@ -670,8 +670,14 @@ mod tests {
     fn validator_summary_formats_activation_and_status() {
         let record = Map::from_iter([
             ("lane_id".into(), Value::from(0u64)),
-            ("validator".into(), Value::from("alice@lane")),
-            ("stake_account".into(), Value::from("alice@lane")),
+            (
+                "validator".into(),
+                Value::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+            ),
+            (
+                "stake_account".into(),
+                Value::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+            ),
             ("total_stake".into(), Value::from("1000")),
             ("self_stake".into(), Value::from("800")),
             (
@@ -692,7 +698,7 @@ mod tests {
         ]));
 
         let summary = format_validator_summary(&payload).expect("format summary");
-        assert!(summary.contains("alice@lane"));
+        assert!(summary.contains("6cmzPVPX944pj7vV"));
         assert!(summary.contains("Pending(epoch 2)"));
         assert!(summary.contains("epoch 1 @ 3601"));
         assert!(summary.contains("1000 (self 800)"));
@@ -707,8 +713,14 @@ mod tests {
         ]);
         let record = Map::from_iter([
             ("lane_id".into(), Value::from(0u64)),
-            ("validator".into(), Value::from("alice@lane")),
-            ("staker".into(), Value::from("bob@lane")),
+            (
+                "validator".into(),
+                Value::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+            ),
+            (
+                "staker".into(),
+                Value::from("6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV"),
+            ),
             ("bonded".into(), Value::from("750")),
             (
                 "pending_unbonds".into(),
@@ -722,8 +734,8 @@ mod tests {
         ]));
 
         let summary = format_stake_summary(&payload).expect("format summary");
-        assert!(summary.contains("alice@lane"));
-        assert!(summary.contains("bob@lane"));
+        assert!(summary.contains("6cmzPVPX944pj7vV"));
+        assert!(summary.contains("6cmzPVPX7WxKCts6"));
         assert!(summary.contains("750"));
         assert!(summary.contains("pending (next @ 10)"));
     }

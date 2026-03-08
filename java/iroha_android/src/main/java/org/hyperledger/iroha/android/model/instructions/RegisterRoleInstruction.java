@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 
 /** Typed builder for {@code RegisterRole} instructions. */
 public final class RegisterRoleInstruction implements InstructionTemplate {
@@ -114,10 +115,7 @@ public final class RegisterRoleInstruction implements InstructionTemplate {
     }
 
     public Builder setOwnerAccountId(final String ownerAccountId) {
-      if (ownerAccountId == null || ownerAccountId.isBlank()) {
-        throw new IllegalArgumentException("ownerAccountId must not be blank");
-      }
-      this.ownerAccountId = ownerAccountId;
+      this.ownerAccountId = AccountIdLiteral.extractIh58Address(ownerAccountId);
       return this;
     }
 

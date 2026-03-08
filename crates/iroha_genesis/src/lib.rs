@@ -23,7 +23,7 @@ use std::{
     io::BufReader,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, LazyLock},
+    sync::LazyLock,
     time::Duration,
 };
 
@@ -37,7 +37,7 @@ use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey};
 #[cfg(test)]
 use iroha_data_model::isi::register::RegisterBox;
 use iroha_data_model::{
-    account::{AccountDomainSelector, curve::CurveId},
+    account::curve::CurveId,
     block::{
         SignedBlock,
         consensus::{ConsensusGenesisParams, NposGenesisParams},
@@ -68,17 +68,6 @@ use norito::{
 
 /// Domain of the genesis account, technically required for the pre-genesis state
 pub static GENESIS_DOMAIN_ID: LazyLock<DomainId> = LazyLock::new(|| "genesis".parse().unwrap());
-
-#[cfg(test)]
-static DOMAIN_SELECTOR_RESOLVER_TEST_LOCK: LazyLock<std::sync::Mutex<()>> =
-    LazyLock::new(|| std::sync::Mutex::new(()));
-
-#[cfg(test)]
-fn lock_domain_selector_resolver_for_tests() -> std::sync::MutexGuard<'static, ()> {
-    DOMAIN_SELECTOR_RESOLVER_TEST_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
 
 /// Construct an [`InstructionRegistry`] with all built-in Iroha instructions and
 /// set it as the global registry.
@@ -741,23 +730,23 @@ pub mod genesis_instructions_json {
         let instruction = match variant.as_str() {
             "AssetDefinition" => {
                 let source_str = take_string(&mut fields, "source")?;
-                let source: AccountId = parse_id(&source_str, "transfer source account")?;
+                let source: AccountId = parse_account_id(&source_str, "transfer source account")?;
                 let object_str = take_string(&mut fields, "object")?;
                 let object: AssetDefinitionId = parse_id(&object_str, "asset definition")?;
                 let destination_str = take_string(&mut fields, "destination")?;
                 let destination: AccountId =
-                    parse_id(&destination_str, "transfer destination account")?;
+                    parse_account_id(&destination_str, "transfer destination account")?;
                 ensure_no_extra_fields(&fields)?;
                 InstructionBox::from(Transfer::asset_definition(source, object, destination))
             }
             "Domain" => {
                 let source_str = take_string(&mut fields, "source")?;
-                let source: AccountId = parse_id(&source_str, "transfer source account")?;
+                let source: AccountId = parse_account_id(&source_str, "transfer source account")?;
                 let domain_str = take_string(&mut fields, "object")?;
                 let domain: DomainId = parse_id(&domain_str, "domain")?;
                 let destination_str = take_string(&mut fields, "destination")?;
                 let destination: AccountId =
-                    parse_id(&destination_str, "transfer destination account")?;
+                    parse_account_id(&destination_str, "transfer destination account")?;
                 ensure_no_extra_fields(&fields)?;
                 InstructionBox::from(Transfer::domain(source, domain, destination))
             }
@@ -799,7 +788,7 @@ pub mod genesis_instructions_json {
                 )));
             }
         };
-        let destination: AccountId = parse_id(
+        let destination: AccountId = parse_account_id(
             &take_string(&mut fields, "destination")?,
             "grant destination account",
         )?;
@@ -850,9 +839,9 @@ pub mod genesis_instructions_json {
             .ok_or_else(|| json::Error::missing_field("lane_id"))?;
         let lane_id = LaneId::from(parse_u32(lane_value, "lane_id")?);
         let validator_str = take_string(&mut fields, "validator")?;
-        let validator: AccountId = parse_id(&validator_str, "validator")?;
+        let validator: AccountId = parse_account_id(&validator_str, "validator")?;
         let stake_account_str = take_string(&mut fields, "stake_account")?;
-        let stake_account: AccountId = parse_id(&stake_account_str, "stake_account")?;
+        let stake_account: AccountId = parse_account_id(&stake_account_str, "stake_account")?;
         let stake_value = fields
             .remove("initial_stake")
             .ok_or_else(|| json::Error::missing_field("initial_stake"))?;
@@ -889,7 +878,7 @@ pub mod genesis_instructions_json {
             .ok_or_else(|| json::Error::missing_field("lane_id"))?;
         let lane_id = LaneId::from(parse_u32(lane_value, "lane_id")?);
         let validator_str = take_string(&mut fields, "validator")?;
-        let validator: AccountId = parse_id(&validator_str, "validator")?;
+        let validator: AccountId = parse_account_id(&validator_str, "validator")?;
         ensure_no_extra_fields(&fields)?;
         let activate = ActivatePublicLaneValidator::new(lane_id, validator);
         Ok(Some(InstructionBox::from(activate)))
@@ -937,6 +926,12 @@ pub mod genesis_instructions_json {
             .map_err(|err| json::Error::Message(format!("invalid {label}: {err}")))
     }
 
+    fn parse_account_id(value: &str, label: &'static str) -> Result<AccountId, json::Error> {
+        AccountId::parse_encoded(value)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|err| json::Error::Message(format!("invalid {label}: {err}")))
+    }
+
     fn parse_u32(value: Value, label: &'static str) -> Result<u32, json::Error> {
         match value {
             Value::String(s) => s
@@ -975,23 +970,11 @@ pub mod genesis_instructions_json {
     }
 
     fn account_literal(account: &AccountId) -> Option<String> {
-        if let Ok(ih58) = account.canonical_ih58() {
-            return Some(format!("{ih58}@{}", account.domain()));
-        }
-        account
-            .try_signatory()
-            .map(|pk| format!("{pk}@{}", account.domain()))
+        account.canonical_ih58().ok()
     }
 
     fn asset_literal(asset: &AssetId) -> Option<String> {
-        let account_literal = account_literal(asset.account())?;
-        let definition = asset.definition();
-        let literal = if definition.domain() == asset.account().domain() {
-            format!("{}##{account_literal}", definition.name())
-        } else {
-            format!("{definition}#{account_literal}")
-        };
-        Some(literal)
+        Some(asset.canonical_encoded())
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1380,35 +1363,27 @@ pub mod genesis_instructions_json {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../defaults/genesis.json");
             let raw = std::fs::read_to_string(&path).expect("read defaults/genesis.json");
             let value: Value = norito::json::from_str(&raw).expect("parse defaults genesis JSON");
-            {
-                let _resolver_guard = super::super::lock_domain_selector_resolver_for_tests();
-                super::super::RawGenesisTransaction::install_domain_selector_resolver_from_genesis(
-                    &value,
-                )
-                .expect("install domain-selector resolver");
-                let transactions = value
+            let transactions = value
+                .as_object()
+                .and_then(|obj| obj.get("transactions"))
+                .and_then(Value::as_array)
+                .expect("transactions array");
+            for (index, tx) in transactions.iter().enumerate() {
+                norito::json::value::from_value::<RawGenesisTx>(tx.clone())
+                    .unwrap_or_else(|err| panic!("decode transaction {index}: {err}"));
+                if let Some(parameters_value) = tx.as_object().and_then(|obj| obj.get("parameters"))
+                {
+                    norito::json::value::from_value::<Parameters>(parameters_value.clone())
+                        .expect("decode structured parameters");
+                }
+                if let Some(instructions) = tx
                     .as_object()
-                    .and_then(|obj| obj.get("transactions"))
+                    .and_then(|obj| obj.get("instructions"))
                     .and_then(Value::as_array)
-                    .expect("transactions array");
-                for (index, tx) in transactions.iter().enumerate() {
-                    norito::json::value::from_value::<RawGenesisTx>(tx.clone())
-                        .unwrap_or_else(|err| panic!("decode transaction {index}: {err}"));
-                    if let Some(parameters_value) =
-                        tx.as_object().and_then(|obj| obj.get("parameters"))
-                    {
-                        norito::json::value::from_value::<Parameters>(parameters_value.clone())
-                            .expect("decode structured parameters");
-                    }
-                    if let Some(instructions) = tx
-                        .as_object()
-                        .and_then(|obj| obj.get("instructions"))
-                        .and_then(Value::as_array)
-                    {
-                        for instruction in instructions {
-                            super::value_to_instruction(instruction.clone())
-                                .expect("decode structured instruction");
-                        }
+                {
+                    for instruction in instructions {
+                        super::value_to_instruction(instruction.clone())
+                            .expect("decode structured instruction");
                     }
                 }
             }
@@ -3563,102 +3538,6 @@ mod tests2 {
 impl RawGenesisTransaction {
     const WARN_ON_GENESIS_GTE: u64 = 1024 * 1024 * 1024; // 1Gb
 
-    fn install_domain_selector_resolver_from_genesis(
-        raw_value: &norito::json::Value,
-    ) -> Result<(), norito::json::Error> {
-        let norito::json::Value::Object(root) = raw_value else {
-            return Ok(());
-        };
-        let Some(transactions_value) = root.get("transactions") else {
-            return Ok(());
-        };
-        let norito::json::Value::Array(transactions) = transactions_value else {
-            return Err(norito::json::Error::InvalidField {
-                field: "transactions".into(),
-                message: "expected array".into(),
-            });
-        };
-        let mut index = BTreeMap::new();
-        let genesis_domain_id = GENESIS_DOMAIN_ID.clone();
-        let selector = AccountDomainSelector::from_domain(&genesis_domain_id).map_err(|err| {
-            norito::json::Error::InvalidField {
-                field: "genesis".into(),
-                message: err.to_string(),
-            }
-        })?;
-        index.insert(selector, genesis_domain_id);
-        for tx in transactions {
-            let norito::json::Value::Object(tx_obj) = tx else {
-                continue;
-            };
-            let Some(instructions_value) = tx_obj.get("instructions") else {
-                continue;
-            };
-            let norito::json::Value::Array(instructions) = instructions_value else {
-                return Err(norito::json::Error::InvalidField {
-                    field: "transactions.instructions".into(),
-                    message: "expected array".into(),
-                });
-            };
-            for instruction in instructions {
-                let norito::json::Value::Object(instr_obj) = instruction else {
-                    continue;
-                };
-                let Some(register_value) = instr_obj.get("Register") else {
-                    continue;
-                };
-                let norito::json::Value::Object(register_obj) = register_value else {
-                    continue;
-                };
-                let Some(domain_value) = register_obj.get("Domain") else {
-                    continue;
-                };
-                let norito::json::Value::Object(domain_obj) = domain_value else {
-                    continue;
-                };
-                let Some(id_value) = domain_obj.get("id") else {
-                    continue;
-                };
-                let norito::json::Value::String(id_str) = id_value else {
-                    continue;
-                };
-                let domain_id: DomainId =
-                    id_str
-                        .parse()
-                        .map_err(|_| norito::json::Error::InvalidField {
-                            field: "transactions.instructions.Register.Domain.id".into(),
-                            message: format!("failed to parse domain id `{id_str}`"),
-                        })?;
-                let selector = AccountDomainSelector::from_domain(&domain_id).map_err(|err| {
-                    norito::json::Error::InvalidField {
-                        field: "transactions.instructions.Register.Domain.id".into(),
-                        message: err.to_string(),
-                    }
-                })?;
-                if let Some(existing) = index.get(&selector) {
-                    if existing != &domain_id {
-                        return Err(norito::json::Error::InvalidField {
-                            field: "transactions.instructions.Register.Domain.id".into(),
-                            message: format!(
-                                "Domain selector {selector:?} already bound to domain {existing}"
-                            ),
-                        });
-                    }
-                } else {
-                    index.insert(selector, domain_id);
-                }
-            }
-        }
-        if index.is_empty() {
-            return Ok(());
-        }
-        let index = Arc::new(index);
-        iroha_data_model::account::set_account_domain_selector_resolver(Arc::new(
-            move |selector| index.get(selector).cloned(),
-        ));
-        Ok(())
-    }
-
     /// Iterate over all instructions contained in this manifest.
     #[must_use]
     pub fn instructions(&self) -> impl Iterator<Item = &InstructionBox> {
@@ -3678,8 +3557,6 @@ impl RawGenesisTransaction {
     pub fn from_path(json_path: impl AsRef<Path>) -> Result<Self> {
         use std::io::Read as _;
         init_instruction_registry();
-        #[cfg(test)]
-        let _resolver_guard = lock_domain_selector_resolver_for_tests();
         let here = json_path
             .as_ref()
             .parent()
@@ -3706,13 +3583,6 @@ impl RawGenesisTransaction {
         let raw_value: norito::json::Value = norito::json::from_str(&contents).map_err(|err| {
             eyre!(
                 "failed to deserialize raw genesis transaction from {}: {err}",
-                json_path.as_ref().display()
-            )
-        })?;
-
-        Self::install_domain_selector_resolver_from_genesis(&raw_value).map_err(|err| {
-            eyre!(
-                "failed to resolve domain selectors from {}: {err}",
                 json_path.as_ref().display()
             )
         })?;
@@ -4714,7 +4584,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_genesis_installs_domain_selector_resolver() -> Result<()> {
+    fn parse_genesis_accepts_structured_accounts_without_selector_bootstrap() -> Result<()> {
         init_instruction_registry();
 
         let (tmp_dir, builder) = test_builder();

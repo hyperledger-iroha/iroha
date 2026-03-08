@@ -4,16 +4,14 @@ import XCTest
 
 private func canonicalOwnerLiteral() throws -> String {
     let keypair = try Keypair(privateKeyBytes: Data(repeating: 1, count: 32))
-    let address = try AccountAddress.fromAccount(domain: AccountAddress.defaultDomainName,
-                                                 publicKey: keypair.publicKey)
+    let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
     let ih58 = try address.toIH58(networkPrefix: 0x02F1)
     return ih58
 }
 
 private func noncanonicalOwnerLiteral() throws -> String {
     let keypair = try Keypair(privateKeyBytes: Data(repeating: 2, count: 32))
-    let address = try AccountAddress.fromAccount(domain: AccountAddress.defaultDomainName,
-                                                 publicKey: keypair.publicKey)
+    let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
     let canonicalHex = try address.canonicalHex()
     return canonicalHex
 }
@@ -22,7 +20,7 @@ private func noncanonicalOwnerLiteral() throws -> String {
 private func canonicalAuthorityLiteral(from signingKey: SigningKey,
                                        domain: String = AccountAddress.defaultDomainName) throws -> String {
     let publicKey = try signingKey.publicKey()
-    let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey)
+    let address = try AccountAddress.fromAccount(publicKey: publicKey)
     let ih58 = try address.toIH58(networkPrefix: 0x02F1)
     return ih58
 }
@@ -48,15 +46,40 @@ final class TransactionEncoderValidationTests: XCTestCase {
         }
     }
 
+    func testSetMetadataRejectsEncodedAuthorityWithDomainSuffix() throws {
+        let keypair = try Keypair(privateKeyBytes: Data(repeating: 9, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
+        let ih58 = try address.toIH58(networkPrefix: AccountId.defaultNetworkPrefix)
+        let authority = "\(ih58)@wonderland"
+        let value = try NoritoJSON(["profile": "demo"])
+        let request = SetMetadataRequest(chainId: "chain",
+                                         authority: authority,
+                                         target: .account("bob@wonderland"),
+                                         key: "profile",
+                                         value: value,
+                                         ttlMs: nil)
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 1, count: 32))
+
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeSetMetadata(request: request,
+                                                          signingKey: signingKey,
+                                                          creationTimeMs: 1)
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedAccountId(field: "authority", value: authority))
+        }
+    }
+
     func testPersistCouncilRejectsInvalidMemberAccount() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 2, count: 32))
+        let authority = try canonicalAuthorityLiteral(from: signingKey)
         let request = PersistCouncilRequest(chainId: "chain",
-                                            authority: "alice@wonderland",
+                                            authority: authority,
                                             epoch: 1,
                                             members: ["bob"],
                                             candidatesCount: 1,
                                             derivedBy: .vrf,
                                             ttlMs: nil)
-        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 2, count: 32))
 
         XCTAssertThrowsError(
             try SwiftTransactionEncoder.encodePersistCouncil(request: request,
@@ -69,12 +92,13 @@ final class TransactionEncoderValidationTests: XCTestCase {
     }
 
     func testRemoveMetadataRejectsMalformedAssetTarget() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 3, count: 32))
+        let authority = try canonicalAuthorityLiteral(from: signingKey)
         let request = RemoveMetadataRequest(chainId: "chain",
-                                            authority: "alice@wonderland",
+                                            authority: authority,
                                             target: .asset("rose#wonderland"),
                                             key: "profile",
                                             ttlMs: nil)
-        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 3, count: 32))
 
         XCTAssertThrowsError(
             try SwiftTransactionEncoder.encodeRemoveMetadata(request: request,
@@ -86,14 +110,14 @@ final class TransactionEncoderValidationTests: XCTestCase {
         }
     }
 
-    func testMetadataTargetAcceptsShorthandAssetId() throws {
+    func testMetadataTargetAcceptsNoritoAssetId() throws {
         let target = try TransactionInputValidator.sanitizeMetadataTarget(
-            .asset("rose##alice@wonderland")
+            .asset("norito:ABcd")
         )
         guard case let .asset(assetId) = target else {
             return XCTFail("expected asset target")
         }
-        XCTAssertEqual(assetId, "rose#wonderland#alice@wonderland")
+        XCTAssertEqual(assetId, "norito:abcd")
     }
 
     func testCastZkBallotRejectsIncompleteLockHints() throws {
@@ -193,6 +217,8 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                                                creationTimeMs: 1)
         } catch SwiftTransactionEncoderError.nativeBridgeError(.governance) {
             throw XCTSkip("governance encoder unavailable in linked native bridge")
+        } catch SwiftTransactionEncoderError.nativeBridgeError(.authority) {
+            throw XCTSkip("authority encoder unavailable in linked native bridge")
         }
     }
 

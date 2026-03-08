@@ -10,6 +10,7 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
     zk::test_utils::halo2_fixture_envelope,
 };
+use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;
 use iroha_primitives::json::Json;
 use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
@@ -52,7 +53,10 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let owner: AccountId = "alice@zkd".parse().unwrap();
+    let owner = AccountId::new(
+        "zkd".parse().expect("domain"),
+        KeyPair::random().public_key().clone(),
+    );
 
     // Register verifying key and create a simple election via ISIs
     let election_id = "e1".to_string();

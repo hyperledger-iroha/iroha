@@ -54,9 +54,9 @@ const tx = buildTransaction({
   authority: adminAccount,
   instructions: [
     {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
-    {Mint: {asset: {id: `coffee#wonderland##${adminAccount}`}, value: {quantity: '250'}}},
+    {Mint: {asset: {id: `norito:4e52543000000002`}, value: {quantity: '250'}}},
     {Transfer: {
-      asset: {id: `coffee#wonderland##${adminAccount}`},
+      asset: {id: `norito:4e52543000000002`},
       destination: receiverAccount,
       value: {quantity: '50'},
     }},
@@ -83,5 +83,5 @@ for (const asset of balances.items) {
 ## 验证奇偶校验
 
 - 通过 `iroha --config defaults/client.toml transaction get --hash <hash>` 获取交易详细信息。
-- 与 `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` 交叉检查余额。
+- 与 `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'` 交叉检查余额。
 - 将发出的哈希值与 Rust 和 Python 配方进行比较，以确保 SDK 奇偶校验。

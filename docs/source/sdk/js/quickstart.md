@@ -61,12 +61,12 @@ import {
 } from "@iroha/iroha-js";
 
 const mintInstruction = buildMintAssetInstruction({
-  assetId: "rose#wonderland#alice",
+  assetId: "norito:4e52543000000001",
   quantity: "10",
 });
 
 const transferInstruction = buildTransferAssetInstruction({
-  sourceAssetId: "rose#wonderland#alice",
+  sourceAssetId: "norito:4e52543000000001",
   destinationAccountId: "ih58...",
   quantity: "5",
 });
@@ -74,7 +74,7 @@ const transferInstruction = buildTransferAssetInstruction({
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
   authority: "ih58...",
-  mint: { assetId: "rose#wonderland#alice", quantity: "10" },
+  mint: { assetId: "norito:4e52543000000001", quantity: "10" },
   transfers: [{ destinationAccountId: "ih58...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
@@ -100,7 +100,7 @@ const registerDomain = noritoEncodeInstruction(
 );
 const registerAccount = buildRegisterAccountInstruction({ accountId: "ih58..." });
 const transfer = buildTransferAssetInstruction({
-  sourceAssetId: "rose#wonderland#alice",
+  sourceAssetId: "norito:4e52543000000001",
   destinationAccountId: "ih58...",
   quantity: "5",
 });
@@ -332,17 +332,17 @@ for await (const perm of torii.iterateAccountPermissions("ih58...", {
 }
 const holdings = await torii.listAccountAssets("ih58...", {
   limit: 5,
-  assetId: "rose#wonderland#ih58...",
+  assetId: "norito:4e52543000000001",
 });
 console.log("asset holdings", holdings.items);
 const holders = await torii.listAssetHolders("rose#wonderland", {
   limit: 5,
-  assetId: "rose#wonderland#ih58...",
+  assetId: "norito:4e52543000000001",
 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
 const txs = await torii.listAccountTransactions("ih58...", {
   limit: 3,
-  assetId: "rose#wonderland#ih58...",
+  assetId: "norito:4e52543000000001",
 });
 console.log("recent hashes", txs.items.map((tx) => tx.entrypoint_hash));
 

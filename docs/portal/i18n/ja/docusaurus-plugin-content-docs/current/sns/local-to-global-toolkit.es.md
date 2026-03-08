@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 オプション:
 
 - IH58 の `--format compressed (`sora`)` パラサリダ `sora...`。
-- `--no-append-domain` パラエミミール リテラル シン ドミニオ。
+- `domainless output (default)` パラエミミール リテラル シン ドミニオ。
 - `--audit-only` 変換パラメータを省略します。
 - `--allow-errors` エスカネアンド クアンド アパレスカン フィラス マルフォルマダを確認してください (CLI のコンポルタミエントと一致)。
 
@@ -48,7 +48,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 2. Bloquea は、cuando `audit.json` レポート セレクター ローカル (`domain.kind = local12`) をマージします。
    欠陥のある `true` の有効性 (クラスターの開発/テストで `false` を単独でオーバーライドする)
    診断的回帰) と集合体
-   `iroha tools address normalize --fail-on-warning --only-local` CI パラケインテント
+   `iroha tools address normalize` CI パラケインテント
    回帰は、生産上の危険にさらされています。
 
 詳細な文書、証拠およびスニペットのチェックリストを参照してください。

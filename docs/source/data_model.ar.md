@@ -35,9 +35,9 @@ translator: machine-google-reviewed
 - `IdBox`: مظروف من النوع الإجمالي لأي معرف معتمد (`DomainId`، `AccountId`، `AssetDefinitionId`، `AssetId`، `NftId`، `PeerId`، `TriggerId`، `RoleId`، `Permission`، `CustomParameterId`). مفيد للتدفقات العامة وترميز Norito كنوع واحد.
 - `ChainId`: معرف سلسلة غير شفاف يستخدم لحماية إعادة التشغيل في المعاملات.نماذج سلسلة من المعرفات (قابلة للتعثر مع `Display`/`FromStr`):
 - `DomainId`: `name` (على سبيل المثال، `wonderland`).
-- `AccountId`: المعرف الأساسي المشفر عبر `AccountAddress`، والذي يكشف IH58، وSora المضغوط (`sora…`)، وبرامج الترميز السداسية الأساسية (`AccountAddress::to_ih58`، `to_compressed_sora`، `canonical_hex`، `parse_any`). IH58 هو تنسيق الحساب المفضل؛ يعد النموذج `sora…` هو ثاني أفضل نموذج لـ Sora-only UX. يتم الاحتفاظ بالاسم المستعار للتوجيه المناسب للإنسان `alias@domain` لـ UX ولكن لم يعد يتم التعامل معه كمعرف رسمي. يقوم Torii بتسوية السلاسل الواردة من خلال `AccountAddress::parse_any`. تدعم معرفات الحساب كلاً من وحدات التحكم ذات المفتاح الواحد والمتعددة التوقيعات.
+- `AccountId`: المعرف الأساسي المشفر عبر `AccountAddress`، والذي يكشف IH58، وSora المضغوط (`sora…`)، وبرامج الترميز السداسية الأساسية (`AccountAddress::to_ih58`، `to_compressed_sora`، `canonical_hex`، `parse_encoded`). IH58 هو تنسيق الحساب المفضل؛ يعد النموذج `sora…` هو ثاني أفضل نموذج لـ Sora-only UX. يتم الاحتفاظ بالاسم المستعار للتوجيه المناسب للإنسان `alias` (rejected legacy form) لـ UX ولكن لم يعد يتم التعامل معه كمعرف رسمي. يقوم Torii بتسوية السلاسل الواردة من خلال `AccountAddress::parse_encoded`. تدعم معرفات الحساب كلاً من وحدات التحكم ذات المفتاح الواحد والمتعددة التوقيعات.
 - `AssetDefinitionId`: `asset#domain` (على سبيل المثال، `xor#soramitsu`).
-- `AssetId`: `asset#domain#account` أو `asset##account` إذا كان مجال التعريف يساوي مجال الحساب، حيث `account` هو سلسلة `AccountId` الأساسية (يفضل IH58).
+- `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`: `nft$domain` (على سبيل المثال، `rose$garden`).
 - `PeerId`: `public_key` (تتم المساواة بين الأقران عن طريق المفتاح العام).
 

@@ -47,6 +47,8 @@ public final class NoritoCodecAdapterTests {
     javaCodecRoundTripsPayload();
     javaCodecEncodesAccountIdAuthority();
     javaCodecEncodesMultisigAuthority();
+    javaCodecRejectsLegacyCanonicalAuthorityIdentifier();
+    javaCodecRejectsNestedDomainAuthorityIdentifier();
     javaCodecEncodesMultisigSignatures();
     javaCodecEncodesChainIdLayout();
     javaCodecSupportsInstructionsVariant();
@@ -58,10 +60,11 @@ public final class NoritoCodecAdapterTests {
 
   private static void javaCodecRoundTripsPayload() throws NoritoException {
     final byte[] instructions = "android-instructions".getBytes();
+    final String authority = sampleAuthority(0x10);
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000001")
-            .setAuthority("alice@wonderland")
+            .setAuthority(authority)
             .setCreationTimeMs(1_735_000_000_123L)
             .setExecutable(Executable.ivm(instructions))
             .setTimeToLiveMs(5_000L)
@@ -74,7 +77,7 @@ public final class NoritoCodecAdapterTests {
 
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
     assert decoded.chainId().equals("00000001") : "Chain ID must round-trip";
-    assert decoded.authority().equals("alice@wonderland") : "Authority must round-trip";
+    assert decoded.authority().equals(authority) : "Authority must round-trip";
     assert decoded.creationTimeMs() == 1_735_000_000_123L : "creation_time_ms must round-trip";
     assert Arrays.equals(instructions, decoded.executable().ivmBytes())
         : "Decoded payload should match original instructions";
@@ -90,12 +93,12 @@ public final class NoritoCodecAdapterTests {
     final String ih58;
     try {
       ih58 =
-          AccountAddress.fromAccount("wonderland", publicKey, "ed25519")
+          AccountAddress.fromAccount(publicKey, "ed25519")
               .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build authority address", ex);
     }
-    final String authority = ih58 + "@wonderland";
+    final String authority = ih58;
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000002")
@@ -108,32 +111,14 @@ public final class NoritoCodecAdapterTests {
     final byte[] encoded = adapter.encodeTransaction(payload);
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
 
-    assert authority.equals(decoded.authority()) : "AccountId authority must round-trip with domain";
+    assert authority.equals(decoded.authority()) : "AccountId authority must round-trip";
     final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
     readField(decoder, "payload.chain_id");
     final byte[] authorityField = readField(decoder, "payload.authority");
-    final int expectedStringPayloadLen = 8 + authority.getBytes(StandardCharsets.UTF_8).length;
-    assert authorityField.length != expectedStringPayloadLen
-        : "AccountId authority should encode as struct, not legacy string";
-    final long domainFieldLen = readU64(authorityField, 0, "authority.domain");
-    final long domainNameFieldLen = readU64(authorityField, 8, "authority.domain.name");
-    final long domainStringLen = readU64(authorityField, 16, "authority.domain.name.string");
-    assert domainNameFieldLen == 8 + domainStringLen : "DomainId name must wrap a single string";
-    assert domainFieldLen == 8 + domainNameFieldLen : "Domain field must wrap a DomainId payload";
-    final int controllerFieldOffset = Math.toIntExact(8 + domainFieldLen);
-    final long controllerFieldLen = readU64(authorityField, controllerFieldOffset, "authority.controller");
-    final int controllerPayloadOffset = controllerFieldOffset + 8;
-    final long controllerTag = readU32(authorityField, controllerPayloadOffset, "authority.controller.tag");
-    assert controllerTag == 0L : "AccountController tag must be Single";
-    final long publicKeyFieldLen =
-        readU64(authorityField, controllerPayloadOffset + 4, "authority.controller.public_key");
-    final long publicKeyStringLen =
-        readU64(authorityField, controllerPayloadOffset + 12, "authority.controller.public_key.string");
-    assert publicKeyFieldLen == 8 + publicKeyStringLen
-        : "Public key field must wrap a single string";
-    assert authorityField.length
-        == Math.toIntExact(8 + domainFieldLen + 8 + controllerFieldLen)
-        : "Authority payload must contain domain and controller fields only";
+    final String encodedAuthority =
+        decodeFieldPayload(authorityField, NoritoAdapters.stringAdapter(), "payload.authority");
+    assert authority.equals(encodedAuthority)
+        : "AccountId authority should be encoded as a normalized string";
   }
 
   private static void javaCodecEncodesMultisigAuthority() throws NoritoException {
@@ -150,12 +135,12 @@ public final class NoritoCodecAdapterTests {
     final String ih58;
     try {
       ih58 =
-          AccountAddress.fromMultisigPolicy("wonderland", policy)
+          AccountAddress.fromMultisigPolicy(policy)
               .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build multisig authority address", ex);
     }
-    final String authority = ih58 + "@wonderland";
+    final String authority = ih58;
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000002")
@@ -169,52 +154,68 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
 
     assert authority.equals(decoded.authority()) : "Multisig authority must round-trip";
-
     final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
     readField(decoder, "payload.chain_id");
     final byte[] authorityField = readField(decoder, "payload.authority");
-    final long domainFieldLen = readU64(authorityField, 0, "authority.domain");
-    final int controllerFieldOffset = Math.toIntExact(8 + domainFieldLen);
-    final long controllerFieldLen = readU64(authorityField, controllerFieldOffset, "authority.controller");
-    final int controllerPayloadOffset = controllerFieldOffset + 8;
-    final long controllerTag = readU32(authorityField, controllerPayloadOffset, "authority.controller.tag");
-    assert controllerTag == 1L : "AccountController tag must be Multisig";
-    final long policyLen =
-        readU64(authorityField, controllerPayloadOffset + 4, "authority.controller.policy");
-    final int policyOffset = controllerPayloadOffset + 12;
-    assert authorityField.length >= policyOffset + policyLen
-        : "Multisig policy payload must fit within controller field";
+    final String encodedAuthority =
+        decodeFieldPayload(authorityField, NoritoAdapters.stringAdapter(), "payload.authority");
+    assert authority.equals(encodedAuthority)
+        : "Multisig authority should be encoded as normalized string";
+  }
 
-    int cursor = policyOffset;
-    final int version = authorityField[cursor] & 0xFF;
-    cursor += 1;
-    final int threshold = readU16(authorityField, cursor, "authority.controller.policy.threshold");
-    cursor += 2;
-    assert version == 1 : "Multisig policy version must round-trip";
-    assert threshold == 2 : "Multisig policy threshold must round-trip";
-    final long memberCount =
-        readU64(authorityField, cursor, "authority.controller.policy.members");
-    cursor += 8;
-    assert memberCount == 2L : "Multisig policy member count must round-trip";
+  private static void javaCodecRejectsLegacyCanonicalAuthorityIdentifier() throws NoritoException {
+    final byte[] publicKey = new byte[32];
+    Arrays.fill(publicKey, (byte) 0x6C);
+    final String canonical;
+    try {
+      canonical = AccountAddress.fromAccount(publicKey, "ed25519").canonicalHex();
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalStateException("Failed to build canonical authority address", ex);
+    }
+    try {
+      TransactionPayload.builder()
+          .setChainId("00000002")
+          .setAuthority(canonical)
+          .setCreationTimeMs(1_735_000_000_456L)
+          .setExecutable(Executable.ivm(new byte[] {0x01}))
+          .build();
+      throw new AssertionError("expected canonical authority identifier rejection");
+    } catch (final IllegalArgumentException expected) {
+      assert expected.getMessage().contains("IH58 or compressed sora encoded")
+          : "unexpected error message: " + expected.getMessage();
+    }
+  }
 
-    final String expectedMemberA =
-        PublicKeyCodec.encodePublicKeyMultihash(0x01, memberKeyA);
-    final String expectedMemberB =
-        PublicKeyCodec.encodePublicKeyMultihash(0x01, memberKeyB);
-
-    cursor = assertMultisigMember(authorityField, cursor, expectedMemberA, 1, "member[0]");
-    cursor = assertMultisigMember(authorityField, cursor, expectedMemberB, 2, "member[1]");
-
-    assert authorityField.length
-        == Math.toIntExact(8 + domainFieldLen + 8 + controllerFieldLen)
-        : "Authority payload must contain domain and controller fields only";
+  private static void javaCodecRejectsNestedDomainAuthorityIdentifier() throws NoritoException {
+    final byte[] publicKey = new byte[32];
+    Arrays.fill(publicKey, (byte) 0x7D);
+    final String ih58;
+    try {
+      ih58 =
+          AccountAddress.fromAccount(publicKey, "ed25519")
+              .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalStateException("Failed to build authority address", ex);
+    }
+    try {
+      TransactionPayload.builder()
+          .setChainId("00000002")
+          .setAuthority(ih58 + "@wonderland@fallback")
+          .setCreationTimeMs(1_735_000_000_456L)
+          .setExecutable(Executable.ivm(new byte[] {0x01}))
+          .build();
+      throw new AssertionError("expected nested-domain authority identifier rejection");
+    } catch (final IllegalArgumentException expected) {
+      assert expected.getMessage().contains("must not include @domain suffix")
+          : "unexpected error message: " + expected.getMessage();
+    }
   }
 
   private static void javaCodecEncodesMultisigSignatures() throws NoritoException {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000003")
-            .setAuthority("alice@wonderland")
+            .setAuthority(sampleAuthority(0x31))
             .setCreationTimeMs(1_735_000_000_789L)
             .setExecutable(Executable.ivm(new byte[] {0x0A, 0x0B}))
             .build();
@@ -273,7 +274,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(chainId)
-            .setAuthority("chain@wonderland")
+            .setAuthority(sampleAuthority(0x41))
             .setCreationTimeMs(1_735_000_000_789L)
             .setExecutable(Executable.ivm(new byte[] {0x01}))
             .build();
@@ -299,7 +300,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000009")
-            .setAuthority("instructions@wonderland")
+            .setAuthority(sampleAuthority(0x51))
             .setCreationTimeMs(1_735_111_111_000L)
             .setExecutable(
                 Executable.instructions(
@@ -344,7 +345,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000011")
-            .setAuthority("wire@wonderland")
+            .setAuthority(sampleAuthority(0x61))
             .setCreationTimeMs(1_735_111_111_123L)
             .setExecutable(Executable.instructions(listOf(wireInstruction)))
             .build();
@@ -367,7 +368,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000012")
-            .setAuthority("ivm@wonderland")
+            .setAuthority(sampleAuthority(0x71))
             .setCreationTimeMs(1_735_222_222_123L)
             .setExecutable(Executable.ivm(ivmBytes))
             .build();
@@ -409,7 +410,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000013")
-            .setAuthority("layout@wonderland")
+            .setAuthority(sampleAuthority(0x81))
             .setCreationTimeMs(1_735_222_333_123L)
             .setExecutable(Executable.instructions(listOf(wireInstruction)))
             .build();
@@ -626,6 +627,17 @@ public final class NoritoCodecAdapterTests {
     final byte[] out = new byte[length];
     Arrays.fill(out, (byte) value);
     return out;
+  }
+
+  private static String sampleAuthority(final int fillByte) {
+    final byte[] publicKey = new byte[32];
+    Arrays.fill(publicKey, (byte) fillByte);
+    try {
+      return AccountAddress.fromAccount(publicKey, "ed25519")
+          .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalStateException("Failed to build sample authority", ex);
+    }
   }
 
   private static java.util.Optional<byte[]> decodeOptionPayload(

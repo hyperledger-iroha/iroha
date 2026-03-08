@@ -36,7 +36,7 @@ Analisador کو درج ذیل linha de cabeçalho درکار ہے (ordem flexív
 |--------|----------|------------|
 | `label` | Sim | Etiqueta solicitada (maiúsculas e minúsculas aceitas; ferramenta Norm v1 اور UTS-46 کے مطابق normalize کرتا ہے). |
 | `suffix_id` | Sim | Identificador de sufixo numérico (decimal یا `0x` hex). |
-| `owner` | Sim | Proprietário do registro کے لئے String AccountId (literal IH58; dica opcional @domain). |
+| `owner` | Sim | Proprietário do registro کے لئے String AccountId (literal AccountId codificado (IH58 preferido, compressed aceito; sem sufixo @domain)). |
 | `term_years` | Sim | Inteiro `1..=255`. |
 | `payment_asset_id` | Sim | Ativo de liquidação (exemplo `xor#sora`). |
 | `payment_gross` / `payment_net` | Sim | Inteiros não assinados ou unidades nativas de ativos representam کریں۔ |

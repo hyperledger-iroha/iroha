@@ -8,6 +8,12 @@ use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::prelude::*;
 use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 
+fn fixture_account(hex_public_key: &str) -> AccountId {
+    let domain: DomainId = "wonderland".parse().expect("domain id");
+    let public_key = hex_public_key.parse().expect("public key");
+    AccountId::new(domain, public_key)
+}
+
 fn program_with_scall(sys: u8) -> Vec<u8> {
     let mut code = Vec::new();
     code.extend_from_slice(
@@ -42,10 +48,8 @@ fn deny_unlisted_syscall_in_v1() {
     let prog = program_with_scall(0xAB);
     let mut vm = IVM::new(u64::MAX);
     // Any authority is fine; it won't be used
-    let authority: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-            .parse()
-            .unwrap();
+    let authority =
+        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
     vm.set_host(CoreHost::new(authority));
     vm.load_program(&prog).unwrap();
     let err = vm.run().unwrap_err();
@@ -57,10 +61,8 @@ fn allow_forwarded_alloc_in_v1() {
     // ALLOC is forwarded by CoreHost and should be permitted.
     let prog = program_with_scall(ivm_sys::SYSCALL_ALLOC as u8);
     let mut vm = IVM::new(u64::MAX);
-    let authority: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-            .parse()
-            .unwrap();
+    let authority =
+        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
     vm.set_host(CoreHost::new(authority));
     vm.load_program(&prog).unwrap();
     // Set x10 = 16 for allocation size

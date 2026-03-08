@@ -8,17 +8,17 @@ use axum::{
     Router,
     routing::{get, post},
 };
+use base64::Engine as _;
 use http_body_util::BodyExt as _;
 use iroha_core::{
     governance::parliament,
     kura::Kura,
     query::store::LiveQueryStore,
     queue::Queue,
-    state::{State, World},
+    state::{State, StateReadOnly, World},
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
-use norito::json;
 use tower::ServiceExt as _;
 
 #[tokio::test]
@@ -53,10 +53,8 @@ async fn persist_vrf_council_and_get_current_matches() {
                 let queue = queue.clone();
                 let chain_id = chain_id_arc.clone();
                 let telemetry = telemetry.clone();
-                move |body: iroha_torii::utils::extractors::NoritoJson<
-                    iroha_torii::gov::CouncilPersistRequest,
-                >| async move {
-                    iroha_torii::gov::handle_gov_council_persist(
+                move |body: iroha_torii::NoritoJson<iroha_torii::CouncilPersistRequest>| async move {
+                    iroha_torii::handle_gov_council_persist(
                         chain_id.clone(),
                         queue.clone(),
                         state.clone(),
@@ -71,10 +69,8 @@ async fn persist_vrf_council_and_get_current_matches() {
             "/v1/gov/council/derive-vrf",
             post({
                 let state = state.clone();
-                move |body: iroha_torii::utils::extractors::NoritoJson<
-                    iroha_torii::gov::CouncilDeriveVrfRequest,
-                >| async move {
-                    iroha_torii::gov::handle_gov_council_derive_vrf(state, body).await
+                move |body: iroha_torii::NoritoJson<iroha_torii::CouncilDeriveVrfRequest>| async move {
+                    iroha_torii::handle_gov_council_derive_vrf(state, body).await
                 }
             }),
         )
@@ -82,7 +78,7 @@ async fn persist_vrf_council_and_get_current_matches() {
             "/v1/gov/council/current",
             get({
                 let state = state.clone();
-                move || async move { iroha_torii::gov::handle_gov_council_current(state).await }
+                move || async move { iroha_torii::handle_gov_council_current(state).await }
             }),
         );
 
@@ -105,7 +101,12 @@ async fn persist_vrf_council_and_get_current_matches() {
     for i in 0..5u8 {
         let (pk, sk) =
             iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![i; 4]));
-        let pk_b64 = base64::engine::general_purpose::STANDARD.encode(pk.to_bytes());
+        let pk_bytes = KeyPair::from((pk.clone(), sk.clone()))
+            .public_key()
+            .to_bytes()
+            .1
+            .to_vec();
+        let pk_b64 = base64::engine::general_purpose::STANDARD.encode(pk_bytes);
         let keypair = KeyPair::from_seed(vec![i; 32], Algorithm::Ed25519);
         let account = AccountId::new(domain.clone(), keypair.public_key().clone());
         let account_id = account.to_string();
@@ -117,20 +118,20 @@ async fn persist_vrf_council_and_get_current_matches() {
             _ => unreachable!(),
         });
         candidates.push(iroha_torii::json_object(vec![
-            ("account_id", account_id),
-            ("variant", "Normal"),
-            ("pk_b64", pk_b64),
-            ("proof_b64", pr_b64),
+            iroha_torii::json_entry("account_id", account_id),
+            iroha_torii::json_entry("variant", "Normal"),
+            iroha_torii::json_entry("pk_b64", pk_b64),
+            iroha_torii::json_entry("proof_b64", pr_b64),
         ]));
     }
 
     // Persist with committee_size = 3
-    let body = iroha_torii::json_object(vec![
-        ("committee_size", 3usize),
-        ("epoch", epoch),
-        ("candidates", candidates.clone()),
-    ])
-    .to_string();
+    let body = norito::json::to_string(&iroha_torii::json_object(vec![
+        iroha_torii::json_entry("committee_size", 3usize),
+        iroha_torii::json_entry("epoch", epoch),
+        iroha_torii::json_entry("candidates", candidates.clone()),
+    ]))
+    .expect("serialize persist request body");
     let req = http::Request::builder()
         .method("POST")
         .uri("/v1/gov/council/persist")
@@ -170,11 +171,13 @@ async fn persist_vrf_council_and_get_current_matches() {
         .header(http::header::CONTENT_TYPE, "application/json")
         .body({
             let body = iroha_torii::json_object(vec![
-                ("committee_size", 3usize),
-                ("epoch", epoch),
-                ("candidates", candidates),
+                iroha_torii::json_entry("committee_size", 3usize),
+                iroha_torii::json_entry("epoch", epoch),
+                iroha_torii::json_entry("candidates", candidates),
             ]);
-            axum::body::Body::from(body.to_string())
+            axum::body::Body::from(
+                norito::json::to_string(&body).expect("serialize derive request body"),
+            )
         })
         .unwrap();
     let resp3 = app.clone().oneshot(req3).await.unwrap();
