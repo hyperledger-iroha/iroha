@@ -18,6 +18,14 @@ Last updated: 2026-03-08
 ### Validation Matrix (Telemetry Duplication)
 - `cargo test -p iroha_telemetry broadcast_lag_does_not_stop_client -- --nocapture`
 
+## 2026-03-08 AccountId Parsing API Alignment (Test Samples)
+- Updated `crates/iroha_test_samples/src/lib.rs` to stop parsing `AccountId` from string in tests.
+- Replaced string `.parse::<AccountId>()` with explicit construction via
+  `AccountId::new(DomainId, PublicKey)` to match the current data-model API.
+
+### Validation Matrix (AccountId Parsing Alignment)
+- `cargo test -p iroha_test_samples -- --nocapture`
+
 ## Changes Completed In This Pass
 - Replaced deploy scanner interface with a neutral strict entrypoint.
 - Updated deploy callsites/docs to the new scanner path and strict wording:
