@@ -1,11 +1,9 @@
 import React, {useState} from 'react';
 
 const SAMPLE_ADDRESS = {
-  ih58: 'RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA',
-  compressed: 'sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8',
-  warning: 'Compressed addresses are Sora-only and second-best; prefer IH58.',
-  domain: 'default',
-  implicitDefault: true,
+  ih58: '6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw',
+  compressed: 'sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE',
+  warning: 'Compressed addresses are legacy bridge compatibility only; prefer IH58.',
 };
 
 export default function ExplorerAddressCard() {
@@ -37,9 +35,7 @@ export default function ExplorerAddressCard() {
       <div className="card__header">
         <h3>Explorer copy instrumentation</h3>
         <p id={domainHelperId}>
-          {SAMPLE_ADDRESS.implicitDefault
-            ? `Implicit default domain: ${SAMPLE_ADDRESS.domain} (IH58 already encodes it).`
-            : `Domain selector: ${SAMPLE_ADDRESS.domain}`}
+          IH58 literals are global and selector-free. Domain/dataspace access is granted on-chain.
         </p>
       </div>
       <div className="card__body" aria-describedby={domainHelperId}>

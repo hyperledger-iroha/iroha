@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Сообщение:
 
 - `--format compressed` IH58 — выход `sora...` — выходной сигнал
-- `--no-append-domain` تاکہ голые литералы نکلیں۔
+- `domainless output (default)` تاکہ голые литералы نکلیں۔
 - Шаг преобразования `--audit-only` چھوڑنے کے لیے۔
 - `--allow-errors` — неверные строки при сканировании (поведение CLI)
 
@@ -47,7 +47,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 1. Выделите специальную работу и получите результаты, которые вам нужны.
 2. Локальные селекторы `audit.json` رپورٹ کرے (`domain.kind = local12`) для объединения данных
    Значение по умолчанию `true` (для разработчиков/тестов используются регрессии, необходимые для `false`).
-   `iroha tools address normalize --fail-on-warning --only-local` کو کو میں شامل کریں تاکہ
+   `iroha tools address normalize` کو کو میں شامل کریں تاکہ
    производство регрессий
 
 Ознакомьтесь с контрольными списками доказательств, а также фрагмент примечания к выпуску, который можно использовать для проверки.

@@ -6,18 +6,20 @@ import Combine
 
 @available(iOS 15.0, macOS 12.0, *)
 final class ConnectSessionBalanceTests: XCTestCase {
+    private let encodedUsdAssetID = "norito:757364"
+
     func testBalanceStreamFiltersAccount() async throws {
         let (session, tempURL) = makeSessionWithEvents()
         addTeardownBlock {
             try? FileManager.default.removeItem(at: tempURL)
         }
 
-        let stream = session.balanceStream(accountID: "alice@wonderland")
+        let stream = session.balanceStream(accountID: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
         var iterator = stream.makeAsyncIterator()
         let first = try await iterator.next()
-        XCTAssertEqual(first?.accountID, "alice@wonderland")
+        XCTAssertEqual(first?.accountID, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
         XCTAssertEqual(first?.sequence, 1)
-        XCTAssertEqual(first?.assets.first?.assetId, "usd#bank")
+        XCTAssertEqual(first?.assets.first?.assetId, encodedUsdAssetID)
         XCTAssertEqual(first?.queueDiagnostics?.state, .healthy)
 
         let second = try await iterator.next()
@@ -35,7 +37,7 @@ final class ConnectSessionBalanceTests: XCTestCase {
 
         var received: [ConnectBalanceSnapshot] = []
         let cancellable = session
-            .balancePublisher(accountID: "alice@wonderland", scheduler: nil)
+            .balancePublisher(accountID: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn", scheduler: nil)
             .sink(receiveCompletion: { completion in
                 if case .failure(let error) = completion {
                     XCTFail("Unexpected error \(error)")
@@ -75,14 +77,14 @@ final class ConnectSessionBalanceTests: XCTestCase {
         let events = [
             ConnectEvent(sequence: 1,
                          direction: .walletToApp,
-                         payload: .balanceSnapshot(ConnectBalanceSnapshot(accountID: "alice@wonderland",
-                                                                          assets: [ConnectBalanceAsset(assetId: "usd#bank",
+                         payload: .balanceSnapshot(ConnectBalanceSnapshot(accountID: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                                                                          assets: [ConnectBalanceAsset(assetId: encodedUsdAssetID,
                                                                                                        quantity: "10")],
                                                                           lastUpdatedMs: 1))),
             ConnectEvent(sequence: 2,
                          direction: .walletToApp,
-                         payload: .balanceSnapshot(ConnectBalanceSnapshot(accountID: "bob@wonderland",
-                                                                          assets: [ConnectBalanceAsset(assetId: "usd#bank",
+                         payload: .balanceSnapshot(ConnectBalanceSnapshot(accountID: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                                                                          assets: [ConnectBalanceAsset(assetId: encodedUsdAssetID,
                                                                                                        quantity: "20")],
                                                                           lastUpdatedMs: 2)))
         ]

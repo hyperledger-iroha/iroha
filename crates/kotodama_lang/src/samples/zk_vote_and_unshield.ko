@@ -63,7 +63,7 @@ seiyaku ZkVoteAndUnshield {
 
     let unshield = build_unshield_inline(
       asset_definition!("rose#wonderland"),
-      account!("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"),
+      authority(),
       1,
       nullifier,
       "halo2/ipa",

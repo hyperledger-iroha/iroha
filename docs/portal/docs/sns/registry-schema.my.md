@@ -271,7 +271,7 @@ NameRecordV1 {
     controllers: [
         NameControllerV1 {
             controller_type: Account,
-            account_address: Some(AccountAddress("0x02000001...")),
+            account_address: Some(AccountAddress("0x020001...")),
             resolver_template_id: None,
             payload: {}
         }

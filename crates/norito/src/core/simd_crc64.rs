@@ -979,7 +979,7 @@ mod tests {
 
     #[cfg(feature = "simd-accel")]
     fn fallback_ptr() -> usize {
-        crc64_fallback as usize
+        crc64_fallback as *const () as usize
     }
 
     #[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
@@ -991,8 +991,8 @@ mod tests {
             sse41: true,
             ..SimdFeatureToggle::none()
         };
-        let ptr = detect_best_impl_with(features) as usize;
-        assert_eq!(ptr, crc64_pclmul_runtime as usize);
+        let ptr = detect_best_impl_with(features) as *const () as usize;
+        assert_eq!(ptr, crc64_pclmul_runtime as *const () as usize);
     }
 
     #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
@@ -1003,14 +1003,14 @@ mod tests {
             neon: true,
             ..SimdFeatureToggle::none()
         };
-        let ptr = detect_best_impl_with(features) as usize;
-        assert_eq!(ptr, crc64_pmull_runtime as usize);
+        let ptr = detect_best_impl_with(features) as *const () as usize;
+        assert_eq!(ptr, crc64_pmull_runtime as *const () as usize);
     }
 
     #[cfg(feature = "simd-accel")]
     #[test]
     fn select_impl_falls_back_without_features() {
-        let ptr = detect_best_impl_with(SimdFeatureToggle::none()) as usize;
+        let ptr = detect_best_impl_with(SimdFeatureToggle::none()) as *const () as usize;
         assert_eq!(ptr, fallback_ptr());
     }
 

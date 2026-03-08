@@ -2995,10 +2995,12 @@ mod model {
 
         #[test]
         fn revocation_bundle_signing_roundtrip() {
-            let operator = AccountId::from_str(
-                "ed0120F00DBABE0EDFACE0000000000000000000000000000000000000000000000000@wonderland",
-            )
-            .expect("operator id");
+            let operator = AccountId::new(
+                "wonderland".parse().expect("domain id"),
+                "ed0120F00DBABE0EDFACE0000000000000000000000000000000000000000000000000"
+                    .parse()
+                    .expect("public key"),
+            );
             let revocation = OfflineVerdictRevocation {
                 verdict_id: Hash::new(b"revocation-bundle"),
                 issuer: operator.clone(),
@@ -3648,7 +3650,7 @@ mod tests {
 
     fn sample_commitment(tag: u8) -> OfflineAllowanceCommitment {
         OfflineAllowanceCommitment {
-            asset: sample_asset("sbp"),
+            asset: sample_asset("acme"),
             amount: Numeric::new(1_000, 0),
             commitment: vec![tag; 32],
         }
@@ -3658,8 +3660,8 @@ mod tests {
         let sender_key = sample_public_key(0xA1);
         let receiver_key = sample_public_key(0xB2);
         let certificate = OfflineWalletCertificate {
-            controller: account_from_key(&sender_key, "sbp"),
-            operator: account_from_key(&sender_key, "sbp"),
+            controller: account_from_key(&sender_key, "acme"),
+            operator: account_from_key(&sender_key, "acme"),
             allowance: sample_commitment(0x11),
             spend_public_key: sender_key.clone(),
             attestation_report: vec![0x01, 0x02],
@@ -3678,9 +3680,9 @@ mod tests {
         };
         OfflineSpendReceipt {
             tx_id: Hash::new(b"offline-tx"),
-            from: account_from_key(&sender_key, "sbp"),
-            to: account_from_key(&receiver_key, "sbp"),
-            asset: sample_asset("sbp"),
+            from: account_from_key(&sender_key, "acme"),
+            to: account_from_key(&receiver_key, "acme"),
+            asset: sample_asset("acme"),
             amount: Numeric::new(250, 0),
             issued_at_ms: 1_700_000_500,
             invoice_id: "inv-001".into(),
@@ -3754,7 +3756,7 @@ mod tests {
             OfflineTransferRecord::collect_pos_verdict_snapshots(&transfer, &snapshot_certificate);
         OfflineTransferRecord {
             transfer,
-            controller: sample_account(0xA1, "sbp"),
+            controller: sample_account(0xA1, "acme"),
             status: OfflineTransferStatus::Settled,
             rejection_reason: None,
             recorded_at_ms: 1,
@@ -3987,8 +3989,8 @@ mod tests {
     fn offline_to_online_transfer_roundtrip() {
         let transfer = OfflineToOnlineTransfer {
             bundle_id: Hash::new(b"bundle"),
-            receiver: sample_account(0xB2, "sbp"),
-            deposit_account: sample_account(0xC3, "sbp"),
+            receiver: sample_account(0xB2, "acme"),
+            deposit_account: sample_account(0xC3, "acme"),
             receipts: vec![sample_receipt()],
             balance_proof: OfflineBalanceProof {
                 initial_commitment: sample_commitment(0x22),

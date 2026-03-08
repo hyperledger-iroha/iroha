@@ -2,9 +2,9 @@
 
 use std::fs;
 
-#[cfg(feature = "fastpq-gpu")]
-use fastpq_prover::ExecutionMode;
-use fastpq_prover::{OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch};
+use fastpq_prover::{
+    ExecutionMode, OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch,
+};
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
@@ -120,7 +120,8 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
 
 #[test]
 fn stage2_artifact_balanced_1k_matches_fixture() {
-    let prover = Prover::canonical("fastpq-lane-balanced").expect("prover");
+    let prover = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
+        .expect("prover");
     let batch = synthetic_batch(1_000);
     let proof = prover.prove(&batch).expect("proof");
     let expected = include_bytes!("fixtures/stage2_balanced_1k.bin");
@@ -147,7 +148,8 @@ fn stage2_artifact_balanced_cpu_gpu_parity() {
         eprintln!("skipping cpu/gpu parity test; gpu backend unavailable");
         return;
     }
-    let batch = synthetic_batch(256);
+    let expected = include_bytes!("fixtures/stage2_balanced_1k.bin");
+    let batch = synthetic_batch(1_000);
     let cpu = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
         .expect("cpu prover");
     let gpu = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Gpu)
@@ -156,12 +158,23 @@ fn stage2_artifact_balanced_cpu_gpu_parity() {
     let gpu_proof = gpu.prove(&batch).expect("gpu proof");
     let cpu_encoded = to_bytes(&cpu_proof).expect("encode cpu proof");
     let gpu_encoded = to_bytes(&gpu_proof).expect("encode gpu proof");
+    assert_eq!(
+        cpu_encoded.as_slice(),
+        expected,
+        "cpu proof should match canonical stage2 fixture"
+    );
+    assert_eq!(
+        gpu_encoded.as_slice(),
+        expected,
+        "gpu proof should match canonical stage2 fixture"
+    );
     assert_eq!(cpu_encoded, gpu_encoded, "stage2 cpu/gpu proofs must match");
 }
 
 #[test]
 fn stage2_artifact_balanced_5k_matches_fixture() {
-    let prover = Prover::canonical("fastpq-lane-balanced").expect("prover");
+    let prover = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
+        .expect("prover");
     let batch = synthetic_batch(5_000);
     let proof = prover.prove(&batch).expect("proof");
     let expected = include_bytes!("fixtures/stage2_balanced_5k.bin");

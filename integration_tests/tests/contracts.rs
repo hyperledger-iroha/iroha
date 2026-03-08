@@ -9,6 +9,7 @@ use iroha::data_model::prelude::*;
 use iroha_data_model::smart_contract::manifest::ContractManifest;
 use iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
 use iroha_test_network::NetworkBuilder;
+use norito::codec::Encode;
 use reqwest::StatusCode;
 
 fn hex32(hash: &Hash) -> String {
@@ -28,7 +29,7 @@ async fn post_and_get_contract_manifest_via_torii() -> Result<()> {
             // Surface more detail if the pipeline stalls while registering the manifest.
             layer.write(["logger", "level"], "TRACE").write(
                 ["logger", "filter"],
-                "iroha_core::sumeragi=trace,iroha_core::queue=trace",
+                "iroha_core::sumeragi=trace,iroha_core::queue=trace,iroha_core::smartcontracts=trace,iroha_core::tx=trace",
             );
         })
         .with_genesis_instruction(Grant::account_permission(
@@ -57,6 +58,10 @@ async fn post_and_get_contract_manifest_via_torii() -> Result<()> {
     let pk = iroha_data_model::prelude::ExposedPrivateKey(
         iroha_test_samples::ALICE_KEYPAIR.private_key().clone(),
     );
+    let authority_literal = format!(
+        "norito:{}",
+        hex::encode((&*iroha_test_samples::ALICE_ID).encode())
+    );
     let manifest = ContractManifest {
         code_hash: Some(code_hash),
         abi_hash: None,
@@ -73,8 +78,7 @@ async fn post_and_get_contract_manifest_via_torii() -> Result<()> {
     let body = norito::json::object([
         (
             "authority",
-            norito::json::to_value(&format!("{}", *iroha_test_samples::ALICE_ID))
-                .expect("serialize authority"),
+            norito::json::to_value(&authority_literal).expect("serialize authority"),
         ),
         (
             "private_key",

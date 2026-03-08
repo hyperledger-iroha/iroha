@@ -6,19 +6,20 @@ import CryptoKit
 
 final class OfflineReceiptChallengeTests: XCTestCase {
     private static let fixtureReceiverAccountId =
-        "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
-    private static let fixtureAssetId =
-        "xor#sora#34mSYn6ySFTASoiVzNGuyBkedDbYTxqhobNmoDbzdhfaNtveqVrm8N49uoqtcRNvAUcapufe1"
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
 
-    func testEncodeRejectsEmptyChainId() {
+    func testEncodeRejectsEmptyChainId() throws {
         let nonce = sampleNonceHex()
         let senderCertificateIdHex = sampleSenderCertificateIdHex()
+        let fixtureAssetId = try makeNoritoAssetId(name: "xor",
+                                                   domain: "sora",
+                                                   accountId: Self.fixtureReceiverAccountId)
         XCTAssertThrowsError(
             try OfflineReceiptChallenge.encode(
                 chainId: " ",
                 invoiceId: "inv-empty",
                 receiverAccountId: Self.fixtureReceiverAccountId,
-                assetId: Self.fixtureAssetId,
+                assetId: fixtureAssetId,
                 amount: "1",
                 issuedAtMs: 1_700_000_000_000,
                 senderCertificateIdHex: senderCertificateIdHex,
@@ -32,15 +33,18 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         }
     }
 
-    func testEncodeAcceptsScaledAmount() {
+    func testEncodeAcceptsScaledAmount() throws {
         let nonce = sampleNonceHex()
         let senderCertificateIdHex = sampleSenderCertificateIdHex()
+        let fixtureAssetId = try makeNoritoAssetId(name: "xor",
+                                                   domain: "sora",
+                                                   accountId: Self.fixtureReceiverAccountId)
         XCTAssertNoThrow(
             try OfflineReceiptChallenge.encode(
                 chainId: "testnet",
                 invoiceId: "inv-frac",
                 receiverAccountId: Self.fixtureReceiverAccountId,
-                assetId: Self.fixtureAssetId,
+                assetId: fixtureAssetId,
                 amount: "1.5",
                 issuedAtMs: 1_700_000_000_000,
                 senderCertificateIdHex: senderCertificateIdHex,
@@ -49,15 +53,18 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         )
     }
 
-    func testEncodeRejectsScaleMismatchWhenExpectedScaleProvided() {
+    func testEncodeRejectsScaleMismatchWhenExpectedScaleProvided() throws {
         let nonce = sampleNonceHex()
         let senderCertificateIdHex = sampleSenderCertificateIdHex()
+        let fixtureAssetId = try makeNoritoAssetId(name: "xor",
+                                                   domain: "sora",
+                                                   accountId: Self.fixtureReceiverAccountId)
         XCTAssertThrowsError(
             try OfflineReceiptChallenge.encode(
                 chainId: "testnet",
                 invoiceId: "inv-frac",
                 receiverAccountId: Self.fixtureReceiverAccountId,
-                assetId: Self.fixtureAssetId,
+                assetId: fixtureAssetId,
                 amount: "1.5",
                 issuedAtMs: 1_700_000_000_000,
                 senderCertificateIdHex: senderCertificateIdHex,
@@ -76,11 +83,14 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         #if canImport(Darwin)
         let nonce = IrohaHash.hash(Data("receipt-nonce".utf8)).hexUppercased()
         let senderCertificateIdHex = sampleSenderCertificateIdHex()
+        let fixtureAssetId = try makeNoritoAssetId(name: "xor",
+                                                   domain: "sora",
+                                                   accountId: Self.fixtureReceiverAccountId)
         let result = try OfflineReceiptChallenge.encode(
             chainId: "testnet",
             invoiceId: "inv-swift-tests",
-            receiverAccountId: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
-            assetId: "xor#sora#34mSYn6ySFTASoiVzNGuyBkedDbYTxqhobNmoDbzdhfaNtveqVrm8N49uoqtcRNvAUcapufe1",
+            receiverAccountId: Self.fixtureReceiverAccountId,
+            assetId: fixtureAssetId,
             amount: "250",
             issuedAtMs: 1_700_000_000_000,
             senderCertificateIdHex: senderCertificateIdHex,
@@ -102,13 +112,12 @@ final class OfflineReceiptChallengeTests: XCTestCase {
 
     func testChallengePreimageCanonicalizesReceiverAccountId() throws {
         let publicKey = Data(repeating: 0x22, count: 32)
-        let domain = "wonderland"
-        let rawAccountId = AccountId.make(publicKey: publicKey, domain: domain)
-        let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey, algorithm: "ed25519")
-        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-        let canonicalAccountId = ih58
-        let rawAssetId = "xor#\(domain)#\(rawAccountId)"
-        let canonicalAssetId = "xor#\(domain)#\(canonicalAccountId)"
+        let domain = AccountAddress.defaultDomainName
+        let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: "ed25519")
+        let rawAccountId = try address.toCompressedSora()
+        let canonicalAccountId = try address.toIH58(networkPrefix: 0x02F1)
+        let rawAssetId = try makeNoritoAssetId(name: "xor", domain: domain, accountId: rawAccountId)
+        let canonicalAssetId = try makeNoritoAssetId(name: "xor", domain: domain, accountId: canonicalAccountId)
         let nonceHex = IrohaHash.hash(Data("receipt-nonce".utf8)).hexUppercased()
         let nonce = try XCTUnwrap(Data(hexString: nonceHex))
         let senderCertificateId = IrohaHash.hash(Data("sender-certificate".utf8))
@@ -145,9 +154,8 @@ final class OfflineReceiptChallengeTests: XCTestCase {
             throw XCTSkip("NoritoBridge not available")
         }
         let publicKey = Data(repeating: 0x11, count: 32)
-        let domain = "wonderland"
-        let receiverAccountId = AccountId.make(publicKey: publicKey, domain: domain)
-        let assetId = "xor#\(domain)#\(receiverAccountId)"
+        let receiverAccountId = AccountId.make(publicKey: publicKey)
+        let assetId = try fixtureAllowanceAssetId()
         let senderCertificateIdHex = sampleSenderCertificateIdHex()
         let nonceHex = sampleNonceHex()
         let result = try bridge.offlineReceiptChallenge(
@@ -167,8 +175,21 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         XCTAssertEqual(native.clientHash.count, 32)
         XCTAssertFalse(native.preimage.isEmpty)
         #else
-        throw XCTSkip("NoritoBridge not available on this platform")
+            throw XCTSkip("NoritoBridge not available on this platform")
         #endif
+    }
+
+    private func fixtureAllowanceAssetId() throws -> String {
+        let url = fixtureURL("summary.json")
+        let data = try Data(contentsOf: url)
+        let object = try JSONSerialization.jsonObject(with: data, options: [])
+        guard let map = object as? [String: Any],
+              let value = map["allowance_asset"] as? String else {
+            throw NSError(domain: "OfflineReceiptChallengeTests", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "fixtures/offline_allowance/ios-demo/summary.json is missing allowance_asset"
+            ])
+        }
+        return value
     }
 
     private func sampleNonceHex() -> String {
@@ -177,5 +198,22 @@ final class OfflineReceiptChallengeTests: XCTestCase {
 
     private func sampleSenderCertificateIdHex() -> String {
         IrohaHash.hash(Data("sender-certificate".utf8)).hexUppercased()
+    }
+
+    private func makeNoritoAssetId(name: String,
+                                   domain: String,
+                                   accountId: String) throws -> String {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(try OfflineNorito.encodeAssetDefinitionId(name: name, domain: domain))
+        writer.writeField(try OfflineNorito.encodeAccountId(accountId))
+        return "norito:\(writer.data.hexLowercased())"
+    }
+
+    private func fixtureURL(_ name: String) -> URL {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 {
+            url.deleteLastPathComponent()
+        }
+        return url.appendingPathComponent("fixtures/offline_allowance/ios-demo/\(name)")
     }
 }

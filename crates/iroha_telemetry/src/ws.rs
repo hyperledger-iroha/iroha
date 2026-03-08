@@ -637,13 +637,13 @@ mod tests {
         // Fail sending the first message
         fail_send.store(true, Ordering::SeqCst);
         telemetry_sender.send(system_connected_telemetry()).unwrap();
-        message_receiver.try_next().unwrap_err();
+        message_receiver.try_recv().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // The second message is not sent because the sink is reset
         fail_send.store(false, Ordering::SeqCst);
         telemetry_sender.send(system_interval_telemetry(1)).unwrap();
-        message_receiver.try_next().unwrap_err();
+        message_receiver.try_recv().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Fail the reconnection
@@ -652,7 +652,7 @@ mod tests {
 
         // The third message is not sent because the sink is not created yet
         telemetry_sender.send(system_interval_telemetry(1)).unwrap();
-        message_receiver.try_next().unwrap_err();
+        message_receiver.try_recv().unwrap_err();
     }
 
     async fn send_after_reconnect_fails_with_suite(suite: Suite) {
@@ -666,24 +666,76 @@ mod tests {
         // Fail sending the first message
         fail_send.store(true, Ordering::SeqCst);
         telemetry_sender.send(system_connected_telemetry()).unwrap();
-        message_receiver.try_next().unwrap_err();
+        message_receiver.try_recv().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // The second message is not sent because the sink is reset
         fail_send.store(false, Ordering::SeqCst);
         telemetry_sender.send(system_interval_telemetry(1)).unwrap();
-        message_receiver.try_next().unwrap_err();
+        message_receiver.try_recv().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Fail sending the first message after reconnect
         fail_send.store(true, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_secs(1)).await;
-        message_receiver.try_next().unwrap_err();
+        message_receiver.try_recv().unwrap_err();
 
         // The message is sent
         fail_send.store(false, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_secs(1)).await;
-        message_receiver.try_next().unwrap();
+        message_receiver.try_recv().unwrap();
+    }
+
+    async fn broadcast_lag_does_not_stop_client_with_suite(suite: Suite) {
+        let Suite {
+            telemetry_sender,
+            mut message_receiver,
+            ..
+        } = suite;
+
+        telemetry_sender.send(system_connected_telemetry()).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Drain the initialization message so subsequent assertions focus on interval telemetry.
+        let _ = message_receiver.next().await.unwrap();
+
+        // Flood the channel faster than the client can drain it to trigger lag handling.
+        for peers in 0..200_u64 {
+            telemetry_sender
+                .send(system_interval_telemetry(peers))
+                .unwrap();
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        telemetry_sender
+            .send(system_interval_telemetry(777))
+            .unwrap();
+
+        // Ensure the latest update still arrives even after the lag burst.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        let mut received_latest = false;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_millis(100), message_receiver.next()).await {
+                Ok(Some(Message::Binary(bytes))) => {
+                    let map: Map = norito::json::from_slice(&bytes).unwrap();
+                    let Some(Value::Object(payload)) = map.get("payload") else {
+                        continue;
+                    };
+                    if payload.get("msg").and_then(Value::as_str) == Some("system.interval")
+                        && payload.get("peers").and_then(Value::as_u64) == Some(777)
+                    {
+                        received_latest = true;
+                        break;
+                    }
+                }
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => break,
+            }
+        }
+
+        assert!(
+            received_latest,
+            "expected telemetry to continue after broadcast lag"
+        );
     }
 
     async fn broadcast_lag_does_not_stop_client_with_suite(suite: Suite) {

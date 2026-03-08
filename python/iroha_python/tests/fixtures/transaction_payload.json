@@ -1,6 +1,6 @@
 {
   "chain": "00000002",
-  "authority": "alice@wonderland",
+  "authority": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
   "creation_time_ms": 1735000000123,
   "executable": {
     "Ivm": "cGF5bG9hZC1ieXRlcw=="

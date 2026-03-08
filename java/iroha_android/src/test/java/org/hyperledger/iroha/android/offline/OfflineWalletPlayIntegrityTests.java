@@ -73,9 +73,9 @@ public final class OfflineWalletPlayIntegrityTests {
         """;
     return new OfflineAllowanceList.OfflineAllowanceItem(
         "deadbeef",
-        "alice@wonderland",
+        "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
         "Alice",
-        "usd#wonderland",
+        "norito:00",
         Instant.now().toEpochMilli(),
         Instant.now().plusSeconds(3600).toEpochMilli(),
         Instant.now().plusSeconds(7200).toEpochMilli(),

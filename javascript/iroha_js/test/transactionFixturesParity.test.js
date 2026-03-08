@@ -51,7 +51,7 @@ function extractCanonicalAuthority(payloadBase64, authorityHint) {
         const domain = trimmed.slice(atIndex + 1);
         if (signatory && domain) {
           try {
-            const { address } = AccountAddress.parseAny(signatory, undefined, domain);
+            const { address } = AccountAddress.parseEncoded(signatory, undefined, domain);
             return address.toIH58();
           } catch {
             // Fall back to payload scan.
@@ -59,7 +59,7 @@ function extractCanonicalAuthority(payloadBase64, authorityHint) {
         }
       } else {
         try {
-          const { address } = AccountAddress.parseAny(trimmed);
+          const { address } = AccountAddress.parseEncoded(trimmed);
           return address.toIH58();
         } catch {
           // Fall back to payload scan.
@@ -95,14 +95,14 @@ function extractCanonicalAuthority(payloadBase64, authorityHint) {
         continue;
       }
       try {
-        const { address } = AccountAddress.parseAny(signatory, undefined, domain);
+        const { address } = AccountAddress.parseEncoded(signatory, undefined, domain);
         return address.toIH58();
       } catch {
         continue;
       }
     }
     try {
-      const { address } = AccountAddress.parseAny(entry);
+      const { address } = AccountAddress.parseEncoded(entry);
       return address.toIH58();
     } catch {
       continue;
@@ -237,7 +237,7 @@ test("buildBurnAssetTransaction matches canonical Norito fixture", () => {
     typeof assetId === "string"
       ? assetId.includes("##")
         ? assetId.replace(/##.+$/, `##${canonicalAuthority}`)
-        : assetId.replace(/#[^#]+$/, `#${canonicalAuthority}`)
+        : assetId.replace(/#[^#]+$/, `##${canonicalAuthority}`)
       : assetId;
   const quantity = burnInstruction.arguments?.quantity;
   assert.equal(typeof assetId, "string", "asset identifier must be provided");

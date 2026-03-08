@@ -106,7 +106,7 @@ Hooks жизненного цикла (enforced runtime):
   "asset": "xor#wonderland",
   "total_reward": "250.0000",
   "shares": [
-    { "account": "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA", "role": "Validator", "amount": "150" },
+    { "account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw", "role": "Validator", "amount": "150" },
     { "account": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", "role": "Nominator", "amount": "100" }
   ],
   "metadata": {
@@ -140,8 +140,8 @@ Runtime guards:
 ```norito
 {
   "lane_id": 1,
-  "validator": "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA",
-  "stake_account": "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA",
+  "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+  "stake_account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
   "initial_stake": "150000",
   "metadata": {
     "commission_bps": 750,
@@ -246,11 +246,11 @@ validator-first). Runtime логика будет добавлять аннот�
 
     ```jsonc
     [
-      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA" } },
+      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw" } },
       {
         "ExitPublicLaneValidator": {
           "lane_id": 1,
-          "validator": "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA",
+          "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
           "release_at_ms": 1730000000000
         }
       }

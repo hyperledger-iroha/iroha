@@ -1339,7 +1339,7 @@ fn encode_hex(bytes: &[u8]) -> String {
 }
 
 fn account_literal(account_id: &AccountId) -> String {
-    format!("{account_id}@{}", account_id.domain())
+    account_id.to_string()
 }
 
 fn asset_literal(asset_id: &AssetId) -> String {
@@ -1359,10 +1359,12 @@ fn parse_asset_id(value: &str) -> Result<AssetId, ComposeError> {
 }
 
 fn parse_account_id(value: &str) -> Result<AccountId, ComposeError> {
-    AccountId::from_str(value).map_err(|err| ComposeError::InvalidAccountId {
-        account: value.to_owned(),
-        reason: err.to_string(),
-    })
+    AccountId::parse_encoded(value)
+        .map(|parsed| parsed.into_account_id())
+        .map_err(|err| ComposeError::InvalidAccountId {
+            account: value.to_owned(),
+            reason: err.to_string(),
+        })
 }
 
 fn parse_quantity(value: &str) -> Result<Numeric, ComposeError> {

@@ -1976,9 +1976,8 @@ mod tests {
     impl TestContext {
         fn new(output_format: CliOutputFormat) -> Self {
             let key_pair = KeyPair::random();
-            let account: AccountId = format!("{}@wonderland", key_pair.public_key())
-                .parse()
-                .expect("valid account");
+            let domain: DomainId = "wonderland".parse().expect("domain");
+            let account = AccountId::new(domain, key_pair.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
                 account,

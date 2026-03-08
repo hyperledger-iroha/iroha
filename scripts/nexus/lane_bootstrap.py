@@ -534,12 +534,14 @@ def collect_validators(inline: List[str], file_path: Optional[Path]) -> List[str
     for validator in validators:
         if not validator:
             raise ValueError("validator account identifier must be non-empty")
+        if any(ch.isspace() for ch in validator):
+            raise ValueError(
+                f"invalid validator `{validator}` (whitespace is not allowed in encoded account identifiers)"
+            )
         if "@" in validator:
-            parts = validator.split("@")
-            if len(parts) != 2 or not parts[0] or not parts[1]:
-                raise ValueError(
-                    f"invalid validator `{validator}` (expected IH58/uaid/opaque or <alias|public_key>@domain)"
-                )
+            raise ValueError(
+                f"invalid validator `{validator}` (expected encoded account identifier; @domain literals are rejected)"
+            )
     return validators
 
 

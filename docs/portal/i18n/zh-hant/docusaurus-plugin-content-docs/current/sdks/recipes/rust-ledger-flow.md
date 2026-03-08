@@ -133,6 +133,6 @@ ih58... now holds:
 - 使用 `iroha --config defaults/client.toml transaction get --hash <hash>` 來
   檢查SDK提交的交易。
 - 與 `iroha --config defaults/client.toml asset list all --table` 交叉檢查餘額
-  或 `asset list filter '{"id":"coffee#wonderland##<account>"}'`。
+  或 `asset list filter '{"id":"norito:4e52543000000002"}'`。
 - 重複 CLI 演練中的相同流程，以確認兩個表面都產生
   相同的 Norito 有效負載和事務狀態。

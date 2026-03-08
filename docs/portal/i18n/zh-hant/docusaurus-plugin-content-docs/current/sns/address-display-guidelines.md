@@ -150,7 +150,7 @@ UI 和 SDK 表面應該準備好顯示選擇器類型：
 
 |選擇器種類 |規範六角 |
 |----------------|---------------|
-|隱式默認 | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+|隱式默認 | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 |本地摘要 (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 |全局註冊表 (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -166,7 +166,7 @@ UI 和 SDK 表面應該準備好顯示選擇器類型：
    具有 `kind`/`warning` 字段的對象，並通過以下方式回顯任何提供的域
    `input_domain` 字段。當 `kind` 為 `local12` 時，CLI 會打印一條警告
    stderr 和 JSON 摘要呼應相同的指導，因此 CI 管道和 SDK
-   可以將其浮現出來。每當您需要轉換時傳遞 `--append-domain`
+   可以將其浮現出來。每當您需要轉換時傳遞 `legacy  suffix`
    編碼重播為 `<ih58>@<domain>`。
 2. SDK 可以通過 JavaScript 幫助程序顯示相同的警告/摘要：
 
@@ -194,19 +194,19 @@ UI 和 SDK 表面應該準備好顯示選擇器類型：
    讀取換行符分隔的文字（以 `#` 開頭的註釋將被忽略，並且
    `--input -` 或無標誌使用 STDIN），發出 JSON 報告
    每個條目的規範/首選 IH58/第二最佳壓縮 (`sora`) 摘要，並對兩個解析進行計數
-   包含垃圾行的轉儲以及帶有 `--fail-on-warning` 的門自動化
+   包含垃圾行的轉儲以及帶有 `strict CI post-check` 的門自動化
    一旦操作員準備好阻止 CI 中的本地選擇器。
 6. 當需要換行符到換行符重寫時，使用
   對於本地選擇器修復電子表格，請使用
   導出 `input,status,format,…` CSV，一次性突出顯示規範編碼、警告和解析失敗。
    默認情況下，助手會跳過非本地行，轉換每個剩餘的條目
    到請求的編碼（IH58首選/壓縮（`sora`）第二好/十六進制/JSON），並保留
-   設置 `--append-domain` 時的原始域。與 `--allow-errors` 配對
+   設置 `legacy  suffix` 時的原始域。與 `--allow-errors` 配對
    即使轉儲包含格式錯誤的文字也可以繼續掃描。
 7. CI/lint 自動化可以運行 `ci/check_address_normalize.sh`，它提取
    來自 `fixtures/account/address_vectors.json` 的本地選擇器，轉換
    通過 `iroha tools address normalize` 進行回放
-   `iroha tools address audit --fail-on-warning` 證明版本不再發出
+   `iroha tools address audit` 證明版本不再發出
    本地摘要。`torii_address_local8_total{endpoint}`加
 `torii_address_collision_total{endpoint,kind="local12_digest"}`，
 `torii_address_collision_domain_total{endpoint,domain}`，以及
@@ -239,7 +239,7 @@ Grafana 板 `dashboards/grafana/address_ingest.json` 提供執行
 發貨時，請在錢包/瀏覽器發行說明中包含以下項目符號
 切換：
 
-> **地址：** 添加了 `iroha tools address normalize --only-local --append-domain`
+> **地址：** 添加了 `iroha tools address normalize`
 > helper 並將其連接到 CI (`ci/check_address_normalize.sh`) 所以錢包/資源管理器
 > 在主網上阻止 Local-8/Local-12 之前。將任何自定義導出更新為
 > 運行命令並將規範化列表附加到發布證據包中。

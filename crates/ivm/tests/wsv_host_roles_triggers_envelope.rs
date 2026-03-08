@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
+use iroha_crypto::PublicKey;
 use ivm::{
     IVM, Memory, PointerType, VMError,
     instruction::wide,
-    mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
+    mock_wsv::{DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost},
     syscalls,
 };
 mod common;
@@ -36,6 +37,20 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn account(domain: &str, public_key: &str) -> ScopedAccountId {
+    let domain: DomainId = domain.parse().unwrap();
+    let public_key: PublicKey = public_key.parse().unwrap();
+    ScopedAccountId::new(domain, public_key)
+}
+
+fn canonical_account(account: ScopedAccountId) -> ScopedAccountId {
+    let value = norito::json::to_value(&account).expect("serialize account");
+    let literal = value.as_str().expect("account literal");
+    ScopedAccountId::parse_encoded(literal)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("canonical account id must parse")
+}
+
 fn run_env_result(vm: &mut IVM, env: norito::json::Value) -> Result<(), VMError> {
     let body = norito::json::to_vec(&env).expect("env json");
     let tlv = make_tlv(PointerType::Json as u16, &body);
@@ -64,16 +79,20 @@ fn run_env(vm: &mut IVM, env: norito::json::Value) {
 #[test]
 fn envelope_roles_permissions_triggers() {
     // Setup WSV and host
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
+    let alice = canonical_account(account(
+        "wonderland",
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+    ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::ManageRoles);
     wsv.grant_permission(&alice, PermissionToken::ManagePermissions);
     wsv.grant_permission(&alice, PermissionToken::ManageTriggers);
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -118,10 +137,10 @@ fn envelope_roles_permissions_triggers() {
         host.wsv
             .has_permission(&alice, &PermissionToken::RegisterDomain)
     );
-    assert!(
-        host.wsv
-            .has_permission(&alice, &PermissionToken::ReadAccountAssets(alice.clone()))
-    );
+    assert!(host.wsv.has_permission(
+        &alice,
+        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&alice,)),
+    ));
 
     // 2) Grant + revoke a direct permission
     let mint_perm_env = json_object([
@@ -224,13 +243,17 @@ fn envelope_roles_permissions_triggers() {
 
 #[test]
 fn envelope_missing_payload_is_rejected() {
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
+    let alice = canonical_account(account(
+        "wonderland",
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+    ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new(wsv, alice, HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -241,13 +264,17 @@ fn envelope_missing_payload_is_rejected() {
 
 #[test]
 fn envelope_payload_must_be_object() {
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
+    let alice = canonical_account(account(
+        "wonderland",
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+    ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new(wsv, alice, HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -261,13 +288,17 @@ fn envelope_payload_must_be_object() {
 
 #[test]
 fn envelope_admin_alias_rejects_without_manage_permissions() {
-    let alice: AccountId =
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
-            .parse()
-            .unwrap();
+    let alice = canonical_account(account(
+        "wonderland",
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+    ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 

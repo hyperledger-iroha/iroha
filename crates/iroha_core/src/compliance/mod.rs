@@ -430,15 +430,13 @@ mod tests {
 
     fn account(name: &str, domain: &str) -> AccountId {
         let domain_id = DomainId::from_str(domain).expect("domain");
-        let canonical = format!("{name}@{domain}");
-        AccountId::from_str(&canonical).unwrap_or_else(|_| {
-            let mut seed = canonical.into_bytes();
-            if seed.is_empty() {
-                seed.extend_from_slice(b"lane-compliance-account");
-            }
-            let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
-            AccountId::new(domain_id.clone(), keypair.public_key().clone())
-        })
+        let seed_literal = format!("{name}::{domain}");
+        let mut seed = seed_literal.into_bytes();
+        if seed.is_empty() {
+            seed.extend_from_slice(b"lane-compliance-account");
+        }
+        let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+        AccountId::new(domain_id, keypair.public_key().clone())
     }
 
     fn sample_policy(

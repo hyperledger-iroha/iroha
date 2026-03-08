@@ -28,9 +28,8 @@ Harakat elementlari:
    (`@domain` qo'shimchasi yo'q). Kanonik hex disk raskadrovka uchun mo'ljallangan (`0x...`).
 2. **Qabul qilingan kiritishlar:** tahlilchilar IH58 (afzal), `sora` siqilgan,
    va kanonik hex (faqat `0x...`; yalang'och olti burchak rad etiladi). Kirishlar MUMKIN
-   Marshrutlash bo'yicha maslahatlar uchun `@<domain>` qo'shimchasi; `<label>@<domain>` taxalluslari a talab qiladi
-   hal qiluvchi. Raw `public_key@domain` (multihash hex) qo'llab-quvvatlanadi.
-3. **Resolvers:** domensiz IH58/sora tahlil qilish uchun domen tanlagich kerak
+   Marshrutlash bo'yicha maslahatlar uchun `@<domain>` qo'shimchasi; `<label>@<domain>` (rejected legacy form) taxalluslari a talab qiladi
+   hal qiluvchi.  3. **Resolvers:** domensiz IH58/sora tahlil qilish uchun domen tanlagich kerak
    resolver, agar selektor aniq sukut bo'lmasa (konfiguratsiya qilingan standartdan foydalaning
    domen yorlig'i). UAID (`uaid:...`) va noaniq (`opaque:...`) harflar talab qiladi
    hal qiluvchilar.

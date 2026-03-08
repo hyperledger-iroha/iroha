@@ -143,7 +143,7 @@ UI と SDK の管理:
 
 |ログイン | ログインヘックス |
 |---------------|---------------|
-| और देखें `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| और देखें `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 |ダイジェスト (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 |ニュース (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -157,7 +157,7 @@ CLI と ADDR-5:1. `iroha tools address inspect` يصدر الان ملخص JSON 
    16 進数。評価 `domain` 評価 `kind`/`warning`
    عرض المزيد `input_domain`. عندما يكون `kind` هو `local12`
    CLI の標準エラー出力 ويعكس ملخص JSON 認証 التوجيه حتى تتمكن خطوط CI و
-   SDK は次のとおりです。 مرر `--append-domain` متى اردت اعادة تشغيل الترميز المحول
+   SDK は次のとおりです。 مرر `legacy  suffix` متى اردت اعادة تشغيل الترميز المحول
    كـ `<ih58>@<domain>`。
 2. SDK の開発/開発 JavaScript:
 
@@ -190,12 +190,12 @@ CLI と ADDR-5:1. `iroha tools address inspect` يصدر الان ملخص JSON 
   CSV `input,status,format,...` セキュリティ セキュリティ
   خفاقات التحليل في مرور واحد。 يتخطى المساعد الصفوف غير المحلية افتراضيا،
   ويحول كل ادخال متبق الى الترميز المطلوب (IH58/مضغوط/hex/JSON)، ويحافظ على
-  `--append-domain` を参照してください。 `--allow-errors`
+  `legacy  suffix` を参照してください。 `--allow-errors`
   リテラル تالفة 。
 7. CI/lint تشغيل `ci/check_address_normalize.sh` الذي يستخرج محددات
    ローカル `fixtures/account/address_vectors.json`، ويحولها عبر
    `iroha tools address normalize`، ويعيد تشغيل
-   `iroha tools address audit --fail-on-warning` ダイジェスト
+   `iroha tools address audit` ダイジェスト
    地元。
 
 `torii_address_local8_total{endpoint}` 認証済み
@@ -227,7 +227,7 @@ Grafana (`dashboards/grafana/address_ingest.json`) ADDR-7 の意味
 
 バージョンとバージョンのカットオーバー:
 
-> **العناوين:** تمت اضافة مساعد `iroha tools address normalize --only-local --append-domain`
+> **العناوين:** تمت اضافة مساعد `iroha tools address normalize`
 > وربطه في CI (`ci/check_address_normalize.sh`) حتى تتمكن مسارات المحفظة/المستكشف
 > ローカル アクセス IH58/ローカル 8/ローカル 12
 > メインネット。 حدث اي عمليات تصدير مخصصة لتشغيل الامر وارفق القائمة المعيارية

@@ -54,9 +54,9 @@ const tx = buildTransaction({
   authority: adminAccount,
   instructions: [
     {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
-    {Mint: {asset: {id: `coffee#wonderland##${adminAccount}`}, value: {quantity: '250'}}},
+    {Mint: {asset: {id: `norito:4e52543000000002`}, value: {quantity: '250'}}},
     {Transfer: {
-      asset: {id: `coffee#wonderland##${adminAccount}`},
+      asset: {id: `norito:4e52543000000002`},
       destination: receiverAccount,
       value: {quantity: '50'},
     }},
@@ -83,5 +83,5 @@ foydali yuk) va qabul qiluvchining yangilangan balansi.
 ## Paritetni tekshiring
 
 - Tranzaksiya tafsilotlarini `iroha --config defaults/client.toml transaction get --hash <hash>` orqali oling.
-- `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` bilan balanslarni o'zaro tekshirish.
+- `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'` bilan balanslarni o'zaro tekshirish.
 - SDK paritetini ta'minlash uchun chiqarilgan xeshni Rust va Python retseptlari bilan solishtiring.

@@ -153,7 +153,7 @@ insertar en docs/tests:
 
 | Tipo de selector | Hex canónico |
 |---------------|---------------|
-| Implícito por defecto | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Implícito por defecto | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | Resumen local (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | Registro mundial (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -168,7 +168,7 @@ Las cadenas comprimidas deben seguir el flujo CLI documentado en ADDR-5:1. `iroh
    `domain` con campos `kind`/`warning` y refleja cualquier dominio proporcionado
    vía el campo `input_domain`. Cuando `kind` es `local12`, el CLI imprime una
    advertencia a stderr y el resumen JSON refleja la misma guía para que los
-   Los pipelines de CI y los SDK pueden mostrarla. Pasa `--append-domain` cuando
+   Los pipelines de CI y los SDK pueden mostrarla. Pasa `legacy  suffix` cuando
    quieras que la codificación convertida se reproduzca como `<ih58>@<domain>`.
 2. Los SDK pueden mostrar la misma advertencia/resumen a través del ayudante de
    JavaScript:
@@ -198,19 +198,19 @@ Las cadenas comprimidas deben seguir el flujo CLI documentado en ADDR-5:1. `iroh
    resúmenes canónicos/IH58/comprimidos para cada entrada, y cuenta errores de
    parse y advertencias de dominio Local. Usa `--allow-errors` al auditar dumps
    heredados que contienen filas de basura, y bloquea la automatización con
-   `--fail-on-warning` cuando los operadores están listos para bloquear
+   `strict CI post-check` cuando los operadores están listos para bloquear
    selectores Local en CI.
 6. Cuando necesites una reescritura linea a linea, usa
   Para hojas de calculo de remediacion de selectores Local, usa
   para exportar un CSV `input,status,format,...` que resalta codificaciones
   canónicas, advertencias y fallos de parse en una sola pasada.
    El ayudante omite filas no Local por defecto, convierte cada entrada restante
-   a la codificación solicitada (IH58/comprimido/hex/JSON), y preserva el dominiooriginal cuando se usa `--append-domain`. Combinalo con `--allow-errors` para
+   a la codificación solicitada (IH58/comprimido/hex/JSON), y preserva el dominiooriginal cuando se usa `legacy  suffix`. Combinalo con `--allow-errors` para
    seguir escaneando incluso cuando un dump contiene literales mal formados.
 7. La automatización de CI/lint puede ejecutar `ci/check_address_normalize.sh`,
    que extrae los selectores Local de `fixtures/account/address_vectors.json`,
    los convierte vía `iroha tools address normalize`, y vuelve a ejecutar
-   `iroha tools address audit --fail-on-warning` para demostrar que los lanzamientos ya no
+   `iroha tools address audit` para demostrar que los lanzamientos ya no
    emiten resúmenes Locales.`torii_address_local8_total{endpoint}` junto con
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
 `torii_address_collision_domain_total{endpoint,domain}`, y el tablero Grafana
@@ -245,7 +245,7 @@ ventana requerida de 30 días antes de que mainnet desactive los selectores
 ### Fragmento para notas de lanzamiento (billetera y exploradora)
 
 Incluye la siguiente viñeta en las notas de lanzamiento de billetera/explorador
-al publicar el cutover:> **Direcciones:** Se agrega el ayudante `iroha tools address normalize --only-local --append-domain`
+al publicar el cutover:> **Direcciones:** Se agrega el ayudante `iroha tools address normalize`
 > y se conecta en CI (`ci/check_address_normalize.sh`) para que las tuberías de
 > billetera/explorador puedan convertir selectores Local heredados a formas
 > canónicas IH58/comprimidas antes de que Local-8/Local-12 se bloqueen en mainnet.

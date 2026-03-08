@@ -2450,10 +2450,12 @@ mod tests {
 
         // Build a small suite of representative instructions
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let account_id: AccountId =
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland"
+        let account_id = AccountId::new(
+            domain_id.clone(),
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
-                .unwrap();
+                .unwrap(),
+        );
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
         let nft_id: NftId = "n0$wonderland".parse().unwrap();
@@ -2504,11 +2506,11 @@ mod tests {
 
     #[test]
     fn revoke_encode_as_instruction_box_uses_encode() {
-        // Account identifiers accept `<alias|public_key>@domain` input forms.
-        let account_id: AccountId =
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland"
-                .parse()
-                .unwrap();
+        let domain: DomainId = "wonderland".parse().unwrap();
+        let signatory = "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+            .parse()
+            .unwrap();
+        let account_id = AccountId::new(domain, signatory);
         let permission = Permission::new("dummy".parse().unwrap(), Json::new(()));
         let revoke = Revoke::account_permission(permission, account_id);
         let expected = revoke.encode();
@@ -2588,10 +2590,12 @@ mod tests {
         let _guard = RegistryGuard::set(crate::instruction_registry::default());
 
         let domain_id: DomainId = "alice".parse().unwrap();
-        let account_id: AccountId =
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@alice"
+        let account_id = AccountId::new(
+            domain_id.clone(),
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
-                .unwrap();
+                .expect("public key"),
+        );
         let asset_def_id: AssetDefinitionId = "coin#alice".parse().unwrap();
         let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
         let role_id: RoleId = "auditor".parse().unwrap();
@@ -2635,14 +2639,18 @@ mod tests {
 
         // Common fixtures
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let account_a: AccountId =
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+        let account_a = AccountId::new(
+            domain_id.clone(),
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
-                .unwrap();
-        let account_b: AccountId =
-            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
+                .unwrap(),
+        );
+        let account_b = AccountId::new(
+            domain_id.clone(),
+            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
                 .parse()
-                .unwrap();
+                .unwrap(),
+        );
         let asset_def_id: AssetDefinitionId = "coin#wonderland".parse().unwrap();
         let asset_id = AssetId::of(asset_def_id.clone(), account_a.clone());
         let nft_id: NftId = "n0$wonderland".parse().unwrap();

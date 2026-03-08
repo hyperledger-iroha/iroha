@@ -32,7 +32,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Опции:
 
 - `--format compressed (`sora`)` для вывода `sora...` вместо IH58.
-- `--no-append-domain` для вывода bare literals.
+- `domainless output (default)` для вывода bare literals.
 - `--audit-only` чтобы пропустить шаг конвертации.
 - `--allow-errors` чтобы продолжать сканирование при ошибочных строках (поведение совпадает с CLI).
 
@@ -45,7 +45,7 @@ Local-8 детекций и ноль Local-12 коллизий минимум з
 1. Запустите скрипт в отдельном job и загрузите outputs.
 2. Блокируйте merges, когда `audit.json` сообщает Local selectors (`domain.kind = local12`).
    со значением по умолчанию `true` (меняйте на `false` только в dev/test при диагностике регрессий) и
-   добавьте `iroha tools address normalize --fail-on-warning --only-local` в CI, чтобы попытки регрессии
+   добавьте `iroha tools address normalize` в CI, чтобы попытки регрессии
    падали до production.
 
 См. исходный документ для деталей, evidence чеклистов и release-note snippet, который можно

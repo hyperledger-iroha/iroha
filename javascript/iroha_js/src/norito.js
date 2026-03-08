@@ -1,5 +1,4 @@
 import { getNativeBinding } from "./native.js";
-import { normalizeAccountId, normalizeAssetId } from "./normalizers.js";
 
 const ALIGNMENT = 16;
 
@@ -8,72 +7,6 @@ function cloneJson(value) {
     return structuredClone(value);
   }
   return JSON.parse(JSON.stringify(value));
-}
-
-function maybeUpgradeAccountId(value) {
-  if (typeof value !== "string") {
-    return value;
-  }
-  const trimmed = value.trim();
-  const at = trimmed.lastIndexOf("@");
-  if (at === -1) {
-    return value;
-  }
-  const signatory = trimmed.slice(0, at);
-  if (signatory.length === 0) {
-    return value;
-  }
-  const upper = signatory.toUpperCase();
-  if (
-    upper.startsWith("0X") ||
-    upper.startsWith("ED") ||
-    !/^[0-9A-F]+$/.test(upper)
-  ) {
-    return value;
-  }
-  return `0x${upper}@${trimmed.slice(at + 1)}`;
-}
-
-function maybeUpgradeAssetId(value) {
-  if (typeof value !== "string" || value.startsWith("hash:")) {
-    return value;
-  }
-  if (value.includes("##")) {
-    const [definition, account] = value.split("##");
-    if (account === undefined || account.length === 0) {
-      return value;
-    }
-    return `${definition}##${maybeUpgradeAccountId(account)}`;
-  }
-  const segments = value.split("#");
-  if (segments.length >= 3) {
-    const accountPart = segments.pop();
-    if (accountPart) {
-      segments.push(maybeUpgradeAccountId(accountPart));
-      return segments.join("#");
-    }
-  }
-  return value;
-}
-
-function upgradeInstructionStrings(value) {
-  if (Array.isArray(value)) {
-    return value.map((entry) => upgradeInstructionStrings(entry));
-  }
-  if (value && typeof value === "object") {
-    for (const [key, nested] of Object.entries(value)) {
-      value[key] = upgradeInstructionStrings(nested);
-    }
-    return value;
-  }
-  if (typeof value === "string") {
-    const upgradedAccount = maybeUpgradeAccountId(value);
-    if (upgradedAccount !== value) {
-      return upgradedAccount;
-    }
-    return maybeUpgradeAssetId(value);
-  }
-  return value;
 }
 
 function resolveNative(method) {
@@ -95,8 +28,7 @@ export function noritoEncodeInstruction(instruction) {
     if (typeof instruction === "string") {
       try {
         const parsed = JSON.parse(instruction);
-        const upgraded = upgradeInstructionStrings(parsed);
-        return native.noritoEncodeInstruction(JSON.stringify(upgraded));
+        return native.noritoEncodeInstruction(JSON.stringify(parsed));
       } catch {
         const trimmed = instruction.trim();
         const decoded = tryDecodeBase64(trimmed) ?? tryDecodeHex(trimmed);
@@ -106,12 +38,10 @@ export function noritoEncodeInstruction(instruction) {
         return native.noritoEncodeInstruction(instruction);
       }
     }
-    const cloned = cloneJson(instruction);
-    const upgraded = upgradeInstructionStrings(cloned);
-    return native.noritoEncodeInstruction(JSON.stringify(upgraded));
+    return native.noritoEncodeInstruction(JSON.stringify(cloneJson(instruction)));
   }
 
-  // JS-only fallback: canonicalise identifiers and emit UTF-8 JSON bytes.
+  // JS-only fallback: emit UTF-8 JSON bytes.
   if (typeof instruction === "string") {
     const trimmed = instruction.trim();
     const decoded = tryDecodeBase64(trimmed) ?? tryDecodeHex(trimmed);
@@ -127,9 +57,8 @@ export function noritoEncodeInstruction(instruction) {
 /**
  * Decode canonical Norito instruction bytes back to JSON.
  *
- * When `options.parseJson !== false`, the result is a JSON value whose nested
- * account and asset identifiers are canonicalised. Otherwise the raw JSON
- * string returned by the native binding is emitted.
+ * When `options.parseJson !== false`, the result is the parsed JSON payload.
+ * Otherwise the raw JSON string returned by the native binding is emitted.
  *
  * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
  * @param {{ parseJson?: boolean }} [options]
@@ -157,15 +86,13 @@ export function noritoDecodeInstruction(bytes, options = {}) {
     if (options.parseJson === false) {
       return json;
     }
-    const parsed = JSON.parse(json);
-    return canonicalizeDecodedValue(parsed);
+    return JSON.parse(json);
   }
 
   const json = buffer.toString("utf8");
   try {
     const parsed = JSON.parse(json);
-    const upgraded = canonicalizeDecodedValue(parsed);
-    return options.parseJson === false ? json : upgraded;
+    return options.parseJson === false ? json : parsed;
   } catch {
     const hint =
       "Norito decode requires the native binding; run `npm run build:native` or supply JSON-encoded bytes in JS-only mode.";
@@ -186,39 +113,8 @@ function toBuffer(value) {
   throw new TypeError("bytes must be a Buffer, ArrayBuffer, or typed array");
 }
 
-function canonicalizeDecodedValue(value) {
-  if (Array.isArray(value)) {
-    return value.map((entry) => canonicalizeDecodedValue(entry));
-  }
-  if (value && typeof value === "object") {
-    for (const [key, nested] of Object.entries(value)) {
-      value[key] = canonicalizeDecodedValue(nested);
-    }
-    return value;
-  }
-  if (typeof value === "string") {
-    if (!value.startsWith("hash:") && value.includes("#")) {
-      try {
-        return normalizeAssetId(value, "decoded.assetId");
-      } catch {
-        return value;
-      }
-    }
-    if (value.includes("@")) {
-      try {
-        return normalizeAccountId(value, "decoded.accountId");
-      } catch {
-        return value;
-      }
-    }
-  }
-  return value;
-}
-
 function encodeJsonInstruction(instruction) {
-  const cloned = cloneJson(instruction);
-  const upgraded = upgradeInstructionStrings(cloned);
-  return Buffer.from(JSON.stringify(upgraded), "utf8");
+  return Buffer.from(JSON.stringify(cloneJson(instruction)), "utf8");
 }
 
 function isAlignmentError(error) {

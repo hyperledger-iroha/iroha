@@ -31,7 +31,7 @@ final class OfflineAllowanceCapacityTests: XCTestCase {
                 "certificate_id_hex": "cert-\(index)",
                 "controller_id": "controller-\(index)",
                 "controller_display": "Controller \(index)",
-                "asset_id": "PKR#sbp",
+                "asset_id": "USD#acme",
                 "registered_at_ms": 1,
                 "expires_at_ms": 2,
                 "policy_expires_at_ms": 3,

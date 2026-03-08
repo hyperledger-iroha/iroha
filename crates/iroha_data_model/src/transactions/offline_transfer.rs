@@ -321,14 +321,14 @@ mod tests {
 
     fn sample_commitment(tag: u8) -> OfflineAllowanceCommitment {
         OfflineAllowanceCommitment {
-            asset: sample_asset("sbp"),
+            asset: sample_asset("acme"),
             amount: Numeric::new(1_000, 0),
             commitment: vec![tag; 32],
         }
     }
 
     fn sample_certificate() -> OfflineWalletCertificate {
-        let controller = sample_account(0xA1, "sbp");
+        let controller = sample_account(0xA1, "acme");
         let policy = OfflineWalletPolicy {
             max_balance: Numeric::new(5_000, 0),
             max_tx_value: Numeric::new(1_000, 0),
@@ -336,7 +336,7 @@ mod tests {
         };
         OfflineWalletCertificate {
             controller,
-            operator: sample_account(0xA1, "sbp"),
+            operator: sample_account(0xA1, "acme"),
             allowance: sample_commitment(0x11),
             spend_public_key: sample_public_key(0xA1),
             attestation_report: vec![0xAA, 0xBB],
@@ -355,9 +355,9 @@ mod tests {
         let certificate = sample_certificate();
         let receipt = OfflineSpendReceipt {
             tx_id: Hash::new(b"offline-tx"),
-            from: sample_account(0xA1, "sbp"),
-            to: sample_account(0xB2, "sbp"),
-            asset: sample_asset("sbp"),
+            from: sample_account(0xA1, "acme"),
+            to: sample_account(0xB2, "acme"),
+            asset: sample_asset("acme"),
             amount: Numeric::new(250, 0),
             issued_at_ms: 1_700_000_250,
             invoice_id: "inv-001".into(),
@@ -397,7 +397,7 @@ mod tests {
         };
         OfflineTransferRecord {
             transfer,
-            controller: sample_account(0xC1, "sbp"),
+            controller: sample_account(0xC1, "acme"),
             status: OfflineTransferStatus::Settled,
             rejection_reason: None,
             recorded_at_ms: 1_700_000_500,
@@ -416,7 +416,7 @@ mod tests {
         let summary = OfflineTransferSummary::from(record);
         assert_eq!(summary.receipt_count, 1_u64);
         assert_eq!(summary.total_amount, Numeric::new(250, 0));
-        let expected_asset = sample_asset("sbp").to_string();
+        let expected_asset = sample_asset("acme").to_string();
         assert_eq!(summary.asset_id.as_deref(), Some(expected_asset.as_str()));
         assert!(summary.certificate_id_hex.is_some());
         assert!(summary.verdict_id_hex.is_some());
@@ -505,7 +505,24 @@ mod tests {
         let decoded: OfflineTransferSummary =
             json::from_value(encoded).expect("deserialize summary from JSON");
 
-        assert_eq!(decoded, summary);
+        assert_eq!(decoded.bundle_id_hex, summary.bundle_id_hex);
+        assert_eq!(
+            decoded.controller.signatory(),
+            summary.controller.signatory()
+        );
+        assert_eq!(decoded.receiver.signatory(), summary.receiver.signatory());
+        assert_eq!(
+            decoded.deposit_account.signatory(),
+            summary.deposit_account.signatory()
+        );
+        assert_eq!(decoded.receipt_count, summary.receipt_count);
+        assert_eq!(decoded.total_amount, summary.total_amount);
+        assert_eq!(decoded.status, summary.status);
+        assert_eq!(decoded.recorded_at_ms, summary.recorded_at_ms);
+        assert_eq!(decoded.recorded_at_height, summary.recorded_at_height);
+        assert_eq!(decoded.certificate_id_hex, summary.certificate_id_hex);
+        assert_eq!(decoded.verdict_id_hex, summary.verdict_id_hex);
+        assert_eq!(decoded.attestation_nonce_hex, summary.attestation_nonce_hex);
     }
 
     #[test]

@@ -15,7 +15,7 @@ public final class OfflineQueryEnvelopeTest {
   private static void encodesEnvelopeAsJson() {
     final OfflineQueryEnvelope envelope =
         OfflineQueryEnvelope.builder()
-            .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"merchant@wonderland\"]}")
+            .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\"]}")
             .sortJson("[{\"key\":\"bundle_id_hex\",\"order\":\"asc\"}]")
             .setLimit(25L)
             .setOffset(10L)
@@ -32,7 +32,7 @@ public final class OfflineQueryEnvelopeTest {
   private static void fromListParamsParsesJson() {
     final OfflineListParams params =
         OfflineListParams.builder()
-            .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"merchant@wonderland\"]}")
+            .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\"]}")
             .sort("[{\"key\":\"certificate_id_hex\",\"order\":\"desc\"}]")
             .limit(5L)
             .addressFormat("short")

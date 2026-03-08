@@ -39,7 +39,7 @@ Run with:
 ```bash
 npm install
 TORII_URL=http://127.0.0.1:8080 \
-ACCOUNT_ID=alice@wonderland \
+ACCOUNT_ID=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
 TORII_AUTH_TOKEN=token \
 node ./recipes/nft_account_iteration.mjs
 ```
@@ -163,7 +163,7 @@ Run with:
 npm install
 node ./recipes/contracts.mjs \
   TORII_URL=https://torii.devnet.example \
-  AUTHORITY=alice@wonderland \
+  AUTHORITY=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
   PRIVATE_KEY_HEX=$(cat ~/.iroha/keys/alice.hex) \
   CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
   CONTRACT_MANIFEST_PATH=./artifacts/demo_manifest.json \
@@ -221,8 +221,8 @@ Run with:
 ```bash
 npm install
 TORII_URL=http://localhost:8080 \
-ACCOUNT_ID=alice@wonderland \
-NFT_ID=nft#wonderland#unique \
+ACCOUNT_ID=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
+NFT_ID=norito:4e52543000000002 \
 PAGE_SIZE=25 \
 MAX_ITEMS=100 \
 node ./recipes/assets_iterators.mjs
@@ -232,7 +232,7 @@ Environment variables:
 
 - `TORII_URL` — Torii endpoint (defaults to `http://localhost:8080`).
 - `ACCOUNT_ID` — account literal for asset iteration.
-- `NFT_ID` — optional NFT id to filter on (exact match).
+- `NFT_ID` — optional encoded NFT id (`norito:<hex>`) to filter on (exact match).
 - `PAGE_SIZE` / `MAX_ITEMS` — pagination controls.
 - `TORII_API_TOKEN` / `TORII_AUTH_TOKEN` — credentials for permissioned nodes.
 - `ALLOW_INSECURE=1` — allow HTTP while sending credentials (dev/test only).
@@ -270,6 +270,8 @@ Environment variables:
   writes JSON to disk, and replays the stored envelope against Torii.
 - Defaults to an in-process mock Torii server to keep the flow deterministic; set
   `OFFLINE_PIPELINE_USE_MOCK=0` and `TORII_BASE_URL` to target a live node.
+- Supports deterministic build-only validation with `OFFLINE_PIPELINE_SKIP_REPLAY=1`, which exits
+  after envelope build/parse/write and skips mock/live replay.
 - Logs the envelope hash, schema, and metadata so you can archive evidence alongside the stored
   payload.
 
@@ -287,6 +289,7 @@ Environment variables:
 - `OFFLINE_PIPELINE_OUT_DIR` — output directory for the stored envelope (default:
   `artifacts/js/offline_pipeline`).
 - `OFFLINE_PIPELINE_USE_MOCK` — set to `0` to skip the mock server and use `TORII_BASE_URL`.
+- `OFFLINE_PIPELINE_SKIP_REPLAY` — set to `1` to stop after build/parse/write and skip replay.
 
 ## governance.mjs
 

@@ -38,7 +38,7 @@ scripts/address_local_toolkit.sh \
 አማራጮች፡-
 
 - `--format compressed` ለ `sora…` ውፅዓት ከ IH58 ይልቅ።
-- ባዶ ቃል በቃል ለመልቀቅ `--no-append-domain`።
+- ባዶ ቃል በቃል ለመልቀቅ `domainless output (default)`።
 - የልወጣ ደረጃን ለመዝለል `--audit-only`።
 - `--allow-errors` የተበላሹ ረድፎች ሲታዩ መቃኘቱን ለመቀጠል (ከ CLI ባህሪ ጋር ይዛመዳል)።
 
@@ -52,7 +52,7 @@ scripts/address_local_toolkit.sh \
 2. I18NI0000022X የአካባቢያዊ መራጮችን (`domain.kind = local12`) ሲዘግብ ይዋሃዳል።
    በነባሪ የ`true` ዋጋ (ወደ `false` በdev/የሙከራ ስብስቦች ላይ መሻር ብቻ
    መመለሻዎችን መመርመር) እና መጨመር
-   `iroha tools address normalize --fail-on-warning --only-local` ወደ CI ስለዚህ regression
+   `iroha tools address normalize` ወደ CI ስለዚህ regression
    ምርቱን ከመምታቱ በፊት ሙከራዎች አልተሳኩም.
 
 ለተጨማሪ ዝርዝሮች፣ የናሙና ማስረጃዎችን ዝርዝር እና የመልቀቂያ-ማስታወሻ ቅንጣቢውን ለደንበኞች ሲያስታውቁ እንደገና ለመጠቀም የምንጭ ሰነዱን ይመልከቱ።

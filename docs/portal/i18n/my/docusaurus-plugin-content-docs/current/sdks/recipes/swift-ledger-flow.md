@@ -116,6 +116,6 @@ struct LedgerFlow {
 ## 5. တန်းတူညီမျှမှုကို အတည်ပြုပါ။
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` မှတစ်ဆင့် အရောင်းအ၀ယ်များကို စစ်ဆေးပါ။
-- ပိုင်ဆိုင်မှုများကို `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` နှင့် နှိုင်းယှဉ်ပါ။
+- ပိုင်ဆိုင်မှုများကို `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'` နှင့် နှိုင်းယှဉ်ပါ။
 - SDK တိုင်းကို အတည်ပြုရန် ဤစာရွက်ကို Rust/Python/JavaScript တို့နှင့် ပေါင်းစပ်ပါ။
   သရုပ်ပြစီးဆင်းမှုအတွက် တူညီသော hashe များကို ထုတ်လုပ်သည်။

@@ -1,20 +1,20 @@
 {
-  "allowed_operators": [
-    "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-  ],
   "allowed_manifest_ids": [
     "pos-retail-v1"
   ],
+  "allowed_operators": [
+    "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+  ],
+  "manifest_grace_ms": 900000,
   "pinned_backend_roots": [
     {
       "label": "torii-admission",
-      "role": "offline_admission_signer",
-      "public_key": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+      "public_key": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+      "role": "offline_admission_signer"
     }
   ],
-  "manifest_grace_ms": 900000,
-  "verdict_grace_ms": 600000,
+  "require_attestation_nonce": false,
   "require_refresh_deadline": true,
   "require_verdict_id": false,
-  "require_attestation_nonce": false
+  "verdict_grace_ms": 600000
 }

@@ -1,51 +1,6 @@
 {
   "components": {
     "schemas": {
-      "AccountResolveRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "literal": {
-            "description": "Account literal to resolve.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "literal"
-        ],
-        "type": "object"
-      },
-      "AccountResolveResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "account_id": {
-            "description": "Canonical IH58 account identifier.",
-            "type": "string"
-          },
-          "domain": {
-            "description": "Resolved domain label.",
-            "type": "string"
-          },
-          "format": {
-            "description": "Address format when source is encoded.",
-            "enum": [
-              "ih58",
-              "compressed",
-              "canonical_hex"
-            ],
-            "type": "string"
-          },
-          "source": {
-            "description": "Resolution source (encoded, alias, public_key, uaid, opaque).",
-            "type": "string"
-          }
-        },
-        "required": [
-          "account_id",
-          "domain",
-          "source"
-        ],
-        "type": "object"
-      },
       "AliasResolveIndexRequest": {
         "additionalProperties": false,
         "properties": {
@@ -888,7 +843,7 @@
             "type": "string"
           },
           "relay_id": {
-            "description": "Relay account identifier (IH58 or `<alias|public_key>@domain`).",
+            "description": "Relay account identifier (IH58 or `sora...` compressed literal).",
             "type": "string"
           },
           "reported_at_ms": {
@@ -1104,6 +1059,68 @@
         "required": [
           "items",
           "total"
+        ],
+        "type": "object"
+      },
+      "OfflineBuildClaimIssueRequest": {
+        "properties": {
+          "app_id": {
+            "description": "Optional application identifier override.",
+            "nullable": true,
+            "type": "string"
+          },
+          "build_number": {
+            "description": "Optional build number override. Defaults to the certificate minimum.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "certificate_id_hex": {
+            "description": "Registered offline certificate identifier rendered as hex.",
+            "type": "string"
+          },
+          "expires_at_ms": {
+            "description": "Optional expiry timestamp override.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "issued_at_ms": {
+            "description": "Optional issuance timestamp override.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "platform": {
+            "description": "Build-claim platform slug (`apple` or `android`).",
+            "type": "string"
+          },
+          "tx_id_hex": {
+            "description": "Receipt tx id rendered as hex. Used as build-claim nonce.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "certificate_id_hex",
+          "tx_id_hex",
+          "platform"
+        ],
+        "type": "object"
+      },
+      "OfflineBuildClaimIssueResponse": {
+        "properties": {
+          "build_claim": {
+            "description": "Operator-signed OfflineBuildClaim payload.",
+            "type": "object"
+          },
+          "claim_id_hex": {
+            "description": "Deterministic build-claim identifier rendered as hex.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_id_hex",
+          "build_claim"
         ],
         "type": "object"
       },
@@ -1489,18 +1506,64 @@
         ],
         "type": "object"
       },
+      "OfflineSettlementBuildClaimOverride": {
+        "properties": {
+          "app_id": {
+            "description": "Optional application identifier override.",
+            "nullable": true,
+            "type": "string"
+          },
+          "build_number": {
+            "description": "Optional build number override.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "expires_at_ms": {
+            "description": "Optional expiry timestamp override.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "issued_at_ms": {
+            "description": "Optional issuance timestamp override.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "tx_id_hex": {
+            "description": "Receipt tx id rendered as hex (override target).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tx_id_hex"
+        ],
+        "type": "object"
+      },
       "OfflineSettlementSubmitRequest": {
         "properties": {
           "authority": {
             "description": "Account authorizing the settlement transaction.",
             "type": "string"
           },
+          "build_claim_overrides": {
+            "description": "Optional per-receipt build-claim overrides keyed by tx_id_hex.",
+            "items": {
+              "$ref": "#/components/schemas/OfflineSettlementBuildClaimOverride"
+            },
+            "type": "array"
+          },
           "private_key": {
             "description": "Exposed private key used to sign the transaction.",
             "type": "object"
           },
+          "repair_existing_build_claims": {
+            "description": "When true, Torii re-issues and replaces existing receipt build claims.",
+            "type": "boolean"
+          },
           "transfer": {
-            "description": "OfflineToOnlineTransfer bundle to settle.",
+            "description": "OfflineToOnlineTransfer bundle to settle. Torii auto-fills missing receipt build claims when `torii.offline_issuer` is configured.",
             "type": "object"
           }
         },
@@ -1516,10 +1579,15 @@
           "bundle_id_hex": {
             "description": "Deterministic bundle identifier rendered as hex.",
             "type": "string"
+          },
+          "transaction_hash_hex": {
+            "description": "Canonical signed transaction hash rendered as hex.",
+            "type": "string"
           }
         },
         "required": [
-          "bundle_id_hex"
+          "bundle_id_hex",
+          "transaction_hash_hex"
         ],
         "type": "object"
       },
@@ -3454,37 +3522,6 @@
           }
         },
         "summary": "Query accounts.",
-        "tags": [
-          "Accounts"
-        ]
-      }
-    },
-    "/v1/accounts/resolve": {
-      "post": {
-        "description": "Resolve account literals into canonical IH58 identifiers.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AccountResolveRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AccountResolveResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Resolve account literals.",
         "tags": [
           "Accounts"
         ]
@@ -6880,7 +6917,7 @@
         "operationId": "kaigiRelayDetail",
         "parameters": [
           {
-            "description": "Relay account identifier (e.g., `relay@kaigi`).",
+            "description": "Relay account identifier (e.g., `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).",
             "in": "path",
             "name": "relay_id",
             "required": true,
@@ -8016,6 +8053,57 @@
           }
         },
         "summary": "Renew an offline allowance certificate.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/build-claims/issue": {
+      "post": {
+        "description": "Signs an OfflineBuildClaim bound to a receipt tx id using Torii's configured offline issuer key.",
+        "operationId": "offlineBuildClaimIssue",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineBuildClaimIssueRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineBuildClaimIssueResponse"
+                }
+              }
+            },
+            "description": "Offline build claim issued."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid build-claim payload.",
+            "headers": {
+              "x-iroha-reject-code": {
+                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
+                "schema": {
+                  "example": "certificate_expired",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Issue an offline build claim.",
         "tags": [
           "Offline"
         ]
@@ -9224,7 +9312,7 @@
         ]
       },
       "post": {
-        "description": "Enqueues a `SubmitOfflineToOnlineTransfer` transaction carrying the provided OfflineToOnlineTransfer bundle.",
+        "description": "Enqueues a `SubmitOfflineToOnlineTransfer` transaction carrying the provided OfflineToOnlineTransfer bundle. When `torii.offline_issuer` is configured, Torii auto-issues missing receipt `build_claim` entries before submission. Use `build_claim_overrides[]` for per-receipt app/build/window overrides; set `repair_existing_build_claims=true` to re-issue existing claims.",
         "operationId": "offlineSettlementsSubmit",
         "requestBody": {
           "content": {

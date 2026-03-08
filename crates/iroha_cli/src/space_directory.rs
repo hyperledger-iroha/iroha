@@ -704,7 +704,7 @@ impl ManifestScaffoldProfileArgs {
         let governance_issuer = self
             .governance_issuer
             .clone()
-            .unwrap_or_else(|| "governance@example".to_owned());
+            .unwrap_or_else(|| "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan".to_owned());
         let governance_ticket = self
             .governance_ticket
             .clone()
@@ -712,8 +712,8 @@ impl ManifestScaffoldProfileArgs {
         let governance_quorum = self.governance_quorum.unwrap_or(1);
         let validators = if self.validators.is_empty() {
             vec![
-                "validator-1@example".to_owned(),
-                "validator-2@example".to_owned(),
+                "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned(),
+                "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ".to_owned(),
             ]
         } else {
             self.validators.clone()
@@ -730,8 +730,8 @@ impl ManifestScaffoldProfileArgs {
         let da_quorum = self.da_quorum.unwrap_or(4);
         let da_attesters = if self.da_attesters.is_empty() {
             vec![
-                "attester-1@example".to_owned(),
-                "attester-2@example".to_owned(),
+                "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL".to_owned(),
+                "6cmzPVPX4QdPT36dHgSFoznxS3MV99eV8CzeuZFTeqqsBgXDUYfft81".to_owned(),
             ]
         } else {
             self.da_attesters.clone()
@@ -1441,20 +1441,20 @@ mod tests {
         };
         let profile_args = ManifestScaffoldProfileArgs {
             profile_id: Some("profile.cbdc.preview".to_owned()),
-            governance_issuer: Some("parliament@cbdc".to_owned()),
+            governance_issuer: Some("6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan".to_owned()),
             governance_ticket: Some("gov-ticket".to_owned()),
             governance_quorum: Some(4),
             validators: vec![
-                "cbdc-validator-1@cbdc".to_owned(),
-                "cbdc-validator-2@cbdc".to_owned(),
+                "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned(),
+                "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ".to_owned(),
             ],
             validator_quorum: Some(2),
             protected_namespaces: vec!["cbdc".to_owned(), "gov".to_owned()],
             da_class: Some("A".to_owned()),
             da_quorum: Some(8),
             da_attesters: vec![
-                "da-attester-1@cbdc".to_owned(),
-                "da-attester-2@cbdc".to_owned(),
+                "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL".to_owned(),
+                "6cmzPVPX4QdPT36dHgSFoznxS3MV99eV8CzeuZFTeqqsBgXDUYfft81".to_owned(),
             ],
             da_rotation_epochs: Some(96),
             composability_group: Some(

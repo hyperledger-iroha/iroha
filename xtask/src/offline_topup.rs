@@ -215,7 +215,7 @@ fn handle_allowance(
     let operator_key = parse_private_key(operator_key_spec)
         .wrap_err_with(|| format!("invalid operator private key for allowance `{label}`"))?;
 
-    let controller = AccountId::parse(&allowance.controller)
+    let controller = AccountId::parse_encoded(&allowance.controller)
         .map_err(|err| {
             eyre!(
                 "invalid `controller` value `{}` for allowance `{label}`: {}",
@@ -229,7 +229,7 @@ fn handle_allowance(
         .as_deref()
         .or_else(|| operator_from_spec.and_then(|op| op.account.as_deref()))
         .ok_or_else(|| eyre!("operator account not provided for allowance `{label}`"))?;
-    let operator_account = AccountId::parse(operator_account)
+    let operator_account = AccountId::parse_encoded(operator_account)
         .map_err(|err| {
             eyre!(
                 "invalid `operator` value `{}` for allowance `{label}`: {}",

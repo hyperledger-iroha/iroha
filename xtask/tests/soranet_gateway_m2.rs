@@ -1,4 +1,4 @@
-use std::{fs, path::Path, str::FromStr};
+use std::{fs, path::Path};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use blake3::Hasher as Blake3;
@@ -50,10 +50,12 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
         expires_at_unix: None,
         policy_version: Some("2027-beta".to_string()),
         policy_digest: Some([0xAA; 32]),
-        operator: AccountId::from_str(
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
-        )
-        .expect("account id"),
+        operator: AccountId::new(
+            "wonderland".parse().expect("domain"),
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .expect("public key"),
+        ),
         reason: "SN15 compliance drill".to_string(),
         notes: Some("Beta rollout".to_string()),
         evidence_uris: vec!["sora://gar/receipts/docs/beta".to_string()],
@@ -124,7 +126,7 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
             "usage": billing_usage,
             "catalog": billing_catalog,
             "guardrails": billing_guardrails,
-            "payer": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+            "payer": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
             "treasury": "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C",
             "asset": "xor#wonderland"
         },

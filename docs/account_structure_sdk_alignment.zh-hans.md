@@ -28,8 +28,8 @@ translator: machine-google-reviewed
    （无 `@domain` 后缀）。规范十六进制用于调试 (`0x...`)。
 2. **接受的输入：**解析器必须接受 IH58（首选），`sora` 压缩，
    和规范十六进制（仅限 `0x...`；裸十六进制被拒绝）。输入可以携带
-   `@<domain>` 路由提示后缀； `<label>@<domain>` 别名需要
-   解析器。原始 `public_key@domain`（多重哈希十六进制）仍然受支持。
+   `@<domain>` 路由提示后缀； `<label>@<domain>` (rejected legacy form) 别名需要
+   解析器。原始 
 3. **解析器：**无域IH58/sora解析需要域选择器
    解析器，除非选择器是隐式默认的（使用配置的默认值
    域标签）。 UAID (`uaid:...`) 和不透明 (`opaque:...`) 文字需要

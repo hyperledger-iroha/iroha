@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 説明:
 
 - `--format compressed (`sora`)` は `sora...` と IH58 を接続します。
-- `--no-append-domain` для вывода 裸のリテラル。
+- `domainless output (default)` для вывода 裸のリテラル。
 - `--audit-only` чтобы пропустить заг конвертации.
 - `--allow-errors` は、CLI にアクセスできます。
 
@@ -47,7 +47,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 1. ジョブと出力を確認します。
 2. マージ、`audit.json` とローカル セレクター (`domain.kind = local12`)。
    со значением по умолчанию `true` (меняйте на `false` только в dev/test при диагностике регрессий) и
-   `iroha tools address normalize --fail-on-warning --only-local` と CI、чтобы попытки регрессии
+   `iroha tools address normalize` と CI、чтобы попытки регрессии
    製作。
 
 См. исходный документ для деталей、証拠 чеклистов およびリリースノート スニペット、который можно

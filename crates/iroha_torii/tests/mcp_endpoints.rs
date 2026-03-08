@@ -20,6 +20,8 @@ use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use norito::json::Value;
 use tower::ServiceExt as _;
 
+const TEST_ACCOUNT_IH58: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+
 fn build_router(cfg: iroha_config::parameters::actual::Root) -> axum::Router {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -2775,7 +2777,7 @@ async fn mcp_jsonrpc_tools_call_account_transactions_uses_path_and_query_argumen
                 "name": "torii.get_v1_accounts_account_id_transactions",
                 "arguments": {
                     "path": {
-                        "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+                        "account_id": TEST_ACCOUNT_IH58
                     },
                     "query": {
                         "limit": 0
@@ -3804,7 +3806,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_settlements_submit_accepts_f
             "params": {
                 "name": "iroha.offline.settlements.submit",
                 "arguments": {
-                    "authority": "alice@wonderland"
+                    "authority": TEST_ACCOUNT_IH58
                 }
             }
         }),
@@ -3948,7 +3950,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_certificates_issue_accepts_f
             "params": {
                 "name": "iroha.offline.certificates.issue",
                 "arguments": {
-                    "authority": "alice@wonderland"
+                    "authority": TEST_ACCOUNT_IH58
                 }
             }
         }),
@@ -3987,7 +3989,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_certificates_renew_accepts_s
                 "name": "iroha.offline.certificates.renew",
                 "arguments": {
                     "certificate_id": "not-a-certificate-id",
-                    "authority": "alice@wonderland"
+                    "authority": TEST_ACCOUNT_IH58
                 }
             }
         }),
@@ -4026,7 +4028,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_certificates_renew_issue_acc
                 "name": "iroha.offline.certificates.renew_issue",
                 "arguments": {
                     "certificate_id": "not-a-certificate-id",
-                    "authority": "alice@wonderland"
+                    "authority": TEST_ACCOUNT_IH58
                 }
             }
         }),
@@ -4173,7 +4175,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_allowances_issue_accepts_fla
             "params": {
                 "name": "iroha.offline.allowances.issue",
                 "arguments": {
-                    "authority": "alice@wonderland"
+                    "authority": TEST_ACCOUNT_IH58
                 }
             }
         }),
@@ -4212,7 +4214,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_allowances_renew_accepts_sho
                 "name": "iroha.offline.allowances.renew",
                 "arguments": {
                     "certificate_id": "not-a-certificate-id",
-                    "authority": "alice@wonderland"
+                    "authority": TEST_ACCOUNT_IH58
                 }
             }
         }),
@@ -4735,7 +4737,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_accepts_flat_ar
             "params": {
                 "name": "iroha.accounts.transactions",
                 "arguments": {
-                    "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                    "account_id": TEST_ACCOUNT_IH58,
                     "limit": 0
                 }
             }
@@ -4808,7 +4810,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_onboard_accepts_shortcuts()
                 "name": "iroha.accounts.onboard",
                 "arguments": {
                     "alias": "agent-alice",
-                    "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+                    "account_id": TEST_ACCOUNT_IH58
                 }
             }
         }),
@@ -4846,7 +4848,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_query_accepts_f
             "params": {
                 "name": "iroha.accounts.transactions.query",
                 "arguments": {
-                    "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                    "account_id": TEST_ACCOUNT_IH58,
                     "limit": 2
                 }
             }
@@ -4879,7 +4881,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_assets_accepts_flat_argument
             "params": {
                 "name": "iroha.accounts.assets",
                 "arguments": {
-                    "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                    "account_id": TEST_ACCOUNT_IH58,
                     "limit": 0
                 }
             }
@@ -4918,7 +4920,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_assets_query_accepts_flat_ar
             "params": {
                 "name": "iroha.accounts.assets.query",
                 "arguments": {
-                    "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                    "account_id": TEST_ACCOUNT_IH58,
                     "limit": 2
                 }
             }
@@ -4951,7 +4953,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_permissions_accepts_flat_acc
             "params": {
                 "name": "iroha.accounts.permissions",
                 "arguments": {
-                    "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+                    "account_id": TEST_ACCOUNT_IH58
                 }
             }
         }),
@@ -5533,44 +5535,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_query_accepts_flat_arg
     );
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_accounts_resolve_accepts_literal_shortcut() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1063,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.resolve",
-                "arguments": {
-                    "literal": "not-an-account-literal"
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid literal shortcut should be marked as MCP tool error"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid literal to be rejected"
-    );
 }
 
 #[tokio::test]

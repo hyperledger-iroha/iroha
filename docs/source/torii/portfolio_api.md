@@ -42,11 +42,11 @@ GET /v1/accounts/{uaid}/portfolio
       "dataspace_alias": "universal",
       "accounts": [
         {
-          "account_id": "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA",
+          "account_id": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
           "label": null,
           "assets": [
             {
-              "asset_id": "cash#portfolio::RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA",
+              "asset_id": "cash#portfolio::6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
               "asset_definition_id": "cash#portfolio",
               "quantity": "500"
             }
@@ -144,7 +144,7 @@ Sample response:
     {
       "dataspace_id": 0,
       "dataspace_alias": "universal",
-      "accounts": ["RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA"]
+      "accounts": ["6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"]
     },
     {
       "dataspace_id": 11,

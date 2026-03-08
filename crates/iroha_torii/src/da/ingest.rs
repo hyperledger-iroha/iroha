@@ -1622,9 +1622,6 @@ fn registry_alias_from_metadata(
 fn registry_owner_from_metadata(
     metadata: &ExtraMetadata,
 ) -> Result<Option<AccountId>, (StatusCode, String)> {
-    #[cfg(test)]
-    crate::ensure_test_domain_selector_resolver();
-
     let Some(entry) = metadata
         .items
         .iter()
@@ -1642,12 +1639,14 @@ fn registry_owner_from_metadata(
             "owner must not be empty",
         ));
     }
-    let owner = AccountId::from_str(value).map_err(|err| {
-        da_metadata_error(
-            META_DA_REGISTRY_OWNER,
-            format!("invalid AccountId `{value}`: {err}"),
-        )
-    })?;
+    let owner = AccountId::parse_encoded(value)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| {
+            da_metadata_error(
+                META_DA_REGISTRY_OWNER,
+                format!("invalid AccountId `{value}`: {err}"),
+            )
+        })?;
     Ok(Some(owner))
 }
 

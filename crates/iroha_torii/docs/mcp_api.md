@@ -130,7 +130,6 @@ It lets AI agents call Torii and Connect endpoints through JSON-RPC.
   - `iroha.accounts.get`
   - `iroha.accounts.qr`
   - `iroha.accounts.query`
-  - `iroha.accounts.resolve`
   - `iroha.aliases.resolve`
   - `iroha.aliases.resolve_index`
   - `iroha.accounts.onboard`
@@ -240,7 +239,7 @@ Query account transactions with path and query arguments:
     "name": "torii.get_v1_accounts_account_id_transactions",
     "arguments": {
       "path": {
-        "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+        "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN"
       },
       "query": {
         "limit": 20,
@@ -261,7 +260,7 @@ Equivalent flat-argument call via the alias tool:
   "params": {
     "name": "iroha.accounts.transactions",
     "arguments": {
-      "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN",
       "limit": 20,
       "offset": 0
     }
@@ -279,7 +278,7 @@ Account assets alias (flat `account_id` + query keys):
   "params": {
     "name": "iroha.accounts.assets",
     "arguments": {
-      "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN",
       "limit": 20,
       "offset": 0
     }
@@ -297,7 +296,7 @@ Account permissions alias (flat `account_id`):
   "params": {
     "name": "iroha.accounts.permissions",
     "arguments": {
-      "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN"
     }
   }
 }
@@ -313,7 +312,7 @@ Account detail alias (flat `account_id` shortcut):
   "params": {
     "name": "iroha.accounts.get",
     "arguments": {
-      "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN"
     }
   }
 }
@@ -329,7 +328,7 @@ Account QR alias (flat `account_id` shortcut):
   "params": {
     "name": "iroha.accounts.qr",
     "arguments": {
-      "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN"
     }
   }
 }
@@ -362,7 +361,7 @@ Account transactions query alias (flat `account_id` + query-envelope shortcuts):
   "params": {
     "name": "iroha.accounts.transactions.query",
     "arguments": {
-      "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN",
       "limit": 20
     }
   }
@@ -379,7 +378,7 @@ Account assets query alias (flat `account_id` + query-envelope shortcuts):
   "params": {
     "name": "iroha.accounts.assets.query",
     "arguments": {
-      "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN",
       "limit": 20
     }
   }
@@ -397,7 +396,7 @@ Account onboarding alias (flat shortcuts):
     "name": "iroha.accounts.onboard",
     "arguments": {
       "alias": "agent-alice",
-      "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN"
     }
   }
 }
@@ -1891,22 +1890,6 @@ Optional `iroha.transactions.wait` controls:
 - `transaction_hash` (alias for `hash`)
 - `terminal_statuses` (default: `Committed`, `Applied`, `Rejected`, `Expired`)
 - `status_accept` (Accept header for status polling calls; defaults to `application/json`)
-
-Account resolve alias shortcut:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "acct-resolve-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.accounts.resolve",
-    "arguments": {
-      "literal": "<account-literal>"
-    }
-  }
-}
-```
 
 Alias runtime resolve shortcut:
 

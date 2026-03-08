@@ -1,8 +1,8 @@
 seiyaku AssetOps {
   kotoage fn execute() permission(Admin) {
     // Typed pointer‑ABI arguments via constructors
-    let alice = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
-    let bob = account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland");
+    let alice = authority();
+    let bob = authority();
     let coin = asset_definition!("coin#wonder");
     mint_asset(
       alice,

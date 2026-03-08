@@ -34,7 +34,7 @@ public final class OfflineSpendReceiptPayloadEncoderTest {
     // These use the compressed AccountAddress format
     final String sender = "RnuaJGGDLA57fKeoK1TaFQWhYLxMXY9sEqWhSviYfXxDwTkLdBw3Khq2";
     final String receiver = "RnuaJGGDL9ruds8g1c7AAz8cq1kS16u1LDptWe8FC3NLR4qs1RhLjNjk";
-    final String asset = "xor##" + sender;
+    final String asset = "norito:00";
 
     // tx_id must have LSB=1 (this is the hash from Rust test)
     final String txIdHex = "e2a94e18647fe0c6283a31e40c46ae1cc5f0867650f6834e4f01e34284adc9c7";

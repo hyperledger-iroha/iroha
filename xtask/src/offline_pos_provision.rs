@@ -56,7 +56,8 @@ pub(crate) fn run(options: OfflinePosProvisionOptions) -> Result<()> {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let operator_account = AccountId::from_str(&spec.operator.account)
+    let operator_account = AccountId::parse_encoded(&spec.operator.account)
+        .map(|parsed| parsed.into_account_id())
         .wrap_err_with(|| format!("invalid operator account `{}`", spec.operator.account))?;
     let mut summaries = Vec::with_capacity(spec.manifests.len());
     for manifest_spec in &spec.manifests {
@@ -262,7 +263,8 @@ fn handle_manifest(
     })?;
 
     let operator_account = if let Some(account) = spec.operator_account.as_deref() {
-        AccountId::from_str(account)
+        AccountId::parse_encoded(account)
+            .map(|parsed| parsed.into_account_id())
             .wrap_err_with(|| format!("invalid operator account `{account}`"))?
     } else {
         default_operator_account.clone()
@@ -363,7 +365,8 @@ fn handle_revocation_bundle(
         .wrap_err_with(|| format!("failed to create output directory {}", bundle_dir.display()))?;
 
     let operator_account = if let Some(account) = spec.operator_account.as_deref() {
-        AccountId::from_str(account)
+        AccountId::parse_encoded(account)
+            .map(|parsed| parsed.into_account_id())
             .wrap_err_with(|| format!("invalid operator account `{account}`"))?
     } else {
         default_operator_account.clone()
@@ -616,7 +619,8 @@ fn build_revocation_entry(
             entry.verdict_id_hex
         )
     })?;
-    let issuer = AccountId::from_str(&entry.issuer)
+    let issuer = AccountId::parse_encoded(&entry.issuer)
+        .map(|parsed| parsed.into_account_id())
         .wrap_err_with(|| format!("invalid issuer account `{}`", entry.issuer))?;
     let reason = parse_revocation_reason(entry.reason.as_deref()).wrap_err_with(|| {
         format!(

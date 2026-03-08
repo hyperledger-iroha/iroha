@@ -155,13 +155,15 @@ const ACCOUNT_ADDRESS = AccountAddress.fromAccount({
   publicKey: ACCOUNT_PUBLIC_KEY,
 });
 const ACCOUNT_ID = ACCOUNT_ADDRESS.toIH58();
-const ACCOUNT_ID_INPUT = `${ACCOUNT_SIGNATORY}@${DOMAIN_ID}`;
+const ACCOUNT_ID_INPUT = ACCOUNT_ID;
 const ACCOUNT_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAccountIdUsingNorito(ACCOUNT_ID)
   : ACCOUNT_ID;
 const ASSET_DEFINITION_ID = "rose#wonderland";
-const ASSET_ID = `rose##${ACCOUNT_ID}`;
-const ASSET_ID_INPUT = `rose##${ACCOUNT_ID_INPUT}`;
+const ASSET_ID =
+  "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c4000000000000006165e1e191d7b79c00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323045444636443742353243373033324430334145433639364632303638424435333130313532384633433742363038314246463035413136363244374643323435330000000000000017000000000000000f00000000000000070000000000000064656661756c740c000000000000000400000000000000726f7365";
+const ASSET_ID_INPUT =
+  "norito:4E52543000000EAF5EF05DB6ED320EAF5EF05DB6ED3200C4000000000000006165E1E191D7B79C00810000000000000017000000000000000F00000000000000070000000000000064656661756C745A00000000000000000000004E00000000000000460000000000000065643031323045444636443742353243373033324430334145433639364632303638424435333130313532384633433742363038314246463035413136363244374643323435330000000000000017000000000000000F00000000000000070000000000000064656661756C740C000000000000000400000000000000726F7365";
 const ASSET_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAssetIdUsingNorito(ASSET_ID)
   : ASSET_ID;
@@ -256,7 +258,7 @@ function normalizedHashHex(bytes) {
   return `hash:${body}#${checksum}`;
 }
 
-test("normalizeAccountId exported canonicalizes multihash identifier", () => {
+test("normalizeAccountId exported accepts encoded account IDs", () => {
   const canonical = exportedNormalizeAccountId(ACCOUNT_ID_INPUT);
   assert.equal(canonical, ACCOUNT_ID_CANONICAL);
 });
@@ -279,9 +281,16 @@ test("normalizeAccountId rejects Local-8 selectors", () => {
   );
 });
 
-test("normalizeAssetId exported canonicalizes embedded account identifiers", () => {
+test("normalizeAssetId exported canonicalizes encoded asset identifiers", () => {
   const canonical = exportedNormalizeAssetId(ASSET_ID_INPUT);
   assert.equal(canonical, ASSET_ID_CANONICAL);
+});
+
+test("normalizeAssetId rejects unsupported asset#domain#account literals", () => {
+  assert.throws(
+    () => exportedNormalizeAssetId(`rose#wonderland#${ACCOUNT_ID}`),
+    /must not use 'asset#domain#account'/,
+  );
 });
 
 test("buildMintAssetInstruction produces Norito-compatible payload", () => {

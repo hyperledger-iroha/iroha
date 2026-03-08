@@ -182,6 +182,6 @@ Compilez avec votre outil préféré (`./gradlew :java:iroha_android:assemble &&
 ## 5. Vérifier la parité
 
 - Inspectez les hashes de transaction via `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Récupérez les soldes via la CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`).
+- Récupérez les soldes via la CLI (`asset list filter '{"id":"norito:4e52543000000002"}'`).
 - Comparez les résultats avec les recettes Rust/Python/JavaScript/Swift pour garantir que chaque SDK produit des payloads Norito identiques pour le flux de démo.
 

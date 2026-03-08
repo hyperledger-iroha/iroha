@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 אפשרויות:
 
 - `--format compressed (`sora`)` pour la sortie `sora...` au lieu de IH58.
-- `--no-append-domain` pour emettre des literaux nus.
+- `domainless output (default)` pour emettre des literaux nus.
 - `--audit-only` pour ignorer l'etape de conversion.
 - `--allow-errors` pour continuer le scan quand des lignes mal formees apparaissent (correspond au comportement de la CLI).
 
@@ -48,7 +48,7 @@ votre ticket de gestion du changement avec la capture Grafana qui prouve zero
 2. Bloquez les merges quand `audit.json` signale des selecteurs Local (`domain.kind = local12`).
    a sa valeur par defaut `true` (ne passer a `false` que sur les clusters dev/test lors du
    diagnostic de regressions) et ajoutez
-   `iroha tools address normalize --fail-on-warning --only-local` a CI pour que les regressions
+   `iroha tools address normalize` a CI pour que les regressions
    echouent avant la production.
 
 Voir le document source pour plus de details, des checklists d'evidence et le snippet de

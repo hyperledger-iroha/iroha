@@ -73,8 +73,6 @@ fn print_world_memory_usage() {
 }
 
 mod util {
-    use std::fmt::Display;
-
     use iroha_core::smartcontracts::Registrable;
     use iroha_crypto::KeyPair;
     use iroha_data_model::prelude::*;
@@ -92,11 +90,9 @@ mod util {
         (genesis_domain, genesis_account)
     }
 
-    pub fn gen_account_in(domain: impl Display) -> (AccountId, KeyPair) {
+    pub fn gen_account_in(domain: &DomainId) -> (AccountId, KeyPair) {
         let key_pair = KeyPair::random();
-        let account_id = format!("{}@{}", key_pair.public_key(), domain)
-            .parse()
-            .unwrap();
+        let account_id = AccountId::new(domain.clone(), key_pair.public_key().clone());
         (account_id, key_pair)
     }
 

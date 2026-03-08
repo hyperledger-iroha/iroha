@@ -66,7 +66,7 @@ impl Name {
         if candidate.chars().any(|ch| FORBIDDEN_CHARS.contains(&ch)) {
             #[allow(clippy::non_ascii_literal)]
             return Err(ParseError {
-                reason: "The `@` character is reserved for `account@domain` constructs, \
+                reason: "The `@` character is reserved for scoped alias/public-key constructs, \
                         `#` for `asset#domain`, and `$` — for `nft$domain`.",
             });
         }
@@ -143,15 +143,8 @@ impl<'a> norito::core::NoritoDeserialize<'a> for Name {
                         if norito::debug_trace_enabled() {
                             eprintln!("Name::try_deserialize fallback raw={raw}");
                         }
-                        match Name::from_str(raw) {
-                            Ok(name) => return Ok(name),
-                            Err(err) => {
-                                if let Ok(account) = raw.parse::<crate::account::AccountId>() {
-                                    return Ok(account.domain().name.clone());
-                                }
-                                return Err(norito::core::Error::Message(err.reason.into()));
-                            }
-                        }
+                        return Name::from_str(raw)
+                            .map_err(|err| norito::core::Error::Message(err.reason.into()));
                     }
                 }
                 Err(err) => return Err(err),
@@ -306,6 +299,16 @@ mod tests {
             let reparsed = Name::from_str(&decoded_s).expect("parse back");
             assert_eq!(reparsed, name);
         }
+    }
+
+    #[test]
+    fn name_rejects_account_literal_text() {
+        let err = Name::from_str("alice@hbl")
+            .expect_err("account-style literal must not be accepted as Name");
+        assert!(
+            err.to_string().contains("`@` character"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

@@ -29,7 +29,7 @@ const { signedTransaction } = buildTransaction({
   authority: "ih58...",
   instructions: [
     buildMintAssetInstruction({
-      assetId: "rose#wonderland#alice",
+      assetId: "norito:4e52543000000001",
       quantity: "10",
     }),
   ],

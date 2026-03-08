@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.StringJoiner;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 
 /** Typed builder for {@code PersistCouncilForEpoch} instructions. */
 public final class PersistCouncilForEpochInstruction implements InstructionTemplate {
@@ -178,10 +179,7 @@ public final class PersistCouncilForEpochInstruction implements InstructionTempl
     }
 
     public Builder addMember(final String accountId) {
-      if (accountId == null || accountId.isBlank()) {
-        throw new IllegalArgumentException("member account id must not be blank");
-      }
-      this.members.add(accountId);
+      this.members.add(AccountIdLiteral.extractIh58Address(accountId));
       return this;
     }
 
@@ -193,10 +191,7 @@ public final class PersistCouncilForEpochInstruction implements InstructionTempl
     }
 
     public Builder addAlternate(final String accountId) {
-      if (accountId == null || accountId.isBlank()) {
-        throw new IllegalArgumentException("alternate account id must not be blank");
-      }
-      this.alternates.add(accountId);
+      this.alternates.add(AccountIdLiteral.extractIh58Address(accountId));
       return this;
     }
 

@@ -251,14 +251,17 @@ impl JsonKeyCodec for RepoAgreementId {
 mod tests {
     use super::*;
 
-    const ALICE_ID_STR: &str =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
-    const BOB_ID_STR: &str =
-        "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016@wonderland";
-
+    const ALICE_ID_STR: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
     fn sample_agreement(initiated_ms: u64, margin_frequency_secs: u64) -> RepoAgreement {
-        let initiator: AccountId = ALICE_ID_STR.parse().unwrap();
-        let counterparty: AccountId = BOB_ID_STR.parse().unwrap();
+        let initiator = AccountId::parse_encoded(ALICE_ID_STR)
+            .expect("valid initiator account")
+            .into_account_id();
+        let counterparty = AccountId::new(
+            "wonderland".parse().expect("domain id"),
+            "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
+                .parse()
+                .expect("public key"),
+        );
         let cash_leg = RepoCashLeg {
             asset_definition_id: "usd#wonderland".parse().unwrap(),
             quantity: Numeric::from(1_000u32),

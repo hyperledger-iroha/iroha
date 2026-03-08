@@ -3,11 +3,16 @@ use std::collections::HashSet;
 use iroha_data_model::prelude::PublicKey;
 use iroha_primitives::numeric::Numeric;
 use ivm::mock_wsv::{
-    AccountId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, NftId, PermissionToken,
+    AccountSubjectId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, NftId,
+    PermissionToken, ScopedAccountId,
 };
 
 fn num(value: u64) -> Numeric {
     Numeric::from(value)
+}
+
+fn test_account(domain: &DomainId, public_key: PublicKey) -> ScopedAccountId {
+    ScopedAccountId::new(domain.clone(), public_key)
 }
 
 #[test]
@@ -19,8 +24,8 @@ fn test_mock_wsv_basic_ops() {
     let pk2: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
-    let acc1: AccountId = format!("{pk1}@{d}").parse().unwrap();
-    let acc2: AccountId = format!("{pk2}@{d}").parse().unwrap();
+    let acc1 = test_account(&d, pk1);
+    let acc2 = test_account(&d, pk2);
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
     let mut wsv = MockWorldStateView::with_balances(&[
@@ -49,8 +54,8 @@ fn test_mock_wsv_rejects_scaled_numeric() {
     let pk2: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
-    let acc1: AccountId = format!("{pk1}@{d}").parse().unwrap();
-    let acc2: AccountId = format!("{pk2}@{d}").parse().unwrap();
+    let acc1 = test_account(&d, pk1);
+    let acc2 = test_account(&d, pk2);
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
     let mut wsv = MockWorldStateView::with_balances(&[
@@ -77,16 +82,15 @@ fn test_register_and_mint_once() {
     let pk: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
-    let acc: AccountId = format!("{pk}@{d}").parse().unwrap();
+    let acc = test_account(&d, pk);
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
     let mut wsv = MockWorldStateView::new();
+    wsv.add_account_unchecked(acc.clone());
     wsv.grant_permission(&acc, PermissionToken::RegisterDomain);
     wsv.grant_permission(&acc, PermissionToken::RegisterAccount);
     wsv.grant_permission(&acc, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&acc, PermissionToken::MintAsset(asset.clone()));
 
-    assert!(wsv.register_domain(&acc, d.clone()));
-    assert!(wsv.register_account(&acc, acc.clone()));
     assert!(wsv.register_asset_definition(&acc, asset.clone(), Mintable::Once));
     assert!(wsv.mint(&acc, acc.clone(), asset.clone(), num(50)));
     assert_eq!(wsv.balance(acc.clone(), asset.clone()), num(50));
@@ -100,16 +104,15 @@ fn test_register_and_mint_limited() {
     let pk: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
-    let acc: AccountId = format!("{pk}@{d}").parse().unwrap();
+    let acc = test_account(&d, pk);
     let asset: AssetDefinitionId = "ticket#domain".parse().unwrap();
     let mut wsv = MockWorldStateView::new();
+    wsv.add_account_unchecked(acc.clone());
     wsv.grant_permission(&acc, PermissionToken::RegisterDomain);
     wsv.grant_permission(&acc, PermissionToken::RegisterAccount);
     wsv.grant_permission(&acc, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&acc, PermissionToken::MintAsset(asset.clone()));
 
-    assert!(wsv.register_domain(&acc, d.clone()));
-    assert!(wsv.register_account(&acc, acc.clone()));
     let limited = Mintable::limited_from_u32(2).expect("non-zero budget");
     assert!(wsv.register_asset_definition(&acc, asset.clone(), limited));
     assert!(wsv.mint(&acc, acc.clone(), asset.clone(), num(10)));
@@ -124,16 +127,15 @@ fn test_limited_asset_budget_exhaustion() {
     let pk: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
-    let acc: AccountId = format!("{pk}@{d}").parse().unwrap();
+    let acc = test_account(&d, pk);
     let asset: AssetDefinitionId = "badge#domain".parse().unwrap();
     let mut wsv = MockWorldStateView::new();
+    wsv.add_account_unchecked(acc.clone());
     wsv.grant_permission(&acc, PermissionToken::RegisterDomain);
     wsv.grant_permission(&acc, PermissionToken::RegisterAccount);
     wsv.grant_permission(&acc, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&acc, PermissionToken::MintAsset(asset.clone()));
 
-    assert!(wsv.register_domain(&acc, d.clone()));
-    assert!(wsv.register_account(&acc, acc.clone()));
     let limited = Mintable::limited_from_u32(1).expect("non-zero budget");
     assert!(wsv.register_asset_definition(&acc, asset.clone(), limited));
     assert!(wsv.mint(&acc, acc.clone(), asset.clone(), num(42)));
@@ -150,17 +152,24 @@ fn test_balance_permission() {
     let pk2: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
-    let acc1: AccountId = format!("{pk1}@{d}").parse().unwrap();
-    let acc2: AccountId = format!("{pk2}@{d}").parse().unwrap();
+    let acc1 = test_account(&d, pk1);
+    let acc2 = test_account(&d, pk2);
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
     let mut wsv = MockWorldStateView::with_balances(&[((acc1.clone(), asset.clone()), num(100))]);
-    wsv.grant_permission(&acc1, PermissionToken::ReadAccountAssets(acc1.clone()));
+    wsv.add_account_unchecked(acc2.clone());
+    wsv.grant_permission(
+        &acc1,
+        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&acc1)),
+    );
 
     // acc2 should not see acc1's balance without permission
     assert_eq!(wsv.balance_checked(&acc2, &acc1, &asset), None);
     // grant permission to acc2
-    wsv.grant_permission(&acc2, PermissionToken::ReadAccountAssets(acc1.clone()));
+    wsv.grant_permission(
+        &acc2,
+        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&acc1)),
+    );
     assert_eq!(wsv.balance_checked(&acc2, &acc1, &asset), Some(num(100)));
 }
 
@@ -170,7 +179,7 @@ fn unregister_asset_after_burning_out() {
     let pk: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
-    let acc: AccountId = format!("{pk}@{d}").parse().unwrap();
+    let acc = test_account(&d, pk);
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
     let mut wsv = MockWorldStateView::with_balances(&[((acc.clone(), asset.clone()), num(10))]);
@@ -188,8 +197,8 @@ fn unregister_account_after_transferring_everything_out() {
     let pk2: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
-    let acc1: AccountId = format!("{pk1}@{d}").parse().unwrap();
-    let acc2: AccountId = format!("{pk2}@{d}").parse().unwrap();
+    let acc1 = test_account(&d, pk1);
+    let acc2 = test_account(&d, pk2);
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
     let mut wsv = MockWorldStateView::with_balances(&[
@@ -202,35 +211,65 @@ fn unregister_account_after_transferring_everything_out() {
 }
 
 #[test]
-fn unregister_account_clears_permissions_and_roles() {
-    let d: DomainId = "domain".parse().unwrap();
-    let pk: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
-        .parse()
-        .unwrap();
-    let acc: AccountId = format!("{pk}@{d}").parse().unwrap();
+fn unregister_account_detaches_subject_and_preserves_state_for_relink() {
+    let first_domain: DomainId = "domain".parse().unwrap();
+    let second_domain: DomainId = "domain-2".parse().unwrap();
+    let account_pk: PublicKey =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
+            .parse()
+            .unwrap();
+    let admin_pk: PublicKey =
+        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
+            .parse()
+            .unwrap();
+    let account = test_account(&first_domain, account_pk.clone());
+    let account_relinked = test_account(&second_domain, account_pk);
+    let admin = test_account(&first_domain, admin_pk);
     let asset: AssetDefinitionId = "rose#domain".parse().unwrap();
 
     let mut wsv = MockWorldStateView::new();
-    wsv.grant_permission(&acc, PermissionToken::RegisterDomain);
-    wsv.grant_permission(&acc, PermissionToken::RegisterAccount);
-    wsv.grant_permission(&acc, PermissionToken::RegisterAssetDefinition);
+    wsv.add_account_unchecked(admin.clone());
+    wsv.grant_permission(&admin, PermissionToken::RegisterDomain);
+    wsv.grant_permission(&admin, PermissionToken::RegisterAccount);
+    wsv.grant_permission(&admin, PermissionToken::RegisterAssetDefinition);
 
-    assert!(wsv.register_domain(&acc, d.clone()));
-    assert!(wsv.register_account(&acc, acc.clone()));
-    assert!(wsv.register_asset_definition(&acc, asset.clone(), Mintable::Infinitely));
+    assert!(wsv.register_domain(&admin, second_domain.clone()));
+    assert!(wsv.register_account(&admin, account.clone()));
+    assert!(wsv.register_asset_definition(&admin, asset.clone(), Mintable::Infinitely));
 
     let mut perms = HashSet::new();
     perms.insert(PermissionToken::MintAsset(asset.clone()));
     assert!(wsv.create_role("minter", perms));
-    assert!(wsv.grant_role(&acc, "minter"));
-    wsv.grant_permission(&acc, PermissionToken::ReadAccountAssets(acc.clone()));
+    assert!(wsv.grant_role(&account, "minter"));
+    wsv.grant_permission(
+        &account,
+        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&account)),
+    );
 
-    assert!(wsv.has_permission(&acc, &PermissionToken::MintAsset(asset.clone())));
-    assert!(wsv.has_permission(&acc, &PermissionToken::ReadAccountAssets(acc.clone())));
+    assert!(wsv.has_permission(&account, &PermissionToken::MintAsset(asset.clone())));
+    assert!(wsv.has_permission(
+        &account,
+        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&account))
+    ));
 
-    assert!(wsv.unregister_account(&acc));
-    assert!(!wsv.has_permission(&acc, &PermissionToken::MintAsset(asset.clone())));
-    assert!(!wsv.has_permission(&acc, &PermissionToken::ReadAccountAssets(acc.clone())));
+    assert!(wsv.unregister_account(&account));
+    assert!(!wsv.has_permission(&account, &PermissionToken::MintAsset(asset.clone())));
+    assert!(!wsv.has_permission(
+        &account,
+        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&account))
+    ));
+
+    assert!(wsv.register_account(&admin, account_relinked.clone()));
+    assert!(wsv.has_permission(
+        &account_relinked,
+        &PermissionToken::MintAsset(asset.clone())
+    ));
+    assert!(wsv.has_permission(
+        &account_relinked,
+        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(
+            &account_relinked
+        ))
+    ));
 }
 
 #[test]
@@ -240,20 +279,70 @@ fn unregister_domain_rejects_cross_domain_nfts() {
     let pk: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
-    let owner: AccountId = format!("{pk}@{holder_domain}").parse().unwrap();
+    let owner = test_account(&holder_domain, pk);
     let nft_id: NftId = format!("artifact${nft_domain}").parse().unwrap();
 
     let mut wsv = MockWorldStateView::new();
+    wsv.add_account_unchecked(owner.clone());
     wsv.grant_permission(&owner, PermissionToken::RegisterDomain);
     wsv.grant_permission(&owner, PermissionToken::RegisterAccount);
 
     assert!(wsv.register_domain(&owner, nft_domain.clone()));
-    assert!(wsv.register_domain(&owner, holder_domain.clone()));
-    assert!(wsv.register_account(&owner, owner.clone()));
-
     assert!(wsv.create_nft(owner.clone(), owner.clone(), nft_id.clone()));
     assert!(!wsv.unregister_domain(&nft_domain));
 
     assert!(wsv.burn_nft(&owner, &nft_id));
     assert!(wsv.unregister_domain(&nft_domain));
+}
+
+#[test]
+fn subject_links_can_span_multiple_domains_and_are_queryable() {
+    let first_domain: DomainId = "domain".parse().unwrap();
+    let second_domain: DomainId = "domain-2".parse().unwrap();
+    let admin_pk: PublicKey =
+        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
+            .parse()
+            .unwrap();
+    let subject_pk: PublicKey =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
+            .parse()
+            .unwrap();
+
+    let admin = test_account(&first_domain, admin_pk);
+    let scoped_first = test_account(&first_domain, subject_pk.clone());
+    let scoped_second = test_account(&second_domain, subject_pk);
+    let admin_subject = AccountSubjectId::from(&admin);
+    let subject = AccountSubjectId::from(&scoped_first);
+
+    let mut wsv = MockWorldStateView::new();
+    wsv.add_account_unchecked(admin.clone());
+    wsv.grant_permission(&admin, PermissionToken::RegisterDomain);
+    wsv.grant_permission(&admin, PermissionToken::RegisterAccount);
+
+    assert!(wsv.register_domain(&admin, second_domain.clone()));
+    assert!(wsv.register_account(&admin, scoped_first.clone()));
+    assert!(wsv.register_account(&admin, scoped_second.clone()));
+
+    wsv.grant_permission(&scoped_first, PermissionToken::RegisterAssetDefinition);
+    assert!(wsv.has_permission(&scoped_second, &PermissionToken::RegisterAssetDefinition));
+
+    assert_eq!(
+        wsv.linked_domains_for_subject(&subject),
+        vec![first_domain.clone(), second_domain.clone()]
+    );
+    let first_domain_subjects = wsv.linked_subjects_for_domain(&first_domain);
+    assert_eq!(first_domain_subjects.len(), 2);
+    assert!(first_domain_subjects.contains(&admin_subject));
+    assert!(first_domain_subjects.contains(&subject));
+    assert_eq!(
+        wsv.linked_subjects_for_domain(&second_domain),
+        vec![subject.clone()]
+    );
+
+    assert!(wsv.unregister_account(&scoped_first));
+    assert_eq!(
+        wsv.linked_domains_for_subject(&subject),
+        vec![second_domain.clone()]
+    );
+    assert!(wsv.has_permission(&scoped_second, &PermissionToken::RegisterAssetDefinition));
 }

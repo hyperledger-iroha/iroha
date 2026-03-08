@@ -641,7 +641,7 @@ Key details:
 
 - `--spec` accepts a JSON file with `{ "operator": { "account": "<account id>", "private_key": "ed25519:…" }, "allowances": [...] }`.
   Each allowance entry supplies `label`, `controller`, `operator`, `allowance_asset`, and policy fields using the
-  canonical IH58 account syntax (no `@domain`; append `@domain` only as an explicit routing hint). Spend keys can be specified as a multihash (`ed0120…`)
+  canonical IH58 account syntax (no `@domain`; runtime parsers reject `@domain` suffixes). Spend keys can be specified as a multihash (`ed0120…`)
   or as `algo:hex`, metadata can be provided inline or via `metadata_file`, attestation bytes can be
   embedded with `attestation_report_{hex,base64}` (or loaded from `attestation_report_file`), and an
   optional `blinding_hex` override keeps regression fixtures deterministic.
@@ -1311,9 +1311,10 @@ recording the attempt in their journals.【IrohaSwift/Sources/IrohaSwift/Offline
   the monotonic counter advances exactly once per spend before accepting the proof. Settlement-time
   assertion verification still binds the receipt-derived challenge hash. Nonce-extension decoding
   accepts both Apple production DER wrappers and the legacy plain OCTET STRING form used by older
-  fixtures/tools. Signature verification keeps two non-strict compatibility paths for legacy iOS
-  clients: `authenticatorData || receipt_challenge_hash` and
-  `authenticatorData || SHA256(clientDataHash)`. Set
+  fixtures/tools. Signature verification follows Secure Enclave semantics and verifies
+  `SHA256(SHA256(authenticatorData || clientDataHash))`. Non-strict mode keeps two compatibility
+  alternatives for the inner hash input (`clientDataHash`): `receipt_challenge_hash` and
+  `SHA256(clientDataHash)`. Set
   `settlement.offline.apple_app_attest_strict_signature = true` to disable compatibility fallbacks
   and require canonical raw `clientDataHash` signatures only.【crates/iroha_core/src/smartcontracts/isi/offline.rs:1034】【crates/iroha_config/src/parameters/user.rs:9320】
 - **Android KeyMint verification.** `verify_android_attestation` decodes the X.509 chain, validates

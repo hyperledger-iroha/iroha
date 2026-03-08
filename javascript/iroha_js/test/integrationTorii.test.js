@@ -126,7 +126,7 @@ const CHAIN_ID =
   process.env.IROHA_TORII_INTEGRATION_CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
 const AUTHORITY_ACCOUNT_ID =
   process.env.IROHA_TORII_INTEGRATION_ACCOUNT_ID ??
-  "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+  "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
 const PRIVATE_KEY_HEX =
   process.env.IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX ??
   "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53";
@@ -1106,7 +1106,7 @@ test(
     assertSuccessfulStatus(accountStatus, accountId);
 
     const assetDefinitionId = randomAssetDefinitionId(domainId);
-    const assetId = `${assetDefinitionId}#${accountId}`;
+    const assetId = randomEncodedAssetId("mintasset");
     const { signedTransaction: assetTx, hash: assetHash } =
       buildRegisterAssetDefinitionAndMintTransaction({
         chainId: CHAIN_ID,
@@ -1119,7 +1119,7 @@ test(
           },
         },
         mint: {
-          accountId,
+          assetId,
           quantity: "7",
         },
         privateKey,
@@ -1257,8 +1257,8 @@ test(
     const senderAccountId = randomAccountId(domainId);
     const receiverAccountId = randomAccountId(domainId);
     const assetDefinitionId = randomAssetDefinitionId(domainId);
-    const senderAssetId = `${assetDefinitionId}#${senderAccountId}`;
-    const receiverAssetId = `${assetDefinitionId}#${receiverAccountId}`;
+    const senderAssetId = randomEncodedAssetId("senderasset");
+    const receiverAssetId = randomEncodedAssetId("receiverasset");
     const mintedQuantity = "15";
     const transferQuantity = "6";
     const remainingQuantity = (BigInt(mintedQuantity) - BigInt(transferQuantity)).toString();
@@ -1905,7 +1905,7 @@ test(
     });
     const triggerId = randomTriggerId();
     const namespace = "apps";
-    const assetId = `rose#wonderland#${AUTHORITY_ACCOUNT_ID}`;
+    const assetId = randomEncodedAssetId("triggerasset");
     const action = buildTimeTriggerAction({
       authority: AUTHORITY_ACCOUNT_ID,
       instructions: [
@@ -5521,13 +5521,25 @@ function randomDomainId() {
 }
 
 function randomAccountId(domainId) {
-  const accountName = randomIdentifier("jsacct");
-  return `${accountName}@${domainId}`;
+  const label = randomIdentifier("jsacct");
+  const publicKey = crypto
+    .createHash("sha256")
+    .update(`${domainId}:${label}`)
+    .digest();
+  return AccountAddress.fromAccount({ domain: domainId, publicKey }).toIH58();
 }
 
 function randomAssetDefinitionId(domainId) {
   const assetName = randomIdentifier("jsasset");
   return `${assetName}#${domainId}`;
+}
+
+function randomEncodedAssetId(label) {
+  const payload = crypto
+    .createHash("sha256")
+    .update(randomIdentifier(label))
+    .digest("hex");
+  return `norito:${payload}`;
 }
 
 function randomTriggerId(namespace = "apps") {

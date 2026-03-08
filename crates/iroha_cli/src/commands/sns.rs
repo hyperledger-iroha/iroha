@@ -128,14 +128,14 @@ pub struct PaymentOptions {
     /// Net payment amount forwarded to the registry. Defaults to `payment-gross`.
     #[arg(long = "payment-net", value_name = "U64")]
     pub net: Option<u64>,
-    /// Settlement transaction reference (string or JSON literal).
-    #[arg(long = "payment-settlement", value_name = "JSON-OR-STRING")]
+    /// Settlement transaction reference (JSON literal).
+    #[arg(long = "payment-settlement", value_name = "JSON")]
     pub settlement: Option<String>,
     /// Account that authorised the payment. Defaults to the CLI config account.
     #[arg(long = "payment-payer", value_name = "ACCOUNT-ID")]
     pub payer: Option<String>,
-    /// Steward/treasury signature attesting to the payment (string or JSON literal).
-    #[arg(long = "payment-signature", value_name = "JSON-OR-STRING")]
+    /// Steward/treasury signature attesting to the payment (JSON literal).
+    #[arg(long = "payment-signature", value_name = "JSON")]
     pub signature: Option<String>,
 }
 
@@ -217,8 +217,8 @@ pub struct FreezeArgs {
     /// Timestamp (ms since epoch) when the freeze should auto-expire.
     #[arg(long = "until-ms", value_name = "U64")]
     pub until_ms: u64,
-    /// Guardian ticket signature (string or JSON literal).
-    #[arg(long = "guardian-ticket", value_name = "JSON-OR-STRING")]
+    /// Guardian ticket signature (JSON literal).
+    #[arg(long = "guardian-ticket", value_name = "JSON")]
     pub guardian_ticket: String,
 }
 
@@ -326,7 +326,8 @@ impl PaymentOptions {
         let settlement_literal = self.settlement.as_ref().ok_or_else(|| {
             eyre!("`--payment-settlement` is required when --payment-json is not provided")
         })?;
-        let settlement_tx = parse_json_literal(settlement_literal);
+        let settlement_tx = parse_json_literal(settlement_literal)
+            .wrap_err("`--payment-settlement` must be valid JSON")?;
         let payer = match &self.payer {
             Some(literal) => resolve(literal).wrap_err("invalid payment payer account id")?,
             None => default_payer.clone(),
@@ -334,7 +335,8 @@ impl PaymentOptions {
         let signature_literal = self.signature.as_ref().ok_or_else(|| {
             eyre!("`--payment-signature` is required when --payment-json is not provided")
         })?;
-        let signature = parse_json_literal(signature_literal);
+        let signature = parse_json_literal(signature_literal)
+            .wrap_err("`--payment-signature` must be valid JSON")?;
         Ok(PaymentProofV1 {
             asset_id,
             gross_amount: gross,
@@ -464,18 +466,19 @@ impl FreezeArgs {
         self.selector.trim()
     }
 
-    fn build_request(&self) -> FreezeNameRequestV1 {
-        FreezeNameRequestV1 {
+    fn build_request(&self) -> Result<FreezeNameRequestV1> {
+        Ok(FreezeNameRequestV1 {
             reason: self.reason.clone(),
             until_ms: self.until_ms,
-            guardian_ticket: parse_json_literal(&self.guardian_ticket),
-        }
+            guardian_ticket: parse_json_literal(&self.guardian_ticket)
+                .wrap_err("`--guardian-ticket` must be valid JSON")?,
+        })
     }
 }
 
 impl Run for FreezeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let request = self.build_request();
+        let request = self.build_request()?;
         let record = context
             .client_from_config()
             .sns()
@@ -902,7 +905,7 @@ impl SuffixCatalogEntry {
         }
         let expected_steward = resolve(self.steward_account.trim())
             .wrap_err_with(|| format!("invalid steward account `{}`", self.steward_account))?;
-        if policy.steward != expected_steward {
+        if policy.steward.to_string() != expected_steward.to_string() {
             mismatches.push(format!(
                 "steward differs (catalog `{expected_steward}`, policy `{}`)",
                 policy.steward
@@ -959,7 +962,7 @@ impl SuffixCatalogEntry {
                     self.fund_splitter_account
                 )
             })?;
-        if policy.fund_splitter_account != expected_fund_splitter {
+        if policy.fund_splitter_account.to_string() != expected_fund_splitter.to_string() {
             mismatches.push(format!(
                 "fund_splitter_account differs (catalog `{expected_fund_splitter}`, policy `{}`)",
                 policy.fund_splitter_account
@@ -986,6 +989,28 @@ impl SuffixCatalogEntry {
         let mut policy_reserved = policy.reserved_labels.clone();
         catalog_reserved.sort_by(|a, b| a.normalized_label.cmp(&b.normalized_label));
         policy_reserved.sort_by(|a, b| a.normalized_label.cmp(&b.normalized_label));
+        let catalog_reserved = catalog_reserved
+            .iter()
+            .map(|entry| {
+                (
+                    entry.normalized_label.clone(),
+                    entry.assigned_to.as_ref().map(ToString::to_string),
+                    entry.release_at_ms,
+                    entry.note.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let policy_reserved = policy_reserved
+            .iter()
+            .map(|entry| {
+                (
+                    entry.normalized_label.clone(),
+                    entry.assigned_to.as_ref().map(ToString::to_string),
+                    entry.release_at_ms,
+                    entry.note.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
         if catalog_reserved != policy_reserved {
             mismatches.push(format!(
                 "reserved_labels differ (catalog {catalog_reserved:?}, policy {policy_reserved:?})"
@@ -1022,7 +1047,8 @@ mod catalog_tests {
     use iroha::data_model::sns::fixtures;
 
     fn resolve_catalog_account(literal: &str) -> Result<AccountId> {
-        AccountId::from_str(literal)
+        AccountId::parse_encoded(literal)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .wrap_err_with(|| format!("invalid catalog account `{literal}`"))
     }
 
@@ -1187,7 +1213,7 @@ mod schema_tests {
                 "contact": "ops@sora.net"
             },
             "respondents": [
-                {"role": "registrant", "account_id": "alice@wonderland"}
+                {"role": "registrant", "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"}
             ],
             "allegations": [
                 {"code": "REG-1", "summary": "Ownership conflict"}
@@ -1239,8 +1265,8 @@ where
     norito::json::from_str(&contents).wrap_err("invalid JSON payload")
 }
 
-fn parse_json_literal(raw: &str) -> Json {
-    norito::json::from_str(raw).unwrap_or_else(|_| Json::from(raw))
+fn parse_json_literal(raw: &str) -> Result<Json> {
+    norito::json::from_str(raw).wrap_err("invalid JSON literal")
 }
 
 #[cfg(test)]
@@ -1256,7 +1282,8 @@ mod tests {
     }
 
     fn resolve_account_literal(literal: &str) -> Result<AccountId> {
-        AccountId::from_str(literal)
+        AccountId::parse_encoded(literal)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .wrap_err_with(|| format!("invalid test account literal `{literal}`"))
     }
 
@@ -1289,8 +1316,9 @@ mod tests {
             suffix: "sora".to_string(),
             suffix_id: 1,
             status: "active".to_string(),
-            steward_account: "alice@wonderland".to_string(),
-            fund_splitter_account: "splitter@wonderland".to_string(),
+            steward_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_string(),
+            fund_splitter_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+                .to_string(),
             payment_asset_id: "xor#sora".to_string(),
             referral_cap_bps: 0,
             min_term_years: 1,
@@ -1326,10 +1354,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_json_literal_falls_back_to_string() {
-        let value = parse_json_literal("opaque-sig");
-        assert_eq!(value, Json::from("opaque-sig"));
-        let complex = parse_json_literal("{\"hash\":\"0x01\"}");
+    fn parse_json_literal_requires_valid_json() {
+        let err = parse_json_literal("opaque-sig").expect_err("must reject raw non-json literal");
+        assert!(
+            err.to_string().contains("invalid JSON literal"),
+            "unexpected error: {err}"
+        );
+        let string_literal = parse_json_literal("\"opaque-sig\"").expect("json string");
+        assert_eq!(string_literal, Json::from("opaque-sig"));
+        let complex = parse_json_literal("{\"hash\":\"0x01\"}").expect("json object");
         let parsed: norito::json::Value =
             norito::json::from_str(complex.get()).expect("parse json literal");
         let hash = parsed
@@ -1409,7 +1442,7 @@ mod tests {
     fn transfer_args_loads_governance_hook() {
         let gov = sample_governance_file();
         let owner = default_owner();
-        let new_owner = format!("{}@{}", owner.signatory(), owner.domain());
+        let new_owner = owner.to_string();
         let args = TransferArgs {
             selector: "makoto.sora".into(),
             new_owner: new_owner.clone(),
@@ -1418,7 +1451,12 @@ mod tests {
         let payload = args
             .build_request(&resolve_account_literal)
             .expect("transfer payload");
-        assert_eq!(payload.new_owner, new_owner.parse().unwrap());
+        assert_eq!(
+            payload.new_owner,
+            AccountId::parse_encoded(&new_owner)
+                .expect("new owner account id")
+                .into_account_id()
+        );
         assert_eq!(payload.governance.proposal_id, "proposal-1");
     }
 
@@ -1430,7 +1468,7 @@ mod tests {
             until_ms: 42,
             guardian_ticket: "{\"sig\":\"abc\"}".into(),
         };
-        let payload = args.build_request();
+        let payload = args.build_request().expect("freeze payload");
         assert_eq!(payload.reason, "guardian freeze");
         assert_eq!(payload.until_ms, 42);
         let ticket: norito::json::Value =
@@ -1440,6 +1478,24 @@ mod tests {
             .and_then(|obj| obj.get("sig"))
             .and_then(|entry| entry.as_str());
         assert_eq!(sig, Some("abc"));
+    }
+
+    #[test]
+    fn freeze_args_rejects_non_json_guardian_ticket() {
+        let args = FreezeArgs {
+            selector: "makoto.sora".into(),
+            reason: "guardian freeze".into(),
+            until_ms: 42,
+            guardian_ticket: "opaque-sig".into(),
+        };
+        let err = args
+            .build_request()
+            .expect_err("raw non-json guardian ticket must fail");
+        assert!(
+            err.to_string()
+                .contains("`--guardian-ticket` must be valid JSON"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

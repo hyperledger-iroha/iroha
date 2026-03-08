@@ -8,17 +8,17 @@
       "dataspace_alias": "universal",
       "accounts": [
         {
-          "account_id": "34mSYn1E6gFyP5RsCgfyH1bMjVaauvgE7P26P9Mc9TKjonTppJGvNWFKo6gEZd2Ryg9zL3WaT@portfolio_fixture",
+          "account_id": "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
           "label": null,
           "assets": [
             {
               "asset_definition_id": "cash#portfolio_fixture",
-              "asset_id": "cash##34mSYn1E6gFyP5RsCgfyH1bMjVaauvgE7P26P9Mc9TKjonTppJGvNWFKo6gEZd2Ryg9zL3WaT@portfolio_fixture",
+              "asset_id": "norito:4e52543000000001",
               "quantity": "875"
             },
             {
               "asset_definition_id": "points#portfolio_fixture",
-              "asset_id": "points##34mSYn1E6gFyP5RsCgfyH1bMjVaauvgE7P26P9Mc9TKjonTppJGvNWFKo6gEZd2Ryg9zL3WaT@portfolio_fixture",
+              "asset_id": "norito:4e52543000000002",
               "quantity": "320"
             }
           ]

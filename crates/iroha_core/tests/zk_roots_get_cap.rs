@@ -9,6 +9,7 @@ use iroha_core::{
     smartcontracts::ivm::host::CoreHost,
     state::{State, World, WorldReadOnly},
 };
+use iroha_crypto::KeyPair;
 use iroha_data_model::{account::NewAccount, prelude::*};
 use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
 use mv::storage::StorageReadOnly;
@@ -119,7 +120,7 @@ fn zk_roots_get_respects_cap_and_max() {
     let mut stx = block.transaction();
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
-    let owner: AccountId = "alice@zkd".parse().unwrap();
+    let owner = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),

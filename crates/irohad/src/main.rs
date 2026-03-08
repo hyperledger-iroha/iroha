@@ -23,7 +23,6 @@ use std::{
     fs,
     future::Future,
     path::{Path, PathBuf},
-    str::FromStr,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -109,389 +108,46 @@ struct ConsensusHandshakeMeta {
 }
 
 fn parse_handshake_meta_str(raw: &str) -> Result<ConsensusHandshakeMeta, norito::Error> {
-    if let Ok(meta) = norito::json::from_str(raw) {
-        Ok(meta)
-    } else {
-        let value = norito::json::parse_value(raw).map_err(norito::Error::from)?;
-        norito::json::from_value(value).map_err(norito::Error::from)
-    }
+    norito::json::from_str(raw).map_err(norito::Error::from)
 }
 
 fn parse_manifest_crypto_str(raw: &str) -> Result<ManifestCrypto, norito::Error> {
-    if let Ok(meta) = norito::json::from_str(raw) {
-        Ok(meta)
-    } else {
-        let value = norito::json::parse_value(raw).map_err(norito::Error::from)?;
-        norito::json::from_value(value).map_err(norito::Error::from)
-    }
+    norito::json::from_str(raw).map_err(norito::Error::from)
 }
 
 fn parse_confidential_registry_meta_str(
     raw: &str,
 ) -> Result<ConfidentialRegistryMeta, norito::Error> {
-    if let Ok(meta) = norito::json::from_str(raw) {
-        Ok(meta)
-    } else {
-        let value = norito::json::parse_value(raw).map_err(norito::Error::from)?;
-        norito::json::from_value(value).map_err(norito::Error::from)
-    }
-}
-
-fn extract_after_key<'a>(raw: &'a str, key: &str) -> Option<&'a str> {
-    let lower = raw.to_ascii_lowercase();
-    let idx = lower.find(key)?;
-    Some(&raw[idx + key.len()..])
-}
-
-fn extract_jsonish_array(raw: &str, key: &str) -> Option<String> {
-    let tail = extract_after_key(raw, key)?;
-    let start = tail.find('[')?;
-    let inner = &tail[start + 1..];
-    let end = inner.find(']')?;
-    Some(inner[..end].to_owned())
-}
-
-fn extract_jsonish_scalar(raw: &str, key: &str) -> Option<String> {
-    let tail = extract_after_key(raw, key)?;
-    let trimmed = tail.trim_start_matches(|ch: char| {
-        ch.is_whitespace() || matches!(ch, ':' | '=' | '>' | '-' | '\\' | '"' | '\'' | ',')
-    });
-
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let token = trimmed
-        .split(|ch: char| ch.is_whitespace() || matches!(ch, ',' | '}' | ']' | '"' | '\''))
-        .next()
-        .unwrap_or_default()
-        .trim_matches(&['"', '\'', '\\'][..]);
-
-    (!token.is_empty()).then(|| token.to_owned())
-}
-
-fn extract_jsonish_bool(raw: &str, key: &str) -> Option<bool> {
-    match extract_jsonish_scalar(raw, key)?
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "true" => Some(true),
-        "false" => Some(false),
-        _ => None,
-    }
-}
-
-fn parse_curve_ids(raw: &str) -> Vec<u8> {
-    let mut values = Vec::new();
-    for token in raw.split(|ch: char| !ch.is_ascii_digit()) {
-        if token.is_empty() {
-            continue;
-        }
-        if let Ok(value) = token.parse::<u8>()
-            && !values.contains(&value)
-        {
-            values.push(value);
-        }
-    }
-    values
-}
-
-fn parse_allowed_signing(raw: &str) -> Vec<Algorithm> {
-    let mut values = Vec::new();
-    for token in raw.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')) {
-        if token.is_empty() {
-            continue;
-        }
-        let normalized = token.to_ascii_lowercase();
-        if let Ok(algorithm) = Algorithm::from_str(&normalized)
-            && !values.contains(&algorithm)
-        {
-            values.push(algorithm);
-        }
-    }
-    values
-}
-
-fn decode_crypto_manifest_heuristics(raw: &str) -> Result<ManifestCrypto, norito::Error> {
-    // Legacy payloads may be JSON-ish text with escaped quotes or malformed key/value separators.
-    let trimmed = raw.trim().trim_matches(&['"', '\''][..]);
-    let unescaped = trimmed
-        .replace("\\\"", "\"")
-        .replace("\\{", "{")
-        .replace("\\}", "}")
-        .replace("\\[", "[")
-        .replace("\\]", "]");
-
-    let candidates = [trimmed, unescaped.as_str()];
-    let mut manifest = ManifestCrypto::default();
-    let mut parsed_any = false;
-
-    for candidate in candidates {
-        if let Some(curves_raw) = extract_jsonish_array(candidate, "allowed_curve_ids") {
-            let curves = parse_curve_ids(&curves_raw);
-            if !curves.is_empty() {
-                manifest.allowed_curve_ids = curves;
-                parsed_any = true;
-            }
-        }
-
-        if let Some(signing_raw) = extract_jsonish_array(candidate, "allowed_signing") {
-            let signing = parse_allowed_signing(&signing_raw);
-            if !signing.is_empty() {
-                manifest.allowed_signing = signing;
-                parsed_any = true;
-            }
-        } else if let Some(signing_scalar) = extract_jsonish_scalar(candidate, "allowed_signing") {
-            let signing = parse_allowed_signing(&signing_scalar);
-            if !signing.is_empty() {
-                manifest.allowed_signing = signing;
-                parsed_any = true;
-            }
-        }
-
-        if let Some(hash) = extract_jsonish_scalar(candidate, "default_hash")
-            && !hash.trim().is_empty()
-        {
-            manifest.default_hash = hash;
-            parsed_any = true;
-        }
-
-        if let Some(distid) = extract_jsonish_scalar(candidate, "sm2_distid_default")
-            && !distid.trim().is_empty()
-        {
-            manifest.sm2_distid_default = distid;
-            parsed_any = true;
-        }
-
-        if let Some(sm_intrinsics) = extract_jsonish_scalar(candidate, "sm_intrinsics")
-            && !sm_intrinsics.trim().is_empty()
-        {
-            manifest.sm_intrinsics = sm_intrinsics;
-            parsed_any = true;
-        }
-
-        if let Some(sm_preview) = extract_jsonish_bool(candidate, "sm_openssl_preview") {
-            manifest.sm_openssl_preview = sm_preview;
-            parsed_any = true;
-        }
-    }
-
-    if parsed_any {
-        Ok(manifest)
-    } else {
-        Err(norito::Error::Message(
-            "failed to decode crypto_manifest_meta payload".to_string(),
-        ))
-    }
+    norito::json::from_str(raw).map_err(norito::Error::from)
 }
 
 fn decode_crypto_manifest_meta(payload: &Json) -> Result<ManifestCrypto, norito::Error> {
-    if let Ok(meta) = parse_manifest_crypto_str(payload.get()) {
-        return Ok(meta);
-    }
-
-    if let Ok(value) = norito::json::parse_value(payload.get()) {
-        if let Ok(meta) = norito::json::from_value(value.clone()) {
-            return Ok(meta);
-        }
-        if let Some(inner) = value.as_str()
-            && let Ok(meta) = parse_manifest_crypto_str(inner)
-        {
-            return Ok(meta);
+    match parse_manifest_crypto_str(payload.get()) {
+        Ok(meta) => Ok(meta),
+        Err(error) => {
+            let preview: String = payload.get().chars().take(256).collect();
+            tracing::warn!(?error, preview = %preview, "failed to decode crypto_manifest_meta payload");
+            Err(norito::Error::Message(
+                "failed to decode crypto_manifest_meta payload".to_string(),
+            ))
         }
     }
-
-    if let Ok(inner) = norito::json::from_str::<String>(payload.get())
-        && let Ok(meta) = parse_manifest_crypto_str(&inner)
-    {
-        return Ok(meta);
-    }
-
-    // Legacy malformed payloads sometimes wrapped the JSON object in raw quotes
-    // without escaping interior quotes. Peel one wrapping layer and retry.
-    let raw = payload.get().trim();
-    if raw.len() >= 2
-        && ((raw.starts_with('"') && raw.ends_with('"'))
-            || (raw.starts_with('\'') && raw.ends_with('\'')))
-    {
-        let mut inner = raw[1..raw.len() - 1].to_owned();
-        if inner.contains("\\\"") {
-            inner = inner.replace("\\\"", "\"");
-        }
-        if let Ok(meta) = parse_manifest_crypto_str(inner.trim()) {
-            return Ok(meta);
-        }
-    }
-
-    if let Ok(meta) = decode_crypto_manifest_heuristics(payload.get()) {
-        return Ok(meta);
-    }
-
-    let preview: String = payload.get().chars().take(256).collect();
-    tracing::warn!(preview = %preview, "failed to decode crypto_manifest_meta payload");
-    Err(norito::Error::Message(
-        "failed to decode crypto_manifest_meta payload".to_string(),
-    ))
 }
 
 fn decode_confidential_registry_meta(
     payload: &Json,
 ) -> Result<ConfidentialRegistryMeta, norito::Error> {
-    if let Ok(meta) = parse_confidential_registry_meta_str(payload.get()) {
-        return Ok(meta);
-    }
-
-    if let Ok(value) = norito::json::parse_value(payload.get()) {
-        if let Ok(meta) = norito::json::from_value(value.clone()) {
-            return Ok(meta);
-        }
-        if let Some(inner) = value.as_str()
-            && let Ok(meta) = parse_confidential_registry_meta_str(inner)
-        {
-            return Ok(meta);
-        }
-    }
-
-    if let Ok(inner) = norito::json::from_str::<String>(payload.get())
-        && let Ok(meta) = parse_confidential_registry_meta_str(&inner)
-    {
-        return Ok(meta);
-    }
-
-    // Legacy malformed payloads sometimes wrapped the JSON object in raw quotes
-    // without escaping interior quotes. Peel one wrapping layer and retry.
-    let raw = payload.get().trim();
-    if raw.len() >= 2
-        && ((raw.starts_with('"') && raw.ends_with('"'))
-            || (raw.starts_with('\'') && raw.ends_with('\'')))
-    {
-        let mut inner = raw[1..raw.len() - 1].to_owned();
-        if inner.contains("\\\"") {
-            inner = inner.replace("\\\"", "\"");
-        }
-        if let Ok(meta) = parse_confidential_registry_meta_str(inner.trim()) {
-            return Ok(meta);
-        }
-    }
-
-    // Last-resort parse for mangled key/value separators.
-    if let Some(hash) = extract_jsonish_scalar(payload.get(), "vk_set_hash") {
-        return Ok(ConfidentialRegistryMeta {
-            vk_set_hash: Some(hash),
-        });
-    }
-
-    Err(norito::Error::Message(
-        "failed to decode confidential_registry_root payload".to_string(),
-    ))
+    parse_confidential_registry_meta_str(payload.get()).map_err(|_| {
+        norito::Error::Message("failed to decode confidential_registry_root payload".to_string())
+    })
 }
 
 fn decode_consensus_handshake_meta(
     payload: &Json,
 ) -> Result<ConsensusHandshakeMeta, norito::Error> {
-    if let Ok(meta) = parse_handshake_meta_str(payload.get()) {
-        return Ok(meta);
-    }
-
-    if let Ok(value) = norito::json::parse_value(payload.get()) {
-        if let Ok(meta) = norito::json::from_value(value.clone()) {
-            return Ok(meta);
-        }
-        if let Some(inner) = value.as_str()
-            && let Ok(meta) = parse_handshake_meta_str(inner)
-        {
-            return Ok(meta);
-        }
-    }
-
-    if let Ok(inner) = norito::json::from_str::<String>(payload.get())
-        && let Ok(meta) = parse_handshake_meta_str(&inner)
-    {
-        return Ok(meta);
-    }
-
-    decode_consensus_handshake_heuristics(payload.get())
-}
-
-fn decode_consensus_handshake_heuristics(
-    raw: &str,
-) -> Result<ConsensusHandshakeMeta, norito::Error> {
-    let raw_lower = raw.to_ascii_lowercase();
-    let mode = if raw_lower.contains("permissioned") {
-        Some("Permissioned".to_string())
-    } else if raw_lower.contains("npos") {
-        Some("Npos".to_string())
-    } else {
-        None
-    };
-    let bls_domain = raw_lower
-        .find("bls-iroha2")
-        .map(|start| {
-            let tail = &raw[start..];
-            tail.split(&['"', ',', ' ', '}', '\n', '\t', ';'][..])
-                .next()
-                .unwrap_or(tail)
-                .trim_matches(&['"', '\'', '\\'][..])
-                .to_string()
-        })
-        .or_else(|| {
-            mode.as_deref().map(|m| match m {
-                "Npos" => "bls-iroha2:npos-sumeragi:v1".to_string(),
-                _ => "bls-iroha2:permissioned-sumeragi:v1".to_string(),
-            })
-        });
-
-    let fingerprint = raw_lower
-        .match_indices("0x")
-        .find_map(|(idx, _)| {
-            let rest = &raw[idx..];
-            let mut hex = String::new();
-            for ch in rest.chars() {
-                if ch == 'x' || ch == 'X' || ch.is_ascii_hexdigit() {
-                    hex.push(ch);
-                } else {
-                    break;
-                }
-            }
-            (hex.len() >= 66).then_some(hex[..66].to_string())
-        })
-        .or_else(|| {
-            // Look for an unprefixed 64+ hex run.
-            let bytes = raw.as_bytes();
-            let mut best: Option<(usize, usize)> = None;
-            let mut i = 0;
-            while i < bytes.len() {
-                if bytes[i].is_ascii_hexdigit() {
-                    let start = i;
-                    while i < bytes.len() && bytes[i].is_ascii_hexdigit() {
-                        i += 1;
-                    }
-                    let len = i - start;
-                    if len >= 64 {
-                        best = Some((start, len));
-                        break;
-                    }
-                } else {
-                    i += 1;
-                }
-            }
-            best.map(|(start, len)| format!("0x{}", &raw[start..start + len.min(64)]))
-        });
-
-    if let (Some(mode), Some(bls_domain), Some(consensus_fingerprint)) =
-        (mode, bls_domain, fingerprint)
-    {
-        return Ok(ConsensusHandshakeMeta {
-            mode,
-            bls_domain,
-            wire_proto_versions: vec![iroha_core::sumeragi::consensus::PROTO_VERSION],
-            consensus_fingerprint,
-        });
-    }
-
-    Err(norito::Error::Message(
-        "failed to decode consensus_handshake_meta payload".to_string(),
-    ))
+    parse_handshake_meta_str(payload.get()).map_err(|_| {
+        norito::Error::Message("failed to decode consensus_handshake_meta payload".to_string())
+    })
 }
 
 #[cfg(test)]
@@ -526,18 +182,19 @@ mod handshake_payload_tests {
     }
 
     #[test]
-    fn decode_consensus_meta_handles_normal_and_nested_json() {
+    fn decode_consensus_meta_rejects_nested_json_string_payload() {
         let payload = handshake_payload_from_genesis();
         let meta = decode_consensus_handshake_meta(&payload).expect("decode normal payload");
         assert_eq!(meta.mode, "Permissioned");
 
-        // Double-encoded payload (stringified JSON) also decodes.
         let stringified =
             Json::new(norito::json::to_json(&payload).expect("stringify handshake payload"));
-        let meta2 =
-            decode_consensus_handshake_meta(&stringified).expect("decode nested string payload");
-        assert_eq!(meta2.mode, meta.mode);
-        assert_eq!(meta2.consensus_fingerprint, meta.consensus_fingerprint);
+        let err =
+            decode_consensus_handshake_meta(&stringified).expect_err("nested payload must fail");
+        assert!(
+            err.to_string().contains("failed to decode"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -552,53 +209,35 @@ mod handshake_payload_tests {
     }
 
     #[test]
-    fn decode_consensus_meta_handles_mangled_json() {
+    fn decode_consensus_meta_rejects_mangled_json() {
         let mangled = Json::from_norito_value_ref(&norito::json::Value::String(
             r#"{mode"Permissioned",bls_domain"bls-iroha2:permissioned-sumeragi:v1",consensus_fingerprint"0x632eaff6fe3054ca279416357baae5ff7f28144b3bc6a83921f68d466c4ec0ab"}"#.to_string(),
         ))
         .expect("construct mangled payload");
-        let meta =
-            decode_consensus_handshake_meta(&mangled).expect("mangled payload should still parse");
-        assert_eq!(meta.mode, "Permissioned");
+        let err = decode_consensus_handshake_meta(&mangled).expect_err("mangled payload must fail");
         assert!(
-            meta.bls_domain.contains("permissioned-sumeragi"),
-            "unexpected domain: {}",
-            meta.bls_domain
-        );
-        assert!(
-            meta.consensus_fingerprint.starts_with("0x632e"),
-            "unexpected fingerprint: {}",
-            meta.consensus_fingerprint
-        );
-        assert!(
-            meta.wire_proto_versions
-                .contains(&iroha_core::sumeragi::consensus::PROTO_VERSION)
+            err.to_string().contains("failed to decode"),
+            "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn decode_consensus_meta_handles_unprefixed_hex_and_uppercase_tokens() {
+    fn decode_consensus_meta_rejects_unprefixed_hex_and_uppercase_tokens() {
         let fingerprint = "632eaff6fe3054ca279416357baae5ff7f28144b3bc6a83921f68d466c4ec0ab";
         let raw = format!(
             "MODE=PERMISSIONED bls_domain=bls-iroha2:permissioned-sumeragi:v1 consensus_fingerprint={fingerprint}"
         );
         let payload = Json::from(raw.as_str());
-        let meta = decode_consensus_handshake_meta(&payload).expect("decode uppercase payload");
-        assert_eq!(meta.mode, "Permissioned");
-        assert_eq!(meta.bls_domain, "bls-iroha2:permissioned-sumeragi:v1");
+        let err =
+            decode_consensus_handshake_meta(&payload).expect_err("non-JSON payload must fail");
         assert!(
-            meta.consensus_fingerprint.starts_with("0x632e"),
-            "unexpected fingerprint {}",
-            meta.consensus_fingerprint
-        );
-        assert_eq!(
-            meta.wire_proto_versions,
-            vec![iroha_core::sumeragi::consensus::PROTO_VERSION]
+            err.to_string().contains("failed to decode"),
+            "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn decode_crypto_manifest_meta_handles_normal_and_nested_json() {
+    fn decode_crypto_manifest_meta_rejects_nested_json_string_payload() {
         let manifest = ManifestCrypto::default();
         let payload = Json::new(manifest.clone());
         let decoded = decode_crypto_manifest_meta(&payload).expect("decode normal payload");
@@ -606,64 +245,48 @@ mod handshake_payload_tests {
 
         let stringified =
             Json::new(norito::json::to_json(&payload).expect("stringify manifest payload"));
-        let decoded_nested =
-            decode_crypto_manifest_meta(&stringified).expect("decode nested payload");
-        assert_eq!(decoded_nested, manifest);
+        let err = decode_crypto_manifest_meta(&stringified)
+            .expect_err("nested string payload must be rejected");
+        assert!(
+            err.to_string().contains("failed to decode"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
-    fn decode_crypto_manifest_meta_handles_raw_quoted_legacy_payload() {
+    fn decode_crypto_manifest_meta_rejects_raw_quoted_legacy_payload() {
         let raw = r#""{"allowed_curve_ids":[1,3,4],"allowed_signing":["ed25519","secp256k1","bls_normal"],"default_hash":"blake2b-256","sm2_distid_default":"1234567812345678","sm_openssl_preview":false}""#;
         let payload = Json::from_string_unchecked(raw.to_owned());
-        let decoded =
-            decode_crypto_manifest_meta(&payload).expect("decode raw-quoted legacy payload");
-        assert_eq!(
-            decoded.allowed_signing,
-            vec![
-                Algorithm::Ed25519,
-                Algorithm::Secp256k1,
-                Algorithm::BlsNormal
-            ]
+        let err = decode_crypto_manifest_meta(&payload)
+            .expect_err("raw-quoted compatibility payload must be rejected");
+        assert!(
+            err.to_string().contains("failed to decode"),
+            "unexpected error: {err}"
         );
-        assert_eq!(decoded.default_hash, "blake2b-256");
-        assert_eq!(decoded.allowed_curve_ids, vec![1, 3, 4]);
     }
 
     #[test]
-    fn decode_crypto_manifest_meta_handles_backslash_escaped_object_payload() {
+    fn decode_crypto_manifest_meta_rejects_backslash_escaped_object_payload() {
         let raw = r#"{\"allowed_curve_ids\":[1,3,4],\"allowed_signing\":[\"ed25519\",\"secp256k1\",\"bls_normal\"],\"default_hash\":\"blake2b-256\",\"sm2_distid_default\":\"1234567812345678\",\"sm_openssl_preview\":false}"#;
         let payload = Json::from_string_unchecked(raw.to_owned());
-        let decoded =
-            decode_crypto_manifest_meta(&payload).expect("decode backslash-escaped payload");
-        assert_eq!(
-            decoded.allowed_signing,
-            vec![
-                Algorithm::Ed25519,
-                Algorithm::Secp256k1,
-                Algorithm::BlsNormal
-            ]
+        let err = decode_crypto_manifest_meta(&payload)
+            .expect_err("backslash-escaped compatibility payload must be rejected");
+        assert!(
+            err.to_string().contains("failed to decode"),
+            "unexpected error: {err}"
         );
-        assert_eq!(decoded.default_hash, "blake2b-256");
-        assert_eq!(decoded.allowed_curve_ids, vec![1, 3, 4]);
     }
 
     #[test]
-    fn decode_crypto_manifest_meta_handles_mangled_key_value_separators() {
+    fn decode_crypto_manifest_meta_rejects_mangled_key_value_separators() {
         let raw = r#"{"allowed_curve_ids""[1,3,4],"allowed_signing""["ed25519","secp256k1","bls_normal"],"default_hash""blake2b-256","sm2_distid_default""1234567812345678","sm_openssl_preview"false}"#;
         let payload = Json::from_string_unchecked(raw.to_owned());
-        let decoded =
-            decode_crypto_manifest_meta(&payload).expect("decode mangled key-value payload");
-        assert_eq!(
-            decoded.allowed_signing,
-            vec![
-                Algorithm::Ed25519,
-                Algorithm::Secp256k1,
-                Algorithm::BlsNormal
-            ]
+        let err = decode_crypto_manifest_meta(&payload)
+            .expect_err("mangled compatibility payload must be rejected");
+        assert!(
+            err.to_string().contains("failed to decode"),
+            "unexpected error: {err}"
         );
-        assert_eq!(decoded.default_hash, "blake2b-256");
-        assert_eq!(decoded.allowed_curve_ids, vec![1, 3, 4]);
-        assert!(!decoded.sm_openssl_preview);
     }
 
     #[test]
@@ -676,24 +299,27 @@ mod handshake_payload_tests {
     }
 
     #[test]
-    fn decode_confidential_registry_meta_handles_mangled_key_value_separators() {
+    fn decode_confidential_registry_meta_rejects_mangled_key_value_separators() {
         let hash = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let payload = Json::from_string_unchecked(format!("{{\"vk_set_hash\"\"{hash}\"}}"));
-        let decoded = decode_confidential_registry_meta(&payload)
-            .expect("decode mangled confidential payload");
-        assert_eq!(decoded.vk_set_hash.as_deref(), Some(hash));
+        let err = decode_confidential_registry_meta(&payload)
+            .expect_err("mangled compatibility payload must fail");
+        assert!(
+            err.to_string().contains("failed to decode"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
-    fn parse_confidential_registry_hash_treats_null_as_absent() {
-        let payload = Json::from_string_unchecked("{\"vk_set_hash\"null}".to_string());
+    fn parse_confidential_registry_hash_treats_json_null_as_absent() {
+        let payload = Json::from_string_unchecked("{\"vk_set_hash\":null}".to_string());
         let decoded =
             parse_confidential_registry_hash(&payload).expect("decode null confidential payload");
         assert_eq!(decoded, None);
     }
 }
 
-#[derive(JsonDeserialize)]
+#[derive(Debug, JsonDeserialize)]
 struct ConfidentialRegistryMeta {
     #[norito(default)]
     vk_set_hash: Option<String>,

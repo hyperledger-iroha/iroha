@@ -7,11 +7,11 @@ seiyaku DomainOps {
     let domain_id = domain!("wonder");
     register_domain(domain_id);
 
-    // Transfer domain ownership from the current authority to bob@wonderland
+    // Transfer domain ownership from the current authority (demo no-op self transfer).
     transfer_domain(
       authority(),
       domain_id,
-      account!("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland")
+      authority()
     );
 
     // Optionally unregister the domain (for demo purposes)

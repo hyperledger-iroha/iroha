@@ -346,8 +346,7 @@ fn select_entrypoint(entrypoints: &[EntrypointDescriptor]) -> Option<&Entrypoint
     None
 }
 
-/// Normalize manifest/entrypoint hint keys into canonical WSV keys plus state keys,
-/// preserving literal WSV keys when account selectors cannot be resolved.
+/// Normalize manifest/entrypoint hint keys into canonical WSV keys plus state keys.
 #[allow(clippy::too_many_lines)]
 fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Option<AccessSet> {
     if read_keys.iter().any(|key| key == "*") || write_keys.iter().any(|key| key == "*") {
@@ -356,22 +355,6 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
     let mut advisory = StateAccessSetAdvisory::default();
     let mut state_reads: BTreeSet<String> = BTreeSet::new();
     let mut state_writes: BTreeSet<String> = BTreeSet::new();
-    let account_parse_unresolved = |err: &iroha_data_model::error::ParseError| -> bool {
-        matches!(
-            err.reason(),
-            "ERR_DOMAIN_SELECTOR_UNRESOLVED" | "ERR_UAID_UNRESOLVED" | "ERR_OPAQUE_ID_UNRESOLVED"
-        )
-    };
-    let asset_has_unresolved_account = |raw_asset: &str| -> bool {
-        let Some((_, account_part)) = raw_asset.rsplit_once('#') else {
-            return false;
-        };
-        match account_part.parse::<AccountId>() {
-            Ok(_) => false,
-            Err(err) => account_parse_unresolved(&err),
-        }
-    };
-
     let ingest = |raw: &str,
                   canonical: &mut Vec<CanonicalStateKey>,
                   state_keys: &mut BTreeSet<String>|
@@ -384,7 +367,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("account.detail:") {
-            let mut parsed = None;
+            let mut parsed: Option<AccountMetadataKey> = None;
             for split in [rest.split_once(':'), rest.rsplit_once(':')] {
                 let Some((id_raw, key_raw)) = split else {
                     continue;
@@ -392,24 +375,19 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
                 let Ok(key) = key_raw.parse::<Name>() else {
                     continue;
                 };
-                match id_raw.parse::<AccountId>() {
+                match AccountId::parse_encoded(id_raw)
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                {
                     Ok(id) => {
-                        parsed = Some(Ok(AccountMetadataKey { id, key }));
-                        break;
-                    }
-                    Err(err) if account_parse_unresolved(&err) => {
-                        parsed = Some(Err(()));
+                        parsed = Some(AccountMetadataKey { id, key });
                         break;
                     }
                     Err(_) => continue,
                 }
             }
             match parsed {
-                Some(Ok(key)) => {
+                Some(key) => {
                     canonical.push(CanonicalStateKey::AccountMetadata(key));
-                }
-                Some(Err(())) => {
-                    state_keys.insert(raw.to_owned());
                 }
                 None => return None,
             }
@@ -435,7 +413,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("asset.detail:") {
-            let mut parsed = None;
+            let mut parsed: Option<AssetMetadataKey> = None;
             for split in [rest.split_once(':'), rest.rsplit_once(':')] {
                 let Some((id_raw, key_raw)) = split else {
                     continue;
@@ -443,24 +421,17 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
                 let Ok(key) = key_raw.parse::<Name>() else {
                     continue;
                 };
-                match id_raw.parse::<AssetId>() {
+                match AssetId::parse_encoded(id_raw) {
                     Ok(id) => {
-                        parsed = Some(Ok(AssetMetadataKey { id, key }));
-                        break;
-                    }
-                    Err(_) if asset_has_unresolved_account(id_raw) => {
-                        parsed = Some(Err(()));
+                        parsed = Some(AssetMetadataKey { id, key });
                         break;
                     }
                     Err(_) => continue,
                 }
             }
             match parsed {
-                Some(Ok(key)) => {
+                Some(key) => {
                     canonical.push(CanonicalStateKey::AssetMetadata(key));
-                }
-                Some(Err(())) => {
-                    state_keys.insert(raw.to_owned());
                 }
                 None => return None,
             }
@@ -484,7 +455,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("role.binding:") {
-            let mut parsed = None;
+            let mut parsed: Option<AccountRoleKey> = None;
             for split in [rest.split_once(':'), rest.rsplit_once(':')] {
                 let Some((account_raw, role_raw)) = split else {
                     continue;
@@ -492,35 +463,29 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
                 let Ok(role) = role_raw.parse::<RoleId>() else {
                     continue;
                 };
-                match account_raw.parse::<AccountId>() {
+                match AccountId::parse_encoded(account_raw)
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                {
                     Ok(account) => {
-                        parsed = Some(Ok(AccountRoleKey { account, role }));
-                        break;
-                    }
-                    Err(err) if account_parse_unresolved(&err) => {
-                        parsed = Some(Err(()));
+                        parsed = Some(AccountRoleKey { account, role });
                         break;
                     }
                     Err(_) => continue,
                 }
             }
             match parsed {
-                Some(Ok(key)) => {
+                Some(key) => {
                     canonical.push(CanonicalStateKey::AccountRole(key));
-                }
-                Some(Err(())) => {
-                    state_keys.insert(raw.to_owned());
                 }
                 None => return None,
             }
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("account:") {
-            match rest.parse::<AccountId>() {
+            match AccountId::parse_encoded(rest)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            {
                 Ok(id) => canonical.push(CanonicalStateKey::Account(id)),
-                Err(err) if account_parse_unresolved(&err) => {
-                    state_keys.insert(raw.to_owned());
-                }
                 Err(_) => return None,
             }
             return Some(());
@@ -536,11 +501,8 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("asset:") {
-            match rest.parse::<AssetId>() {
+            match AssetId::parse_encoded(rest) {
                 Ok(id) => canonical.push(CanonicalStateKey::Asset(id)),
-                Err(_) if asset_has_unresolved_account(rest) => {
-                    state_keys.insert(raw.to_owned());
-                }
                 Err(_) => return None,
             }
             return Some(());
@@ -1665,7 +1627,7 @@ mod tests {
 
     #[test]
     fn access_set_hints_reject_unknown_keys() {
-        let reads = vec!["perm.account:alice@wonderland:can_transfer".to_owned()];
+        let reads = vec!["perm.account:legacy-scoped-literal:can_transfer".to_owned()];
         assert!(access_set_from_hint_keys(&reads, &[]).is_none());
     }
 
@@ -1904,7 +1866,7 @@ mod tests {
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
 
         let hints = AccessSetHints {
-            read_keys: vec!["perm.account:alice@wonderland:can_transfer".to_owned()],
+            read_keys: vec!["perm.account:legacy-scoped-literal:can_transfer".to_owned()],
             write_keys: Vec::new(),
         };
         let manifest = ContractManifest {

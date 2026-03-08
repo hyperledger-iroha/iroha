@@ -6,7 +6,9 @@ import {
 } from "../src/index.js";
 
 const BASE_URL = process.env.TORII_URL ?? "http://127.0.0.1:8080";
-const ACCOUNT_LITERAL = process.env.ACCOUNT_ID ?? "alice@wonderland";
+const ACCOUNT_LITERAL =
+  process.env.ACCOUNT_ID ??
+  "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT";
 const AUTH_TOKEN = process.env.TORII_AUTH_TOKEN ?? null;
 const API_TOKEN = process.env.TORII_API_TOKEN ?? null;
 const ALLOW_INSECURE = process.env.TORII_ALLOW_INSECURE === "1";

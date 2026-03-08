@@ -93,7 +93,8 @@ pub fn encode_account_id_to_canonical_hex(
     AccountAddress::from_account_id(account)?.canonical_hex()
 }
 
-/// Parse an address string in any supported format, returning both the canonical payload and the detected format.
+/// Parse an address string in strict encoded form (IH58 or compressed),
+/// returning both the canonical payload and the detected format.
 ///
 /// # Errors
 ///
@@ -103,7 +104,7 @@ pub fn parse_account_address(
     input: &str,
     expected_prefix: Option<u16>,
 ) -> Result<ParsedAccountAddress, AccountAddressError> {
-    let (address, format) = AccountAddress::parse_any(input, expected_prefix)?;
+    let (address, format) = AccountAddress::parse_encoded(input, expected_prefix)?;
     Ok(ParsedAccountAddress {
         domain_kind: address.domain_kind(),
         address,
@@ -131,7 +132,7 @@ mod tests {
         assert!(
             matches!(parsed.format, AccountAddressFormat::IH58 { network_prefix } if network_prefix == 42)
         );
-        assert_eq!(parsed.domain_kind(), AddressDomainKind::LocalDigest12);
+        assert_eq!(parsed.domain_kind(), AddressDomainKind::Default);
     }
 
     #[test]
@@ -147,7 +148,7 @@ mod tests {
             AccountAddress::from_account_id(&account).expect("address")
         );
         assert_eq!(parsed.format, AccountAddressFormat::Compressed);
-        assert_eq!(parsed.domain_kind(), AddressDomainKind::LocalDigest12);
+        assert_eq!(parsed.domain_kind(), AddressDomainKind::Default);
     }
 
     #[test]

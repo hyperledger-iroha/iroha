@@ -162,7 +162,7 @@ Ejemplos hex canonicos que las herramientas de billetera pueden enlazar o
 
 |ティポデセレクター |ヘックスカノニコ |
 |---------------|---------------|
-|暗黙的に欠陥がある | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+|暗黙的に欠陥がある | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 |ローカルのダイジェスト (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 |レジストロ グローバル (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -179,7 +179,7 @@ ADDR-5 の CLI ドキュメントに含まれるカデナ:
    `domain` コン カンポス `kind`/`warning` y refleja cualquier dominio proporcionado
    エル・カンポ`input_domain`経由。 Cuando `kind` es `local12`、EL CLI インプライム
    JSON を参照して標準エラーと履歴書を表示する
-   CI および SDK のパイプラインは最も重要です。パサ `--append-domain` クアンド
+   CI および SDK のパイプラインは最も重要です。パサ `legacy  suffix` クアンド
    `<ih58>@<domain>` を参照してください。
 2. Los SDKs pueden mostrar la missma advertencia/resumen via el helper de
    JavaScript:```js
@@ -209,7 +209,7 @@ ADDR-5 の CLI ドキュメントに含まれるカデナ:
    履歴書 canonicos/IH58/comprimidos para cada entrada, y cuenta errores de
    ローカルの広告を解析します。米国 `--allow-errors` アル監査ダンプ
    コンティネン フィラス バスラ、自動化されたブロックへのアクセス
-   `--fail-on-warning` cuando los operadores esten listos para bloquear
+   `strict CI post-check` cuando los operadores esten listos para bloquear
    CI でローカルを選択します。
 6.クアンド・ネセシテ・ウナ・レスクリトゥーラ・リネア・ア・リネア、アメリカ
   選択の修正を計算するパラパラ、米国ローカル
@@ -217,12 +217,12 @@ ADDR-5 の CLI ドキュメントに含まれるカデナ:
   canonicas、advertencias、fallos de parse en una sola pasada。
    ヘルパーはフィラスを省略し、ローカルの欠陥を確認し、再スタンテを確認します
    コードの承認 (IH58/comprimido/hex/JSON)、および管理権の保持
-   オリジナルクアンドSE米国`--append-domain`。 Combinalo コン `--allow-errors` パラ
+   オリジナルクアンドSE米国`legacy  suffix`。 Combinalo コン `--allow-errors` パラ
    Seguir escaneando incluso cuando un dump contiee literales mal formados を選択してください。
 7. CI/lint puede エジェクターの自動化 `ci/check_address_normalize.sh`、
    ローカルの `fixtures/account/address_vectors.json` の余分なセレクター、
    los convierte via `iroha tools address normalize`、y vuelve a ejecutar
-   `iroha tools address audit --fail-on-warning` デモストラル リリースはありません
+   `iroha tools address audit` デモストラル リリースはありません
    エミテンダイジェストローカル。
 
 `torii_address_local8_total{endpoint}` ジュントコン
@@ -261,7 +261,7 @@ ADDR-7 要求 `domain_kind="local12"` 永久保証
 ### ランサミエントのフラグメント (ビルテラと探検家)
 
 ランサミエントのメモ/エクスプローラードールの弾丸を含む
-公開されたカットオーバー:> **指示:** ヘルパー `iroha tools address normalize --only-local --append-domain` を選択してください
+公開されたカットオーバー:> **指示:** ヘルパー `iroha tools address normalize` を選択してください
 > CI (`ci/check_address_normalize.sh`) パイプラインとの接続を確立
 > billetera/explorador puedan Convertir selectores 形式的なローカル遺伝情報
 > canonicas IH58/comprimidas antes de que Local-8/Local-12 se bloqueen en mainnet。

@@ -101,7 +101,9 @@ where
 }
 
 pub(crate) fn parse_account_id(spec: &str) -> Result<AccountId> {
-    AccountId::from_str(spec).map_err(|err| eyre!("invalid account id `{spec}`: {err}"))
+    AccountId::parse_encoded(spec)
+        .map(|parsed| parsed.into_account_id())
+        .map_err(|err| eyre!("invalid account id `{spec}`: {err}"))
 }
 
 pub(crate) fn parse_asset_id(spec: &str) -> Result<AssetId> {

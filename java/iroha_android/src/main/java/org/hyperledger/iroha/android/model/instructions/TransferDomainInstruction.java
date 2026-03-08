@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 
 /** Typed builder for the `TransferDomain` instruction. */
 public final class TransferDomainInstruction implements InstructionTemplate {
@@ -97,7 +98,9 @@ public final class TransferDomainInstruction implements InstructionTemplate {
     private Builder() {}
 
     public Builder setSourceAccountId(final String sourceAccountId) {
-      this.sourceAccountId = Objects.requireNonNull(sourceAccountId, "sourceAccountId");
+      this.sourceAccountId =
+          AccountIdLiteral.extractIh58Address(
+              Objects.requireNonNull(sourceAccountId, "sourceAccountId"));
       return this;
     }
 
@@ -108,7 +111,8 @@ public final class TransferDomainInstruction implements InstructionTemplate {
 
     public Builder setDestinationAccountId(final String destinationAccountId) {
       this.destinationAccountId =
-          Objects.requireNonNull(destinationAccountId, "destinationAccountId");
+          AccountIdLiteral.extractIh58Address(
+              Objects.requireNonNull(destinationAccountId, "destinationAccountId"));
       return this;
     }
 

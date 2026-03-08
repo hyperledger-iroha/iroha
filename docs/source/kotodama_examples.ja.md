@@ -45,8 +45,8 @@ seiyaku Hello {
 seiyaku TransferDemo {
   kotoage fn do_transfer() permission(AssetTransferRole) {
     transfer_asset(
-      account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
-      account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
+      account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+      account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
       asset_definition!("rose#wonderland"),
       10
     );
@@ -64,14 +64,14 @@ seiyaku TransferDemo {
 ```kotodama
 seiyaku NftDemo {
   kotoage fn create() permission(NftAuthority) {
-    let owner = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    let owner = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
     let nft = nft_id!("dragon$wonderland");
     nft_mint_asset(nft, owner);
   }
 
   kotoage fn transfer() permission(NftAuthority) {
-    let owner = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
-    let recipient = account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland");
+    let owner = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+    let recipient = account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU");
     let nft = nft_id!("dragon$wonderland");
     nft_transfer_asset(owner, nft, recipient);
   }

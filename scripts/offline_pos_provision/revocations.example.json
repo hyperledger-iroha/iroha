@@ -1,21 +1,21 @@
 [
   {
-    "verdict_id_hex": "0000000000000000000000000000000000000000000000000000000000000001",
-    "issuer": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
-    "revoked_at_ms": 1730314876000,
-    "reason": "device_compromised",
-    "note": "Retail device reported stolen",
+    "issuer": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
     "metadata": {
       "ticket": "INC-4012"
-    }
+    },
+    "note": "Retail device reported stolen",
+    "reason": "device_compromised",
+    "revoked_at_ms": 1730314876000,
+    "verdict_id_hex": "0000000000000000000000000000000000000000000000000000000000000001"
   },
   {
-    "verdict_id_hex": "0000000000000000000000000000000000000000000000000000000000000003",
-    "issuer": "ed01207EAAF3023FA8E1E41975686C5D4D3F131DCE090D869AC0E9B4EB15CDA902C72F@wonderland",
-    "revoked_at_ms": 1730414876000,
-    "reason": "issuer_request",
+    "issuer": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
     "metadata": {
       "program": "pilot"
-    }
+    },
+    "reason": "issuer_request",
+    "revoked_at_ms": 1730414876000,
+    "verdict_id_hex": "0000000000000000000000000000000000000000000000000000000000000003"
   }
 ]

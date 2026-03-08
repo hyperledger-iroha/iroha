@@ -150,7 +150,7 @@ UIs اور SDKs کو selector کی قسم دکھانے کے لئے تیار ہو
 
 | Selector قسم | Canonical hex |
 |---------------|---------------|
-| ضمنی ڈیفالٹ | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| ضمنی ڈیفالٹ | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | لوکل digest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | گلوبل رجسٹری (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -167,7 +167,7 @@ UIs اور SDKs کو selector کی قسم دکھانے کے لئے تیار ہو
    کرتا ہے۔ جب `kind` `local12` ہو تو CLI stderr پر وارننگ دیتا ہے اور JSON
    summary وہی رہنمائی دہراتا ہے تاکہ CI pipelines اور SDKs اسے surface کر سکیں۔
    جب بھی آپ convert شدہ encoding کو `<ih58>@<domain>` کی صورت میں replay کرنا
-   چاہیں تو `--append-domain` دیں۔
+   چاہیں تو `legacy  suffix` دیں۔
 2. SDKs اسی وارننگ/summary کو JavaScript helper کے ذریعے دکھا سکتے ہیں:
 
    ```js
@@ -195,18 +195,18 @@ UIs اور SDKs کو selector کی قسم دکھانے کے لئے تیار ہو
    ہوتے ہیں، اور `--input -` یا کوئی فلیگ نہ ہو تو STDIN استعمال ہوتا ہے)، ہر
    اندراج کے لئے canonical/IH58 (ترجیحی)/compressed (`sora`) (`sora`, second-best) summaries کے ساتھ JSON رپورٹ بناتی
    rows ہوں تو `--allow-errors` استعمال کریں، اور جب آپریٹرز Local selectors کو
-   CI میں بلاک کرنے کے لئے تیار ہوں تو `--fail-on-warning` سے آٹومیشن گیٹ کریں۔
+   CI میں بلاک کرنے کے لئے تیار ہوں تو `strict CI post-check` سے آٹومیشن گیٹ کریں۔
 6. اگر newline-to-newline rewrite چاہیے تو
   Local-selector remediation spreadsheets کے لئے
   استعمال کریں تاکہ `input,status,format,...` CSV برآمد ہو جو canonical encodings،
   warnings اور parse failures کو ایک پاس میں نمایاں کرے۔ helper ڈیفالٹ طور پر
   non-Local rows چھوڑ دیتا ہے، باقی entries کو مطلوبہ encoding (IH58 ترجیحی/compressed (`sora`) second‑best/hex/JSON)
-  میں بدلتا ہے، اور `--append-domain` پر اصل ڈومین محفوظ رکھتا ہے۔ `--allow-errors`
+  میں بدلتا ہے، اور `legacy  suffix` پر اصل ڈومین محفوظ رکھتا ہے۔ `--allow-errors`
   کے ساتھ جوڑیں تاکہ خراب literals والے dumps پر بھی scan جاری رہے۔
 7. CI/lint automation `ci/check_address_normalize.sh` چلا سکتی ہے، جو
    `fixtures/account/address_vectors.json` سے Local selectors نکال کر
    `iroha tools address normalize` سے تبدیل کرتی ہے، اور
-   `iroha tools address audit --fail-on-warning` دوبارہ چلاتی ہے تاکہ ثابت ہو کہ
+   `iroha tools address audit` دوبارہ چلاتی ہے تاکہ ثابت ہو کہ
    releases اب Local digests نہیں نکالتے۔
 
 `torii_address_local8_total{endpoint}` کے ساتھ
@@ -240,7 +240,7 @@ selectors کو disable کرے۔ Alertmanager pack
 
 cutover کے وقت والٹ/ایکسپلورر ریلیز نوٹس میں درج ذیل bullet شامل کریں:
 
-> **Addresses:** `iroha tools address normalize --only-local --append-domain` helper شامل
+> **Addresses:** `iroha tools address normalize` helper شامل
 > کیا گیا اور اسے CI (`ci/check_address_normalize.sh`) میں وائر کیا گیا تاکہ
 > میں تبدیل کر سکیں، قبل اس کے کہ Local-8/Local-12 mainnet پر بلاک ہوں۔ کسی بھی
 > custom exports کو اپ ڈیٹ کریں تاکہ کمانڈ چلائی جائے اور normalized list کو

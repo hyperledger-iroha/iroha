@@ -13,7 +13,7 @@ Norm v1 applies to every place where [`Name`](../../../crates/iroha_data_model/
 is parsed under a domain context:
 
 - domain registration (`RegisterDomain` / `NewDomain`);
-- implicit-domain address handling (default domain selector);
+- implicit-domain address handling (default domain binding);
 - manifest and metadata tooling that publish domain references;
 - CLI, SDK, and governance interfaces that accept domain identifiers.
 
@@ -82,7 +82,7 @@ SDK, etc.).
 | `Treasury$default` | `Treasury$default` | — | ❌ rejected | `$` is blocked by the input validation step. |
 | `\u{0065}\u{0301}.example` | `é.example` | `xn--9ca.example` | ✅ accepted | Shows NFC collapsing combining sequences before punycode. |
 | `例え．テスト` (full-width stop) | `例え．テスト` | — | ❌ rejected | Full-width delimiter fails the ASCII folding stage. |
-| `wÍḷd-card` | `wÍḷd-card` | — | ❌ rejected | Contains `ḷ` (Latin Extended Additional), which Norm v1 bans for domain selectors. |
+| `wÍḷd-card` | `wÍḷd-card` | — | ❌ rejected | Contains `ḷ` (Latin Extended Additional), which Norm v1 bans for domain labels. |
 
 These examples should be mirrored in fixtures for Torii and SDKs so that
 cross-language implementations converge on the same behaviour. The canonical

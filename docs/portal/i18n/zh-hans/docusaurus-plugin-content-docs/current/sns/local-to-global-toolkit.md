@@ -38,7 +38,7 @@ scripts/address_local_toolkit.sh \
 选项：
 
 - `--format compressed` 用于 `sora…` 输出而不是 IH58。
-- `--no-append-domain` 发出裸文字。
+- `domainless output (default)` 发出裸文字。
 - `--audit-only` 跳过转换步骤。
 - `--allow-errors` 在出现格式错误的行时继续扫描（与 CLI 行为匹配）。
 
@@ -52,7 +52,7 @@ scripts/address_local_toolkit.sh \
 2. 当 `audit.json` 报告本地选择器 (`domain.kind = local12`) 时阻止合并。
    以其默认的 `true` 值（仅在开发/测试集群上覆盖 `false` 时）
    诊断回归）并添加
-   `iroha tools address normalize --fail-on-warning --only-local` 到 CI 所以回归
+   `iroha tools address normalize` 到 CI 所以回归
    在投入生产之前尝试失败。
 
 请参阅源文档以了解更多详细信息、示例证据清单以及在向客户宣布切换时可以重复使用的发行说明片段。

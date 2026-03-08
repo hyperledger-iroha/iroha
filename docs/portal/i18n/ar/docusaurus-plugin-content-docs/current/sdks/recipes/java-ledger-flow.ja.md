@@ -187,5 +187,5 @@ public final class LedgerFlow {
 ## 5. تحقّق من التكافؤ
 
 - افحص تجزئات المعاملات عبر `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- احصل على الأرصدة باستخدام CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`).
+- احصل على الأرصدة باستخدام CLI (`asset list filter '{"id":"norito:4e52543000000002"}'`).
 - قارن النتائج مع وصفات Rust/Python/JavaScript/Swift للتأكد من أن كل SDK ينتج حمولات Norito متطابقة لتدفق العرض التجريبي.

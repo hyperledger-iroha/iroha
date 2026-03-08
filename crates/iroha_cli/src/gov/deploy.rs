@@ -377,7 +377,7 @@ pub struct DeployMetaArgs {
     pub namespace: String,
     #[arg(long)]
     pub contract_id: String,
-    /// Optional validator account IDs authorizing the deployment alongside the authority.
+    /// Optional validator account IDs (IH58 or sora compressed) authorizing the deployment alongside the authority.
     #[arg(long = "approver", value_name = "ACCOUNT")]
     pub approvers: Vec<String>,
 }
@@ -396,12 +396,9 @@ impl Run for DeployMetaArgs {
                 if trimmed.is_empty() {
                     return Err(eyre!(format!("--approver[{idx}] must not be blank")));
                 }
-                if !trimmed.contains('@') {
-                    return Err(eyre!(format!(
-                        "invalid --approver[{idx}] `{trimmed}`; expected `<account>@<domain>`"
-                    )));
-                }
-                accounts.push(trimmed.to_string());
+                let account = crate::resolve_account_id(context, trimmed)
+                    .map_err(|err| eyre!("invalid --approver[{idx}] `{trimmed}`: {err}"))?;
+                accounts.push(account.to_string());
             }
             pairs.push(("gov_manifest_approvers", json_array(accounts)?));
         }
@@ -589,6 +586,23 @@ mod tests {
     }
 
     #[test]
+    fn deploy_meta_args_rejects_legacy_approver_with_domain_suffix() {
+        let mut ctx = TestContext::new();
+        let args = DeployMetaArgs {
+            namespace: "apps".into(),
+            contract_id: "calc.v1".into(),
+            approvers: vec!["alice@invalid-domain".into()],
+        };
+        let err = args
+            .run(&mut ctx)
+            .expect_err("legacy approver literal should fail");
+        assert!(
+            err.to_string().contains("must not include '@domain'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn finalize_body_shape() {
         let args = FinalizeArgs {
             referendum_id: "ref-123".to_string(),
@@ -662,7 +676,7 @@ mod tests {
         hasher.update(name.as_bytes());
         let digest = hasher.finalize();
         let key_pair = KeyPair::from_seed(digest.as_bytes().to_vec(), Algorithm::Ed25519);
-        let domain = "wonderland";
-        format!("{}@{}", key_pair.public_key(), domain)
+        let domain = "wonderland".parse().expect("domain");
+        AccountId::new(domain, key_pair.public_key().clone()).to_string()
     }
 }

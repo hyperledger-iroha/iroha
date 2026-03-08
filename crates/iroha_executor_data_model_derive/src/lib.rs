@@ -37,9 +37,16 @@ pub fn derive_parameter(input: TokenStream) -> Result<TokenStream> {
 ///
 ///     validate_grant_revoke!(<CanDoSomethingWithAsset>, (authority, instruction));
 ///
+///     let owner = AccountId::new(
+///         "wonderland".parse().unwrap(),
+///         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+///             .parse()
+///             .unwrap(),
+///     );
+///     let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
 ///     CanDoSomethingWithAsset {
 ///        some_data: "some data".to_owned(),
-///        asset: "rose##ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland".parse().unwrap(),
+///        asset: AssetId::new(asset_def, owner),
 ///     }.is_owned_by(&authority)
 /// }
 /// ```

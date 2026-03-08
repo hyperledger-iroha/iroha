@@ -80,7 +80,7 @@ une de `coffee#wonderland` a `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \
-  --id coffee#wonderland##${ADMIN_ACCOUNT} \
+  --id norito:4e52543000000002 \
   --quantity 250
 ```
 
@@ -95,7 +95,7 @@ ou, para cibler apenas o novo ativo:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${ADMIN_ACCOUNT}\"}" \
+  "{\"id\":\"norito:4e52543000000002\"}" \
   --limit 1 | jq .
 ```
 
@@ -105,7 +105,7 @@ Coloque 50 unidades do operador da conta para `$RECEIVER_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
-  --id coffee#wonderland##${ADMIN_ACCOUNT} \
+  --id norito:4e52543000000002 \
   --to ${RECEIVER_ACCOUNT} \
   --quantity 50
 ```
@@ -115,10 +115,10 @@ para verificar as novas vendas:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${ADMIN_ACCOUNT}\"}" --limit 1 | jq .
+  "{\"id\":\"norito:4e52543000000002\"}" --limit 1 | jq .
 
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
+  "{\"id\":\"norito:4e52543000000003\"}" --limit 1 | jq .
 ```
 
 ## 5. Verificando as verificações do livro-razão

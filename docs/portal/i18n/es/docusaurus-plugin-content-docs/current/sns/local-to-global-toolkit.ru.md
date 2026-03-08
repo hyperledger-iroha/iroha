@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Opciones:
 
 - `--format compressed (`sora`)` para el `sora...` para el IH58.
-- `--no-append-domain` para usar literales desnudos.
+- `domainless output (default)` para usar literales desnudos.
 - `--audit-only` чтобы пропустить шаг конвертации.
 - `--allow-errors` Para realizar el escaneo desde otras estaciones (compatible con CLI).Script выводит пути артефактов в конце выполнения. Приложите оба файла k
 ticket de gestión de cambios вместе с Grafana captura de pantalla, подтверждающим ноль
@@ -45,7 +45,7 @@ Local-8 детекций и ноль Local-12 коллизий minимум за 
 1. Abra el script en el trabajo anterior y guarde las salidas.
 2. Блокируйте fusiones, когда `audit.json` сообщает Selectores locales (`domain.kind = local12`).
    со значением по умолчанию `true` (меняйте на `false` только в dev/test при диагностике регрессий) и
-   Inserte `iroha tools address normalize --fail-on-warning --only-local` en CI, estas son las regresiones populares
+   Inserte `iroha tools address normalize` en CI, estas son las regresiones populares
    падали до producción.
 
 См. Documento completo para detalles, listas de pruebas y fragmentos de notas de la versión, muchos ejemplos

@@ -61,10 +61,9 @@ Serde derives, visitors, JSON DOM helpers, and config loaders.
 > canonical string formatting while Serde implementations remain temporarily for
 > migration paths.
 >
-> **Status (Jan 25, 2026):** `AccountId`/`AssetId` JSON now includes an explicit
-> `@domain` suffix (e.g., `IH58@domain`, `asset##IH58@domain`) so decoding does
-> not rely on a domain-selector resolver. Alias inputs such as `label@domain`
-> remain parseable via resolvers where configured.
+> **Status (Jan 25, 2026):** `AccountId`/`AssetId` JSON is emitted in canonical
+> encoded literals (e.g., `IH58`, `norito:<hex>`), and decoding no longer relies
+> on a domain-selector resolver.
 
 > **Status (Nov 7, 2025):** `IpfsPath` gained Norito `FastJsonWrite` and
 > `JsonDeserialize` impls backed by the existing parser, with regression tests

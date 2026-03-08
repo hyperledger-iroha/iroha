@@ -52,13 +52,10 @@ impl AddressFormatPreference {
 
     /// Render a canonical literal string (IH58) according to the preference.
     pub fn display_from_literal(self, literal: &str) -> String {
-        #[cfg(test)]
-        crate::ensure_test_domain_selector_resolver();
-
         match self {
             Self::Ih58 => literal.to_string(),
             Self::Compressed => {
-                let parsed = match AccountId::parse(literal) {
+                let parsed = match AccountId::parse_encoded(literal) {
                     Ok(parsed) => parsed,
                     Err(err) => {
                         iroha_logger::warn!(
@@ -107,10 +104,6 @@ impl AddressFormatPreference {
 mod tests {
     use std::sync::{LazyLock, Mutex};
 
-    use iroha_data_model::account::{
-        account_domain_selector_resolver, clear_account_domain_selector_resolver,
-        set_account_domain_selector_resolver,
-    };
     use iroha_test_samples::ALICE_ID;
 
     use super::*;
@@ -177,28 +170,19 @@ mod tests {
     }
 
     #[test]
-    fn ensure_test_domain_selector_resolver_enables_parsing() {
+    fn account_literal_parsing_is_selector_free() {
         let _lock = RESOLVER_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous = account_domain_selector_resolver();
-        clear_account_domain_selector_resolver();
-
-        crate::ensure_test_domain_selector_resolver();
 
         let literal = ALICE_ID.to_string();
-        let parsed = AccountId::parse(&literal).expect("resolver should parse IH58 literal");
-        assert_eq!(parsed.account_id(), &*ALICE_ID);
+        let parsed = AccountId::parse_encoded(&literal).expect("IH58 literal should parse");
+        assert_eq!(parsed.canonical(), literal);
+        assert_eq!(parsed.account_id().controller(), ALICE_ID.controller());
 
-        clear_account_domain_selector_resolver();
-        crate::ensure_test_domain_selector_resolver();
-
-        let reparsed = AccountId::parse(&literal).expect("resolver reinstalls after clear");
-        assert_eq!(reparsed.account_id(), &*ALICE_ID);
-
-        clear_account_domain_selector_resolver();
-        if let Some(resolver) = previous {
-            set_account_domain_selector_resolver(resolver);
-        }
+        let reparsed =
+            AccountId::parse_encoded(&literal).expect("repeated hook call should be harmless");
+        assert_eq!(reparsed.canonical(), literal);
+        assert_eq!(reparsed.account_id().controller(), ALICE_ID.controller());
     }
 }

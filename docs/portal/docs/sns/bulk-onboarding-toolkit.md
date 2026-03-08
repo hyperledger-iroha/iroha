@@ -35,7 +35,7 @@ The parser requires the following header row (order is flexible):
 |--------|----------|-------------|
 | `label` | Yes | Requested label (mixed case accepted; tool normalises per Norm v1 and UTS-46). |
 | `suffix_id` | Yes | Numeric suffix identifier (decimal or `0x` hex). |
-| `owner` | Yes | AccountId string (IH58 literal; optional @domain hint) for the registration owner. |
+| `owner` | Yes | AccountId string (domainless encoded literal; no @domain suffix) for the registration owner. |
 | `term_years` | Yes | Integer `1..=255`. |
 | `payment_asset_id` | Yes | Settlement asset (for example `xor#sora`). |
 | `payment_gross` / `payment_net` | Yes | Unsigned integers representing asset-native units. |

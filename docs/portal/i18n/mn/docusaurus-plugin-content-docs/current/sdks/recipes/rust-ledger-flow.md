@@ -133,6 +133,6 @@ ih58... now holds:
 - `iroha --config defaults/client.toml transaction get --hash <hash>` ашиглана уу
   SDK-ийн ирүүлсэн гүйлгээг шалгах.
 - Үлдэгдлийг `iroha --config defaults/client.toml asset list all --table` ашиглан шалгана уу
-  эсвэл `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+  эсвэл `asset list filter '{"id":"norito:4e52543000000002"}'`.
 - Хоёр гадаргуугийн үйлдвэрлэлийг баталгаажуулахын тулд CLI-ийн алхмаас ижил урсгалыг давт
   ижил Norito ачаалал болон гүйлгээний төлөв.

@@ -143,7 +143,7 @@ payload bit: │version  │ class  │  norm  │ext │
 
 | نوع المحدد | Шестигранник قانوني |
 |---------------|---------------|
-| افتراضي ضمني | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| افتراضي ضمني | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | дайджест محلي (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | سجل عالمي (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -157,7 +157,7 @@ payload bit: │version  │ class  │  norm  │ext │
    والـ hex القانوني. Встроенная система `domain` для `kind`/`warning`
    Он был создан в соответствии с `input_domain`. عندما يكون `kind` и `local12`
    Вызов CLI для обработки стандартного кода JSON и обработки данных в CI и
-   SDK в наличии. مرر `--append-domain` для получения дополнительной информации.
+   SDK в наличии. مرر `legacy  suffix` для получения дополнительной информации.
    Я18NI00000082X.
 2. Для использования SDK с поддержкой/развертыванием JavaScript:
 
@@ -184,18 +184,18 @@ payload bit: │version  │ class  │  norm  │ext │
    `--input -` в формате STDIN), а также в формате JSON.
    قانونية/IH58/مضغوطة لكل ادخال, ويحسب اخطاء التحليل وتحذيرات نطاق Local. استخدم
    `--allow-errors` создает дампы, созданные для проверки работоспособности системы.
-   Используйте `--fail-on-warning` для локального локального доступа в CI.
+   Используйте `strict CI post-check` для локального локального доступа в CI.
 6. Он сказал, что хочет, чтобы это произошло.
   لملفات الجداول الخاصة بمعالجة محددات Local, استخدم
   Создайте CSV `input,status,format,...` для получения дополнительной информации.
   Он был убит в Нью-Йорке. يتخطى المساعد الصفوف غير المحلية افتراضيا،
   Создайте файл для просмотра файла (IH58/формат/hex/JSON) и сохраните его.
-  النطاق الاصلي عندما يتم تعيين `--append-domain`. اقرنه `--allow-errors`
+  النطاق الاصلي عندما يتم تعيين `legacy  suffix`. اقرنه `--allow-errors`
   لمواصلة الفحص حتى عند وجود تالفة.
 7. Для подключения CI/lint используйте `ci/check_address_normalize.sh`.
    Местный номер `fixtures/account/address_vectors.json`, ويحولها عبر
    `iroha tools address normalize`, ويعيد تشغيل
-   `iroha tools address audit --fail-on-warning` لاثبات ان الاصدارات لم تعد تصدر дайджесты
+   `iroha tools address audit` لاثبات ان الاصدارات لم تعد تصدر дайджесты
    Местный.
 
 `torii_address_local8_total{endpoint}` بالاضافة الى
@@ -227,7 +227,7 @@ Grafana (`dashboards/grafana/address_ingest.json`) используется дл
 
 В кадре из фильма "Старый мир"/переход к фильму:
 
-> **العناوين:** تمت اضافة مساعد `iroha tools address normalize --only-local --append-domain`
+> **العناوين:** تمت اضافة مساعد `iroha tools address normalize`
 > Создано для CI (`ci/check_address_normalize.sh`)
 > В локальном режиме в разделе IH58/Local-12.
 > В основной сети. Он был создан в 1980-х годах, когда в 1990-х годах он был открыт для всех желающих.

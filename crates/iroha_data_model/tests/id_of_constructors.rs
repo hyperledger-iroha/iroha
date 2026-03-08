@@ -25,14 +25,13 @@ fn asset_definition_id_of_matches_parse() {
 #[test]
 fn asset_id_of_matches_parse() {
     let _guard = guard_chain_discriminant();
-    let domain: DomainId = "wonderland".parse().unwrap();
+    let domain: DomainId = address::default_domain_name().as_ref().parse().unwrap();
     let kp = KeyPair::random();
     let account = AccountId::of(domain.clone(), kp.public_key().clone());
-    let def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let def = AssetDefinitionId::of(domain, "rose".parse().unwrap());
+    let via_of = AssetId::of(def.clone(), account);
 
-    let account_literal = format!("{}@{domain}", kp.public_key());
-    let parsed: AssetId = format!("rose##{account_literal}").parse().unwrap();
-    let via_of = AssetId::of(def, account);
+    let parsed = AssetId::parse_encoded(&via_of.to_string()).unwrap();
 
     assert_eq!(parsed, via_of);
     assert_eq!(format!("{parsed}"), format!("{via_of}"));
@@ -53,10 +52,12 @@ fn nft_id_of_matches_parse() {
 #[test]
 fn account_id_of_matches_parse() {
     let _guard = guard_chain_discriminant();
-    let domain: DomainId = "land".parse().unwrap();
+    let domain: DomainId = address::default_domain_name().as_ref().parse().unwrap();
     let kp = KeyPair::random();
-    let parsed: AccountId = format!("{}@{domain}", kp.public_key()).parse().unwrap();
     let via_of = AccountId::of(domain, kp.public_key().clone());
+    let parsed = AccountId::parse_encoded(&via_of.to_string())
+        .map(|parsed| parsed.into_account_id())
+        .expect("canonical AccountId literal parses");
 
     assert_eq!(parsed, via_of);
     assert_eq!(format!("{parsed}"), format!("{via_of}"));

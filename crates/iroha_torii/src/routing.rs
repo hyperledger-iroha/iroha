@@ -11,7 +11,7 @@
 use core::str::FromStr;
 use std::{
     sync::{Arc, LazyLock, RwLock},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -21,8 +21,6 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-#[cfg(feature = "app_api")]
-use dashmap::DashMap;
 #[cfg(feature = "telemetry")]
 use eyre::eyre;
 use hex::ToHex;
@@ -112,150 +110,6 @@ use iroha_data_model::{
 };
 
 use crate::api_version::{self, ApiVersion};
-#[cfg(feature = "app_api")]
-mod local_selector_tracker {
-    use std::sync::{Arc, LazyLock};
-
-    use dashmap::mapref::entry::Entry;
-
-    use super::*;
-
-    static TRACKER: LazyLock<LocalSelectorTracker> = LazyLock::new(LocalSelectorTracker::default);
-
-    #[derive(Clone, Default)]
-    pub struct LocalSelectorTracker {
-        digests: DashMap<[u8; 12], LocalSelectorRecord>,
-    }
-
-    #[derive(Clone)]
-    struct LocalSelectorRecord {
-        canonical: Arc<str>,
-        collisions: Vec<Arc<str>>,
-    }
-
-    impl LocalSelectorRecord {
-        fn new(label: Arc<str>) -> Self {
-            Self {
-                canonical: label,
-                collisions: Vec::new(),
-            }
-        }
-
-        fn contains(&self, label: &str) -> bool {
-            self.canonical.as_ref() == label
-                || self
-                    .collisions
-                    .iter()
-                    .any(|candidate| candidate.as_ref() == label)
-        }
-
-        fn push_collision(&mut self, label: Arc<str>) -> bool {
-            if self
-                .collisions
-                .iter()
-                .any(|candidate| candidate.as_ref() == label.as_ref())
-            {
-                return false;
-            }
-            self.collisions.push(label);
-            true
-        }
-    }
-
-    #[derive(Clone, Debug)]
-    pub struct LocalSelectorCollision {
-        pub digest: [u8; 12],
-        pub existing: Arc<str>,
-        pub new_label: Arc<str>,
-    }
-
-    impl LocalSelectorTracker {
-        pub fn observe(
-            &self,
-            digest: [u8; 12],
-            domain_label: &str,
-        ) -> Option<LocalSelectorCollision> {
-            let label_arc: Arc<str> = Arc::from(domain_label.to_owned());
-            match self.digests.entry(digest) {
-                Entry::Vacant(slot) => {
-                    slot.insert(LocalSelectorRecord::new(label_arc));
-                    None
-                }
-                Entry::Occupied(mut entry) => {
-                    if entry.get().contains(domain_label) {
-                        return None;
-                    }
-                    let existing = entry.get().canonical.clone();
-                    if entry.get_mut().push_collision(label_arc.clone()) {
-                        Some(LocalSelectorCollision {
-                            digest,
-                            existing,
-                            new_label: label_arc,
-                        })
-                    } else {
-                        None
-                    }
-                }
-            }
-        }
-
-        pub fn clear(&self) {
-            self.digests.clear();
-        }
-
-        #[cfg(test)]
-        pub fn seed_for_tests(&self, digest: [u8; 12], label: &str) {
-            let record = LocalSelectorRecord::new(Arc::from(label.to_owned()));
-            self.digests.insert(digest, record);
-        }
-    }
-
-    pub fn observe_global(digest: [u8; 12], domain_label: &str) -> Option<LocalSelectorCollision> {
-        LazyLock::force(&TRACKER).observe(digest, domain_label)
-    }
-
-    #[cfg(test)]
-    pub fn reset_for_tests() {
-        LazyLock::force(&TRACKER).clear();
-    }
-
-    #[cfg(test)]
-    pub fn seed_for_tests(digest: [u8; 12], label: &str) {
-        LazyLock::force(&TRACKER).seed_for_tests(digest, label);
-    }
-}
-
-#[cfg(not(feature = "app_api"))]
-mod local_selector_tracker {
-    use std::sync::Arc;
-
-    #[derive(Clone, Default)]
-    pub struct LocalSelectorTracker;
-
-    #[allow(dead_code)]
-    #[derive(Clone, Debug)]
-    pub struct LocalSelectorCollision {
-        pub digest: [u8; 12],
-        pub existing: Arc<str>,
-        pub new_label: Arc<str>,
-    }
-
-    impl LocalSelectorTracker {}
-
-    pub fn observe_global(
-        _digest: [u8; 12],
-        _domain_label: &str,
-    ) -> Option<LocalSelectorCollision> {
-        None
-    }
-
-    #[cfg(test)]
-    pub fn reset_for_tests() {}
-
-    #[cfg(test)]
-    pub fn seed_for_tests(_digest: [u8; 12], _label: &str) {}
-}
-
 use core::fmt;
 use std::{
     cmp::{Ordering, Reverse},
@@ -263,7 +117,6 @@ use std::{
     num::NonZeroUsize,
     panic::AssertUnwindSafe,
     sync::OnceLock,
-    time::Duration,
 };
 
 use base64::Engine;
@@ -284,7 +137,6 @@ use iroha_primitives::json::Json as IrohaJson;
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyShareError};
-pub use local_selector_tracker::{LocalSelectorCollision, LocalSelectorTracker};
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::{Decode, Encode},
@@ -564,7 +416,8 @@ fn dummy_accepted_transaction() -> iroha_core::tx::AcceptedTransaction<'static> 
 
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
-        AccountId, ChainId, DomainId, Level, isi::Log, transaction::TransactionBuilder,
+        ChainId, DomainId, Level, account::ScopedAccountId, isi::Log,
+        transaction::TransactionBuilder,
     };
 
     let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
@@ -572,7 +425,7 @@ fn dummy_accepted_transaction() -> iroha_core::tx::AcceptedTransaction<'static> 
         .expect("valid chain id");
     let domain_id: DomainId = "dummy".parse().expect("valid domain id");
     let keypair = KeyPair::random();
-    let authority = AccountId::new(domain_id, keypair.public_key().clone());
+    let authority = ScopedAccountId::new(domain_id, keypair.public_key().clone());
     let mut builder = TransactionBuilder::new(chain_id, authority);
     builder.set_creation_time(Duration::from_millis(0));
     let tx = builder
@@ -1621,7 +1474,7 @@ fn collect_kaigi_relays(state: &CoreState) -> Result<Vec<KaigiRelaySnapshot>, Er
             if !key_str.starts_with("kaigi_relay__") {
                 continue;
             }
-            let registration: KaigiRelayRegistration =
+            let mut registration: KaigiRelayRegistration =
                 value.clone().try_into_any_norito().map_err(|err| {
                     Error::Query(iroha_data_model::ValidationFail::InternalError(
                         err.to_string(),
@@ -1629,11 +1482,20 @@ fn collect_kaigi_relays(state: &CoreState) -> Result<Vec<KaigiRelaySnapshot>, Er
                 })?;
 
             if registration.relay_id.domain != domain_id {
-                return Err(Error::Query(
-                    iroha_data_model::ValidationFail::InternalError(
-                        "relay metadata stored under mismatched domain".to_string(),
-                    ),
-                ));
+                let replacement = world.accounts().iter().find_map(|(candidate_id, _)| {
+                    (candidate_id.domain() == &domain_id
+                        && candidate_id.controller() == registration.relay_id.controller())
+                    .then(|| candidate_id.clone())
+                });
+                if let Some(account_id) = replacement {
+                    registration.relay_id = account_id;
+                } else {
+                    return Err(Error::Query(
+                        iroha_data_model::ValidationFail::InternalError(
+                            "relay metadata stored under mismatched domain".to_string(),
+                        ),
+                    ));
+                }
             }
 
             let feedback =
@@ -3353,7 +3215,7 @@ pub async fn handle_get_proof(
 /// DTO for FindProofRecordById as a signed core query
 pub struct ProofFindByIdQueryDto {
     /// Authority account id to sign the query
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Private key used to sign
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Proof backend (e.g., "halo2/ipa")
@@ -5309,7 +5171,7 @@ mod multisig_guard_tests {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let chain_id: ChainId = "multisig-direct-sign-guard".parse().unwrap();
         let ms_keypair = KeyPair::random();
-        let multisig_id = AccountId::new(domain_id.clone(), ms_keypair.public_key().clone());
+        let multisig_id = ScopedAccountId::new(domain_id.clone(), ms_keypair.public_key().clone());
 
         let spec = ModelJson::from("spec");
         let mut metadata = Metadata::default();
@@ -5342,7 +5204,7 @@ mod multisig_guard_tests {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let chain_id: ChainId = "multisig-role-guard".parse().unwrap();
         let ms_keypair = KeyPair::random();
-        let multisig_id = AccountId::new(domain_id.clone(), ms_keypair.public_key().clone());
+        let multisig_id = ScopedAccountId::new(domain_id.clone(), ms_keypair.public_key().clone());
 
         let role_id: RoleId = "MULTISIG_SIGNATORY/test/0".parse().unwrap();
         let role = Role::new(role_id.clone(), multisig_id.clone()).build(&multisig_id);
@@ -5956,6 +5818,124 @@ mod nts_tests {
 
 // Note: endpoint behavior is covered by unit tests in ivm_cli and doc-sync tests.
 
+fn protected_contract_namespaces_from_custom_parameter(state: &CoreState) -> Vec<String> {
+    use iroha_data_model::{name::Name, parameter::CustomParameterId};
+
+    let world = state.world_view();
+    let params = world.parameters();
+    let Ok(name) = Name::from_str("gov_protected_namespaces") else {
+        return Vec::new();
+    };
+    let id = CustomParameterId(name);
+    params
+        .custom()
+        .get(&id)
+        .and_then(|custom| custom.payload().try_into_any_norito::<Vec<String>>().ok())
+        .unwrap_or_default()
+}
+
+fn lane_manifest_protected_namespaces(state: &CoreState, lane_id: LaneId) -> Vec<String> {
+    let manifests = state.lane_manifests.read().clone();
+    manifests
+        .status(lane_id)
+        .and_then(|status| status.rules())
+        .map(|rules| {
+            rules
+                .protected_namespaces
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn all_lane_manifest_protected_namespaces(state: &CoreState) -> Vec<String> {
+    let manifests = state.lane_manifests.read().clone();
+    let mut namespaces = BTreeSet::new();
+    for status in manifests.statuses() {
+        if let Some(rules) = status.rules() {
+            for namespace in &rules.protected_namespaces {
+                namespaces.insert(namespace.to_string());
+            }
+        }
+    }
+    namespaces.into_iter().collect()
+}
+
+fn protected_contract_namespaces(
+    state: &CoreState,
+    tx: &iroha_data_model::transaction::signed::SignedTransaction,
+) -> Vec<String> {
+    let accepted =
+        iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(tx));
+    let nexus = state.nexus.read().clone();
+    let routing = iroha_core::queue::evaluate_policy_with_catalog(
+        &nexus.routing_policy,
+        &nexus.lane_catalog,
+        &nexus.dataspace_catalog,
+        &accepted,
+    );
+
+    let mut namespaces = lane_manifest_protected_namespaces(state, routing.lane_id);
+    if namespaces.is_empty() {
+        namespaces = all_lane_manifest_protected_namespaces(state);
+    }
+    if namespaces.is_empty() {
+        return protected_contract_namespaces_from_custom_parameter(state);
+    }
+    namespaces
+}
+
+fn fallback_contract_registration_id(
+    manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
+) -> String {
+    manifest
+        .code_hash
+        .as_ref()
+        .map(|code_hash| {
+            let code_hash_hex = hex::encode(code_hash.as_ref());
+            format!("manifest_{}", &code_hash_hex[..16])
+        })
+        .unwrap_or_else(|| "manifest_registration".to_owned())
+}
+
+fn resolve_contract_registration_metadata(
+    requested_namespace: Option<&str>,
+    requested_contract_id: Option<&str>,
+    protected_namespaces: &[String],
+    manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
+) -> Option<(String, String)> {
+    let requested_namespace = requested_namespace
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let requested_contract_id = requested_contract_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    if requested_namespace.is_none()
+        && requested_contract_id.is_none()
+        && protected_namespaces.is_empty()
+    {
+        return None;
+    }
+
+    let namespace = requested_namespace.or_else(|| {
+        protected_namespaces.iter().find_map(|candidate| {
+            let trimmed = candidate.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            iroha_data_model::name::Name::from_str(trimmed).ok()?;
+            Some(trimmed.to_owned())
+        })
+    })?;
+    let contract_id =
+        requested_contract_id.unwrap_or_else(|| fallback_contract_registration_id(manifest));
+    Some((namespace, contract_id))
+}
+
 /// Submit RegisterSmartContractCode as a signed transaction.
 #[iroha_futures::telemetry_future]
 pub async fn handle_post_contract_code(
@@ -5965,20 +5945,118 @@ pub async fn handle_post_contract_code(
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<RegisterContractCodeDto>,
 ) -> Result<impl IntoResponse> {
-    use iroha_data_model::{isi::smart_contract_code, prelude as dm};
+    use iroha_data_model::{
+        isi::smart_contract_code, metadata::Metadata, name::Name, prelude as dm,
+    };
 
     // Build the ISI
     let isi = smart_contract_code::RegisterSmartContractCode {
         manifest: req.manifest.clone(),
     };
+    let mut tx_builder = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone())
+        .with_instructions(core::iter::once(dm::InstructionBox::from(isi)));
+    let preview_tx = tx_builder.clone().sign(&req.private_key.0);
+    let protected_namespaces = protected_contract_namespaces(&state, &preview_tx);
+    let mut metadata_attached = false;
+
+    if let Some((namespace, contract_id)) = resolve_contract_registration_metadata(
+        req.gov_namespace.as_deref(),
+        req.gov_contract_id.as_deref(),
+        &protected_namespaces,
+        &req.manifest,
+    ) {
+        let mut metadata = Metadata::default();
+        let gov_namespace_key =
+            Name::from_str("gov_namespace").expect("static metadata key `gov_namespace`");
+        metadata.insert(gov_namespace_key, IrohaJson::new(namespace.clone()));
+        let gov_contract_id_key =
+            Name::from_str("gov_contract_id").expect("static metadata key `gov_contract_id`");
+        metadata.insert(gov_contract_id_key, IrohaJson::new(contract_id.clone()));
+        let contract_namespace_key =
+            Name::from_str("contract_namespace").expect("static metadata key `contract_namespace`");
+        metadata.insert(contract_namespace_key, IrohaJson::new(namespace));
+        let contract_id_key =
+            Name::from_str("contract_id").expect("static metadata key `contract_id`");
+        metadata.insert(contract_id_key, IrohaJson::new(contract_id));
+        tx_builder = tx_builder.with_metadata(metadata);
+        metadata_attached = true;
+    }
+
     // Construct and sign a transaction
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone())
-        .with_instructions(core::iter::once(dm::InstructionBox::from(isi)))
-        .sign(&req.private_key.0);
+    let tx = if metadata_attached {
+        tx_builder.sign(&req.private_key.0)
+    } else {
+        preview_tx
+    };
 
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/contracts/code")
         .await
         .map(|_| (StatusCode::ACCEPTED, ()))
+}
+
+#[cfg(test)]
+mod contract_registration_metadata_tests {
+    use iroha_crypto::Hash;
+
+    use super::*;
+
+    fn manifest_with_code_hash(
+        code_hash: Option<Hash>,
+    ) -> iroha_data_model::smart_contract::manifest::ContractManifest {
+        iroha_data_model::smart_contract::manifest::ContractManifest {
+            code_hash,
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            kotoba: None,
+            provenance: None,
+        }
+    }
+
+    #[test]
+    fn registration_metadata_uses_first_valid_protected_namespace() {
+        let code_hash = Hash::new(b"manifest-test");
+        let manifest = manifest_with_code_hash(Some(code_hash));
+        let protected = vec![
+            "   ".to_owned(),
+            "not valid namespace".to_owned(),
+            "treasury".to_owned(),
+        ];
+
+        let resolved = resolve_contract_registration_metadata(None, None, &protected, &manifest)
+            .expect("metadata should resolve");
+
+        let expected_contract_id = format!("manifest_{}", &hex::encode(code_hash.as_ref())[..16]);
+        assert_eq!(resolved, ("treasury".to_owned(), expected_contract_id));
+    }
+
+    #[test]
+    fn registration_metadata_prefers_request_values() {
+        let manifest = manifest_with_code_hash(None);
+        let protected = vec!["treasury".to_owned()];
+
+        let resolved = resolve_contract_registration_metadata(
+            Some("  contracts  "),
+            Some("  demo.contract  "),
+            &protected,
+            &manifest,
+        )
+        .expect("metadata should resolve");
+
+        assert_eq!(
+            resolved,
+            ("contracts".to_owned(), "demo.contract".to_owned())
+        );
+    }
+
+    #[test]
+    fn registration_metadata_absent_without_request_or_protected_namespaces() {
+        let manifest = manifest_with_code_hash(None);
+        let resolved = resolve_contract_registration_metadata(None, None, &[], &manifest);
+        assert!(resolved.is_none());
+    }
 }
 
 /// Fetch on-chain contract manifest by code_hash.
@@ -6329,7 +6407,7 @@ pub async fn handle_get_contract_code_bytes(
 /// Request for activating a contract instance
 pub struct ActivateInstanceDto {
     /// Authority account id
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Private key for signing
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Target namespace
@@ -6733,7 +6811,7 @@ pub fn handle_proof_retention_status(
 /// DTO for registering a verifying key
 pub struct ZkVkRegisterDto {
     /// Account authorizing the operation
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Exposed private key used to sign the transaction
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Verifier backend identifier (e.g., “groth16”)
@@ -6808,7 +6886,7 @@ fn _assert_vk_register_dto_json() {
 /// DTO for updating a verifying key record
 pub struct ZkVkUpdateDto {
     /// Account authorizing the operation
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Exposed private key used to sign the transaction
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Verifier backend identifier (e.g., “groth16”)
@@ -7415,11 +7493,19 @@ pub struct ContractCodeRecordDto {
 )]
 pub struct RegisterContractCodeDto {
     /// Account that authorizes the transaction
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Signing key; Exposed for API transport
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Contract manifest to register on-chain
     pub manifest: iroha_data_model::smart_contract::manifest::ContractManifest,
+    /// Optional governance namespace metadata (`gov_namespace`).
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub gov_namespace: Option<String>,
+    /// Optional governance contract id metadata (`gov_contract_id`).
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub gov_contract_id: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -7439,7 +7525,7 @@ fn _assert_register_contract_code_dto_send() {
 /// Request for deploying contract code (bytecode provided as base64)
 pub struct DeployContractDto {
     /// Transaction authority
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Signing key for submitting the transaction
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Base64-encoded compiled `.to` bytecode
@@ -7470,7 +7556,7 @@ pub struct DeployContractResponseDto {
 /// Request for dry-run simulation of contract deployment without enqueueing a transaction.
 pub struct ContractSimulateDto {
     /// Transaction authority used for host context and metadata validation.
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Signing key used to build the in-memory transaction.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Base64-encoded compiled `.to` bytecode.
@@ -7703,7 +7789,7 @@ fn prepare_contract_call(
 /// Request body for combined deploy + activate workflow.
 pub struct DeployAndActivateInstanceDto {
     /// Transaction authority
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Signing key for submitting the transaction
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Governance namespace that will host the contract instance
@@ -7752,7 +7838,7 @@ pub struct DeployAndActivateInstanceResponseDto {
 /// Request payload for invoking a deployed contract instance.
 pub struct ContractCallDto {
     /// Account authorizing the call.
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Private key used to sign the transaction.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Target namespace hosting the contract instance.
@@ -7770,7 +7856,7 @@ pub struct ContractCallDto {
     pub gas_asset_id: Option<String>,
     /// Optional fee sponsor account that will be charged for gas/fees when enabled and authorized.
     #[norito(default)]
-    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
+    pub fee_sponsor: Option<iroha_data_model::account::ScopedAccountId>,
     /// Caller-specified gas limit (must be > 0) forwarded to transaction metadata.
     pub gas_limit: u64,
 }
@@ -7819,7 +7905,7 @@ struct PreparedContractCall {
 /// Request payload for creating a subscription plan.
 pub struct SubscriptionPlanCreateDto {
     /// Account authorizing the transaction (plan provider).
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Signing key for submitting the transaction.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Asset definition id used to store the plan metadata.
@@ -7887,7 +7973,7 @@ pub struct SubscriptionPlanListResponseDto {
 /// Request payload for creating a subscription.
 pub struct SubscriptionCreateDto {
     /// Account authorizing the transaction (subscriber).
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Signing key for submitting the transaction.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Subscription NFT id to register.
@@ -8000,7 +8086,7 @@ pub struct SubscriptionGetResponseDto {
 /// Request payload for subscription status updates.
 pub struct SubscriptionActionDto {
     /// Account authorizing the transaction (subscriber).
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Signing key for submitting the transaction.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Optional charge time override in UTC milliseconds.
@@ -8042,7 +8128,7 @@ pub enum SubscriptionCancelMode {
 /// Request payload for recording subscription usage.
 pub struct SubscriptionUsageRequestDto {
     /// Account authorizing the transaction (usage reporter).
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Signing key for submitting the transaction.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Usage counter key to update.
@@ -8078,7 +8164,7 @@ pub struct SubscriptionActionResponseDto {
 /// Request payload for Torii SoraFS pin registration endpoint.
 pub struct RegisterPinManifestDto {
     /// Account authorizing the transaction.
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Signing key exposed for API transport.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Numeric profile identifier advertised by the manifest/descriptor.
@@ -8258,7 +8344,7 @@ const _: () = {
 /// Request payload for Torii SoraFS capacity declaration endpoint.
 pub struct RegisterCapacityDeclarationDto {
     /// Account authorizing the transaction.
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Signing key exposed for API transport.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Canonical Norito encoding of `CapacityDeclarationV1`, base64 encoded.
@@ -8370,7 +8456,7 @@ pub struct CompleteReplicationOrderResponseDto {
 /// Request payload for Torii SoraFS capacity telemetry endpoint.
 pub struct RecordCapacityTelemetryDto {
     /// Account authorizing the transaction.
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Signing key exposed for API transport.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Provider identifier (hex-encoded BLAKE3-256).
@@ -8420,7 +8506,7 @@ pub struct RecordCapacityTelemetryDto {
 /// Request payload for Torii SoraFS capacity dispute endpoint.
 pub struct RegisterCapacityDisputeDto {
     /// Account authorizing the dispute submission.
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Signing key exposed for API transport.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Canonical base64-encoded Norito payload of `CapacityDisputeV1`.
@@ -11191,8 +11277,8 @@ mod deploy_tests {
         let prog = minimal_ivm_program(1);
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&prog);
         let kp = iroha_crypto::KeyPair::random();
-        let authority: iroha_data_model::account::AccountId =
-            iroha_data_model::account::AccountId::of(
+        let authority: iroha_data_model::account::ScopedAccountId =
+            iroha_data_model::account::ScopedAccountId::of(
                 "wonderland".parse().unwrap(),
                 kp.public_key().clone(),
             );
@@ -11450,7 +11536,8 @@ mod sorafs_pin_tests {
             retention_epoch: policy.retention_epoch,
         };
         let kp = iroha_crypto::KeyPair::random();
-        let authority = dm::AccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority =
+            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
         let req = RegisterPinManifestDto {
             authority,
             private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
@@ -11519,7 +11606,8 @@ mod sorafs_pin_tests {
             retention_epoch: policy.retention_epoch,
         };
         let kp = iroha_crypto::KeyPair::random();
-        let authority = dm::AccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority =
+            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
         let proof_bytes = b"alias-proof";
         let req = RegisterPinManifestDto {
             authority,
@@ -11906,7 +11994,7 @@ mod sorafs_capacity_tests {
             .map(|kp| dm::MultisigMember::new(kp.public_key().clone(), 1).expect("member is valid"))
             .collect::<Vec<_>>();
         let policy = dm::MultisigPolicy::new(1, members).expect("policy");
-        let authority = dm::AccountId::new_multisig(domain, policy);
+        let authority = dm::ScopedAccountId::new_multisig(domain, policy);
 
         let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority)
             .with_instructions([dm::Log::new(dm::Level::INFO, "too many signatures".into())])
@@ -11951,7 +12039,8 @@ mod sorafs_capacity_tests {
         let declaration_bytes = norito::to_bytes(&declaration).expect("encode declaration");
         let declaration_b64 = base64::engine::general_purpose::STANDARD.encode(&declaration_bytes);
         let kp = iroha_crypto::KeyPair::random();
-        let authority = dm::AccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority =
+            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
         let metadata = vec![MetadataEntryDto {
             key: "label".into(),
             value: IrohaJson::from(Value::String("edge".into())),
@@ -12171,7 +12260,8 @@ mod sorafs_capacity_tests {
         let dispute_bytes = norito::to_bytes(&dispute).expect("encode dispute");
         let dispute_b64 = base64::engine::general_purpose::STANDARD.encode(&dispute_bytes);
         let kp = iroha_crypto::KeyPair::random();
-        let authority = dm::AccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority =
+            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
 
         let req = RegisterCapacityDisputeDto {
             authority,
@@ -12242,7 +12332,8 @@ mod sorafs_capacity_tests {
         let declaration_bytes = norito::to_bytes(&declaration).expect("encode declaration");
         let declaration_b64 = base64::engine::general_purpose::STANDARD.encode(&declaration_bytes);
         let kp = iroha_crypto::KeyPair::random();
-        let authority = dm::AccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority =
+            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
 
         let register_req = RegisterCapacityDeclarationDto {
             authority: authority.clone(),
@@ -12307,7 +12398,8 @@ mod sorafs_capacity_tests {
         let declaration_bytes = norito::to_bytes(&declaration).expect("encode declaration");
         let declaration_b64 = base64::engine::general_purpose::STANDARD.encode(&declaration_bytes);
         let kp = iroha_crypto::KeyPair::random();
-        let authority = dm::AccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority =
+            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
 
         let register_req = RegisterCapacityDeclarationDto {
             authority: authority.clone(),
@@ -12437,7 +12529,8 @@ mod sorafs_capacity_tests {
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
         let provider_hex = hex::encode([0x11; 32]);
         let kp = iroha_crypto::KeyPair::random();
-        let authority = dm::AccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority =
+            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
         let req = RecordCapacityTelemetryDto {
             authority,
             private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
@@ -12496,7 +12589,8 @@ mod sorafs_capacity_tests {
         seed_capacity_declaration(&node);
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
         let kp = iroha_crypto::KeyPair::random();
-        let authority = dm::AccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority =
+            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
         let req = RecordCapacityTelemetryDto {
             authority,
             private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
@@ -12972,7 +13066,7 @@ fn instruction_matches_asset_id(
 #[cfg(feature = "app_api")]
 fn instruction_matches_account_id(
     instr: &iroha_data_model::isi::InstructionBox,
-    expected: &AccountId,
+    expected: &ScopedAccountId,
 ) -> bool {
     use iroha_data_model::isi::{TransferAssetBatch, TransferBox};
 
@@ -13283,8 +13377,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
             tx.result().as_ref().is_ok()
         }
     };
-    // String fallbacks (compat with any ad-hoc string-based values)
-    let authority_fallback = tx_field_value(tx, "authority");
+    // String fallback is retained for timestamp only.
     let ts_fallback = tx_field_value(tx, "timestamp_ms");
     let _entry_fallback = tx_field_value(tx, "entrypoint_hash");
     let asset_ids_cache: OnceLock<Vec<iroha_data_model::asset::AssetId>> = OnceLock::new();
@@ -13328,37 +13421,23 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 "authority" => {
                     if torii_debug_match_enabled() {
                         eprintln!(
-                            "[torii-filter-debug] authority cmp lhs_str={:?} rhs={:?} fallback={:?}",
+                            "[torii-filter-debug] authority cmp lhs_str={:?} rhs={:?}",
                             authority_str,
-                            v.as_str(),
-                            authority_fallback
+                            v.as_str()
                         );
                     }
                     if let (Some(acc), Some(s)) = (authority_typed.as_ref(), v.as_str()) {
-                        if let Ok(parsed) = s.parse::<iroha_data_model::account::AccountId>() {
-                            if &parsed == acc {
-                                if torii_debug_match_enabled() {
-                                    eprintln!(
-                                        "[torii-filter-debug] authority branch => true (parsed match)"
-                                    );
-                                }
-                                return true;
-                            }
-                        }
-                    }
-                    if authority_str.as_deref() == v.as_str()
-                        || authority_fallback.as_deref() == v.as_str()
-                    {
+                        let matched = iroha_data_model::account::ScopedAccountId::parse_encoded(s)
+                            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                            .map_or(false, |parsed| parsed.controller() == acc.controller());
                         if torii_debug_match_enabled() {
                             eprintln!(
-                                "[torii-filter-debug] authority branch => true (string match)"
+                                "[torii-filter-debug] authority branch => {}",
+                                if matched { "true" } else { "false" }
                             );
                         }
-                        true
+                        matched
                     } else {
-                        if torii_debug_match_enabled() {
-                            eprintln!("[torii-filter-debug] authority branch => false");
-                        }
                         false
                     }
                 }
@@ -13407,18 +13486,12 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
             match f.0.as_str() {
                 "result_ok" => v.as_bool().map_or(false, |b| result_ok != b),
                 "authority" => {
-                    if authority_str.as_deref() != v.as_str()
-                        && authority_fallback.as_deref() != v.as_str()
-                    {
-                        if let (Some(acc), Some(s)) = (authority_typed.as_ref(), v.as_str()) {
-                            s.parse::<iroha_data_model::account::AccountId>()
-                                .map(|id| &id != acc)
-                                .unwrap_or(true)
-                        } else {
-                            true
-                        }
+                    if let (Some(acc), Some(s)) = (authority_typed.as_ref(), v.as_str()) {
+                        iroha_data_model::account::ScopedAccountId::parse_encoded(s)
+                            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                            .map_or(true, |id| id.controller() != acc.controller())
                     } else {
-                        false
+                        true
                     }
                 }
                 "asset_id" => v
@@ -13496,9 +13569,22 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                         .ok()
                     })
                     .any(|h| h == entry_hash_typed),
-                "authority" => list.iter().filter_map(|v| v.as_str()).any(|s| {
-                    authority_str.as_deref() == Some(s) || authority_fallback.as_deref() == Some(s)
-                }),
+                "authority" => {
+                    if let Some(acc) = authority_typed.as_ref() {
+                        list.iter()
+                            .filter_map(|v| v.as_str())
+                            .filter_map(|s| {
+                                iroha_data_model::account::ScopedAccountId::parse_encoded(s)
+                                    .map(
+                                        iroha_data_model::account::ParsedAccountId::into_account_id,
+                                    )
+                                    .ok()
+                            })
+                            .any(|id| id.controller() == acc.controller())
+                    } else {
+                        false
+                    }
+                }
                 "asset_id" => list
                     .iter()
                     .filter_map(|v| v.as_str())
@@ -13543,9 +13629,22 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                         .ok()
                     })
                     .all(|h| h != entry_hash_typed),
-                "authority" => list.iter().filter_map(|v| v.as_str()).all(|s| {
-                    authority_str.as_deref() != Some(s) && authority_fallback.as_deref() != Some(s)
-                }),
+                "authority" => {
+                    if let Some(acc) = authority_typed.as_ref() {
+                        list.iter()
+                            .filter_map(|v| v.as_str())
+                            .filter_map(|s| {
+                                iroha_data_model::account::ScopedAccountId::parse_encoded(s)
+                                    .map(
+                                        iroha_data_model::account::ParsedAccountId::into_account_id,
+                                    )
+                                    .ok()
+                            })
+                            .all(|id| id.controller() != acc.controller())
+                    } else {
+                        true
+                    }
+                }
                 "asset_id" => list
                     .iter()
                     .filter_map(|v| v.as_str())
@@ -13596,6 +13695,41 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 _ => tx_field_value(tx, &f.0).is_none(),
             }
         }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn tx_authority_matches_subject(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    account_id: &iroha_data_model::account::ScopedAccountId,
+) -> bool {
+    match tx.entrypoint() {
+        iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
+            signed.authority().controller() == account_id.controller()
+        }
+        _ => false,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn filter_expr_references_field(expr: &FilterExpr, field_name: &str) -> bool {
+    use FilterExpr as F;
+
+    match expr {
+        F::And(list) | F::Or(list) => list
+            .iter()
+            .any(|inner| filter_expr_references_field(inner, field_name)),
+        F::Not(inner) => filter_expr_references_field(inner, field_name),
+        F::Eq(field, _)
+        | F::Ne(field, _)
+        | F::Lt(field, _)
+        | F::Lte(field, _)
+        | F::Gt(field, _)
+        | F::Gte(field, _)
+        | F::In(field, _)
+        | F::Nin(field, _)
+        | F::Exists(field)
+        | F::IsNull(field) => field.0 == field_name,
     }
 }
 
@@ -13699,14 +13833,6 @@ fn tx_predicate_from_filter(
             path.0.as_str()
         }
 
-        fn parse_account(value: &Value) -> Option<iroha_data_model::account::AccountId> {
-            value.as_str()?.parse().ok()
-        }
-
-        fn parse_bool(value: &Value) -> Option<bool> {
-            value.as_bool()
-        }
-
         fn parse_u64(value: &Value) -> Option<u64> {
             value.as_u64()
         }
@@ -13755,14 +13881,14 @@ fn tx_predicate_from_filter(
                 }
                 F::Not(inner) => convert(inner).map(|p| TP::Not(Box::new(p))),
                 F::Eq(field, value) => match field_name(field) {
-                    "authority" => parse_account(value).map(TP::AuthorityEq),
+                    "authority" => None,
                     "timestamp_ms" => parse_u64(value).map(TP::TsEq),
                     "result_ok" => None,
                     "entrypoint_hash" => parse_entry_hash(value).map(TP::EntryEq),
                     _ => None,
                 },
                 F::Ne(field, value) => match field_name(field) {
-                    "authority" => parse_account(value).map(TP::AuthorityNe),
+                    "authority" => None,
                     "timestamp_ms" => parse_u64(value).map(|n| TP::Not(Box::new(TP::TsEq(n)))),
                     "result_ok" => None,
                     "entrypoint_hash" => parse_entry_hash(value).map(TP::EntryNe),
@@ -13785,13 +13911,7 @@ fn tx_predicate_from_filter(
                     _ => None,
                 },
                 F::In(field, values) => match field_name(field) {
-                    "authority" => {
-                        let mut out = Vec::new();
-                        for v in values {
-                            out.push(parse_account(v)?);
-                        }
-                        Some(TP::AuthorityIn(out))
-                    }
+                    "authority" => None,
                     "timestamp_ms" => {
                         let mut out = Vec::new();
                         for v in values {
@@ -13810,13 +13930,7 @@ fn tx_predicate_from_filter(
                     _ => None,
                 },
                 F::Nin(field, values) => match field_name(field) {
-                    "authority" => {
-                        let mut out = Vec::new();
-                        for v in values {
-                            out.push(parse_account(v)?);
-                        }
-                        Some(TP::AuthorityNin(out))
-                    }
+                    "authority" => None,
                     "timestamp_ms" => {
                         let mut out = Vec::new();
                         for v in values {
@@ -13835,14 +13949,14 @@ fn tx_predicate_from_filter(
                     _ => None,
                 },
                 F::Exists(field) => match field_name(field) {
-                    "authority" => Some(TP::AuthorityExists(true)),
+                    "authority" => None,
                     "timestamp_ms" => Some(TP::TsExists(true)),
                     "result_ok" => None,
                     "entrypoint_hash" => Some(TP::EntryExists(true)),
                     _ => None,
                 },
                 F::IsNull(field) => match field_name(field) {
-                    "authority" => Some(TP::AuthorityExists(false)),
+                    "authority" => None,
                     "timestamp_ms" => Some(TP::TsExists(false)),
                     "result_ok" => None,
                     "entrypoint_hash" => Some(TP::EntryExists(false)),
@@ -13912,8 +14026,6 @@ fn tx_predicate_from_filter(
 }
 
 #[cfg(feature = "app_api")]
-const LOCAL12_COLLISION_METRIC_KIND: &str = "local12_digest";
-#[cfg(feature = "app_api")]
 static SUBSCRIPTION_PLAN_KEY: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str(iroha_data_model::subscription::SUBSCRIPTION_PLAN_METADATA_KEY)
         .expect("subscription plan metadata key is valid")
@@ -13938,8 +14050,6 @@ static SUBSCRIPTION_TRIGGER_REF_KEY: LazyLock<Name> = LazyLock::new(|| {
 const ENDPOINT_ACCOUNTS_LIST: &str = "/v1/accounts";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_QUERY: &str = "/v1/accounts/query";
-#[cfg(feature = "app_api")]
-const ENDPOINT_ACCOUNTS_RESOLVE: &str = "/v1/accounts/resolve";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD: &str = "/v1/accounts/onboard";
 #[cfg(feature = "app_api")]
@@ -14022,11 +14132,17 @@ const ENDPOINT_KAIGI_RELAY_DETAIL: &str = "/v1/kaigi/relays/{relay_id}";
 #[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_BLOCKS: &str = "/v1/explorer/blocks";
 #[cfg(feature = "app_api")]
+const ENDPOINT_EXPLORER_HEALTH: &str = "/v1/explorer/health";
+#[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_BLOCK_DETAIL: &str = "/v1/explorer/blocks/{identifier}";
 #[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_TRANSACTIONS: &str = "/v1/explorer/transactions";
 #[cfg(feature = "app_api")]
+const ENDPOINT_EXPLORER_TRANSACTIONS_LATEST: &str = "/v1/explorer/transactions/latest";
+#[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_INSTRUCTIONS: &str = "/v1/explorer/instructions";
+#[cfg(feature = "app_api")]
+const ENDPOINT_EXPLORER_INSTRUCTIONS_LATEST: &str = "/v1/explorer/instructions/latest";
 #[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_TRANSACTION_DETAIL: &str = "/v1/explorer/transactions/{hash}";
 #[cfg(feature = "app_api")]
@@ -14105,8 +14221,8 @@ pub fn parse_account_path_segment(
     literal: &str,
     telemetry: &MaybeTelemetry,
     endpoint: &'static str,
-) -> Result<(iroha_data_model::account::AccountId, String), Error> {
-    use iroha_data_model::{account::AccountId, query::error::QueryExecutionFail};
+) -> Result<(iroha_data_model::account::ScopedAccountId, String), Error> {
+    use iroha_data_model::{account::ScopedAccountId, query::error::QueryExecutionFail};
 
     parse_account_literal(literal, telemetry, endpoint)
         .map(|parsed| {
@@ -14121,6 +14237,66 @@ pub fn parse_account_path_segment(
                 )),
             ))
         })
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_parsed_account_against_world(
+    state: &CoreState,
+    parsed: &ScopedAccountId,
+) -> Option<iroha_data_model::account::ScopedAccountId> {
+    let world = state.world_view();
+    if world.account(parsed).is_ok() {
+        return Some(parsed.clone());
+    }
+
+    let mut matches = world.accounts_iter().filter_map(|entry| {
+        (entry.id().controller() == parsed.controller()).then(|| entry.id().clone())
+    });
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+#[cfg(feature = "app_api")]
+fn parse_account_literal_with_state(
+    state: &CoreState,
+    literal: &str,
+    telemetry: &MaybeTelemetry,
+    context: &'static str,
+) -> Result<(iroha_data_model::account::ScopedAccountId, String), iroha_data_model::error::ParseError>
+{
+    let trimmed = literal.trim();
+    match ScopedAccountId::parse_encoded(trimmed) {
+        Ok(parsed) => {
+            let parsed_id = parsed.into_account_id();
+            let resolved =
+                resolve_parsed_account_against_world(state, &parsed_id).unwrap_or(parsed_id);
+            record_account_literal_accept(telemetry, context, &resolved);
+            Ok((resolved.clone(), resolved.to_string()))
+        }
+        Err(base_err) => {
+            record_account_literal_reject(telemetry, context, literal, base_err.reason());
+            Err(base_err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn parse_account_path_segment_with_state(
+    state: &CoreState,
+    literal: &str,
+    telemetry: &MaybeTelemetry,
+    endpoint: &'static str,
+) -> Result<(iroha_data_model::account::ScopedAccountId, String), Error> {
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
+
+    parse_account_literal_with_state(state, literal, telemetry, endpoint).map_err(|err| {
+        Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
+            format!("invalid account_id `{literal}`: {}", err.reason()),
+        )))
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -14139,6 +14315,7 @@ pub fn parse_lane_id_literal(literal: &str) -> Result<LaneId, Error> {
 #[cfg(feature = "app_api")]
 fn canonicalize_account_literal_value(
     value: &mut norito::json::Value,
+    state: Option<&CoreState>,
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<(), Error> {
@@ -14147,10 +14324,24 @@ fn canonicalize_account_literal_value(
     match value {
         norito::json::Value::String(literal) => {
             let current_literal = literal.clone();
-            match parse_account_literal(current_literal.as_str(), telemetry, context) {
+            let parsed = match state {
+                Some(state) => parse_account_literal_with_state(
+                    state,
+                    current_literal.as_str(),
+                    telemetry,
+                    context,
+                )
+                .map(|(_, canonical)| canonical),
+                None => parse_account_literal(current_literal.as_str(), telemetry, context).map(
+                    |parsed| {
+                        let (_, canonical, _) = parsed.into_parts();
+                        canonical
+                    },
+                ),
+            };
+            match parsed {
                 Ok(parsed) => {
-                    let (_, canonical, _) = parsed.into_parts();
-                    *literal = canonical;
+                    *literal = parsed;
                     Ok(())
                 }
                 Err(err) => Err(Error::Query(ValidationFail::QueryFailed(
@@ -14166,9 +14357,32 @@ fn canonicalize_account_literal_value(
 }
 
 #[cfg(feature = "app_api")]
+fn scoped_accounts_for_subject_sorted(
+    world: &impl WorldReadOnly,
+    parsed_account: &ScopedAccountId,
+) -> Vec<ScopedAccountId> {
+    let subject = parsed_account.subject_id();
+    let mut accounts: Vec<ScopedAccountId> = world
+        .accounts_for_subject_iter(&subject)
+        .map(|entry| entry.id().clone())
+        .collect();
+    if accounts.is_empty() {
+        accounts.push(parsed_account.clone());
+    }
+    accounts.sort_by(|left, right| {
+        left.domain()
+            .cmp(right.domain())
+            .then_with(|| left.controller().cmp(right.controller()))
+    });
+    accounts.dedup();
+    accounts
+}
+
+#[cfg(feature = "app_api")]
 fn canonicalize_filter_account_literals(
     expr: &mut FilterExpr,
     field_name: &str,
+    state: Option<&CoreState>,
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<(), Error> {
@@ -14177,16 +14391,16 @@ fn canonicalize_filter_account_literals(
     match expr {
         F::And(list) | F::Or(list) => {
             for e in list {
-                canonicalize_filter_account_literals(e, field_name, telemetry, context)?;
+                canonicalize_filter_account_literals(e, field_name, state, telemetry, context)?;
             }
             Ok(())
         }
         F::Not(inner) => {
-            canonicalize_filter_account_literals(inner, field_name, telemetry, context)
+            canonicalize_filter_account_literals(inner, field_name, state, telemetry, context)
         }
         F::Eq(field, value) | F::Ne(field, value) => {
             if field.0.as_str() == field_name {
-                canonicalize_account_literal_value(value, telemetry, context)
+                canonicalize_account_literal_value(value, state, telemetry, context)
             } else {
                 Ok(())
             }
@@ -14194,7 +14408,7 @@ fn canonicalize_filter_account_literals(
         F::In(field, list) | F::Nin(field, list) => {
             if field.0.as_str() == field_name {
                 for value in list {
-                    canonicalize_account_literal_value(value, telemetry, context)?;
+                    canonicalize_account_literal_value(value, state, telemetry, context)?;
                 }
             }
             Ok(())
@@ -14211,7 +14425,17 @@ fn canonicalize_accounts_filter_literals(
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<()> {
-    canonicalize_filter_account_literals(expr, "id", telemetry, context)
+    canonicalize_filter_account_literals(expr, "id", None, telemetry, context)
+}
+
+#[cfg(feature = "app_api")]
+fn canonicalize_accounts_filter_literals_with_state(
+    expr: &mut FilterExpr,
+    state: &CoreState,
+    telemetry: &MaybeTelemetry,
+    context: &'static str,
+) -> Result<()> {
+    canonicalize_filter_account_literals(expr, "id", Some(state), telemetry, context)
 }
 
 #[cfg(feature = "app_api")]
@@ -14221,7 +14445,7 @@ fn canonicalize_repo_filter_literals(
     context: &'static str,
 ) -> Result<()> {
     for field in ["initiator", "counterparty", "custodian"] {
-        canonicalize_filter_account_literals(expr, field, telemetry, context)?;
+        canonicalize_filter_account_literals(expr, field, None, telemetry, context)?;
     }
     Ok(())
 }
@@ -14232,7 +14456,7 @@ fn canonicalize_offline_allowance_filter_literals(
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<()> {
-    canonicalize_filter_account_literals(expr, "controller_id", telemetry, context)
+    canonicalize_filter_account_literals(expr, "controller_id", None, telemetry, context)
 }
 
 #[cfg(feature = "app_api")]
@@ -14241,7 +14465,7 @@ fn canonicalize_offline_revocation_filter_literals(
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<()> {
-    canonicalize_filter_account_literals(expr, "issuer_id", telemetry, context)
+    canonicalize_filter_account_literals(expr, "issuer_id", None, telemetry, context)
 }
 
 #[cfg(feature = "app_api")]
@@ -14250,7 +14474,7 @@ fn canonicalize_offline_summary_filter_literals(
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<()> {
-    canonicalize_filter_account_literals(expr, "controller_id", telemetry, context)
+    canonicalize_filter_account_literals(expr, "controller_id", None, telemetry, context)
 }
 
 #[cfg(feature = "app_api")]
@@ -14260,7 +14484,7 @@ fn canonicalize_offline_transfer_filter_literals(
     context: &'static str,
 ) -> Result<()> {
     for field in ["controller_id", "receiver_id", "deposit_account_id"] {
-        canonicalize_filter_account_literals(expr, field, telemetry, context)?;
+        canonicalize_filter_account_literals(expr, field, None, telemetry, context)?;
     }
     Ok(())
 }
@@ -14272,7 +14496,7 @@ fn canonicalize_offline_receipt_filter_literals(
     context: &'static str,
 ) -> Result<()> {
     for field in ["controller_id", "receiver_id"] {
-        canonicalize_filter_account_literals(expr, field, telemetry, context)?;
+        canonicalize_filter_account_literals(expr, field, None, telemetry, context)?;
     }
     Ok(())
 }
@@ -14284,13 +14508,12 @@ fn canonicalize_query_account_literal(
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<Option<String>> {
-    #[cfg(test)]
-    crate::ensure_test_domain_selector_resolver();
-
-    use iroha_data_model::{ValidationFail, account::AccountId, query::error::QueryExecutionFail};
+    use iroha_data_model::{
+        ValidationFail, account::ScopedAccountId, query::error::QueryExecutionFail,
+    };
 
     literal
-        .map(|raw| match AccountId::parse(raw) {
+        .map(|raw| match ScopedAccountId::parse_encoded(raw) {
             Ok(parsed) => {
                 record_account_literal_accept(telemetry, context, parsed.account_id());
                 Ok(parsed.canonical().to_string())
@@ -14314,12 +14537,9 @@ pub fn parse_account_literal(
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<iroha_data_model::account::ParsedAccountId, iroha_data_model::error::ParseError> {
-    use iroha_data_model::account::AccountId;
+    use iroha_data_model::account::ScopedAccountId;
 
-    #[cfg(test)]
-    crate::ensure_test_domain_selector_resolver();
-
-    match AccountId::parse(literal) {
+    match ScopedAccountId::parse_encoded(literal) {
         Ok(parsed) => {
             record_account_literal_accept(telemetry, context, parsed.account_id());
             Ok(parsed)
@@ -14335,14 +14555,10 @@ pub fn parse_account_literal(
 fn record_account_literal_accept(
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    account_id: &AccountId,
+    _account_id: &ScopedAccountId,
 ) {
     telemetry.with_metrics(|metrics| {
-        if let Ok(address) = AccountAddress::from_account_id(account_id) {
-            metrics.inc_torii_address_domain(context, address.domain_kind().as_str());
-            #[cfg(feature = "telemetry")]
-            record_local12_selector_collision(metrics, context, account_id, &address);
-        }
+        metrics.inc_torii_address_domain(context, "default");
     });
 }
 
@@ -14384,32 +14600,6 @@ fn literal_is_local8(literal: &str) -> bool {
         .starts_with("sn1")
 }
 
-#[cfg(all(feature = "app_api", feature = "telemetry"))]
-fn record_local12_selector_collision(
-    telemetry: &Telemetry,
-    endpoint: &'static str,
-    account_id: &AccountId,
-    address: &AccountAddress,
-) {
-    let Some(digest) = address.local12_digest() else {
-        return;
-    };
-    let domain_label = account_id.domain().name().as_ref();
-    if let Some(collision) = local_selector_tracker::observe_global(digest, domain_label) {
-        telemetry.inc_torii_address_collision(endpoint, LOCAL12_COLLISION_METRIC_KIND);
-        telemetry.inc_torii_address_collision_domain(endpoint, domain_label);
-        let digest_hex = collision.digest.encode_hex::<String>();
-        iroha_logger::warn!(
-            target: "torii.address.local12",
-            endpoint,
-            digest = %digest_hex,
-            existing = collision.existing.as_ref(),
-            new_label = collision.new_label.as_ref(),
-            "detected Local-12 selector collision"
-        );
-    }
-}
-
 #[cfg(feature = "app_api")]
 fn explorer_qr_error(err: qrcode::types::QrError) -> Error {
     use iroha_data_model::query::error::QueryExecutionFail;
@@ -14426,7 +14616,7 @@ mod address_metrics_tests {
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::{
-            AccountAddress, AccountId,
+            AccountAddress, ScopedAccountId,
             address::{AddressDomainKind, default_domain_name, set_default_domain_name},
         },
         domain::DomainId,
@@ -14448,9 +14638,9 @@ mod address_metrics_tests {
     async fn parse_account_literal_counts_local8_attempts() {
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
-        let reason =
-            iroha_data_model::account::address::AccountAddressErrorCode::LocalDigestTooShort
-                .as_str();
+        let reason = iroha_data_model::account::ScopedAccountId::parse_encoded(local8_literal())
+            .expect_err("local8 literal should fail")
+            .reason();
         let invalid_counter = metrics
             .torii_address_invalid_total
             .with_label_values(&[TEST_CONTEXT, reason]);
@@ -14482,51 +14672,12 @@ mod address_metrics_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn local12_selector_collision_increments_metric() {
-        local_selector_tracker::reset_for_tests();
-        let telemetry = MaybeTelemetry::for_tests();
-        let metrics = telemetry.metrics().await;
-        let counter = metrics
-            .torii_address_collision_total
-            .with_label_values(&[TEST_CONTEXT, LOCAL12_COLLISION_METRIC_KIND]);
-        let domain_counter = metrics
-            .torii_address_collision_domain_total
-            .with_label_values(&[TEST_CONTEXT, "custom"]);
-        let before = counter.get();
-        let before_domain = domain_counter.get();
-
-        let domain_id: DomainId = "custom".parse().expect("domain id");
-        let account = AccountId::new(domain_id, KeyPair::random().public_key().clone());
-        let address = AccountAddress::from_account_id(&account).expect("encode local address");
-        let digest = address
-            .local12_digest()
-            .expect("non-default domains emit Local-12 digests");
-
-        local_selector_tracker::seed_for_tests(digest, "seeded.local");
-
-        record_account_literal_accept(&telemetry, TEST_CONTEXT, &account);
-
-        assert_eq!(
-            counter.get(),
-            before + 1,
-            "Local-12 selector collisions should increment torii_address_collision_total"
-        );
-        assert_eq!(
-            domain_counter.get(),
-            before_domain + 1,
-            "Local-12 collisions should increment torii_address_collision_domain_total"
-        );
-
-        local_selector_tracker::reset_for_tests();
-    }
-
-    #[tokio::test(flavor = "current_thread")]
     async fn filter_validation_records_address_metrics() {
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
-        let reason =
-            iroha_data_model::account::address::AccountAddressErrorCode::LocalDigestTooShort
-                .as_str();
+        let reason = iroha_data_model::account::ScopedAccountId::parse_encoded(local8_literal())
+            .expect_err("local8 literal should fail")
+            .reason();
         let invalid_counter = metrics
             .torii_address_invalid_total
             .with_label_values(&[CONTEXT_ACCOUNTS_TRANSACTIONS_QUERY_FILTER, reason]);
@@ -14542,43 +14693,17 @@ mod address_metrics_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn account_filter_canonicalizes_alias_literals() {
-        use std::sync::Arc;
-
-        use iroha_crypto::Algorithm;
-        use iroha_data_model::{
-            account::{AccountId, clear_account_alias_resolver, set_account_alias_resolver},
-            domain::DomainId,
-        };
-
+    async fn account_filter_rejects_alias_literals() {
         let telemetry = MaybeTelemetry::for_tests();
-        let domain: DomainId = "wonderland".parse().expect("domain parses");
-        let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
-        let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
-        let account_for_resolver = account.clone();
-        set_account_alias_resolver(Arc::new(move |label, alias_domain| {
-            if label == "alice" && alias_domain == &domain {
-                Some(account_for_resolver.clone())
-            } else {
-                None
-            }
-        }));
-
         let mut expr = FilterExpr::Eq(
             FieldPath("id".to_string()),
-            Value::String("alice@wonderland".into()),
+            Value::String("alias@invalid-domain".into()),
         );
 
         let result =
             canonicalize_accounts_filter_literals(&mut expr, &telemetry, ENDPOINT_ACCOUNTS_QUERY);
 
-        clear_account_alias_resolver();
-
-        assert!(result.is_ok(), "alias literals should canonicalize");
-        let FilterExpr::Eq(_, Value::String(canonical)) = expr else {
-            panic!("expected canonicalized string filter")
-        };
-        assert_eq!(canonical, account.to_string());
+        assert!(result.is_err(), "alias literals must be rejected");
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -14611,7 +14736,7 @@ mod address_metrics_tests {
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
         let literal = "sorainvalid@kaigi";
-        let reason = AccountId::parse(literal)
+        let reason = ScopedAccountId::parse_encoded(literal)
             .expect_err("literal must fail")
             .reason();
         let before = metrics
@@ -14656,15 +14781,11 @@ mod address_metrics_tests {
         }
     }
 
-    fn canonical_hex_literal(domain_label: &str) -> String {
+    fn ih58_literal(domain_label: &str) -> String {
         let domain: DomainId = domain_label.parse().expect("domain parses");
         let kp = KeyPair::random();
-        let account = AccountId::new(domain.clone(), kp.public_key().clone());
-        let canonical_hex = AccountAddress::from_account_id(&account)
-            .expect("address encodes")
-            .canonical_hex()
-            .expect("canonical hex");
-        format!("{canonical_hex}@{domain}")
+        let account = ScopedAccountId::new(domain, kp.public_key().clone());
+        account.to_string()
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -14672,7 +14793,7 @@ mod address_metrics_tests {
         let _guard = DefaultDomainGuard::set("wonderland");
         let telemetry = MaybeTelemetry::for_tests();
         let endpoint = TEST_CONTEXT;
-        let literal = canonical_hex_literal("wonderland");
+        let literal = ih58_literal("wonderland");
         let label = AddressDomainKind::Default.as_str();
 
         let before = {
@@ -14697,54 +14818,19 @@ mod address_metrics_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn parse_account_literal_records_local12_domain_metrics() {
-        let _guard = DefaultDomainGuard::set("default");
+    async fn kaigi_sse_accepts_ih58_literal() {
         let telemetry = MaybeTelemetry::for_tests();
-        let endpoint = TEST_CONTEXT;
-        let literal = canonical_hex_literal("wonderland");
-        let label = AddressDomainKind::LocalDigest12.as_str();
-
-        let before = {
-            let metrics = telemetry.metrics().await;
-            metrics
-                .torii_address_domain_total
-                .with_label_values(&[endpoint, label])
-                .get()
-        };
-
-        parse_account_literal(&literal, &telemetry, endpoint).expect("literal should parse");
-
-        let after = {
-            let metrics = telemetry.metrics().await;
-            metrics
-                .torii_address_domain_total
-                .with_label_values(&[endpoint, label])
-                .get()
-        };
-
-        assert_eq!(after, before + 1);
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn kaigi_sse_accepts_public_key_literal() {
-        let telemetry = MaybeTelemetry::for_tests();
-        let literal = format!(
-            "{}@kaigi",
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-        );
+        let literal = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
 
         let parsed = parse_account_literal(&literal, &telemetry, KAIGI_SSE_CONTEXT)
-            .expect("public key literal should parse");
+            .expect("ih58 literal should parse");
         assert_eq!(parsed.canonical(), parsed.account_id().to_string());
     }
 }
 
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
 mod account_path_metric_tests {
-    use iroha_data_model::{
-        account::{AccountAddress, AccountAddressError, AccountAddressErrorCode, AccountId},
-        domain::DomainId,
-    };
+    use iroha_data_model::account::AccountAddressErrorCode;
 
     use super::*;
 
@@ -14773,50 +14859,6 @@ mod account_path_metric_tests {
                 .get()
         };
         assert_eq!(after, before + 1);
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn parse_account_literal_records_local12_collisions() {
-        local_selector_tracker::reset_for_tests();
-        let telemetry = MaybeTelemetry::for_tests();
-        let metrics = telemetry.metrics().await;
-        let endpoint = ENDPOINT_ACCOUNTS_QUERY;
-        let counter = metrics
-            .torii_address_collision_total
-            .with_label_values(&[endpoint, LOCAL12_COLLISION_METRIC_KIND]);
-        let domain_counter = metrics
-            .torii_address_collision_domain_total
-            .with_label_values(&[endpoint, "wonderland"]);
-        let before = counter.get();
-        let before_domain = domain_counter.get();
-
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
-        let account_id = AccountId::new(domain_id, KeyPair::random().public_key().clone());
-        let digest = AccountAddress::from_account_id(&account_id)
-            .expect("address encodes")
-            .local12_digest()
-            .expect("non-default domain should expose digest");
-        local_selector_tracker::seed_for_tests(digest, "alpha.sora");
-
-        let literal = account_id.to_string();
-        assert!(
-            parse_account_literal(&literal, &telemetry, endpoint).is_ok(),
-            "literal should parse"
-        );
-
-        let after = counter.get();
-        assert_eq!(
-            after,
-            before + 1,
-            "expected Local-12 collision counter increment"
-        );
-        assert_eq!(
-            domain_counter.get(),
-            before_domain + 1,
-            "expected Local-12 collision domain counter increment"
-        );
-
-        local_selector_tracker::reset_for_tests();
     }
 }
 
@@ -14889,8 +14931,8 @@ fn committed_transactions_snapshot(
 ///   curl -X POST \
 ///     -H 'Content-Type: application/json' \
 ///     -H 'Accept: application/json' \
-///     -d '{"filter": {"op":"eq","args":[{"FieldPath":"authority"},"ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"]}, "pagination": {"limit": 50}}' \
-///     http://127.0.0.1:8080/v1/accounts/ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland/transactions/query
+///     -d '{"filter": {"op":"eq","args":[{"FieldPath":"authority"},"6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"]}, "pagination": {"limit": 50}}' \
+///     http://127.0.0.1:8080/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query
 ///
 /// Returns: `{ "items": [ {"authority": "...", "timestamp_ms": 0, "entrypoint_hash": "...", "result_ok": true } ], "total": N }`
 ///
@@ -14925,7 +14967,7 @@ pub async fn handle_v1_account_transactions_with_policy(
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
 
-    use iroha_data_model::query::dsl::{CommittedTxPredicate, CompoundPredicate};
+    use iroha_data_model::query::dsl::CompoundPredicate;
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
     #[cfg(feature = "telemetry")]
@@ -14946,7 +14988,8 @@ pub async fn handle_v1_account_transactions_with_policy(
         })
         .unwrap_or(0);
 
-    let (account_id, _canonical_literal) = parse_account_path_segment(
+    let (account_id, _canonical_literal) = parse_account_path_segment_with_state(
+        state.as_ref(),
         &account_id,
         &telemetry,
         ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
@@ -14956,9 +14999,6 @@ pub async fn handle_v1_account_transactions_with_policy(
         &telemetry,
         ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
         address_format,
-    );
-    let account_predicate = CompoundPredicate::from_committed_tx_predicate(
-        CommittedTxPredicate::AuthorityEq(account_id),
     );
     let limits = app_query_limits();
     let cap = app_query_page_cap(&state);
@@ -14987,12 +15027,14 @@ pub async fn handle_v1_account_transactions_with_policy(
             // Structural validation (field path form + basic type checks)
             crate::filter::validate_filter(expr)
                 .map_err(|e| map_filter_error(e, ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY))?;
-            tx_predicate_from_filter(expr)
+            if filter_expr_references_field(expr, "authority") {
+                CompoundPredicate::PASS
+            } else {
+                tx_predicate_from_filter(expr)
+            }
         } else {
             CompoundPredicate::PASS
         };
-        let predicate = predicate.and(account_predicate);
-
         let pagination = enforce_app_pagination(
             envelope.pagination.limit,
             envelope.pagination.offset,
@@ -15011,6 +15053,9 @@ pub async fn handle_v1_account_transactions_with_policy(
             let select_ref = &select_clone;
             let filtered_iter = committed_txs.iter().filter_map(|tx| {
                 if !predicate.applies(tx) {
+                    return None;
+                }
+                if !tx_authority_matches_subject(tx, &account_id) {
                     return None;
                 }
                 let include = filter_ref.map(|expr| filter_tx(expr, tx)).unwrap_or(true);
@@ -15038,6 +15083,9 @@ pub async fn handle_v1_account_transactions_with_policy(
             let debug_filter = torii_debug_match_enabled();
             for tx in &committed_txs {
                 if !predicate.applies(tx) {
+                    continue;
+                }
+                if !tx_authority_matches_subject(tx, &account_id) {
                     continue;
                 }
                 let include = filter_ref.map(|expr| filter_tx(expr, tx)).unwrap_or(true);
@@ -15256,20 +15304,24 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     let start = Instant::now();
     let address_format = AddressFormatPreference::from_param(params.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_ACCOUNTS_TRANSACTIONS, address_format);
-    let (_, canonical_literal) =
-        parse_account_path_segment(&account_id, &telemetry, ENDPOINT_ACCOUNTS_TRANSACTIONS)?;
-    let canonical_account = Arc::<str>::from(canonical_literal);
+    let (account_id, _) = parse_account_path_segment_with_state(
+        state.as_ref(),
+        &account_id,
+        &telemetry,
+        ENDPOINT_ACCOUNTS_TRANSACTIONS,
+    )?;
     let asset_filter = params
         .asset_id
         .as_deref()
         .map(|raw| {
-            raw.parse::<AssetId>()
+            AssetId::parse_encoded(raw)
                 .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))
         })
         .transpose()?;
     let cap = app_query_page_cap(&state);
     let limits = app_query_limits();
     let committed_txs = committed_transactions_snapshot(state.as_ref());
+    let query_subject = account_id;
 
     let (items, total) = {
         let pagination = enforce_app_pagination(
@@ -15282,14 +15334,10 @@ pub async fn handle_v1_account_transactions_get_with_policy(
             .clamp_fetch_size(None)?
             .map(|v| v.min(pagination.cap));
         let filtered = committed_txs.iter().filter_map({
-            let canonical = canonical_account.clone();
+            let query_subject = query_subject.clone();
             let asset_filter = asset_filter.clone();
             move |tx| {
-                let include = match tx_field_value(tx, "authority") {
-                    Some(auth) => auth == canonical.as_ref(),
-                    None => true,
-                };
-                if !include {
+                if !tx_authority_matches_subject(tx, &query_subject) {
                     return None;
                 }
                 if let Some(expected) = asset_filter.as_ref() {
@@ -15921,10 +15969,10 @@ mod tx_query_filter_tests {
         GenericHashOf::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]))
     }
 
-    fn account_with_key() -> (dm::AccountId, KeyPair) {
+    fn account_with_key() -> (dm::ScopedAccountId, KeyPair) {
         let domain: dm::DomainId = "wonderland".parse().unwrap();
         let kp = KeyPair::random();
-        let account = dm::AccountId::new(domain, kp.public_key().clone());
+        let account = dm::ScopedAccountId::new(domain, kp.public_key().clone());
         (account, kp)
     }
 
@@ -15933,7 +15981,7 @@ mod tx_query_filter_tests {
     }
 
     fn build_external_tx(
-        authority: &dm::AccountId,
+        authority: &dm::ScopedAccountId,
         keypair: &KeyPair,
         created_ms: u64,
         entry_hash_override: Option<GenericHashOf<dm::TransactionEntrypoint>>,
@@ -15976,7 +16024,7 @@ mod tx_query_filter_tests {
     }
 
     fn make_external_tx(
-        authority: &dm::AccountId,
+        authority: &dm::ScopedAccountId,
         keypair: &KeyPair,
         created_ms: u64,
         entry_hash_override: Option<GenericHashOf<dm::TransactionEntrypoint>>,
@@ -15993,7 +16041,7 @@ mod tx_query_filter_tests {
     }
 
     fn make_external_tx_with_metadata(
-        authority: &dm::AccountId,
+        authority: &dm::ScopedAccountId,
         keypair: &KeyPair,
         created_ms: u64,
         entry_hash_override: Option<GenericHashOf<dm::TransactionEntrypoint>>,
@@ -16011,7 +16059,7 @@ mod tx_query_filter_tests {
     }
 
     fn make_external_tx_with_instructions(
-        authority: &dm::AccountId,
+        authority: &dm::ScopedAccountId,
         keypair: &KeyPair,
         created_ms: u64,
         instructions: Vec<dm::InstructionBox>,
@@ -16130,8 +16178,8 @@ mod tx_query_filter_tests {
         let domain: dm::DomainId = "wonderland".parse().unwrap();
         let kp_a = KeyPair::random();
         let kp_b = KeyPair::random();
-        let a = dm::AccountId::new(domain.clone(), kp_a.public_key().clone());
-        let b = dm::AccountId::new(domain, kp_b.public_key().clone());
+        let a = dm::ScopedAccountId::new(domain.clone(), kp_a.public_key().clone());
+        let b = dm::ScopedAccountId::new(domain, kp_b.public_key().clone());
         let tx_a = make_external_tx(&a, &kp_a, 1_710_000_000_000, None, true);
         let tx_b = make_external_tx(&b, &kp_b, 1_710_000_000_000, None, false);
 
@@ -16150,8 +16198,8 @@ mod tx_query_filter_tests {
         let domain: dm::DomainId = "wonderland".parse().unwrap();
         let kp_a = KeyPair::random();
         let kp_b = KeyPair::random();
-        let a = dm::AccountId::new(domain.clone(), kp_a.public_key().clone());
-        let b = dm::AccountId::new(domain, kp_b.public_key().clone());
+        let a = dm::ScopedAccountId::new(domain.clone(), kp_a.public_key().clone());
+        let b = dm::ScopedAccountId::new(domain, kp_b.public_key().clone());
         let tx_a = make_external_tx(&a, &kp_a, 1_710_000_000_000, None, true);
         let tx_b = make_external_tx(&b, &kp_b, 1_710_000_000_000, None, false);
 
@@ -16219,7 +16267,7 @@ mod tx_query_filter_tests {
 
         let other_kp = KeyPair::random();
         let other_account =
-            dm::AccountId::new(asset_def.domain().clone(), other_kp.public_key().clone());
+            dm::ScopedAccountId::new(asset_def.domain().clone(), other_kp.public_key().clone());
         let other_id = dm::AssetId::new(asset_def, other_account);
         let expr_miss = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("asset_id".into()),
@@ -16374,9 +16422,9 @@ mod explorer_lookup_tests {
 
     use super::*;
 
-    fn build_state_with_single_transaction(
-        instructions: Vec<dm::InstructionBox>,
-    ) -> (Arc<State>, HashOf<TransactionEntrypoint>) {
+    fn build_state_with_transactions(
+        instruction_batches: Vec<Vec<dm::InstructionBox>>,
+    ) -> (Arc<State>, Vec<HashOf<TransactionEntrypoint>>) {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(
@@ -16388,19 +16436,22 @@ mod explorer_lookup_tests {
         let chain: dm::ChainId = "test-chain".parse().expect("valid chain id");
         let domain: dm::DomainId = "wonderland".parse().expect("valid domain id");
         let authority_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let authority = dm::AccountId::new(domain, authority_key.public_key().clone());
-
-        let mut builder = dm::TransactionBuilder::new(chain, authority);
-        builder.set_creation_time(Duration::from_millis(1_710_000_000_000));
-        let signed = builder
-            .with_instructions(instructions)
-            .sign(authority_key.private_key());
-        let target_hash = signed.hash_as_entrypoint();
-        let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
+        let authority = dm::ScopedAccountId::new(domain, authority_key.public_key().clone());
+        let mut hashes = Vec::new();
+        let mut txs = Vec::new();
+        for (index, instructions) in instruction_batches.into_iter().enumerate() {
+            let mut builder = dm::TransactionBuilder::new(chain.clone(), authority.clone());
+            builder.set_creation_time(Duration::from_millis(1_710_000_000_000 + index as u64));
+            let signed = builder
+                .with_instructions(instructions)
+                .sign(authority_key.private_key());
+            hashes.push(signed.hash_as_entrypoint());
+            txs.push(AcceptedTransaction::new_unchecked(Cow::Owned(signed)));
+        }
 
         let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
-        let unverified = BlockBuilder::new(vec![tx])
+        let unverified = BlockBuilder::new(txs)
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader.private_key())
             .unpack(|_| {});
@@ -16411,6 +16462,14 @@ mod explorer_lookup_tests {
         let committed = valid.commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, state_block, committed);
 
+        (state, hashes)
+    }
+
+    fn build_state_with_single_transaction(
+        instructions: Vec<dm::InstructionBox>,
+    ) -> (Arc<State>, HashOf<TransactionEntrypoint>) {
+        let (state, mut hashes) = build_state_with_transactions(vec![instructions]);
+        let target_hash = hashes.remove(0);
         (state, target_hash)
     }
 
@@ -16447,6 +16506,72 @@ mod explorer_lookup_tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].index, 2);
         assert_eq!(items[0].transaction_hash, target_hash.to_string());
+    }
+
+    #[test]
+    fn explorer_latest_transactions_respect_limit() {
+        let (state, hashes) = build_state_with_transactions(vec![
+            vec![dm::Log::new(dm::Level::INFO, "first".to_owned()).into()],
+            vec![dm::Log::new(dm::Level::INFO, "second".to_owned()).into()],
+            vec![dm::Log::new(dm::Level::INFO, "third".to_owned()).into()],
+        ]);
+        let filters = ExplorerTransactionFilters {
+            authority: None,
+            status: None,
+            block: None,
+            asset_id: None,
+        };
+
+        let items = collect_latest_transaction_summaries(
+            state.as_ref(),
+            state.committed_height() as u64,
+            &filters,
+            2,
+            AddressFormatPreference::Ih58,
+        )
+        .expect("latest transaction collection should succeed");
+
+        assert_eq!(items.len(), 2);
+        let expected: std::collections::BTreeSet<String> =
+            hashes.into_iter().map(|hash| hash.to_string()).collect();
+        let actual: Vec<String> = items.into_iter().map(|item| item.hash).collect();
+        for hash in actual {
+            assert!(expected.contains(&hash));
+        }
+    }
+
+    #[test]
+    fn explorer_latest_instruction_history_respects_limit() {
+        let instructions = vec![
+            dm::Log::new(dm::Level::INFO, "first".to_owned()).into(),
+            dm::Log::new(dm::Level::INFO, "second".to_owned()).into(),
+            dm::Log::new(dm::Level::INFO, "third".to_owned()).into(),
+        ];
+        let (state, target_hash) = build_state_with_single_transaction(instructions);
+        let filters = ExplorerInstructionFilters {
+            account: None,
+            authority: None,
+            transaction_hash: None,
+            status: None,
+            block: None,
+            kind: None,
+            asset_id: None,
+        };
+
+        let items = collect_latest_instruction_history(
+            state.as_ref(),
+            state.committed_height() as u64,
+            &filters,
+            2,
+            AddressFormatPreference::Ih58,
+        )
+        .expect("latest instruction collection should succeed");
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].index, 0);
+        assert_eq!(items[1].index, 1);
+        assert_eq!(items[0].transaction_hash, target_hash.to_string());
+        assert_eq!(items[1].transaction_hash, target_hash.to_string());
     }
 
     #[test]
@@ -16629,8 +16754,7 @@ mod tx_query_integration_smoke {
     use super::*;
     // use tower::ServiceExt; // not needed in this module
 
-    const TEST_ACCOUNT: &str =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+    const TEST_ACCOUNT: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
 
     #[must_use]
     struct DebugEnvGuard {
@@ -16697,23 +16821,22 @@ mod tx_query_integration_smoke {
             filter: Some(crate::filter::FilterExpr::Eq(
                 crate::filter::FieldPath("authority".into()),
                 norito::json::Value::String(
-                    "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                        .into(),
+                    "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into(),
                 ),
             )),
             select: None,
             sort: Vec::new(),
-            pagination: crate::filter::Pagination { limit: Some(50), offset: 0 },
+            pagination: crate::filter::Pagination {
+                limit: Some(50),
+                offset: 0,
+            },
             fetch_size: None,
             address_format: None,
         };
 
         let resp = handle_v1_account_transactions(
             Arc::new(state),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -16867,12 +16990,12 @@ mod tx_query_integration_smoke {
         let mut stx0 = st_block0.transaction();
         let domain_id: dm::DomainId = "wonderland".parse().unwrap();
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let exec_id = dm::AccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(&exec_id, &mut stx0)
             .ok();
         let kp_actor = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let actor_id = dm::AccountId::new(domain_id.clone(), kp_actor.public_key().clone());
+        let actor_id = dm::ScopedAccountId::new(domain_id.clone(), kp_actor.public_key().clone());
         dm::Register::account(dm::Account::new(actor_id.clone()))
             .execute(&exec_id, &mut stx0)
             .ok();
@@ -16969,12 +17092,12 @@ mod tx_query_integration_smoke {
         let domain_id: dm::DomainId = "wonderland".parse().unwrap();
         // Execute with a placeholder authority; in this test we don't enforce on-chain permissions
         let kp_exec = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let exec_id = dm::AccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(&exec_id, &mut stx)
             .ok();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let acc_a = dm::AccountId::new(domain_id.clone(), kp_a.public_key().clone());
+        let acc_a = dm::ScopedAccountId::new(domain_id.clone(), kp_a.public_key().clone());
         let account_literal = acc_a.to_string();
         dm::Register::account(dm::Account::new(acc_a.clone()))
             .execute(&exec_id, &mut stx)
@@ -17157,7 +17280,7 @@ mod tx_query_integration_smoke {
         let mut stx0 = st_block0.transaction();
         let domain_id: dm::DomainId = "wonderland".parse().unwrap();
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let exec_id = dm::AccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(&exec_id, &mut stx0)
             .unwrap();
@@ -17165,7 +17288,7 @@ mod tx_query_integration_smoke {
             .execute(&exec_id, &mut stx0)
             .unwrap();
         let kp_actor = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let actor_id = dm::AccountId::new(domain_id.clone(), kp_actor.public_key().clone());
+        let actor_id = dm::ScopedAccountId::new(domain_id.clone(), kp_actor.public_key().clone());
         dm::Register::account(dm::Account::new(actor_id.clone()))
             .execute(&exec_id, &mut stx0)
             .unwrap();
@@ -17253,8 +17376,8 @@ mod tx_query_integration_smoke {
         let dom_id: dm::DomainId = "wonderland".parse().unwrap();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let acc_a = dm::AccountId::new(dom_id.clone(), kp_a.public_key().clone());
-        let acc_b = dm::AccountId::new(dom_id.clone(), kp_b.public_key().clone());
+        let acc_a = dm::ScopedAccountId::new(dom_id.clone(), kp_a.public_key().clone());
+        let acc_b = dm::ScopedAccountId::new(dom_id.clone(), kp_b.public_key().clone());
         let leader0 = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
@@ -17264,7 +17387,7 @@ mod tx_query_integration_smoke {
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
         let kp_seed = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let exec_id = dm::AccountId::new(dom_id.clone(), kp_seed.public_key().clone());
+        let exec_id = dm::ScopedAccountId::new(dom_id.clone(), kp_seed.public_key().clone());
         dm::Register::domain(dm::Domain::new(dom_id.clone()))
             .execute(&exec_id, &mut stx0)
             .unwrap();
@@ -17406,7 +17529,7 @@ mod tx_query_integration_smoke {
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let domain: dm::DomainId = "wonderland".parse().unwrap();
-        let account = dm::AccountId::new(domain.clone(), kp.public_key().clone());
+        let account = dm::ScopedAccountId::new(domain.clone(), kp.public_key().clone());
         let mut builder = dm::TransactionBuilder::new(chain_id.clone(), account.clone());
         builder.set_creation_time(core::time::Duration::from_millis(1000));
         let signed = builder
@@ -17483,8 +17606,8 @@ mod tx_query_integration_smoke {
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let dom: dm::DomainId = "wonderland".parse().unwrap();
-        let acc_a = dm::AccountId::new(dom.clone(), kp_a.public_key().clone());
-        let acc_b = dm::AccountId::new(dom.clone(), kp_b.public_key().clone());
+        let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
+        let acc_b = dm::ScopedAccountId::new(dom.clone(), kp_b.public_key().clone());
         let acc_b_str = format!("{}", acc_b);
 
         let (_max_clock_drift, _tx_limits) = {
@@ -17592,7 +17715,7 @@ mod tx_query_integration_smoke {
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let dom: dm::DomainId = "wonderland".parse().unwrap();
-        let acc_a = dm::AccountId::new(dom.clone(), kp_a.public_key().clone());
+        let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
         let acc_a_str = format!("{}", acc_a);
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -17699,7 +17822,7 @@ mod tx_query_integration_smoke {
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let dom: dm::DomainId = "wonderland".parse().unwrap();
-        let acc_a = dm::AccountId::new(dom.clone(), kp_a.public_key().clone());
+        let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
 
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -17791,9 +17914,9 @@ mod tx_query_integration_smoke {
         let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let kp_c = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let dom: dm::DomainId = "wonderland".parse().unwrap();
-        let acc_a = dm::AccountId::new(dom.clone(), kp_a.public_key().clone());
-        let acc_b = dm::AccountId::new(dom.clone(), kp_b.public_key().clone());
-        let acc_c = dm::AccountId::new(dom.clone(), kp_c.public_key().clone());
+        let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
+        let acc_b = dm::ScopedAccountId::new(dom.clone(), kp_b.public_key().clone());
+        let acc_c = dm::ScopedAccountId::new(dom.clone(), kp_c.public_key().clone());
         let acc_a_str = format!("{}", acc_a);
         let acc_b_str = format!("{}", acc_b);
 
@@ -17939,9 +18062,9 @@ mod tx_query_integration_smoke {
         let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let kp_c = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let dom: dm::DomainId = "wonderland".parse().unwrap();
-        let acc_a = dm::AccountId::new(dom.clone(), kp_a.public_key().clone());
-        let acc_b = dm::AccountId::new(dom.clone(), kp_b.public_key().clone());
-        let acc_c = dm::AccountId::new(dom.clone(), kp_c.public_key().clone());
+        let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
+        let acc_b = dm::ScopedAccountId::new(dom.clone(), kp_b.public_key().clone());
+        let acc_c = dm::ScopedAccountId::new(dom.clone(), kp_c.public_key().clone());
         let acc_a_str = format!("{}", acc_a);
         let acc_b_str = format!("{}", acc_b);
 
@@ -18132,7 +18255,7 @@ mod tx_query_integration_smoke {
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random();
         let dom: dm::DomainId = "wonderland".parse().unwrap();
-        let acc_a = dm::AccountId::new(dom.clone(), kp_a.public_key().clone());
+        let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
         let account_literal = acc_a.to_string();
 
         let (_max_clock_drift, _tx_limits) = {
@@ -18343,7 +18466,7 @@ mod tx_query_integration_smoke {
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random();
         let dom: dm::domain::DomainId = "wonderland".parse().unwrap();
-        let acc_a = dm::account::AccountId::new(dom.clone(), kp_a.public_key().clone());
+        let acc_a = dm::account::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
         let account_literal = acc_a.to_string();
 
         let (_max_clock_drift, _tx_limits) = {
@@ -18545,7 +18668,7 @@ mod tx_query_integration_smoke {
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_b = KeyPair::from_seed(vec![0; 32], Algorithm::Ed25519);
         let dom: dm::DomainId = "wonderland".parse().unwrap();
-        let acc_b = dm::AccountId::new(dom.clone(), kp_b.public_key().clone());
+        let acc_b = dm::ScopedAccountId::new(dom.clone(), kp_b.public_key().clone());
         // Pre-register the domain and the successful authority (account B).
         {
             let leader0 = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
@@ -18556,7 +18679,7 @@ mod tx_query_integration_smoke {
                 .unpack(|_| {});
             let mut st_block0 = state.block(unverified0.header());
             let mut stx0 = st_block0.transaction();
-            let exec_id = dm::AccountId::new(dom.clone(), kp_b.public_key().clone());
+            let exec_id = dm::ScopedAccountId::new(dom.clone(), kp_b.public_key().clone());
             dm::Register::domain(dm::Domain::new(dom.clone()))
                 .execute(&exec_id, &mut stx0)
                 .ok();
@@ -18721,7 +18844,7 @@ mod tx_query_integration_smoke {
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random();
         let dom: dm::DomainId = "wonderland".parse().unwrap();
-        let acc_a = dm::AccountId::new(dom.clone(), kp_a.public_key().clone());
+        let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
 
         // Pre-register domain and accounts so A exists; B and C will attempt invalid ops later
         {
@@ -18733,7 +18856,7 @@ mod tx_query_integration_smoke {
                 .unpack(|_| {});
             let mut st_block0 = state.block(unverified0.header());
             let mut stx0 = st_block0.transaction();
-            let exec_id = dm::AccountId::new(dom.clone(), kp_a.public_key().clone());
+            let exec_id = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
             dm::Register::domain(dm::Domain::new(dom.clone()))
                 .execute(&exec_id, &mut stx0)
                 .ok();
@@ -18938,8 +19061,8 @@ mod app_api_integration_tests {
 
     fn state_with_assets(
         domain_id: DomainId,
-        authority: AccountId,
-        accounts: Vec<AccountId>,
+        authority: ScopedAccountId,
+        accounts: Vec<ScopedAccountId>,
         asset_definitions: Vec<AssetDefinitionId>,
         assets: Vec<Asset>,
     ) -> Arc<State> {
@@ -18995,7 +19118,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland/transactions/query")
+            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(req_body))
             .unwrap();
@@ -19027,8 +19150,8 @@ mod app_api_integration_tests {
         let kp_a = KeyPair::random();
         let kp_b = KeyPair::random();
         let dom: DomainId = "wonderland".parse().unwrap();
-        let acc_a = AccountId::new(dom.clone(), kp_a.public_key().clone());
-        let acc_b = AccountId::new(dom.clone(), kp_b.public_key().clone());
+        let acc_a = ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
+        let acc_b = ScopedAccountId::new(dom.clone(), kp_b.public_key().clone());
         let account_literal = acc_b.to_string();
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -19143,7 +19266,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland/transactions/query")
+            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -19187,7 +19310,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland/transactions/query")
+            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -19204,7 +19327,7 @@ mod app_api_integration_tests {
         )]));
         let req2 = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland/transactions/query")
+            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body2))
             .unwrap();
@@ -19241,8 +19364,7 @@ mod app_api_integration_tests {
         let mut set = Vec::new();
         for _ in 0..300 {
             set.push(norito::json::Value::String(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
+                "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into(),
             ));
         }
         let body = json_string(obj(vec![(
@@ -19254,7 +19376,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland/transactions/query")
+            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -19273,7 +19395,7 @@ mod app_api_integration_tests {
         let body2 = json_string(obj(vec![("filter", deep)]));
         let req2 = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland/transactions/query")
+            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body2))
             .unwrap();
@@ -19317,7 +19439,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland/transactions/query")
+            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -19363,7 +19485,9 @@ mod app_api_integration_tests {
         // For invalid filter tests, the specific account id is irrelevant
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland/assets/query")
+            .uri(
+                "/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/assets/query",
+            )
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -19426,8 +19550,8 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
-        let alice_id: AccountId =
-            AccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
+        let alice_id: ScopedAccountId =
+            ScopedAccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
         let domain_id = alice_id.domain().clone();
         let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
@@ -19493,8 +19617,8 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
-        let alice_id: AccountId =
-            AccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
+        let alice_id: ScopedAccountId =
+            ScopedAccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
         let domain_id = alice_id.domain().clone();
         let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
@@ -19595,7 +19719,9 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland/assets/query")
+            .uri(
+                "/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/assets/query",
+            )
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -19609,7 +19735,8 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
-        let alice_id: AccountId = AccountId::new("alpha".parse().unwrap(), kp.public_key().clone());
+        let alice_id: ScopedAccountId =
+            ScopedAccountId::new("alpha".parse().unwrap(), kp.public_key().clone());
         let domain_alpha = Domain::new("alpha".parse().unwrap()).build(&alice_id);
         let domain_omega = Domain::new("omega".parse().unwrap()).build(&alice_id);
         let domain_gamma = Domain::new("gamma".parse().unwrap()).build(&alice_id);
@@ -19835,8 +19962,8 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
-        let alice_id: AccountId =
-            AccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
+        let alice_id: ScopedAccountId =
+            ScopedAccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
         let domain_id = alice_id.domain().clone();
         let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
@@ -19896,8 +20023,8 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
-        let alice_id: AccountId =
-            AccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
+        let alice_id: ScopedAccountId =
+            ScopedAccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
         let domain_id = alice_id.domain().clone();
         let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
@@ -19962,8 +20089,8 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
-        let alice_id: AccountId =
-            AccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
+        let alice_id: ScopedAccountId =
+            ScopedAccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
         let domain_id = alice_id.domain().clone();
         let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let assets = vec![Asset::new(
@@ -20195,8 +20322,8 @@ mod app_api_integration_tests {
         use iroha_crypto::KeyPair;
 
         let kp = KeyPair::random();
-        let alice_id: AccountId =
-            AccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
+        let alice_id: ScopedAccountId =
+            ScopedAccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
 
         let vk_hash = Hash::new(b"vk-set-hash");
         let transition_id = Hash::new(b"transition-window");
@@ -20425,13 +20552,17 @@ mod app_api_integration_tests {
         }
     }
 
-    fn build_asset_holder_fixture_state() -> (Arc<iroha_core::state::State>, AccountId, AccountId) {
+    fn build_asset_holder_fixture_state() -> (
+        Arc<iroha_core::state::State>,
+        ScopedAccountId,
+        ScopedAccountId,
+    ) {
         let kp_a = iroha_crypto::KeyPair::random();
         let kp_b = iroha_crypto::KeyPair::random();
-        let alice_id: AccountId =
-            AccountId::new("wonderland".parse().unwrap(), kp_a.public_key().clone());
-        let bob_id: AccountId =
-            AccountId::new("wonderland".parse().unwrap(), kp_b.public_key().clone());
+        let alice_id: ScopedAccountId =
+            ScopedAccountId::new("wonderland".parse().unwrap(), kp_a.public_key().clone());
+        let bob_id: ScopedAccountId =
+            ScopedAccountId::new("wonderland".parse().unwrap(), kp_b.public_key().clone());
 
         let domain_id = alice_id.domain().clone();
         let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
@@ -20456,7 +20587,7 @@ mod app_api_integration_tests {
         (state, alice_id, bob_id)
     }
 
-    fn compressed_literal(account_id: &AccountId) -> String {
+    fn compressed_literal(account_id: &ScopedAccountId) -> String {
         let compressed = account_id
             .to_account_address()
             .and_then(|address| address.to_compressed_sora())
@@ -20493,7 +20624,7 @@ mod query_endpoint_tests {
             parameters::QueryParams,
         };
         let alice_keypair = KeyPair::random();
-        let alice_id: AccountId = AccountId::new(
+        let alice_id: ScopedAccountId = ScopedAccountId::new(
             "wonderland".parse().unwrap(),
             alice_keypair.public_key().clone(),
         );
@@ -20566,7 +20697,7 @@ mod query_endpoint_tests {
         };
 
         let alice_keypair = KeyPair::random();
-        let alice_id: AccountId = AccountId::new(
+        let alice_id: ScopedAccountId = ScopedAccountId::new(
             "wonderland".parse().unwrap(),
             alice_keypair.public_key().clone(),
         );
@@ -20629,7 +20760,7 @@ mod query_endpoint_tests {
         let authority_key = KeyPair::random();
         let signer_key = KeyPair::random();
         let domain: DomainId = "wonderland".parse().unwrap();
-        let authority = AccountId::new(domain, authority_key.public_key().clone());
+        let authority = ScopedAccountId::new(domain, authority_key.public_key().clone());
 
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::new(),
@@ -20739,10 +20870,11 @@ mod query_endpoint_tests {
         use iroha_data_model::isi;
         let isi: dm::InstructionBox = isi::zk::VerifyProof::new(attachment).into();
 
-        let authority: dm::AccountId =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                .parse()
-                .unwrap();
+        let authority: dm::ScopedAccountId = dm::ScopedAccountId::parse_encoded(
+            "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+        )
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("valid account id");
         isi.execute(&authority, &mut stx)
             .expect("execute verify-proof");
         stx.apply();
@@ -20938,12 +21070,15 @@ fn explorer_stream(
     events: EventsSender,
     kind: ExplorerStreamKind,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
+    let mut keepalive_interval = tokio::time::interval(Duration::from_secs(15));
+    keepalive_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let stream = stream::unfold(
         ExplorerStreamState {
             rx: events.subscribe(),
             kura,
             pending: VecDeque::new(),
             kind,
+            keepalive_interval,
         },
         |mut state| async move {
             use tokio::sync::broadcast::error::RecvError;
@@ -20952,22 +21087,30 @@ fn explorer_stream(
                     let ev = SseEvent::default().data(payload);
                     return Some((Ok(ev), state));
                 }
-                match state.rx.recv().await {
-                    Ok(event) => {
-                        if let Some(height) = committed_block_height(&event) {
-                            populate_explorer_queue(
-                                &state.kura,
-                                height,
-                                state.kind,
-                                &mut state.pending,
-                            );
+                tokio::select! {
+                    recv = state.rx.recv() => {
+                        match recv {
+                            Ok(event) => {
+                                if let Some(height) = committed_block_height(&event) {
+                                    populate_explorer_queue(
+                                        &state.kura,
+                                        height,
+                                        state.kind,
+                                        &mut state.pending,
+                                    );
+                                }
+                            }
+                            Err(RecvError::Lagged(_)) => {
+                                let ev = SseEvent::default().comment("lagged");
+                                return Some((Ok(ev), state));
+                            }
+                            Err(RecvError::Closed) => return None,
                         }
                     }
-                    Err(RecvError::Lagged(_)) => {
-                        let ev = SseEvent::default().comment("lagged");
+                    _ = state.keepalive_interval.tick() => {
+                        let ev = SseEvent::default().comment("keepalive");
                         return Some((Ok(ev), state));
                     }
-                    Err(RecvError::Closed) => return None,
                 }
             }
         },
@@ -20981,6 +21124,7 @@ struct ExplorerStreamState {
     kura: Arc<Kura>,
     pending: VecDeque<String>,
     kind: ExplorerStreamKind,
+    keepalive_interval: tokio::time::Interval,
 }
 
 #[cfg(feature = "app_api")]
@@ -21567,7 +21711,7 @@ fn governance_stream_payload(kind: &str, id: Option<String>) -> Value {
 mod governance_stream_tests {
     use super::*;
     use iroha_data_model::{
-        account::AccountId,
+        account::ScopedAccountId,
         events::data::governance::{
             GovernanceCouncilPersisted, GovernanceEvent, GovernanceLockCreated,
             GovernanceProposalSubmitted,
@@ -21575,9 +21719,9 @@ mod governance_stream_tests {
         isi::governance::CouncilDerivationKind,
     };
 
-    fn sample_account() -> AccountId {
+    fn sample_account() -> ScopedAccountId {
         let keypair = KeyPair::random();
-        AccountId::new(
+        ScopedAccountId::new(
             "wonderland".parse().expect("domain id"),
             keypair.public_key().clone(),
         )
@@ -21761,19 +21905,19 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
     let address_format = AddressFormatPreference::from_param(params.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_KAIGI_RELAY_DETAIL, address_format);
 
-    let relay_id = parse_account_literal(&relay_id_str, &telemetry, CONTEXT_KAIGI_RELAY_DETAIL)
-        .map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-            ))
-        })?
-        .into_account_id();
+    let (relay_id, _) = parse_account_path_segment_with_state(
+        state.as_ref(),
+        &relay_id_str,
+        &telemetry,
+        CONTEXT_KAIGI_RELAY_DETAIL,
+    )?;
 
     let relays = collect_kaigi_relays(&state)?;
-    let Some(snapshot) = relays
-        .into_iter()
-        .find(|entry| entry.registration.relay_id == relay_id)
-    else {
+    let relay_controller = relay_id.controller().clone();
+    let Some(snapshot) = relays.into_iter().find(|entry| {
+        entry.registration.relay_id == relay_id
+            || entry.registration.relay_id.controller() == &relay_controller
+    }) else {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         )));
@@ -27599,7 +27743,7 @@ mod cursor_mode_tests {
 
     fn seed_stored_cursor(
         live_query_store: &iroha_core::query::store::LiveQueryStoreHandle,
-        authority: &AccountId,
+        authority: &ScopedAccountId,
         gas_budget: u64,
     ) -> iroha_data_model::query::parameters::ForwardCursor {
         let query_output = (0..3).map(|i| {
@@ -27629,7 +27773,7 @@ mod cursor_mode_tests {
     }
 
     fn signed_singular_find_active_abi(
-        authority: &AccountId,
+        authority: &ScopedAccountId,
         signer: &iroha_crypto::KeyPair,
     ) -> iroha_data_model::query::SignedQuery {
         use iroha_data_model::query::QueryRequest;
@@ -27650,10 +27794,10 @@ mod cursor_mode_tests {
         s.pipeline.query_stored_min_gas_units = 200;
         let state = Arc::new(s);
 
-        // Build a valid AccountId via generated key to avoid parser pitfalls
+        // Build a valid ScopedAccountId via generated key to avoid parser pitfalls
         let kp = iroha_crypto::KeyPair::random();
         let domain: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
-        let authority = AccountId::new(domain.clone(), kp.public_key().clone());
+        let authority = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
         let signed = signed_singular_find_active_abi(&authority, &kp);
 
         let opts = QueryOptions {
@@ -27690,7 +27834,7 @@ mod cursor_mode_tests {
 
         let kp = iroha_crypto::KeyPair::random();
         let domain: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
-        let authority = AccountId::new(domain.clone(), kp.public_key().clone());
+        let authority = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
         let signed = signed_singular_find_active_abi(&authority, &kp);
 
         let opts = QueryOptions {
@@ -27724,7 +27868,7 @@ mod cursor_mode_tests {
 
         let kp = iroha_crypto::KeyPair::random();
         let domain: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
-        let authority = AccountId::new(domain.clone(), kp.public_key().clone());
+        let authority = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
         let cursor = seed_stored_cursor(&state.query_handle, &authority, 250);
         let signed = iroha_data_model::query::QueryRequest::Continue(cursor)
             .with_authority(authority)
@@ -27761,7 +27905,7 @@ mod cursor_mode_tests {
 
         let kp = iroha_crypto::KeyPair::random();
         let domain: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
-        let authority = AccountId::new(domain, kp.public_key().clone());
+        let authority = ScopedAccountId::new(domain, kp.public_key().clone());
         let signed = signed_singular_find_active_abi(&authority, &kp);
 
         // No override and no gas_units → should pass in ephemeral mode
@@ -27816,7 +27960,7 @@ mod lane_admission_metrics_tests {
 
         let key_pair = iroha_crypto::KeyPair::random();
         let domain: DomainId = "wonderland".parse().expect("valid domain id");
-        let account_id = AccountId::new(domain, key_pair.public_key().clone());
+        let account_id = ScopedAccountId::new(domain, key_pair.public_key().clone());
         let instruction = Log::new(Level::INFO, "ingress-metric".to_string());
         let tx = TransactionBuilder::new(chain_id.as_ref().clone(), account_id)
             .with_instructions([InstructionBox::from(instruction)])
@@ -27924,7 +28068,7 @@ pub struct OfflineAllowanceListParams {
     pub sort: Option<String>,
     /// Optional response address format (`ih58` or `compressed`).
     pub address_format: Option<String>,
-    /// Filter allowances by controller account literal (IH58 (preferred)/sora (second-best)/public-key supported).
+    /// Filter allowances by controller account literal (IH58 (preferred)/sora (second-best)).
     pub controller_id: Option<String>,
     /// Filter allowances by asset identifier.
     pub asset_id: Option<String>,
@@ -27975,11 +28119,11 @@ pub struct OfflineTransferListParams {
     pub sort: Option<String>,
     /// Optional response address format (`ih58` or `compressed`).
     pub address_format: Option<String>,
-    /// Filter transfers by originating controller (IH58 (preferred)/sora (second-best)/public-key literals accepted).
+    /// Filter transfers by originating controller (IH58 (preferred)/sora (second-best) literals accepted).
     pub controller_id: Option<String>,
-    /// Filter transfers by receiver account literal (IH58 (preferred)/sora (second-best)/public-key literals accepted).
+    /// Filter transfers by receiver account literal (IH58 (preferred)/sora (second-best) literals accepted).
     pub receiver_id: Option<String>,
-    /// Filter transfers by deposit account literal (IH58 (preferred)/sora (second-best)/public-key literals accepted).
+    /// Filter transfers by deposit account literal (IH58 (preferred)/sora (second-best) literals accepted).
     pub deposit_account_id: Option<String>,
     /// Filter transfers by asset identifier.
     pub asset_id: Option<String>,
@@ -28039,13 +28183,13 @@ pub struct OfflineTransferProofRequest {
 )]
 pub struct OfflineWalletCertificateDraft {
     /// Account that owns the allowance.
-    pub controller: AccountId,
+    pub controller: ScopedAccountId,
     /// Deprecated operator account supplied by older clients.
     ///
     /// Torii now derives the operator account from its configured operator key and
     /// the controller domain, so this field is optional and ignored.
     #[norito(default)]
-    pub operator: Option<AccountId>,
+    pub operator: Option<ScopedAccountId>,
     /// Commitment to the allowance this certificate governs.
     pub allowance: OfflineAllowanceCommitment,
     /// Spend public key baked into the wallet.
@@ -28076,7 +28220,7 @@ pub struct OfflineWalletCertificateDraft {
 impl OfflineWalletCertificateDraft {
     fn into_certificate(
         self,
-        operator: AccountId,
+        operator: ScopedAccountId,
         operator_signature: Signature,
     ) -> OfflineWalletCertificate {
         OfflineWalletCertificate {
@@ -28154,7 +28298,7 @@ pub struct OfflineBuildClaimIssueResponse {
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineAllowanceIssueRequest {
     /// Account authorizing the issuance transaction.
-    pub authority: AccountId,
+    pub authority: ScopedAccountId,
     /// Signing key exposed for API transport.
     pub private_key: ExposedPrivateKey,
     /// Certificate describing the allowance commitment and policy.
@@ -28174,7 +28318,7 @@ pub struct OfflineAllowanceIssueResponse {
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineCertificateRevokeRequest {
     /// Account authorizing the revocation transaction.
-    pub authority: AccountId,
+    pub authority: ScopedAccountId,
     /// Signing key exposed for API transport.
     pub private_key: ExposedPrivateKey,
     /// Certificate identifier to revoke (hex, case-insensitive).
@@ -28203,7 +28347,7 @@ pub struct OfflineCertificateRevokeResponse {
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineCertificateRenewRequest {
     /// Account authorizing the renewal transaction.
-    pub authority: AccountId,
+    pub authority: ScopedAccountId,
     /// Signing key exposed for API transport.
     pub private_key: ExposedPrivateKey,
     /// New certificate describing the renewed allowance.
@@ -28250,7 +28394,7 @@ pub struct OfflineSettlementBuildClaimOverride {
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineSettlementSubmitRequest {
     /// Account authorizing the settlement transaction.
-    pub authority: AccountId,
+    pub authority: ScopedAccountId,
     /// Signing key exposed for API transport.
     pub private_key: ExposedPrivateKey,
     /// Prepared offline-to-online transfer bundle.
@@ -28883,14 +29027,14 @@ fn tx_projections_to_json(
 
 #[cfg(all(test, feature = "app_api"))]
 mod tx_projection_display_tests {
-    use iroha_data_model::account::AccountId;
+    use iroha_data_model::account::ScopedAccountId;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
 
     use super::*;
 
     #[test]
     fn projections_emit_compressed_authority_when_requested() {
-        let account: AccountId = ALICE_ID.clone();
+        let account: ScopedAccountId = ALICE_ID.clone();
         let compressed = account
             .to_account_address()
             .and_then(|addr| addr.to_compressed_sora())
@@ -28912,7 +29056,7 @@ mod tx_projection_display_tests {
 
     #[test]
     fn projections_preserve_ih58_literals_by_default() {
-        let account: AccountId = BOB_ID.clone();
+        let account: ScopedAccountId = BOB_ID.clone();
         let projection = TxProjection {
             authority: Some(account.to_string()),
             timestamp_ms: None,
@@ -29125,25 +29269,32 @@ pub async fn handle_v1_account_permissions_with_policy(
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::query::error::FindError;
 
-    let (account, _) =
-        parse_account_path_segment(&account_id, &telemetry, ENDPOINT_ACCOUNTS_PERMISSIONS)?;
+    let (account, _) = parse_account_path_segment_with_state(
+        state.as_ref(),
+        &account_id,
+        &telemetry,
+        ENDPOINT_ACCOUNTS_PERMISSIONS,
+    )?;
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_PERMISSIONS)?;
 
     let world = state.world_view();
-    let permissions_iter: Box<dyn Iterator<Item = iroha_data_model::permission::Permission>> =
-        match world.account_permissions_iter(&account) {
-            Ok(iter) => Box::new(iter.cloned()),
-            Err(FindError::Account(_)) => Box::new(std::iter::empty()),
+    let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &account);
+    let mut permissions = BTreeSet::new();
+    for scoped_account in &scoped_accounts {
+        match world.account_permissions_iter(scoped_account) {
+            Ok(iter) => permissions.extend(iter.cloned()),
+            Err(FindError::Account(_)) => {}
             Err(err) => {
                 return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                     err.into(),
                 )));
             }
-        };
+        }
+    }
 
     let (items, total) = collect_page_streaming(
-        permissions_iter.map(|permission| {
+        permissions.into_iter().map(|permission| {
             let payload = permission
                 .payload()
                 .clone()
@@ -29217,12 +29368,17 @@ pub async fn handle_v1_account_assets_with_policy(
     let world = state.world_view();
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_ASSETS)?;
-    let (acct, _) = parse_account_path_segment(&account_id, &telemetry, ENDPOINT_ACCOUNTS_ASSETS)?;
+    let (acct, _) = parse_account_path_segment_with_state(
+        state.as_ref(),
+        &account_id,
+        &telemetry,
+        ENDPOINT_ACCOUNTS_ASSETS,
+    )?;
     let asset_filter = p
         .asset_id
         .as_deref()
         .map(|raw| {
-            raw.parse::<AssetId>().map_err(|err| {
+            AssetId::parse_encoded(raw).map_err(|err| {
                 conversion_error(format!(
                     "asset_id must be a valid asset id `{raw}`: {}",
                     err.reason()
@@ -29235,22 +29391,27 @@ pub async fn handle_v1_account_assets_with_policy(
     let fetch_cap = limits
         .clamp_fetch_size(None)?
         .map(|cap| cap.min(pagination.cap));
+    let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
+
+    let mut projected_assets = Vec::new();
+    for scoped_account in &scoped_accounts {
+        for asset in world.assets_in_account_iter(scoped_account) {
+            if let Some(expected) = asset_filter.as_ref()
+                && asset.id() != expected
+            {
+                continue;
+            }
+            projected_assets.push(AccountAssetListItem {
+                asset_id: asset.id().to_string(),
+                quantity: asset.value().clone().into_inner(),
+            });
+        }
+    }
 
     let (items, total) = collect_page_streaming(
-        world.assets_in_account_iter(&acct).filter_map(|asset| {
-            if let Some(expected) = asset_filter.as_ref() {
-                if asset.id() != expected {
-                    return None;
-                }
-            }
-            Some((
-                (),
-                AccountAssetListItem {
-                    asset_id: asset.id().to_string(),
-                    quantity: asset.value().clone().into_inner(),
-                },
-            ))
-        }),
+        projected_assets
+            .into_iter()
+            .map(|projected| ((), projected)),
         p.offset,
         Some(page_limit),
         fetch_cap,
@@ -29429,8 +29590,8 @@ pub async fn handle_v1_repo_agreements_query(
 struct RepoTestFixture {
     state: Arc<CoreState>,
     agreements: Vec<(String, u64)>,
-    initiator_id: AccountId,
-    counterparty_id: AccountId,
+    initiator_id: ScopedAccountId,
+    counterparty_id: ScopedAccountId,
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -29455,11 +29616,11 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
 
     let initiator_keys = KeyPair::random();
     let counterparty_keys = KeyPair::random();
-    let initiator_id: AccountId = AccountId::new(
+    let initiator_id: ScopedAccountId = ScopedAccountId::new(
         "wonderland".parse().unwrap(),
         initiator_keys.public_key().clone(),
     );
-    let counterparty_id: AccountId = AccountId::new(
+    let counterparty_id: ScopedAccountId = ScopedAccountId::new(
         "wonderland".parse().unwrap(),
         counterparty_keys.public_key().clone(),
     );
@@ -29946,8 +30107,7 @@ mod pagination_enforcement_tests {
 
     use super::*;
 
-    const TEST_ACCOUNT: &str =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+    const TEST_ACCOUNT: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
 
     fn test_state() -> Arc<CoreState> {
         Arc::new(State::new_for_testing(
@@ -30738,6 +30898,29 @@ fn account_from_world_entry(
 }
 
 #[cfg(feature = "app_api")]
+fn collect_subject_accounts(world: &impl WorldReadOnly) -> Vec<iroha_data_model::account::Account> {
+    use std::collections::{BTreeMap, btree_map::Entry};
+
+    let mut by_subject = BTreeMap::new();
+    for entry in world.accounts_iter() {
+        let account = account_from_world_entry(entry);
+        let subject = account.id().subject_id();
+        match by_subject.entry(subject) {
+            Entry::Vacant(slot) => {
+                slot.insert(account);
+            }
+            Entry::Occupied(mut slot) => {
+                if account.id().domain() < slot.get().id().domain() {
+                    slot.insert(account);
+                }
+            }
+        }
+    }
+
+    by_subject.into_values().collect()
+}
+
+#[cfg(feature = "app_api")]
 fn uaid_parse_error(reason: &'static str) -> Error {
     iroha_logger::warn!(
         target: "torii.uaid.parse",
@@ -30824,29 +31007,6 @@ pub struct AccountOnboardingRequestDto {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
-pub struct AccountResolveRequestDto {
-    pub literal: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-pub struct AccountResolveResponseDto {
-    pub account_id: String,
-    pub domain: String,
-    pub source: String,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub format: Option<String>,
-}
-
-#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct AccountOnboardingResponseDto {
     pub account_id: String,
@@ -30881,7 +31041,7 @@ fn default_onboarding_domain() -> Option<DomainId> {
 #[cfg(feature = "app_api")]
 fn derive_onboarding_uaid(
     alias: &str,
-    account_id: &AccountId,
+    account_id: &ScopedAccountId,
     identity: Option<&Map>,
 ) -> UniversalAccountId {
     let mut seed = Map::new();
@@ -30901,61 +31061,6 @@ fn onboarding_manifest_issued_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
-}
-
-#[cfg(feature = "app_api")]
-fn account_resolve_source_label(
-    source: iroha_data_model::account::AccountAddressSource,
-) -> (&'static str, Option<&'static str>) {
-    use iroha_data_model::account::{AccountAddressFormat, AccountAddressSource};
-
-    match source {
-        AccountAddressSource::Encoded(format) => {
-            let format_label = match format {
-                AccountAddressFormat::IH58 { .. } => "ih58",
-                AccountAddressFormat::Compressed => "compressed",
-                AccountAddressFormat::CanonicalHex => "canonical_hex",
-            };
-            ("encoded", Some(format_label))
-        }
-        AccountAddressSource::Alias => ("alias", None),
-        AccountAddressSource::RawPublicKey => ("public_key", None),
-        AccountAddressSource::Uaid => ("uaid", None),
-        AccountAddressSource::Opaque => ("opaque", None),
-    }
-}
-
-/// POST /v1/accounts/resolve — normalize account literals into canonical IH58.
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_v1_accounts_resolve(
-    crate::NoritoJson(req): crate::NoritoJson<AccountResolveRequestDto>,
-    telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    let trimmed = req.literal.trim();
-    if trimmed.is_empty() {
-        return Err(conversion_error(
-            "account literal must not be empty".to_string(),
-        ));
-    }
-
-    let parsed =
-        parse_account_literal(trimmed, &telemetry, ENDPOINT_ACCOUNTS_RESOLVE).map_err(|err| {
-            conversion_error(format!(
-                "invalid account literal `{trimmed}`: {}",
-                err.reason()
-            ))
-        })?;
-    let (account_id, canonical, source) = parsed.into_parts();
-    let domain = account_id.domain().to_string();
-    let (source_label, format_label) = account_resolve_source_label(source);
-    let response = AccountResolveResponseDto {
-        account_id: canonical,
-        domain,
-        source: source_label.to_string(),
-        format: format_label.map(str::to_string),
-    };
-    Ok(JsonBody(response).into_response())
 }
 
 #[iroha_futures::telemetry_future]
@@ -30983,8 +31088,10 @@ pub async fn handle_v1_accounts_onboard(
     if trimmed_alias.is_empty() || alias_chars > 64 {
         return Err(onboarding_invalid_request("alias must be 1-64 characters"));
     }
-    let account_id: AccountId = account_literal
-        .parse()
+    let account_literal = account_literal.trim();
+
+    let mut account_id: ScopedAccountId = ScopedAccountId::parse_encoded(account_literal)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|_| onboarding_invalid_request("invalid account id literal"))?;
 
     let expected_domain = signer
@@ -30993,7 +31100,16 @@ pub async fn handle_v1_accounts_onboard(
         .or_else(default_onboarding_domain);
     if let Some(domain) = expected_domain {
         if account_id.domain() != &domain {
-            return Err(onboarding_invalid_request("account domain is not allowed"));
+            account_id = if let Some(signatory) = account_id.try_signatory() {
+                ScopedAccountId::new(domain.clone(), signatory.clone())
+            } else if let Some(policy) = account_id.multisig_policy() {
+                ScopedAccountId::new_multisig(domain.clone(), policy.clone())
+            } else {
+                return Err(onboarding_invalid_request("unsupported account controller"));
+            };
+            if account_id.domain() != &domain {
+                return Err(onboarding_invalid_request("account domain is not allowed"));
+            }
         }
     }
 
@@ -31104,10 +31220,7 @@ pub async fn handle_v1_accounts(
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let world = state.world_view();
-    let accounts: Vec<_> = world
-        .accounts_iter()
-        .map(account_from_world_entry)
-        .collect();
+    let accounts = collect_subject_accounts(&world);
     drop(world);
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_account_sort_spec(&sort_spec);
@@ -31200,7 +31313,12 @@ pub async fn handle_v1_accounts_query(
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
         validate_accounts_filter_adapter(expr)?;
-        canonicalize_accounts_filter_literals(expr, &telemetry, ENDPOINT_ACCOUNTS_QUERY)?;
+        canonicalize_accounts_filter_literals_with_state(
+            expr,
+            state.as_ref(),
+            &telemetry,
+            ENDPOINT_ACCOUNTS_QUERY,
+        )?;
     }
 
     let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
@@ -31219,10 +31337,7 @@ pub async fn handle_v1_accounts_query(
     )?;
     let fetch_size = envelope.fetch_size;
     let world = state.world_view();
-    let accounts: Vec<_> = world
-        .accounts_iter()
-        .map(account_from_world_entry)
-        .collect();
+    let accounts = collect_subject_accounts(&world);
     drop(world);
 
     let (items, total) = if sort_spec.is_empty() {
@@ -31305,7 +31420,7 @@ pub async fn handle_v1_accounts_query(
 pub async fn handle_v1_accounts_portfolio(
     state: Arc<CoreState>,
     axum::extract::Path(raw_uaid): axum::extract::Path<String>,
-    asset_id: Option<iroha_data_model::asset::AssetId>,
+    asset_id: Option<String>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let uaid = parse_uaid_literal(&raw_uaid)?;
@@ -31313,7 +31428,7 @@ pub async fn handle_v1_accounts_portfolio(
     let nexus = state.nexus_snapshot();
     let mut snapshot = portfolio::collect_portfolio_from_world_and_nexus(&world, &nexus, uaid);
     drop(world);
-    if let Some(expected) = asset_id.as_ref() {
+    if let Some(expected) = asset_id.as_deref() {
         filter_portfolio_by_asset_id(&mut snapshot, expected);
     }
     let body = norito::json::to_json_pretty(&snapshot).map_err(|err| {
@@ -31335,7 +31450,7 @@ pub async fn handle_v1_accounts_portfolio(
 struct DataspaceSummaryAccumulator {
     dataspace_id: DataSpaceId,
     dataspace_alias: Option<String>,
-    accounts: BTreeSet<iroha_data_model::account::AccountId>,
+    accounts: BTreeSet<iroha_data_model::account::ScopedAccountId>,
     manifest: Option<SpaceDirectoryManifestRecord>,
     portfolio_accounts: u64,
     portfolio_positions: u64,
@@ -31517,9 +31632,6 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
     crate::NoritoQuery(query): crate::NoritoQuery<NexusDataspacesAccountSummaryQueryParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    #[cfg(test)]
-    crate::ensure_test_domain_selector_resolver();
-
     let literal = raw_literal.trim();
     if literal.is_empty() {
         return Err(conversion_error(
@@ -31547,8 +31659,19 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
     );
 
     let world = state.world_view();
+    let resolved_account_id = if world.account(&account_id).is_ok() {
+        account_id.clone()
+    } else {
+        world
+            .accounts()
+            .iter()
+            .find_map(|(candidate_id, _)| {
+                (candidate_id.controller() == account_id.controller()).then(|| candidate_id.clone())
+            })
+            .ok_or_else(explorer_not_found)?
+    };
     let account = world
-        .account(&account_id)
+        .account(&resolved_account_id)
         .map_err(|_| explorer_not_found())?;
     let mut totals = Map::new();
     totals.insert("dataspaces".into(), Value::from(0_u64));
@@ -31743,7 +31866,7 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
     let mut root = Map::new();
     root.insert(
         "account".into(),
-        Value::from(address_format.display_literal(&account_id)),
+        Value::from(address_format.display_literal(&resolved_account_id)),
     );
     root.insert("account_id".into(), Value::from(canonical_account_id));
     root.insert("uaid".into(), uaid_value);
@@ -31767,13 +31890,15 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
 #[cfg(feature = "app_api")]
 fn filter_portfolio_by_asset_id(
     snapshot: &mut iroha_data_model::nexus::portfolio::UniversalPortfolio,
-    asset_id: &iroha_data_model::asset::AssetId,
+    asset_id_literal: &str,
 ) {
     let mut accounts = 0u64;
     let mut positions = 0u64;
     for dataspace in &mut snapshot.dataspaces {
         for account in &mut dataspace.accounts {
-            account.assets.retain(|asset| &asset.asset_id == asset_id);
+            account
+                .assets
+                .retain(|asset| portfolio_asset_id_literal(&asset.asset_id) == asset_id_literal);
             if !account.assets.is_empty() {
                 accounts = accounts.saturating_add(1);
                 positions = positions.saturating_add(account.assets.len() as u64);
@@ -31791,6 +31916,11 @@ fn filter_portfolio_by_asset_id(
 }
 
 #[cfg(feature = "app_api")]
+fn portfolio_asset_id_literal(asset_id: &iroha_data_model::asset::AssetId) -> String {
+    asset_id.canonical_encoded()
+}
+
+#[cfg(feature = "app_api")]
 #[derive(
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
@@ -31800,7 +31930,7 @@ fn filter_portfolio_by_asset_id(
 /// Request payload for submitting a signed space directory manifest through Torii.
 pub struct SpaceDirectoryManifestPublishDto {
     /// Account that authorizes the manifest publication.
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Exposed private key used to sign/authenticate the manifest payload.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Manifest describing the permissions for the space directory assets.
@@ -31821,7 +31951,7 @@ pub struct SpaceDirectoryManifestPublishDto {
 /// Request payload for revoking a manifest from the space directory.
 pub struct SpaceDirectoryManifestRevokeDto {
     /// Account that owns the dataspace and authorizes the revocation.
-    pub authority: iroha_data_model::account::AccountId,
+    pub authority: iroha_data_model::account::ScopedAccountId,
     /// Private key presented to authenticate the revocation request.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// UAID literal (`uaid:<hex>` or raw 64-hex digest).
@@ -32312,7 +32442,7 @@ mod accounts_query_tests {
         let mut stx = st_block.transaction();
         let domain_id: dm::DomainId = "wonderland".parse().unwrap();
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let exec_id = dm::AccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(&exec_id, &mut stx)
             .unwrap();
@@ -32321,7 +32451,7 @@ mod accounts_query_tests {
             .unwrap();
         for _ in 0..5 {
             let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-            let acct = dm::AccountId::new(domain_id.clone(), kp.public_key().clone());
+            let acct = dm::ScopedAccountId::new(domain_id.clone(), kp.public_key().clone());
             dm::Register::account(dm::Account::new(acct))
                 .execute(&exec_id, &mut stx)
                 .unwrap();
@@ -32361,6 +32491,145 @@ mod accounts_query_tests {
         assert_eq!(doc["items"].as_array().unwrap().len(), 2);
         assert_eq!(doc["total"].as_u64(), Some(4));
     }
+
+    #[tokio::test]
+    async fn accounts_query_filter_rejects_alias_and_accepts_compressed_literals() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let unverified = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut st_block = state.block(unverified.header());
+        let mut stx = st_block.transaction();
+        let domain_id: dm::DomainId = "aliases".parse().expect("valid domain");
+        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        dm::Register::domain(dm::Domain::new(domain_id.clone()))
+            .execute(&exec_id, &mut stx)
+            .expect("register domain");
+        dm::Register::account(dm::Account::new(exec_id.clone()))
+            .execute(&exec_id, &mut stx)
+            .expect("register executor account");
+
+        let account_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let account_id =
+            dm::ScopedAccountId::new(domain_id.clone(), account_keypair.public_key().clone());
+        let label = dm::AccountLabel::new(
+            domain_id.clone(),
+            "primary".parse().expect("valid label name"),
+        );
+        let account = dm::Account::new(account_id.clone()).with_label(Some(label.clone()));
+        dm::Register::account(account)
+            .execute(&exec_id, &mut stx)
+            .expect("register labelled account");
+
+        stx.apply();
+        let valid: ValidBlock = unverified
+            .clone()
+            .validate_and_record_transactions(&mut st_block)
+            .unpack(|_| {});
+        let committed = valid.clone().commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block, committed);
+
+        let expected = account_id.to_string();
+        let compressed_literal = account_id
+            .to_account_address()
+            .expect("account address")
+            .to_compressed_sora()
+            .expect("compressed encoding");
+
+        let alias_literal = format!("{}@{}", label.label, domain_id);
+        let alias_env = crate::filter::QueryEnvelope {
+            query: None,
+            filter: Some(crate::filter::FilterExpr::Eq(
+                crate::filter::FieldPath("id".to_string()),
+                Value::String(alias_literal.clone()),
+            )),
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(8),
+                offset: 0,
+            },
+            fetch_size: None,
+            address_format: None,
+        };
+        let alias_result = handle_v1_accounts_query(
+            state.clone(),
+            crate::utils::extractors::NoritoJson(alias_env),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await;
+        assert!(
+            alias_result.is_err(),
+            "alias literal `{alias_literal}` must be rejected"
+        );
+
+        let compressed_env = crate::filter::QueryEnvelope {
+            query: None,
+            filter: Some(crate::filter::FilterExpr::Eq(
+                crate::filter::FieldPath("id".to_string()),
+                Value::String(compressed_literal.clone()),
+            )),
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(8),
+                offset: 0,
+            },
+            fetch_size: None,
+            address_format: None,
+        };
+        let resp = handle_v1_accounts_query(
+            state.clone(),
+            crate::utils::extractors::NoritoJson(compressed_env),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "compressed literal `{compressed_literal}` should be accepted"
+        );
+        let body = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("body bytes")
+            .to_bytes();
+        let doc: norito::json::Value = norito::json::from_slice(&body).expect("valid JSON");
+        let items = doc
+            .get("items")
+            .and_then(norito::json::Value::as_array)
+            .expect("items array");
+        let ids: Vec<String> = items
+            .iter()
+            .filter_map(|item| {
+                item.get("id")
+                    .and_then(norito::json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect();
+        assert!(
+            ids.iter().any(|id| id == &expected),
+            "compressed literal `{compressed_literal}` should resolve to `{expected}`, got {ids:?}"
+        );
+        assert!(
+            ids.iter().all(|id| !id.contains('@')),
+            "response should expose canonical ids, got {ids:?}"
+        );
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -32387,7 +32656,7 @@ pub async fn handle_v1_explorer_accounts(
 pub async fn handle_v1_explorer_domains(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerPaginationQuery,
-    owned_by: Option<AccountId>,
+    owned_by: Option<ScopedAccountId>,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
     let aggregates = crate::explorer::ExplorerAggregates::build(&world);
@@ -32406,7 +32675,7 @@ pub async fn handle_v1_explorer_asset_definitions(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerPaginationQuery,
     domain: Option<DomainId>,
-    owned_by: Option<AccountId>,
+    owned_by: Option<ScopedAccountId>,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
     let governance = state.governance_snapshot();
@@ -32464,7 +32733,7 @@ pub async fn handle_v1_explorer_asset_definitions(
 pub async fn handle_v1_explorer_assets(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerPaginationQuery,
-    owned_by: Option<AccountId>,
+    owned_by: Option<ScopedAccountId>,
     definition: Option<AssetDefinitionId>,
     asset_id: Option<AssetId>,
 ) -> Result<AxResponse, Error> {
@@ -32484,7 +32753,7 @@ pub async fn handle_v1_explorer_assets(
 pub async fn handle_v1_explorer_nfts(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerPaginationQuery,
-    owned_by: Option<AccountId>,
+    owned_by: Option<ScopedAccountId>,
     domain: Option<DomainId>,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
@@ -32546,6 +32815,26 @@ pub async fn handle_v1_explorer_blocks(
 }
 
 #[cfg(feature = "app_api")]
+pub async fn handle_v1_explorer_health(
+    state: Arc<CoreState>,
+    kura: Arc<Kura>,
+    telemetry: MaybeTelemetry,
+) -> Result<AxResponse, Error> {
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let head_height = state.committed_height() as u64;
+        let body = crate::explorer::ExplorerHealthDto {
+            head_height,
+            head_created_at: latest_block_created_at(kura.as_ref(), head_height),
+            sampled_at: crate::explorer::now_rfc3339(),
+        };
+        Ok(JsonBody(body).into_response())
+    })();
+    record_explorer_endpoint_result(&telemetry, ENDPOINT_EXPLORER_HEALTH, started, &response);
+    response
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplorerTransactionStatusFilter {
     Committed,
@@ -32565,7 +32854,7 @@ pub fn parse_transaction_status_filter(
 
 #[cfg(feature = "app_api")]
 struct ExplorerTransactionFilters {
-    authority: Option<AccountId>,
+    authority: Option<ScopedAccountId>,
     status: Option<ExplorerTransactionStatusFilter>,
     block: Option<u64>,
     asset_id: Option<iroha_data_model::asset::AssetId>,
@@ -32608,8 +32897,8 @@ impl ExplorerTransactionFilters {
 
 #[cfg(feature = "app_api")]
 struct ExplorerInstructionFilters {
-    account: Option<AccountId>,
-    authority: Option<AccountId>,
+    account: Option<ScopedAccountId>,
+    authority: Option<ScopedAccountId>,
     transaction_hash: Option<HashOf<TransactionEntrypoint>>,
     status: Option<ExplorerTransactionStatusFilter>,
     block: Option<u64>,
@@ -32768,7 +33057,7 @@ pub async fn handle_v1_explorer_transactions(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     pagination: crate::explorer::ExplorerPaginationQuery,
-    authority: Option<AccountId>,
+    authority: Option<ScopedAccountId>,
     block: Option<u64>,
     status: Option<ExplorerTransactionStatusFilter>,
     asset_id: Option<iroha_data_model::asset::AssetId>,
@@ -32822,10 +33111,66 @@ pub async fn handle_v1_explorer_transactions(
 }
 
 #[cfg(feature = "app_api")]
+pub async fn handle_v1_explorer_transactions_latest(
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    pagination: crate::explorer::ExplorerPaginationQuery,
+    authority: Option<ScopedAccountId>,
+    block: Option<u64>,
+    status: Option<ExplorerTransactionStatusFilter>,
+    asset_id: Option<iroha_data_model::asset::AssetId>,
+) -> Result<AxResponse, Error> {
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let max_height = state.committed_height() as u64;
+        let address_format = pagination.address_format_pref()?;
+        record_address_format_selection(
+            &telemetry,
+            ENDPOINT_EXPLORER_TRANSACTIONS_LATEST,
+            address_format,
+        );
+        if let Some(block_height) = block {
+            if block_height > max_height {
+                let body = crate::explorer::ExplorerLatestTransactionsResponse {
+                    sampled_at: crate::explorer::now_rfc3339(),
+                    items: Vec::new(),
+                };
+                return Ok(JsonBody(body).into_response());
+            }
+        }
+        let filters = ExplorerTransactionFilters {
+            authority,
+            status,
+            block,
+            asset_id,
+        };
+        let items = collect_latest_transaction_summaries(
+            state.as_ref(),
+            max_height,
+            &filters,
+            pagination.per_page.max(1),
+            address_format,
+        )?;
+        let body = crate::explorer::ExplorerLatestTransactionsResponse {
+            sampled_at: crate::explorer::now_rfc3339(),
+            items,
+        };
+        Ok(JsonBody(body).into_response())
+    })();
+    record_explorer_endpoint_result(
+        &telemetry,
+        ENDPOINT_EXPLORER_TRANSACTIONS_LATEST,
+        started,
+        &response,
+    );
+    response
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 pub struct ExplorerInstructionQuery {
-    pub account: Option<AccountId>,
-    pub authority: Option<AccountId>,
+    pub account: Option<ScopedAccountId>,
+    pub authority: Option<ScopedAccountId>,
     pub transaction_hash: Option<HashOf<TransactionEntrypoint>>,
     pub status: Option<ExplorerTransactionStatusFilter>,
     pub block: Option<u64>,
@@ -32894,6 +33239,71 @@ pub async fn handle_v1_explorer_instructions(
     record_explorer_endpoint_result(
         &telemetry,
         ENDPOINT_EXPLORER_INSTRUCTIONS,
+        started,
+        &response,
+    );
+    response
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_explorer_instructions_latest(
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    pagination: crate::explorer::ExplorerPaginationQuery,
+    query: ExplorerInstructionQuery,
+) -> Result<AxResponse, Error> {
+    let started = std::time::Instant::now();
+    let response = (|| -> Result<AxResponse, Error> {
+        let max_height = state.committed_height() as u64;
+        let address_format = pagination.address_format_pref()?;
+        record_address_format_selection(
+            &telemetry,
+            ENDPOINT_EXPLORER_INSTRUCTIONS_LATEST,
+            address_format,
+        );
+        let ExplorerInstructionQuery {
+            account,
+            authority,
+            transaction_hash,
+            status,
+            block,
+            kind,
+            asset_id,
+        } = query;
+        if let Some(block_height) = block {
+            if block_height > max_height {
+                let body = crate::explorer::ExplorerLatestInstructionsResponse {
+                    sampled_at: crate::explorer::now_rfc3339(),
+                    items: Vec::new(),
+                };
+                return Ok(JsonBody(body).into_response());
+            }
+        }
+        let filters = ExplorerInstructionFilters {
+            account,
+            authority,
+            transaction_hash,
+            status,
+            block,
+            kind,
+            asset_id,
+        };
+        let items = collect_latest_instruction_history(
+            state.as_ref(),
+            max_height,
+            &filters,
+            pagination.per_page.max(1),
+            address_format,
+        )?;
+        let body = crate::explorer::ExplorerLatestInstructionsResponse {
+            sampled_at: crate::explorer::now_rfc3339(),
+            items,
+        };
+        Ok(JsonBody(body).into_response())
+    })();
+    record_explorer_endpoint_result(
+        &telemetry,
+        ENDPOINT_EXPLORER_INSTRUCTIONS_LATEST,
         started,
         &response,
     );
@@ -32990,6 +33400,57 @@ fn collect_transaction_summaries_from_kura(
                     result,
                     address_format,
                 ));
+            }
+        }
+        if height == lower_bound || height == 1 {
+            break;
+        }
+        height -= 1;
+    }
+    Ok(out)
+}
+
+#[cfg(feature = "app_api")]
+fn collect_latest_transaction_summaries(
+    state: &CoreState,
+    start_height: u64,
+    filters: &ExplorerTransactionFilters,
+    limit: u64,
+    address_format: AddressFormatPreference,
+) -> Result<Vec<crate::explorer::ExplorerTransactionDto>, Error> {
+    let limit = limit.max(1);
+    let mut out = Vec::new();
+    if start_height == 0 {
+        return Ok(out);
+    }
+    let mut height = filters.block.unwrap_or(start_height);
+    let lower_bound = filters.block.unwrap_or(1);
+    while height >= lower_bound {
+        let height_usize: usize = height
+            .try_into()
+            .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
+        let nonzero_height = NonZeroUsize::new(height_usize)
+            .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
+        let block = state
+            .block_by_height(nonzero_height)
+            .ok_or_else(explorer_not_found)?;
+        let block_ref = block.as_ref();
+        let external_total = block_ref.external_transactions().len();
+        for (tx, result) in block_ref
+            .external_transactions()
+            .zip(block_ref.results().take(external_total))
+        {
+            if !filters.matches(tx, height, result) {
+                continue;
+            }
+            out.push(crate::explorer::transaction_summary_dto(
+                tx,
+                height,
+                result,
+                address_format,
+            ));
+            if (out.len() as u64) >= limit {
+                return Ok(out);
             }
         }
         if height == lower_bound || height == 1 {
@@ -33139,6 +33600,80 @@ fn collect_instruction_history_from_kura(
                     index,
                     address_format,
                 ));
+            }
+        }
+        if height == lower_bound || height == 1 {
+            break;
+        }
+        height -= 1;
+    }
+    Ok(out)
+}
+
+#[cfg(feature = "app_api")]
+fn collect_latest_instruction_history(
+    state: &CoreState,
+    start_height: u64,
+    filters: &ExplorerInstructionFilters,
+    limit: u64,
+    address_format: AddressFormatPreference,
+) -> Result<Vec<ExplorerInstructionDto>, Error> {
+    let limit = limit.max(1);
+    let mut out = Vec::new();
+    if start_height == 0 {
+        return Ok(out);
+    }
+    let mut height = filters.block.unwrap_or(start_height);
+    let lower_bound = filters.block.unwrap_or(1);
+    while height >= lower_bound {
+        let height_usize: usize = height
+            .try_into()
+            .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
+        let nonzero_height = NonZeroUsize::new(height_usize)
+            .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
+        let block = state
+            .block_by_height(nonzero_height)
+            .ok_or_else(explorer_not_found)?;
+        let block_ref = block.as_ref();
+        let external_total = block_ref.external_transactions().len();
+        for (tx, result) in block_ref
+            .external_transactions()
+            .zip(block_ref.results().take(external_total))
+        {
+            if !filters.matches_transaction(tx, height, result) {
+                continue;
+            }
+            let Executable::Instructions(instructions) = tx.instructions() else {
+                continue;
+            };
+            for (idx, instruction) in instructions.iter().enumerate() {
+                let kind = crate::explorer::instruction_kind(instruction);
+                if !filters.matches_instruction(kind) {
+                    continue;
+                }
+                if let Some(expected) = filters.account.as_ref() {
+                    if !instruction_matches_account_id(instruction, expected) {
+                        continue;
+                    }
+                }
+                if let Some(expected) = filters.asset_id.as_ref() {
+                    if !instruction_matches_asset_id(instruction, expected) {
+                        continue;
+                    }
+                }
+                let index = u32::try_from(idx).unwrap_or(u32::MAX);
+                out.push(crate::explorer::instruction_dto_with_kind(
+                    tx,
+                    height,
+                    result,
+                    instruction,
+                    kind,
+                    index,
+                    address_format,
+                ));
+                if (out.len() as u64) >= limit {
+                    return Ok(out);
+                }
             }
         }
         if height == lower_bound || height == 1 {
@@ -33442,7 +33977,7 @@ fn find_instruction_detail_by_scan(
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_account_detail(
     state: Arc<CoreState>,
-    account_id: AccountId,
+    account_id: ScopedAccountId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
     let aggregates = crate::explorer::ExplorerAggregates::build(&world);
@@ -33461,7 +33996,7 @@ pub async fn handle_v1_explorer_account_detail(
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_account_qr(
     state: Arc<CoreState>,
-    account_id: AccountId,
+    account_id: ScopedAccountId,
     telemetry: MaybeTelemetry,
     address_format: AddressFormatPreference,
 ) -> Result<AxResponse, Error> {
@@ -33542,7 +34077,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
 ) -> Result<AxResponse, Error> {
     use core::cmp::Ordering;
 
-    use iroha_data_model::account::AccountId;
+    use iroha_data_model::account::ScopedAccountId;
     use iroha_primitives::numeric::{Numeric, NumericSpec};
 
     const TOP_HOLDERS: usize = 10;
@@ -33562,7 +34097,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         .try_into()
         .unwrap_or(u64::MAX);
 
-    let mut holders: Vec<(AccountId, Numeric)> = Vec::new();
+    let mut holders: Vec<(ScopedAccountId, Numeric)> = Vec::new();
     let mut total_supply = Numeric::zero();
 
     for asset in view.world().assets_iter() {
@@ -33848,7 +34383,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
     use std::collections::BTreeSet;
 
     use iroha_data_model::{
-        account::AccountId,
+        account::ScopedAccountId,
         isi::{BurnBox, MintBox, TransferAssetBatch, TransferBox},
         transaction::executable::Executable,
     };
@@ -33880,8 +34415,8 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         window_ms: u64,
         start_ms: u64,
         transfers: u64,
-        senders: BTreeSet<AccountId>,
-        receivers: BTreeSet<AccountId>,
+        senders: BTreeSet<ScopedAccountId>,
+        receivers: BTreeSet<ScopedAccountId>,
         amount: Numeric,
     }
 
@@ -34216,13 +34751,13 @@ mod explorer_asset_definition_econometrics_tests {
 
         let domain_id: dm::DomainId = "wonderland".parse().unwrap();
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let exec_id = dm::AccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
         let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let alice_id = dm::AccountId::new(domain_id.clone(), kp_alice.public_key().clone());
+        let alice_id = dm::ScopedAccountId::new(domain_id.clone(), kp_alice.public_key().clone());
         let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let bob_id = dm::AccountId::new(domain_id.clone(), kp_bob.public_key().clone());
+        let bob_id = dm::ScopedAccountId::new(domain_id.clone(), kp_bob.public_key().clone());
         let kp_carol = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let carol_id = dm::AccountId::new(domain_id.clone(), kp_carol.public_key().clone());
+        let carol_id = dm::ScopedAccountId::new(domain_id.clone(), kp_carol.public_key().clone());
 
         let def_id: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
 
@@ -34516,11 +35051,11 @@ mod explorer_asset_definition_snapshot_tests {
 
         let domain_id: dm::DomainId = "wonderland".parse().unwrap();
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let exec_id = dm::AccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
         let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let alice_id = dm::AccountId::new(domain_id.clone(), kp_alice.public_key().clone());
+        let alice_id = dm::ScopedAccountId::new(domain_id.clone(), kp_alice.public_key().clone());
         let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let bob_id = dm::AccountId::new(domain_id.clone(), kp_bob.public_key().clone());
+        let bob_id = dm::ScopedAccountId::new(domain_id.clone(), kp_bob.public_key().clone());
 
         let def_id: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
 
@@ -34675,11 +35210,11 @@ mod explorer_asset_definition_snapshot_tests {
 
         let domain_id: dm::DomainId = "wonderland".parse().unwrap();
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let exec_id = dm::AccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
         let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let alice_id = dm::AccountId::new(domain_id.clone(), kp_alice.public_key().clone());
+        let alice_id = dm::ScopedAccountId::new(domain_id.clone(), kp_alice.public_key().clone());
         let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let bob_id = dm::AccountId::new(domain_id.clone(), kp_bob.public_key().clone());
+        let bob_id = dm::ScopedAccountId::new(domain_id.clone(), kp_bob.public_key().clone());
 
         let def_id: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
 
@@ -35413,7 +35948,7 @@ impl OfflineAllowanceQueryFilters {
             .asset_id
             .as_deref()
             .map(|raw| {
-                raw.parse::<AssetId>()
+                AssetId::parse_encoded(raw)
                     .map_err(|_| Self::conversion_error("asset_id must be a valid asset id"))
             })
             .transpose()?;
@@ -35639,7 +36174,7 @@ impl OfflineTransferQueryFilters {
             .asset_id
             .as_deref()
             .map(|raw| {
-                raw.parse::<AssetId>()
+                AssetId::parse_encoded(raw)
                     .map_err(|_| Self::conversion_error("asset_id must be a valid asset id"))
             })
             .transpose()?;
@@ -35866,7 +36401,7 @@ fn current_unix_timestamp_ms() -> u64 {
 #[derive(Clone)]
 struct OfflineAllowanceListItem {
     certificate_id_hex: String,
-    controller: AccountId,
+    controller: ScopedAccountId,
     asset_id: String,
     registered_at_ms: u64,
     expires_at_ms: u64,
@@ -36095,7 +36630,7 @@ fn transfer_hex_field(field: &str) -> bool {
 #[derive(Clone)]
 struct OfflineVerdictRevocationListItem {
     verdict_id_hex: String,
-    issuer: AccountId,
+    issuer: ScopedAccountId,
     revoked_at_ms: u64,
     reason: OfflineVerdictRevocationReason,
     record: OfflineVerdictRevocation,
@@ -36104,7 +36639,7 @@ struct OfflineVerdictRevocationListItem {
 #[cfg(feature = "app_api")]
 struct OfflineCounterSummaryListItem {
     certificate_id_hex: String,
-    controller: AccountId,
+    controller: ScopedAccountId,
     apple_key_counters: BTreeMap<String, u64>,
     android_series_counters: BTreeMap<String, u64>,
     summary_hash_hex: String,
@@ -37249,9 +37784,9 @@ pub async fn handle_v1_nexus_public_lane_stake(
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     #[cfg(test)]
-    crate::ensure_test_domain_selector_resolver();
-
-    use iroha_data_model::{ValidationFail, account::AccountId, query::error::QueryExecutionFail};
+    use iroha_data_model::{
+        ValidationFail, account::ScopedAccountId, query::error::QueryExecutionFail,
+    };
 
     let canonical_validator = canonicalize_query_account_literal(
         "validator",
@@ -37260,11 +37795,15 @@ pub async fn handle_v1_nexus_public_lane_stake(
         CONTEXT_NEXUS_PUBLIC_LANE_STAKE,
     )?;
     let validator_filter = if let Some(canonical) = canonical_validator {
-        Some(canonical.parse::<AccountId>().map_err(|err| {
-            Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
-                format!("invalid validator literal `{canonical}`: {}", err.reason()),
-            )))
-        })?)
+        Some(
+            ScopedAccountId::parse_encoded(&canonical)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .map_err(|err| {
+                    Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
+                        format!("invalid validator literal `{canonical}`: {}", err.reason()),
+                    )))
+                })?,
+        )
     } else {
         None
     };
@@ -37307,7 +37846,7 @@ pub async fn handle_v1_nexus_public_lane_rewards(
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::{
-        ValidationFail, account::AccountId, asset::AssetId, nexus::PublicLanePendingReward,
+        ValidationFail, account::ScopedAccountId, asset::AssetId, nexus::PublicLanePendingReward,
         query::error::QueryExecutionFail,
     };
 
@@ -37322,14 +37861,16 @@ pub async fn handle_v1_nexus_public_lane_rewards(
             "missing account query parameter".to_owned(),
         )))
     })?;
-    let account_id: AccountId = account_literal.parse().map_err(|err| {
-        Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
-            format!("invalid account literal `{account_literal}`: {err}"),
-        )))
-    })?;
+    let account_id: ScopedAccountId = ScopedAccountId::parse_encoded(&account_literal)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| {
+            Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
+                format!("invalid account literal `{account_literal}`: {err}"),
+            )))
+        })?;
     let asset_filter = match params.asset_id.as_deref() {
         Some(raw) => Some(
-            raw.parse::<AssetId>()
+            AssetId::parse_encoded(raw)
                 .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))?,
         ),
         None => None,
@@ -37374,14 +37915,14 @@ pub async fn handle_v1_nexus_public_lane_rewards(
 #[cfg(feature = "app_api")]
 fn collect_pending_public_lane_rewards<'a>(
     lane_id: LaneId,
-    account_id: &iroha_data_model::account::AccountId,
+    account_id: &iroha_data_model::account::ScopedAccountId,
     upto_epoch: u64,
     asset_filter: Option<&iroha_data_model::asset::AssetId>,
     reward_claims: impl Iterator<
         Item = (
             &'a (
                 LaneId,
-                iroha_data_model::account::AccountId,
+                iroha_data_model::account::ScopedAccountId,
                 iroha_data_model::asset::AssetId,
             ),
             &'a u64,
@@ -37614,7 +38155,7 @@ fn public_lane_unbonding_to_json(unbonding: &PublicLaneUnbonding) -> Value {
 #[cfg(all(test, feature = "app_api"))]
 mod public_lane_tests {
     use iroha_data_model::{
-        account::AccountId,
+        account::ScopedAccountId,
         asset::{AssetDefinitionId, AssetId},
         metadata::Metadata,
         nexus::{
@@ -37726,7 +38267,7 @@ mod public_lane_tests {
         };
 
         let rewards = vec![((lane_id, 1), record_a), ((lane_id, 2), record_b)];
-        let claims: Vec<((LaneId, AccountId, AssetId), u64)> = Vec::new();
+        let claims: Vec<((LaneId, ScopedAccountId, AssetId), u64)> = Vec::new();
 
         let filtered = collect_pending_public_lane_rewards(
             lane_id,
@@ -40370,7 +40911,7 @@ fn sign_offline_certificate(
     }
 
     let operator_key = issuer.operator_keypair.public_key().clone();
-    let operator = AccountId::new(draft.controller.domain().clone(), operator_key);
+    let operator = ScopedAccountId::new(draft.controller.domain().clone(), operator_key);
     let lineage = parse_offline_draft_lineage(&draft.metadata)?;
     if lineage.min_build_number == 0 {
         return Err(conversion_error(format!(
@@ -40578,7 +41119,7 @@ pub async fn handle_v1_offline_allowance_get(
 fn offline_allowance_controller_or_error(
     state: &CoreState,
     certificate_id: &iroha_crypto::Hash,
-) -> Result<iroha_data_model::account::AccountId> {
+) -> Result<iroha_data_model::account::ScopedAccountId> {
     use iroha_data_model::offline::OFFLINE_REJECTION_REASON_PREFIX;
 
     let world = state.world_view();
@@ -41675,7 +42216,7 @@ fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
 #[cfg(feature = "app_api")]
 fn build_billing_trigger(
     trigger_id: TriggerId,
-    authority: AccountId,
+    authority: ScopedAccountId,
     subscription_id: NftId,
     charge_at_ms: u64,
 ) -> Trigger {
@@ -41705,7 +42246,7 @@ fn build_billing_trigger(
 }
 
 #[cfg(feature = "app_api")]
-fn build_usage_trigger(trigger_id: TriggerId, authority: AccountId) -> Trigger {
+fn build_usage_trigger(trigger_id: TriggerId, authority: ScopedAccountId) -> Trigger {
     use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
 
     let action = Action::new(
@@ -41790,12 +42331,10 @@ pub async fn handle_v1_subscription_plans(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<SubscriptionPlanListParams>,
 ) -> Result<impl IntoResponse> {
-    #[cfg(test)]
-    crate::ensure_test_domain_selector_resolver();
-
     let provider = match params.provider {
         Some(raw) if !raw.trim().is_empty() => Some(
-            raw.parse::<AccountId>()
+            ScopedAccountId::parse_encoded(&raw)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .map_err(|err| conversion_error(format!("invalid provider id: {err}")))?,
         ),
         _ => None,
@@ -41992,19 +42531,18 @@ pub async fn handle_v1_subscriptions(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<SubscriptionListParams>,
 ) -> Result<impl IntoResponse> {
-    #[cfg(test)]
-    crate::ensure_test_domain_selector_resolver();
-
     let owned_by = match params.owned_by {
         Some(raw) if !raw.trim().is_empty() => Some(
-            raw.parse::<AccountId>()
+            ScopedAccountId::parse_encoded(&raw)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .map_err(|err| conversion_error(format!("invalid subscriber id: {err}")))?,
         ),
         _ => None,
     };
     let provider = match params.provider {
         Some(raw) if !raw.trim().is_empty() => Some(
-            raw.parse::<AccountId>()
+            ScopedAccountId::parse_encoded(&raw)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .map_err(|err| conversion_error(format!("invalid provider id: {err}")))?,
         ),
         _ => None,
@@ -42900,7 +43438,7 @@ mod subscription_api_tests {
         (queue, chain_id, telemetry)
     }
 
-    fn sample_plan(provider: AccountId) -> SubscriptionPlan {
+    fn sample_plan(provider: ScopedAccountId) -> SubscriptionPlan {
         SubscriptionPlan {
             provider,
             billing: SubscriptionBilling {
@@ -42921,8 +43459,8 @@ mod subscription_api_tests {
 
     fn sample_subscription_state(
         plan_id: AssetDefinitionId,
-        provider: AccountId,
-        subscriber: AccountId,
+        provider: ScopedAccountId,
+        subscriber: ScopedAccountId,
         status: SubscriptionStatus,
         billing_trigger_id: TriggerId,
     ) -> SubscriptionState {
@@ -42956,8 +43494,8 @@ mod subscription_api_tests {
     }
 
     fn state_with_plans_and_subscriptions(
-        provider: AccountId,
-        subscriber: AccountId,
+        provider: ScopedAccountId,
+        subscriber: ScopedAccountId,
         plans: Vec<(AssetDefinitionId, SubscriptionPlan)>,
         subscriptions: Vec<(NftId, SubscriptionState, Option<SubscriptionInvoice>)>,
     ) -> Arc<CoreState> {
@@ -43472,9 +44010,7 @@ mod adapter_filter_tests {
                 "args",
                 arr(vec![
                     val("id"),
-                    val(
-                        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
-                    ),
+                    val("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"),
                 ]),
             ),
         ]);
@@ -43623,7 +44159,7 @@ mod adapter_filter_tests {
                     commitment: vec![0xAA; 32],
                 },
                 spend_public_key: PublicKey::from_str(
-                    "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+                    "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
                 )
                 .expect("public key"),
                 attestation_report: Vec::new(),
@@ -44460,7 +44996,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
             commitment: vec![0xAB; 32],
         },
         spend_public_key: PublicKey::from_str(
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
         )
         .expect("public key"),
         attestation_report: Vec::new(),
@@ -44578,16 +45114,23 @@ pub async fn handle_v1_account_assets_query_with_policy(
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    let (acct, _) =
-        parse_account_path_segment(&account_id, &telemetry, ENDPOINT_ACCOUNTS_ASSETS_QUERY)?;
+    let (acct, _) = parse_account_path_segment_with_state(
+        state.as_ref(),
+        &account_id,
+        &telemetry,
+        ENDPOINT_ACCOUNTS_ASSETS_QUERY,
+    )?;
     let world = state.world_view();
-    let projected_assets: Vec<_> = world
-        .assets_in_account_iter(&acct)
-        .map(|asset| AccountAssetListItem {
-            asset_id: asset.id().to_string(),
-            quantity: asset.value().clone().into_inner(),
-        })
-        .collect();
+    let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
+    let mut projected_assets = Vec::new();
+    for scoped_account in &scoped_accounts {
+        for asset in world.assets_in_account_iter(scoped_account) {
+            projected_assets.push(AccountAssetListItem {
+                asset_id: asset.id().to_string(),
+                quantity: asset.value().clone().into_inner(),
+            });
+        }
+    }
     drop(world);
     let crate::filter::QueryEnvelope {
         filter,
@@ -44729,7 +45272,7 @@ fn validate_asset_filter_adapter(expr: &FilterExpr) -> Result<()> {
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AssetHolderListItem {
-    account_id: iroha_data_model::account::AccountId,
+    account_id: iroha_data_model::account::ScopedAccountId,
     canonical_id: String,
     asset_id: String,
     quantity: iroha_primitives::numeric::Numeric,
@@ -44738,7 +45281,7 @@ struct AssetHolderListItem {
 #[cfg(feature = "app_api")]
 #[derive(Clone, Copy)]
 enum AssetHolderSortField {
-    AccountId,
+    ScopedAccountId,
     Quantity,
 }
 
@@ -44753,7 +45296,7 @@ fn compile_asset_holder_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<AssetH
     let mut selectors = Vec::new();
     for sk in spec {
         let field = match sk.key.0.as_str() {
-            "account_id" => AssetHolderSortField::AccountId,
+            "account_id" => AssetHolderSortField::ScopedAccountId,
             "quantity" => AssetHolderSortField::Quantity,
             _ => continue,
         };
@@ -44765,7 +45308,7 @@ fn compile_asset_holder_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<AssetH
     if selectors.is_empty() {
         selectors.push(AssetHolderSortSelector {
             ascending: true,
-            field: AssetHolderSortField::AccountId,
+            field: AssetHolderSortField::ScopedAccountId,
         });
     }
     selectors
@@ -44779,7 +45322,7 @@ fn asset_holder_sort_key(
     let mut components = Vec::with_capacity(selectors.len());
     for selector in selectors {
         match selector.field {
-            AssetHolderSortField::AccountId => {
+            AssetHolderSortField::ScopedAccountId => {
                 if selector.ascending {
                     components.push(SortKeyComponent::asc(&item.canonical_id));
                 } else {
@@ -44885,7 +45428,7 @@ pub async fn handle_v1_asset_holders(
     use std::collections::BTreeMap;
 
     use iroha_data_model::{
-        account::AccountId,
+        account::ScopedAccountId,
         asset::{AssetId, id::AssetDefinitionId},
     };
 
@@ -44898,16 +45441,17 @@ pub async fn handle_v1_asset_holders(
         .map(str::trim)
         .filter(|raw| !raw.is_empty())
         .map(|raw| {
-            raw.parse::<AssetId>()
+            AssetId::parse_encoded(raw)
                 .map(|asset| asset.to_string())
-                .unwrap_or_else(|_| raw.to_owned())
-        });
+                .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))
+        })
+        .transpose()?;
 
     let world = state.world_view();
     let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
     drop(world);
     // Aggregate balances per account
-    let mut map: BTreeMap<AccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();
+    let mut map: BTreeMap<ScopedAccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();
     for asset in assets {
         if let Some(expected) = asset_filter.as_ref()
             && asset.id().to_string() != *expected
@@ -44990,7 +45534,7 @@ pub async fn handle_v1_asset_holders_query(
     use std::collections::BTreeMap;
 
     use iroha_data_model::{
-        account::AccountId,
+        account::ScopedAccountId,
         asset::{AssetId, id::AssetDefinitionId},
     };
 
@@ -45001,7 +45545,7 @@ pub async fn handle_v1_asset_holders_query(
     let world = state.world_view();
     let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
     drop(world);
-    let mut map: BTreeMap<AccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();
+    let mut map: BTreeMap<ScopedAccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();
     for asset in assets {
         let acct = asset.id().account().clone();
         let entry = map
@@ -45054,6 +45598,7 @@ pub async fn handle_v1_asset_holders_query(
         canonicalize_filter_account_literals(
             expr,
             "account_id",
+            None,
             &telemetry,
             ENDPOINT_ASSET_HOLDERS_QUERY,
         )?;
@@ -45119,23 +45664,7 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
         let Some(raw) = value.as_str() else {
             return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
         };
-        if raw.parse::<iroha_data_model::asset::AssetId>().is_ok() {
-            return Ok(());
-        }
-        let (definition_part, account_part) = raw
-            .rsplit_once('#')
-            .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
-        if account_part.is_empty() {
-            return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
-        }
-        if let Some(name_only) = definition_part.strip_suffix('#') {
-            return name_only
-                .parse::<iroha_data_model::prelude::Name>()
-                .map(|_| ())
-                .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex));
-        }
-        definition_part
-            .parse::<iroha_data_model::asset::id::AssetDefinitionId>()
+        raw.parse::<iroha_data_model::asset::AssetId>()
             .map(|_| ())
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
     };

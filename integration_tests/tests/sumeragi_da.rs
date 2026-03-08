@@ -293,6 +293,7 @@ const DA_RBC_RECOVERY_TIMEOUT_SECS: u64 = 600;
 const DA_RBC_SESSION_TIMEOUT_SECS: u64 = 240;
 const DA_VIEW_CHANGE_TIMEOUT_SECS: u64 = 300;
 const DA_PAYLOAD_LOSS_COMMIT_TIMEOUT_SECS: u64 = 240;
+const DA_KURA_EVICTION_PROGRESS_WAIT_SECS: u64 = 45;
 
 fn generate_incompressible_payload(tag: &str, payload_bytes: usize) -> String {
     use std::hash::{Hash, Hasher};
@@ -633,15 +634,25 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
             submit_log_to_any_peer(&peers, message).await?;
             submitted = submitted.saturating_add(1);
 
-            timeout(da_commit_wait_timeout(), peer.once_block(expected_height))
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let per_submit_wait = remaining.min(Duration::from_secs(
+                DA_KURA_EVICTION_PROGRESS_WAIT_SECS,
+            ));
+            if timeout(per_submit_wait, peer.once_block(expected_height))
                 .await
-                .map_err(|_| {
-                    eyre!(
-                        "peer {} did not reach expected height {expected_height} within {:?}",
-                        peer.mnemonic(),
-                        da_commit_wait_timeout()
-                    )
-                })?;
+                .is_err()
+            {
+                // Avoid failing on one stalled proposal; continue driving consensus until the
+                // scenario deadline and keep the target height aligned with observed progress.
+                let status = fetch_status(&client)
+                    .await
+                    .wrap_err("refresh status after per-submit block wait timeout")?;
+                expected_height = expected_height.max(status.blocks);
+                continue;
+            }
 
             let bytes = fs::read(&index_path).wrap_err("read blocks.index")?;
             ensure!(

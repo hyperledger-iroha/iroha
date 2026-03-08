@@ -14,7 +14,7 @@ fn struct_fields_lower_to_corehost_syscall_args() {
             fn main() {
                 let args = TransferArgs(
                     domain("wonderland"),
-                    account_id("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland")
+                    account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
                 );
                 transfer_domain(authority(), args.domain, args.to);
             }

@@ -1,6 +1,10 @@
 package org.hyperledger.iroha.android.multisig;
 
 public final class MultisigSpecTests {
+  private static final String ALICE_ID =
+      "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+  private static final String BOB_ID =
+      "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
 
   private MultisigSpecTests() {}
 
@@ -15,15 +19,15 @@ public final class MultisigSpecTests {
         MultisigSpec.builder()
             .setQuorum(3)
             .setTransactionTtlMs(60_000)
-            .addSignatory("alice@wonderland", 2)
-            .addSignatory("bob@wonderland", 1)
+            .addSignatory(ALICE_ID, 2)
+            .addSignatory(BOB_ID, 1)
             .build();
 
     assert spec.quorum() == 3 : "quorum mismatch";
     assert spec.transactionTtlMs() == 60_000 : "ttl mismatch";
     final String json = spec.toJson(true);
     assert json.contains("\"transaction_ttl_ms\": 60000") : "json missing ttl";
-    assert json.indexOf("alice@wonderland") < json.indexOf("bob@wonderland") : "signatories not sorted";
+    assert json.indexOf(ALICE_ID) < json.indexOf(BOB_ID) : "signatories not sorted";
   }
 
   private static void testPreviewClampsToPolicyCap() {
@@ -31,7 +35,7 @@ public final class MultisigSpecTests {
         MultisigSpec.builder()
             .setQuorum(1)
             .setTransactionTtlMs(10_000)
-            .addSignatory("alice@wonderland", 1)
+            .addSignatory(ALICE_ID, 1)
             .build();
 
     final MultisigProposalTtlPreview preview = spec.previewProposalExpiry(20_000L, 0L);
@@ -46,7 +50,7 @@ public final class MultisigSpecTests {
         MultisigSpec.builder()
             .setQuorum(1)
             .setTransactionTtlMs(5_000)
-            .addSignatory("alice@wonderland", 1)
+            .addSignatory(ALICE_ID, 1)
             .build();
 
     boolean threw = false;

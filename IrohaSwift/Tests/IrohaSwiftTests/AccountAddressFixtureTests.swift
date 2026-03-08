@@ -19,7 +19,8 @@ final class AccountAddressFixtureTests: XCTestCase {
     // MARK: - Helpers
 
     private func assertPositive(_ vector: AccountAddressPositiveCase) throws {
-        let address = try AccountAddress.fromCanonicalHex(vector.encodings.canonicalHex)
+        let address = try AccountAddress.fromIH58(vector.encodings.ih58.string,
+                                                  expectedPrefix: vector.encodings.ih58.prefix)
         XCTAssertEqual(
             try address.canonicalHex().lowercased(),
             vector.encodings.canonicalHex.lowercased(),
@@ -55,7 +56,7 @@ final class AccountAddressFixtureTests: XCTestCase {
         }
 
         // Parse entry points should lead back to the same canonical bytes.
-        let parsedIH58 = try AccountAddress.parseAny(vector.encodings.ih58.string,
+        let parsedIH58 = try AccountAddress.parseEncoded(vector.encodings.ih58.string,
                                                      expectedPrefix: vector.encodings.ih58.prefix)
         XCTAssertEqual(parsedIH58.1, .ih58, "\(vector.caseId): IH58 parse format mismatch")
         XCTAssertEqual(
@@ -64,13 +65,17 @@ final class AccountAddressFixtureTests: XCTestCase {
             "\(vector.caseId): IH58 parse canonical mismatch"
         )
 
-        let parsedCompressed = try AccountAddress.parseAny(vector.encodings.compressed)
+        let parsedCompressed = try AccountAddress.parseEncoded(vector.encodings.compressed)
         XCTAssertEqual(parsedCompressed.1, .compressed, "\(vector.caseId): compressed parse format mismatch")
         XCTAssertEqual(
             try parsedCompressed.0.canonicalHex(),
             try address.canonicalHex(),
             "\(vector.caseId): compressed parse canonical mismatch"
         )
+
+        XCTAssertThrowsError(try AccountAddress.parseEncoded(vector.encodings.canonicalHex)) { error in
+            XCTAssertEqual(error as? AccountAddressError, .unsupportedAddressFormat, "\(vector.caseId): canonical hex parse should be rejected")
+        }
 
         if let info = try address.multisigPolicyInfo(), vector.category == "multisig" {
             try assertMultisig(vector, info: info)
@@ -117,11 +122,15 @@ final class AccountAddressFixtureTests: XCTestCase {
 
     private func assertNegative(_ vector: AccountAddressNegativeCase) {
         let expectedPrefix = vector.expectedPrefix
-        let expectedCode = vector.expectedError.code
-        XCTAssertThrowsError(try AccountAddress.parseAny(vector.input, expectedPrefix: expectedPrefix)) { error in
+        XCTAssertThrowsError(try AccountAddress.parseEncoded(vector.input, expectedPrefix: expectedPrefix)) { error in
             guard let addressError = error as? AccountAddressError else {
                 return XCTFail("\(vector.caseId): expected AccountAddressError, got \(error)")
             }
+            if vector.format == "canonical_hex" {
+                XCTAssertEqual(addressError, .unsupportedAddressFormat, "\(vector.caseId): canonical hex parser must reject legacy format")
+                return
+            }
+            let expectedCode = vector.expectedError.code
             XCTAssertEqual(addressError.code, expectedCode, "\(vector.caseId): error code mismatch")
         }
     }

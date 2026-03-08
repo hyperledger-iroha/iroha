@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn denies_mismatched_claimed_delta() {
-        let receiver = sample_account(0x01, "sbp");
+        let receiver = sample_account(0x01, "acme");
         let isi = build_submit_transfer(
             &receiver,
             &[Numeric::new(200, 0), Numeric::new(50, 0)],
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn denies_duplicate_invoice_ids() {
-        let receiver = sample_account(0x03, "sbp");
+        let receiver = sample_account(0x03, "acme");
         let invoice_ids = vec!["dup-invoice".to_owned(), "dup-invoice".to_owned()];
         let isi = build_submit_transfer_with_invoice_ids(
             &receiver,
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn accepts_matching_claimed_delta() {
-        let receiver = sample_account(0x02, "sbp");
+        let receiver = sample_account(0x02, "acme");
         let isi = build_submit_transfer(
             &receiver,
             &[Numeric::new(120, 0), Numeric::new(30, 0)],

@@ -603,7 +603,9 @@ mod tests {
                     lane: LaneId::new(2),
                     dataspace: None,
                     matcher: LaneRoutingMatcher {
-                        account: Some("someone@test".into()),
+                        account: Some(
+                            "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp".into(),
+                        ),
                         instruction: None,
                         description: None,
                     },
@@ -1077,7 +1079,7 @@ mod tests {
     #[test]
     fn matches_account_domain_wildcard_rule() {
         let (uae_id, uae_keypair) = gen_account_in("uae");
-        let (bank_id, bank_keypair) = gen_account_in("bank1");
+        let (bank_id, bank_keypair) = gen_account_in("hbl");
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
@@ -1121,8 +1123,8 @@ mod tests {
 
     #[test]
     fn matches_transfer_destination_domain_rule() {
-        let (sender_id, sender_keypair) = gen_account_in("bank1");
-        let (receiver_id, _) = gen_account_in("sbp");
+        let (sender_id, sender_keypair) = gen_account_in("hbl");
+        let (receiver_id, _) = gen_account_in("acme");
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
@@ -1132,7 +1134,7 @@ mod tests {
                 dataspace: None,
                 matcher: LaneRoutingMatcher {
                     account: None,
-                    instruction: Some("transfer@sbp".to_string()),
+                    instruction: Some("transfer@acme".to_string()),
                     description: None,
                 },
             }],
@@ -1157,8 +1159,8 @@ mod tests {
     #[test]
     fn account_rule_takes_precedence_over_transfer_destination_rule() {
         let (uae_sender_id, uae_sender_keypair) = gen_account_in("uae");
-        let (bank_sender_id, bank_sender_keypair) = gen_account_in("bank1");
-        let (sbp_receiver_id, _) = gen_account_in("sbp");
+        let (bank_sender_id, bank_sender_keypair) = gen_account_in("hbl");
+        let (acme_receiver_id, _) = gen_account_in("acme");
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
@@ -1178,7 +1180,7 @@ mod tests {
                     dataspace: None,
                     matcher: LaneRoutingMatcher {
                         account: None,
-                        instruction: Some("transfer@sbp".to_string()),
+                        instruction: Some("transfer@acme".to_string()),
                         description: None,
                     },
                 },
@@ -1192,12 +1194,12 @@ mod tests {
         let uae_transfer = Transfer::asset_numeric(
             AssetId::of(asset_definition.clone(), uae_sender_id.clone()),
             1_u32,
-            sbp_receiver_id.clone(),
+            acme_receiver_id.clone(),
         );
         let bank_transfer = Transfer::asset_numeric(
             AssetId::of(asset_definition, bank_sender_id.clone()),
             1_u32,
-            sbp_receiver_id,
+            acme_receiver_id,
         );
 
         let uae_tx = sample_transaction(

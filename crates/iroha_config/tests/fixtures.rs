@@ -85,6 +85,29 @@ fn strip_ansi_codes(input: &str) -> String {
     result
 }
 
+struct AddressRuntimeGuard {
+    default_domain_label: std::sync::Arc<str>,
+    chain_discriminant: u16,
+}
+
+impl AddressRuntimeGuard {
+    fn capture() -> Self {
+        Self {
+            default_domain_label: iroha_data_model::account::address::default_domain_name(),
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+        }
+    }
+}
+
+impl Drop for AddressRuntimeGuard {
+    fn drop(&mut self) {
+        let _ = iroha_data_model::account::address::set_default_domain_name(
+            self.default_domain_label.to_string(),
+        );
+        iroha_data_model::account::address::set_chain_discriminant(self.chain_discriminant);
+    }
+}
+
 #[derive(Error, Debug)]
 #[error("failed to load config from fixtures")]
 struct FixtureConfigLoadError;
@@ -1293,12 +1316,12 @@ fn minimal_config_snapshot() {
                     max_slash_bps: 10000,
                     reward_dust_threshold: 0,
                     stake_asset_id: "xor#nexus",
-                    stake_escrow_account_id: "gas@ivm",
-                    slash_sink_account_id: "gas@ivm",
+                    stake_escrow_account_id: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+                    slash_sink_account_id: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
                 },
                 fees: NexusFees {
                     fee_asset_id: "xor#nexus",
-                    fee_sink_account_id: "gas@ivm",
+                    fee_sink_account_id: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
                     base_fee: 0,
                     per_byte_fee: 0,
                     per_instruction_fee: 0,
@@ -1521,7 +1544,7 @@ fn minimal_config_snapshot() {
                 overlay_max_bytes: 0,
                 overlay_chunk_instructions: 256,
                 gas: Gas {
-                    tech_account_id: "gas@ivm",
+                    tech_account_id: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
                     accepted_assets: [],
                     units_per_gas: [],
                 },
@@ -3077,6 +3100,44 @@ fn config_with_genesis() {
 }
 
 #[test]
+fn parse_applies_default_account_domain_override_and_restores_globals() {
+    let _runtime_guard = AddressRuntimeGuard::capture();
+
+    iroha_data_model::account::address::set_default_domain_name("sora")
+        .expect("set baseline default domain");
+    iroha_data_model::account::address::set_chain_discriminant(0x02F1);
+
+    let config = load_config_from_fixtures("minimal_default_account_domain.toml")
+        .expect("config with domain override should parse");
+
+    assert_eq!(
+        config.common.default_account_domain_label.value(),
+        "wonderland"
+    );
+    assert_eq!(*config.common.chain_discriminant.value(), 777);
+    assert_eq!(
+        config.gov.bond_escrow_account.domain().to_string(),
+        "wonderland"
+    );
+    assert_eq!(
+        config.gov.citizenship_escrow_account.domain().to_string(),
+        "wonderland"
+    );
+    assert_eq!(
+        config.gov.slash_receiver_account.domain().to_string(),
+        "wonderland"
+    );
+    assert_eq!(
+        iroha_data_model::account::address::default_domain_name().as_ref(),
+        "sora"
+    );
+    assert_eq!(
+        iroha_data_model::account::address::chain_discriminant(),
+        0x02F1
+    );
+}
+
+#[test]
 fn self_is_presented_in_trusted_peers() {
     let config =
         load_config_from_fixtures("minimal_alone_with_genesis.toml").expect("valid config");
@@ -3148,7 +3209,11 @@ fn sorafs_penalty_and_telemetry_roundtrip() {
     assert_eq!(telemetry.max_window_gap, Duration::from_secs(7_200));
     let expected: Vec<_> = defaults::governance::sorafs_telemetry::submitters()
         .iter()
-        .map(|id| AccountId::from_str(id).expect("default submitter must parse"))
+        .map(|id| {
+            AccountId::parse_encoded(id)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("default submitter must parse")
+        })
         .collect();
     assert_eq!(telemetry.submitters, expected);
 }

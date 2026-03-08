@@ -273,7 +273,7 @@ mod tests {
         config::{self, Config},
         crypto::KeyPair,
         data_model::{
-            Metadata,
+            DomainId, Metadata,
             prelude::{AccountId, ChainId},
         },
     };
@@ -286,6 +286,8 @@ mod tests {
         #[command(subcommand)]
         command: Command,
     }
+
+    const SAMPLE_ACCOUNT_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
 
     #[test]
     fn parse_voprf_args() {
@@ -309,9 +311,8 @@ mod tests {
     impl TestContext {
         fn new(output_format: CliOutputFormat) -> Self {
             let kp = KeyPair::random();
-            let account: AccountId = format!("{}@wonderland", kp.public_key())
-                .parse()
-                .expect("valid account");
+            let domain: DomainId = "wonderland".parse().expect("domain");
+            let account = AccountId::new(domain, kp.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
                 account,
@@ -443,21 +444,21 @@ mod tests {
                 .header("Content-Type", "application/json")
                 .body(norito::json::to_vec(&norito::json!({
                     "alias": "alice",
-                    "account_id": "alice@wonderland",
+                    "account_id": SAMPLE_ACCOUNT_ID,
                     "source": "iso_bridge"
                 }))?)
                 .unwrap())
         })
         .expect("helper should succeed");
         assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("alice@wonderland"));
+        assert!(ctx.printed[0].contains(SAMPLE_ACCOUNT_ID));
     }
 
     #[test]
     fn resolve_text_includes_source() {
         let dto = AliasResolveResponse {
             alias: "alice".to_string(),
-            account_id: "alice@wonderland".to_string(),
+            account_id: SAMPLE_ACCOUNT_ID.to_string(),
             source: Some("iso_bridge".to_string()),
         };
         let text = render_alias_resolve_text(&dto);
@@ -495,7 +496,7 @@ mod tests {
                 .body(norito::json::to_vec(&norito::json!({
                     "index": 0,
                     "alias": "GB82WEST12345698765432",
-                    "account_id": "alice@wonderland",
+                    "account_id": SAMPLE_ACCOUNT_ID,
                     "source": "iso_bridge"
                 }))?)
                 .unwrap())
@@ -510,11 +511,11 @@ mod tests {
         let dto = AliasResolveIndexResponse {
             index: 0,
             alias: "GB82WEST12345698765432".to_string(),
-            account_id: "alice@wonderland".to_string(),
+            account_id: SAMPLE_ACCOUNT_ID.to_string(),
             source: None,
         };
         let text = render_alias_resolve_index_text(&dto);
-        assert!(text.contains("account_id: alice@wonderland"));
+        assert!(text.contains(&format!("account_id: {SAMPLE_ACCOUNT_ID}")));
     }
 
     #[test]

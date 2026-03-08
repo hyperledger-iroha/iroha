@@ -11,6 +11,7 @@
  * - TORII_BASE_URL — Torii base URL for replay (default: mock server).
  * - OFFLINE_PIPELINE_OUT_DIR — directory for persisted envelopes (default: artifacts/js/offline_pipeline).
  * - OFFLINE_PIPELINE_USE_MOCK — set to "0" to disable the mock Torii server.
+ * - OFFLINE_PIPELINE_SKIP_REPLAY — set to "1" to build/parse/write only and skip replay.
  */
 import { createServer } from "node:http";
 import fs from "node:fs/promises";
@@ -18,29 +19,40 @@ import path from "node:path";
 import process from "node:process";
 
 import {
+  AccountAddress,
   ToriiClient,
-  buildMintAssetInstruction,
+  buildRegisterDomainInstruction,
   buildOfflineEnvelope,
   buildTransaction,
   hashSignedTransaction,
   parseOfflineEnvelope,
+  publicKeyFromPrivate,
   replayOfflineEnvelope,
   serializeOfflineEnvelope,
   writeOfflineEnvelopeFile,
 } from "@iroha/iroha-js";
 
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
+const AUTHORITY_DOMAIN = process.env.OFFLINE_PIPELINE_AUTHORITY_DOMAIN ?? "wonderland";
+const AUTHORITY_ID =
+  process.env.OFFLINE_PIPELINE_AUTHORITY ??
+  AccountAddress.fromAccount({
+    domain: AUTHORITY_DOMAIN,
+    publicKey: publicKeyFromPrivate(PRIVATE_KEY),
+  }).toIH58();
 const OUT_DIR = process.env.OFFLINE_PIPELINE_OUT_DIR ?? path.join("artifacts", "js", "offline_pipeline");
 const USE_MOCK = (process.env.OFFLINE_PIPELINE_USE_MOCK ?? "1") !== "0";
+const SKIP_REPLAY = (process.env.OFFLINE_PIPELINE_SKIP_REPLAY ?? "0") === "1";
+const DOMAIN_ID = `offline_demo_${Date.now().toString(16)}`;
 
 function buildEnvelope() {
   const { signedTransaction, hash } = buildTransaction({
     chainId: "offline-demo",
-    authority: "alice@wonderland",
+    authority: AUTHORITY_ID,
     instructions: [
-      buildMintAssetInstruction({
-        assetId: "rose#wonderland#alice",
-        quantity: "10",
+      buildRegisterDomainInstruction({
+        domainId: DOMAIN_ID,
+        metadata: { source: "offline-pipeline" },
       }),
     ],
     metadata: { purpose: "offline-demo" },
@@ -111,6 +123,10 @@ async function main() {
   console.log("Envelope hash:", parsed.hashHex);
   console.log("Envelope metadata:", parsed.metadata);
   console.log("Envelope schema:", parsed.schemaName);
+  if (SKIP_REPLAY) {
+    console.log("OFFLINE_PIPELINE_SKIP_REPLAY=1; skipping replay stage.");
+    return;
+  }
 
   let mock = null;
   let baseUrl = process.env.TORII_BASE_URL;

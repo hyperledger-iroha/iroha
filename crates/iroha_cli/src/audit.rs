@@ -67,9 +67,9 @@ pub struct WitnessArgs {
     ///   Applied only with --decode; prefixes match the human-readable key labels.
     ///
     /// Matching on the identifier segment supports:
-    /// - exact (e.g., `account.detail:alice@wonderland`)
-    /// - partial substring (e.g., `account.detail:wonderland`)
-    /// - glob wildcards `*` and `?` (e.g., `asset:rose#*#*@wonderland`)
+    /// - exact (e.g., `account.detail:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn`)
+    /// - partial substring (e.g., `account.detail:6cmzPVPX`)
+    /// - glob wildcards `*` and `?` (e.g., `asset:rose#*#6cmz*`)
     /// - regex-like syntax `/.../` (treated as a glob pattern inside the slashes)
     #[arg(long, value_name = "PREFIXES", requires = "decode")]
     filter: Option<String>,

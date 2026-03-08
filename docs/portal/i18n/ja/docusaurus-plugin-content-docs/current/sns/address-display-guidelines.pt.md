@@ -157,7 +157,7 @@ UI と SDK は、セレクターの公開および情報の開発を開始しま
 
 |セレクターのヒント |ヘックスカノニコ |
 |---------------|---------------|
-|暗黙のパドラオ | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+|暗黙のパドラオ | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 |ローカルのダイジェスト (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 |レジストロ グローバル (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -174,7 +174,7 @@ ADDR-5 のワークフロー CLI ドキュメントに含まれる文字列:
    `domain` com Campos `kind`/`warning` e ecoa qualquer dominio fornecido via o
    カンポ`input_domain`。 Quando `kind` e `local12`、CLI の主要な機能
    stderr e o resumo JSON ecoa a mesma orientacao para que パイプライン CI e SDK
-   ポッサム・エクシビラ。 Passe `--append-domain` semper que quiser reproduzir a
+   ポッサム・エクシビラ。 Passe `legacy  suffix` semper que quiser reproduzir a
    codificacao Convertida como `<ih58>@<domain>`。
 2. SDK podem exibir o mesmo aviso/resumo via o helper JavaScript:
 
@@ -201,7 +201,7 @@ ADDR-5 のワークフロー CLI ドキュメントに含まれる文字列:
    ignorados、e `--input -` ou nenhum flag usa STDIN)、relatorio JSON を出力
    com resumos canonicos/IH58/comprimidos para cada entrada e conta erros de
    ローカルのアクセスを解析します。 `--allow-errors` ao 監査ダンプの代替を使用します。
-   com linhas lixo、e trave a automacao com `--fail-on-warning` quando os
+   com linhas lixo、e trave a automacao com `strict CI post-check` quando os
    operadores estiverem prontos para bloquear seletores ローカル CI なし。
 6. Quando precisar de reescrita linha a linha、使用
   セレトレの救済策を講じる ローカル、使用
@@ -209,12 +209,12 @@ ADDR-5 のワークフロー CLI ドキュメントに含まれる文字列:
   canonicas、avisos および falhas de parse em uma unica passada。
    O helper ignora linhas nao Local por Padrao, Converte cada entrada restante
    法令上の要求 (IH58/comprimido/hex/JSON) を使用して管理を保存
-   オリジナルのQuando `--append-domain`と定義。コンバインコム `--allow-errors`
+   オリジナルのQuando `legacy  suffix`と定義。コンバインコム `--allow-errors`
    不正な文学に関する大量のデータを継続的に収集します。
 7. automacao CI/lint pode executar `ci/check_address_normalize.sh`、追加リクエスト
    `fixtures/account/address_vectors.json` のローカルのセレトレ、変換経由
    `iroha tools address normalize`、再実行
-   `iroha tools address audit --fail-on-warning` パラプロバークが nao のエミテムをリリースします
+   `iroha tools address audit` パラプロバークが nao のエミテムをリリースします
    ローカルをダイジェストします。
 
 `torii_address_local8_total{endpoint}` ジュントコム
@@ -252,7 +252,7 @@ esse congelamento - SDK のツールチップとアビソのメスマ文字列
 カルテ/エクスプローラーのリリースに関するメモを含める
 カットオーバー:
 
-> **Enderecos:** Adicionado o helper `iroha tools address normalize --only-local --append-domain`
+> **Enderecos:** Adicionado o helper `iroha tools address normalize`
 > CI (`ci/check_address_normalize.sh`) パイプラインの接続がありません
 > carteira/explorador possam コンバーター seletores ローカル代替形式
 > canonicas IH58/comprimidas antes de Local-8/Local-12 serem bloqueados na

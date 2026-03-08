@@ -240,7 +240,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_accounts_get_tool());
     tools.push(iroha_accounts_qr_tool());
     tools.push(iroha_accounts_query_tool());
-    tools.push(iroha_accounts_resolve_tool());
     tools.push(iroha_accounts_onboard_tool());
     tools.push(iroha_account_transactions_tool());
     tools.push(iroha_account_transactions_query_tool());
@@ -1085,12 +1084,6 @@ async fn handle_tools_call(
         }
         "iroha.accounts.query" => {
             match dispatch_iroha_accounts_query(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.accounts.resolve" => {
-            match dispatch_iroha_accounts_resolve(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -4248,42 +4241,6 @@ async fn dispatch_iroha_accounts_query(
         inbound_headers,
         Method::POST,
         "/v1/accounts/query",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_accounts_resolve(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = if let Some(body) = arguments.get("body") {
-        body.clone()
-    } else {
-        let literal = arguments
-            .get("literal")
-            .or_else(|| arguments.get("account_literal"))
-            .or_else(|| arguments.get("account_id"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                "`literal` is required (or provide `body.literal`) for iroha.accounts.resolve"
-                    .to_owned()
-            })?;
-        norito::json!({ "literal": literal })
-    };
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/accounts/resolve",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -10218,44 +10175,6 @@ fn iroha_accounts_query_tool() -> ToolSpec {
     }
 }
 
-fn iroha_accounts_resolve_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.accounts.resolve".to_owned(),
-        description:
-            "Resolve account literals into canonical IH58 account identifiers (`literal` shortcut supported)."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/accounts/resolve".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "literal": {
-                    "type": "string",
-                    "description": "Convenience shortcut for `body.literal`."
-                },
-                "account_literal": {
-                    "type": "string",
-                    "description": "Alias for `literal`."
-                },
-                "account_id": {
-                    "type": "string",
-                    "description": "Alias for `literal` when the input is already an account identifier."
-                },
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
 fn iroha_accounts_onboard_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.onboard".to_owned(),
@@ -12973,6 +12892,9 @@ pub(crate) fn invalid_json_payload(err: &json::Error) -> Value {
 mod tests {
     use super::*;
 
+    const TEST_ACCOUNT_IH58: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const TEST_ASSET_ID: &str = "norito:deadbeef";
+
     #[test]
     fn tool_registry_skips_ws_and_sse_routes() {
         let cfg = iroha_config::parameters::actual::ToriiMcp::default();
@@ -13863,7 +13785,7 @@ mod tests {
     #[test]
     fn collect_query_map_accepts_flat_query_fields_when_query_absent() {
         let args = norito::json!({
-            "account_id": "alice@wonderland",
+            "account_id": TEST_ACCOUNT_IH58,
             "limit": 20,
             "offset": 0,
             "headers": {"x": "1"}
@@ -13892,11 +13814,11 @@ mod tests {
     #[test]
     fn extract_account_id_argument_accepts_top_level_shortcut() {
         let args = norito::json!({
-            "account_id": "alice@wonderland"
+            "account_id": TEST_ACCOUNT_IH58
         });
         let account_id =
             extract_account_id_argument(args.as_object().expect("object")).expect("account id");
-        assert_eq!(account_id, "alice@wonderland");
+        assert_eq!(account_id, TEST_ACCOUNT_IH58);
     }
 
     #[test]
@@ -14065,14 +13987,11 @@ mod tests {
     #[test]
     fn extract_asset_id_argument_accepts_top_level_shortcut() {
         let args = norito::json!({
-            "asset_id": "rose##ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+            "asset_id": TEST_ASSET_ID
         });
         let asset_id =
             extract_asset_id_argument(args.as_object().expect("object")).expect("asset id");
-        assert_eq!(
-            asset_id,
-            "rose##ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-        );
+        assert_eq!(asset_id, TEST_ASSET_ID);
     }
 
     #[test]
@@ -14278,7 +14197,7 @@ mod tests {
     #[test]
     fn build_query_envelope_body_collects_shortcut_fields() {
         let args = norito::json!({
-            "filter": { "op": "eq", "args": ["authority", "alice@wonderland"] },
+            "filter": { "op": "eq", "args": ["authority", TEST_ACCOUNT_IH58] },
             "limit": 25,
             "offset": 5,
             "fetch_size": 10
@@ -14308,7 +14227,7 @@ mod tests {
     fn build_accounts_onboard_body_collects_shortcut_fields() {
         let args = norito::json!({
             "alias": "alice",
-            "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+            "account_id": TEST_ACCOUNT_IH58,
             "identity": { "tier": "gold" },
             "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
         });
@@ -14355,7 +14274,7 @@ mod tests {
     #[test]
     fn build_object_body_or_flat_shortcuts_collects_top_level_fields() {
         let args = norito::json!({
-            "authority": "alice@wonderland",
+            "authority": TEST_ACCOUNT_IH58,
             "namespace": "nexus",
             "headers": { "x-test": "1" }
         });
@@ -14367,7 +14286,7 @@ mod tests {
         let body = body.as_object().expect("object");
         assert_eq!(
             body.get("authority").and_then(Value::as_str),
-            Some("alice@wonderland")
+            Some(TEST_ACCOUNT_IH58)
         );
         assert_eq!(body.get("namespace").and_then(Value::as_str), Some("nexus"));
         assert!(body.get("headers").is_none());

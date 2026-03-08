@@ -171,41 +171,14 @@ private enum FixtureConstants {
 }
 
 private func expectedAuthorityLiteral(from label: String) throws -> String {
-    if !label.contains("@") {
-        guard let parsed = try? AccountAddress.parseAny(label,
-                                                        expectedPrefix: FixtureConstants.networkPrefix) else {
-            throw FixtureError.invalidAuthority(label)
-        }
-        return try parsed.0.toIH58(networkPrefix: FixtureConstants.networkPrefix)
-    }
-    let parts = label.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
-    guard parts.count == 2 else {
+    guard !label.contains("@") else {
         throw FixtureError.invalidAuthority(label)
     }
-    let signatory = String(parts[0])
-    let domain = String(parts[1])
-    if let parsed = try? AccountAddress.parseAny(signatory,
-                                                 expectedPrefix: FixtureConstants.networkPrefix) {
-        guard parsed.0.matchesDomainLabel(domain) else {
-            throw FixtureError.invalidAuthority(label)
-        }
-        return try parsed.0.toIH58(networkPrefix: FixtureConstants.networkPrefix)
+    guard let parsed = try? AccountAddress.parseEncoded(label,
+                                                        expectedPrefix: FixtureConstants.networkPrefix) else {
+        throw FixtureError.invalidAuthority(label)
     }
-    let seed = deriveFixtureSeed(signatory: signatory, domain: domain)
-    guard let keypair = NoritoNativeBridge.shared.keypairFromSeed(algorithm: .ed25519, seed: seed) else {
-        throw FixtureError.bridgeKeypairUnavailable
-    }
-    let address = try AccountAddress.fromAccount(domain: domain, publicKey: keypair.publicKey)
-    return try address.toIH58(networkPrefix: FixtureConstants.networkPrefix)
-}
-
-private func deriveFixtureSeed(signatory: String, domain: String) -> Data {
-    var seed = [UInt8](repeating: 0, count: 32)
-    let bytes = Array(signatory.utf8) + Array(domain.utf8)
-    for (index, byte) in bytes.enumerated() {
-        seed[index % seed.count] ^= byte
-    }
-    return Data(seed)
+    return try parsed.0.toIH58(networkPrefix: FixtureConstants.networkPrefix)
 }
 
 private func decodeSignedPayload(from json: String) -> [String: Any]? {

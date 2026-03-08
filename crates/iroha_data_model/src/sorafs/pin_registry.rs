@@ -473,8 +473,6 @@ impl ReplicationOrderRecord {
 
 #[cfg(test)]
 mod tests {
-    use core::str::FromStr;
-
     use super::*;
 
     #[test]
@@ -502,10 +500,12 @@ mod tests {
             chunker,
             chunk_digest,
             PinPolicy::default(),
-            AccountId::from_str(
-                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland",
-            )
-            .expect("parse account id"),
+            AccountId::new(
+                "wonderland".parse().expect("domain id"),
+                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
+                    .parse()
+                    .expect("public key"),
+            ),
             42,
             None,
             None,
@@ -528,10 +528,12 @@ mod tests {
         let mut record = ReplicationOrderRecord {
             order_id: ReplicationOrderId::new([0x44; 32]),
             manifest_digest: ManifestDigest::new([0x55; 32]),
-            issued_by: AccountId::from_str(
-                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland",
-            )
-            .expect("parse account id"),
+            issued_by: AccountId::new(
+                "wonderland".parse().expect("domain id"),
+                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
+                    .parse()
+                    .expect("public key"),
+            ),
             issued_epoch: 10,
             deadline_epoch: 20,
             canonical_order: payload.clone(),

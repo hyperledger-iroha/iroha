@@ -85,6 +85,6 @@ final class OfflineRevocationJournalTests: XCTestCase {
 
     private func sampleIssuerId(seed: UInt8) throws -> String {
         let publicKey = Data(repeating: seed, count: 32)
-        return try AccountId.makeIH58(publicKey: publicKey, domain: "wonderland")
+        return try AccountId.makeIH58(publicKey: publicKey)
     }
 }

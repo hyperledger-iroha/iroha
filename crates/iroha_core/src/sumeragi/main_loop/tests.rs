@@ -40412,8 +40412,6 @@ fn roster_recovery_transitions_are_total_and_finite() {
         State::ReelectRoster,
         State::WaitCandidates,
         State::EscalateEpoch,
-        State::CatchUpIsolated,
-        State::Rejoin,
         State::RotateView,
     ];
     for state in states {
@@ -40448,7 +40446,7 @@ fn roster_recovery_transitions_are_total_and_finite() {
     );
     assert_eq!(
         super::step_roster_recovery_state(State::ReelectRoster, Event::CandidatesNoop),
-        State::RotateView
+        State::EscalateEpoch
     );
     assert_eq!(
         super::step_roster_recovery_state(State::ReelectRoster, Event::CandidatesEmpty),
@@ -40465,26 +40463,6 @@ fn roster_recovery_transitions_are_total_and_finite() {
     assert_eq!(
         super::step_roster_recovery_state(State::EscalateEpoch, Event::EscalationReady),
         State::RotateView
-    );
-    assert_eq!(
-        super::step_roster_recovery_state(State::RotateView, Event::NoProgress),
-        State::CatchUpIsolated
-    );
-    assert_eq!(
-        super::step_roster_recovery_state(State::CatchUpIsolated, Event::CatchUpProgress),
-        State::Rejoin
-    );
-    assert_eq!(
-        super::step_roster_recovery_state(State::CatchUpIsolated, Event::CatchUpComplete),
-        State::Rejoin
-    );
-    assert_eq!(
-        super::step_roster_recovery_state(State::Rejoin, Event::CatchUpComplete),
-        State::Steady
-    );
-    assert_eq!(
-        super::step_roster_recovery_state(State::Rejoin, Event::RoundAdvanced),
-        State::Steady
     );
     assert_eq!(
         super::step_roster_recovery_state(State::RotateView, Event::DependencyMissing),
@@ -40585,7 +40563,9 @@ async fn round_liveness_enters_catchup_isolation_after_bounded_stagnation() {
         )),
         phase: Phase::Commit,
     });
-    let stall_window = actor.frontier_catchup_stall_window().max(Duration::from_millis(1));
+    let stall_window = actor
+        .frontier_catchup_stall_window()
+        .max(Duration::from_millis(1));
     actor.round_liveness.last_progress_height = local_height;
     actor.round_liveness.last_window_at = now
         .checked_sub(super::saturating_mul_duration(stall_window, 3))
@@ -40635,12 +40615,18 @@ async fn round_liveness_isolation_rejoins_after_catchup_completion() {
         actor.drive_round_liveness_fsm(now),
         "catch-up completion should transition isolation into rejoin"
     );
-    assert_eq!(actor.round_liveness.state, super::RoundLivenessState::Rejoin);
+    assert_eq!(
+        actor.round_liveness.state,
+        super::RoundLivenessState::Rejoin
+    );
     assert!(
         actor.drive_round_liveness_fsm(now + Duration::from_millis(1)),
         "rejoin state should return to steady deterministically"
     );
-    assert_eq!(actor.round_liveness.state, super::RoundLivenessState::Steady);
+    assert_eq!(
+        actor.round_liveness.state,
+        super::RoundLivenessState::Steady
+    );
     let snapshot = super::status::snapshot();
     assert_eq!(snapshot.consensus_catchup_isolation_success_total, 1);
     assert_eq!(snapshot.consensus_catchup_rejoin_total, 1);

@@ -116,6 +116,6 @@ struct LedgerFlow {
 ## 5. Тепе-теңдікті тексеріңіз
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` арқылы транзакцияларды тексеріңіз.
-- `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` холдингтерін салыстырыңыз.
+- `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'` холдингтерін салыстырыңыз.
 - Әрбір SDK растау үшін осы рецептті Rust/Python/JavaScript рецептерімен біріктіріңіз
   демонстрациялық ағын үшін бірдей хэштерді жасайды.

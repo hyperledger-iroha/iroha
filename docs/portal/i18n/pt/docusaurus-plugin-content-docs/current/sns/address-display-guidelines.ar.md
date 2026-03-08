@@ -143,7 +143,7 @@ A interface do usuário e os SDKs estão disponíveis para você:
 
 | نوع المحدد | Hex قانوني |
 |---------------|---------------|
-| افتراضي ضمني | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| افتراضي ضمني | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | digerir livro (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | سجل عالمي (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -157,7 +157,7 @@ A interface do usuário e os SDKs estão disponíveis para você:
    e hexadecimal. A solução `domain` é igual a `kind`/`warning`
    O problema é o `input_domain`. Eu tenho `kind` e `local12`
    A CLI é usada para stderr e JSON para ser usada no CI e
-   SDKs estão disponíveis. مرر `--append-domain` متى اردت اعادة تشغيل الترميز المحول
+   SDKs estão disponíveis. مرر `legacy  suffix` متى اردت اعادة تشغيل الترميز المحول
    كـ `<ih58>@<domain>`.
 2. Use SDKs para usar JavaScript:
 
@@ -184,18 +184,18 @@ A interface do usuário e os SDKs estão disponíveis para você:
    `--input -` e um arquivo JSON com STDIN) e um arquivo JSON
    Local. استخدم
    `--allow-errors` é um dump de lixeira que pode ser usado para armazenar dados
-   O código `--fail-on-warning` não pode ser encontrado no local no CI.
+   O código `strict CI post-check` não pode ser encontrado no local no CI.
 6. Faça o download do seu cartão de crédito
   لملفات الجداول الخاصة بمعالجة محددات Local, استخدم
   A remoção de CSV `input,status,format,...` é feita por meio de arquivos e arquivos
   واخفاقات التحليل في مرور واحد. يتخطى المساعد الصفوف غير المحلية افتراضيا,
   ويحول كل ادخال متبق الى الترميز المطلوب (IH58/مضغوط/hex/JSON), ويحافظ على
-  O código de segurança é `--append-domain`. Modelo `--allow-errors`
+  O código de segurança é `legacy  suffix`. Modelo `--allow-errors`
   Não há necessidade de usar literais.
 7. Use CI/lint como `ci/check_address_normalize.sh` para obter mais informações
    Local `fixtures/account/address_vectors.json`, ويحولها عبر
    `iroha tools address normalize`;
-   `iroha tools address audit --fail-on-warning` لاثبات ان الاصدارات para تعد تصدر digests
+   `iroha tools address audit` لاثبات ان الاصدارات para تعد تصدر digests
    Locais.
 
 `torii_address_local8_total{endpoint}` بالاضافة الى
@@ -227,7 +227,7 @@ Use `domain_kind="local12"` para obter mais informações em 30 dias.
 
 ادرج النقطة التالية في ملاحظات اصدار المحفظة/المستكشف عند تنفيذ cutover:
 
-> **العناوين:** تمت اضافة مساعد `iroha tools address normalize --only-local --append-domain`
+> **العناوين:** تمت اضافة مساعد `iroha tools address normalize`
 > وربطه في CI (`ci/check_address_normalize.sh`) حتى تتمكن مسارات المحفظة/المستكشف
 > من تحويل محددات Local القديمة الى صيغ IH58/مضغوطة قانونية قبل حظر Local-8/Local-12
 > Em mainnet. Você pode fazer isso com uma chave de fenda e uma caixa de som

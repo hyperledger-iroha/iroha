@@ -1,10 +1,18 @@
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, PublicKey};
 use ivm::{Memory, PointerType};
 
 mod common;
 
-const VALID_ACCOUNT_ID: &[u8] =
-    b"ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+fn valid_account_id_literal() -> Vec<u8> {
+    let domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("valid domain");
+    let public_key: PublicKey =
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+            .parse()
+            .expect("valid public key");
+    ivm::mock_wsv::ScopedAccountId::new(domain, public_key)
+        .to_string()
+        .into_bytes()
+}
 
 fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
@@ -19,14 +27,15 @@ fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
 
 #[test]
 fn validate_known_types_ok() {
-    let cases: &[(PointerType, &[u8])] = &[
-        (PointerType::AccountId, VALID_ACCOUNT_ID),
+    let valid_account = valid_account_id_literal();
+    let cases: Vec<(PointerType, &[u8])> = vec![
+        (PointerType::AccountId, valid_account.as_slice()),
         (PointerType::AssetDefinitionId, b"rose#wonderland"),
         (PointerType::Name, b"cursor"),
         (PointerType::Json, br#"{"q":1}"#),
         (PointerType::NftId, b"rose$wonderland"),
     ];
-    for (pty, raw) in cases.iter().copied() {
+    for (pty, raw) in cases {
         let payload = common::payload_for_type(pty, raw);
         let tlv = make_tlv(pty as u16, 1, &payload);
         let mut mem = Memory::new(0);
@@ -40,7 +49,8 @@ fn validate_known_types_ok() {
 
 #[test]
 fn reject_hash_mismatch() {
-    let payload = common::payload_for_type(PointerType::AccountId, VALID_ACCOUNT_ID);
+    let valid_account = valid_account_id_literal();
+    let payload = common::payload_for_type(PointerType::AccountId, &valid_account);
     let mut tlv = make_tlv(PointerType::AccountId as u16, 1, &payload);
     // Flip one byte in the stored hash
     let off = 7 + payload.len();

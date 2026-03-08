@@ -9,6 +9,7 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
     zk::test_utils::halo2_fixture_envelope,
 };
+use iroha_crypto::KeyPair;
 use iroha_data_model::{account::NewAccount, prelude::*};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -109,7 +110,7 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
 
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "rose#zkd".parse().unwrap();
-    let alice: AccountId = "alice@zkd".parse().unwrap();
+    let alice = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
 
     // Bootstrap domain/account/asset and mint, then enable ZK (Hybrid)
     for instr in [

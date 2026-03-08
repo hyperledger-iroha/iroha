@@ -154,7 +154,7 @@ payload bit: │version  │ class  │  norm  │ext │
 
 | نوع المحدد | السداسية الكنسي |
 |---------------|---------------|
-| ضمني افتراضيا | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| ضمني افتراضيا | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | الملخص المحلي (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | التسجيل العالمي (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -170,7 +170,7 @@ Voir `docs/source/references/address_norm_v1.md` pour la table complet
    `domain` مع الأبطال `kind`/`warning` ويفتح المجال بأكمله عبر
    لو تشامب `input_domain`. عندما `kind` vaut `local12`، لا CLI يطبع un
    Avertissement sur stderr واستئناف JSON يعكس الرسالة المرسلة لذلك
-   يمكن عرض خطوط الأنابيب CI وSDK. باسيز `--append-domain`
+   يمكن عرض خطوط الأنابيب CI وSDK. باسيز `legacy  suffix`
    عندما ترغب في تجديد التشفير المحول إلى الشكل `<ih58>@<domain>`.
 2. يمكن لـ SDK عرض رسالة التنبيه/الاستئناف عبر المساعد
    جافا سكريبت:
@@ -199,20 +199,20 @@ Voir `docs/source/references/address_norm_v1.md` pour la table complet
    JSON مع السيرة الذاتية canoniques/IH58/compresse لكل إدخال وحساب
    أخطاء التحليل بالإضافة إلى إعلانات النطاق المحلي. استخدم
    `--allow-errors` أثناء تدقيق مخلفات المخلفات المحتوي على الخطوط
-   الطفيليات، وحظر الأتمتة عبر `--fail-on-warning` عندما تكون
+   الطفيليات، وحظر الأتمتة عبر `strict CI post-check` عندما تكون
    تعمل المشغلات على حظر المحددات المحلية في CI.
 6. عندما تحتاج إلى إعادة كتابة الخط على الخط، استخدمه
   Pour les feuilles de calcule de recession des sélecteurs Local, utilisez
   من أجل مُصدِّر ملف CSV `input,status,format,...` الذي تم إعداده مسبقًا بالتشفيرات
   المعايير والإعلانات والتحليلات في خطوة واحدة.
    يقوم المساعد بتجاهل الخطوط غير المحلية بشكل افتراضي، وتحويلها كل مرةيتم حفظه في التشفير المطلوب (IH58/compresse/hex/JSON)، مع الاحتفاظ بالملف
-   المجال الأصلي عندما `--append-domain` نشط. أسوشييز لو أ
+   المجال الأصلي عندما `legacy  suffix` نشط. أسوشييز لو أ
    `--allow-errors` لمواصلة تحليل المحتوى أثناء تفريغ المحتوى
    أشكال literaux mal.
 7. قد يؤدي أتمتة CI/lint إلى تنفيذ المنفذ `ci/check_address_normalize.sh`، وهو ما
    قم بإخراج المحددات المحلية من `fixtures/account/address_vectors.json`، les
    قم بالتحويل عبر `iroha tools address normalize`، واستمتع
-   `iroha tools address audit --fail-on-warning` للتحقق من الإصدارات
+   `iroha tools address audit` للتحقق من الإصدارات
    n'emetent plus de هضم محلي.`torii_address_local8_total{endpoint}` زائد
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
 `torii_address_collision_domain_total{endpoint,domain}` واللوحة Grafana
@@ -247,7 +247,7 @@ Voir `docs/source/references/address_norm_v1.md` pour la table complet
 ### ملحق مذكرة الإصدار (الحقيبة والمستكشف)
 
 قم بتضمين الرصاصة التالية في ملاحظات الإصدار/المستكشف
-lors du Cutover:> **العناوين:** Ajoute le helper `iroha tools address normalize --only-local --append-domain`
+lors du Cutover:> **العناوين:** Ajoute le helper `iroha tools address normalize`
 > والفرع في CI (`ci/check_address_normalize.sh`) لخطوط الأنابيب
 > Portefeuille/explorateur puissent converter les Selecteurs Local Herites vers
 > الأشكال canoniques IH58/compressees avant que Local-8/Local-12 soient

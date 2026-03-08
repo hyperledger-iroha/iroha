@@ -96,7 +96,7 @@ address-manifest-<REVISION>/
    - רשומות `global_domain` חייבות לכלול `{ "domain": "example", "chain": "sora:nexus:global", "selector": "global" }`.
    - רשומות `local_alias` חייבות לכלול digest באורך 12 בתים שמיוצר ע"י Norm v1
      (אשרו עם `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`;
-     סיכום ה‑JSON משקף את הדומיין דרך `input_domain` ו‑`--append-domain` משחזר את
+     סיכום ה‑JSON משקף את הדומיין דרך `input_domain` ו‑`legacy  suffix` משחזר את
      הקידוד כ‑`<ih58>@<domain>` עבור מניפסטים).
    - רשומות `tombstone` חייבות להפנות ל‑selector המדויק, ולכלול `reason_code`,
      `ticket` ו־`replaces_sequence`.
@@ -130,8 +130,8 @@ address-manifest-<REVISION>/
 2. **גזירת payloads קנוניים.** לכל alias שעובד עדכון, הריצו:
 
    ```bash
-   iroha tools address convert sora...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .input_domain' /tmp/alias.json
+   iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
+   jq '.canonical_hex, .ih58' /tmp/alias.json
    ```
 
 3. **טיוטת רשומת מניפסט.** הוסיפו רשומת JSON כמו:

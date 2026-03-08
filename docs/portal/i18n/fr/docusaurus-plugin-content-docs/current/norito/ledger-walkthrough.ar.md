@@ -70,7 +70,7 @@ Il s'agit du `(asset definition, account)`. Il y a 250 millions de dollars pour 
 
 ```sh
 iroha --config defaults/client.toml asset mint \
-  --id coffee#wonderland##${ADMIN_ACCOUNT} \
+  --id norito:4e52543000000002 \
   --quantity 250
 ```
 
@@ -84,7 +84,7 @@ iroha --config defaults/client.toml asset list all --limit 5 --table
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${ADMIN_ACCOUNT}\"}" \
+  "{\"id\":\"norito:4e52543000000002\"}" \
   --limit 1 | jq .
 ```
 
@@ -94,7 +94,7 @@ Il y a 50 millions de dollars dans le dossier `$RECEIVER_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
-  --id coffee#wonderland##${ADMIN_ACCOUNT} \
+  --id norito:4e52543000000002 \
   --to ${RECEIVER_ACCOUNT} \
   --quantity 50
 ```
@@ -103,10 +103,10 @@ Utilisez le hachage pour `$TRANSFER_HASH`. استعلم عن الممتلكات 
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${ADMIN_ACCOUNT}\"}" --limit 1 | jq .
+  "{\"id\":\"norito:4e52543000000002\"}" --limit 1 | jq .
 
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
+  "{\"id\":\"norito:4e52543000000003\"}" --limit 1 | jq .
 ```
 
 ## 5. التحقق من ادلة السجل

@@ -2,7 +2,9 @@
 
 use std::{env, fs, path::PathBuf};
 
-use fastpq_prover::{OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch};
+use fastpq_prover::{
+    ExecutionMode, OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch,
+};
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
@@ -127,7 +129,9 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
 fn golden_stage2_proof_matches_fixture() {
     let path = fixture_path("stage2_balanced_1k.bin");
     if env::var("FASTPQ_UPDATE_FIXTURES").is_ok() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover =
+            Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
+                .unwrap();
         let batch = stage2_fixture_batch(1_000);
         let proof = prover.prove(&batch).expect("generate proof for fixture");
         let reencoded = to_bytes(&proof).expect("encode regenerated proof");
@@ -136,7 +140,8 @@ fn golden_stage2_proof_matches_fixture() {
     }
 
     let bytes = fs::read(&path).expect("read proof fixture");
-    let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+    let prover =
+        Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu).unwrap();
     let batch = stage2_fixture_batch(1_000);
     let proof = prover.prove(&batch).expect("produce proof for comparison");
     let reencoded = to_bytes(&proof).expect("encode proof for comparison");

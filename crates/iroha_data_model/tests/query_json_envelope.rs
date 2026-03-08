@@ -11,10 +11,14 @@ mod json_envelope {
         },
     };
 
-    const AUTHORITY: &str =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland";
-    const ALT_AUTHORITY: &str =
-        "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland";
+    const AUTHORITY: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const ALT_AUTHORITY: &str = "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV";
+
+    fn parse_authority(literal: &str) -> AccountId {
+        AccountId::parse_encoded(literal)
+            .map(|parsed| parsed.into_account_id())
+            .expect("authority")
+    }
 
     #[test]
     fn iterable_envelope_parses_params() {
@@ -30,14 +34,15 @@ mod json_envelope {
                 },
                 "predicate": {
                     "equals": [
-                        {"field": "authority", "value": "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"}
+                        {"field": "authority", "value": "__AUTHORITY__"}
                     ]
                 }
             }
-        }"#;
+        }"#
+        .replace("__AUTHORITY__", AUTHORITY);
 
-        let envelope: QueryEnvelopeJson = norito::json::from_str(json).expect("parse envelope");
-        let authority: AccountId = AUTHORITY.parse().expect("authority");
+        let envelope: QueryEnvelopeJson = norito::json::from_str(&json).expect("parse envelope");
+        let authority = parse_authority(AUTHORITY);
         let request = envelope
             .into_signed_request(authority.clone())
             .expect("build signed request");
@@ -73,7 +78,7 @@ mod json_envelope {
     fn iterable_order_without_key_errors() {
         let json = r#"{"iterable": {"type": "FindDomains", "params": {"order": "Asc"}}}"#;
         let envelope: QueryEnvelopeJson = norito::json::from_str(json).expect("parse envelope");
-        let authority: AccountId = ALT_AUTHORITY.parse().expect("authority");
+        let authority = parse_authority(ALT_AUTHORITY);
         let err = match envelope.into_signed_request(authority) {
             Ok(_) => panic!("order without sort key must error"),
             Err(err) => err,
@@ -125,7 +130,7 @@ mod json_envelope {
             }
         }"#;
         let envelope: QueryEnvelopeJson = norito::json::from_str(json).expect("parse envelope");
-        let authority: AccountId = AUTHORITY.parse().expect("authority");
+        let authority = parse_authority(AUTHORITY);
         let request = envelope
             .into_signed_request(authority)
             .expect("build signed request");

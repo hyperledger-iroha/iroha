@@ -524,7 +524,8 @@ def build_signed_transaction(
     chain_id:
         Target chain identifier.
     authority:
-        Transaction authority account identifier (IH58, UAID/opaque, or `<alias|public_key>@domain`).
+        Transaction authority account identifier (domainless encoded account
+        literal: IH58 preferred, compressed sora accepted).
     private_key:
         Ed25519 private key bytes aligned with `authority`.
     instructions:

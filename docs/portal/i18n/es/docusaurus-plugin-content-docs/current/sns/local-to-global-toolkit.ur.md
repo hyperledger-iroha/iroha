@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 Artículos:
 
 - `--format compressed` IH58 کے بجائے `sora...` salida کے لیے۔
-- `--no-append-domain` تاکہ literales desnudos نکلیں۔
+- `domainless output (default)` تاکہ literales desnudos نکلیں۔
 - Paso de conversión `--audit-only` چھوڑنے کے لیے۔
 - `--allow-errors` Elimina filas con formato incorrecto پر بھی escaneo جاری رہے (comportamiento CLI جیسا)۔
 
@@ -45,7 +45,7 @@ ticket de gestión de cambios کے ساتھ منسلک کریں اور Grafana c
 ## CI انضمام1. اسکرپٹ کو trabajo dedicado میں چلائیں اور salidas اپ لوڈ کریں۔
 2. جب `audit.json` Selectores locales رپورٹ کرے (`domain.kind = local12`) تو fusiones روک دیں۔
    default `true` پر رکھیں (صرف dev/test میں regresiones کی تشخیص کے وقت `false` کریں) اور
-   `iroha tools address normalize --fail-on-warning --only-local` Tarjeta CI میں شامل کریں تاکہ
+   `iroha tools address normalize` Tarjeta CI میں شامل کریں تاکہ
    producción de regresiones تک پہنچنے سے پہلے فیل ہوں۔
 
 مزید تفصیلات، listas de verificación de evidencia, اور fragmento de nota de lanzamiento کے لیے سورس دستاویز دیکھیں

@@ -160,7 +160,7 @@ Exemplos hex canonicos que ferramentas de carteira podem linkar ou embutir em
 
 | Tipo de seletor | Hex canonico |
 |---------------|---------------|
-| Implicito padrao | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Implicito padrao | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | Digest local (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | Registro global (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
@@ -177,7 +177,7 @@ strings comprimidas devem seguir o workflow CLI documentado em ADDR-5:
    `domain` com campos `kind`/`warning` e ecoa qualquer dominio fornecido via o
    campo `input_domain`. Quando `kind` e `local12`, a CLI imprime um aviso em
    stderr e o resumo JSON ecoa a mesma orientacao para que pipelines CI e SDKs
-   possam exibi-la. Passe `--append-domain` sempre que quiser reproduzir a
+   possam exibi-la. Passe `legacy  suffix` sempre que quiser reproduzir a
    codificacao convertida como `<ih58>@<domain>`.
 2. SDKs podem exibir o mesmo aviso/resumo via o helper JavaScript:
 
@@ -206,7 +206,7 @@ strings comprimidas devem seguir o workflow CLI documentado em ADDR-5:
    ignorados, e `--input -` ou nenhum flag usa STDIN), emite um relatorio JSON
    com resumos canonicos/IH58/comprimidos para cada entrada e conta erros de
    parse e avisos de dominio Local. Use `--allow-errors` ao auditar dumps alternativos
-   com linhas lixo, e trave a automacao com `--fail-on-warning` quando os
+   com linhas lixo, e trave a automacao com `strict CI post-check` quando os
    operadores estiverem prontos para bloquear seletores Local no CI.
 6. Quando precisar de reescrita linha a linha, use
   Para planilhas de remediacao de seletores Local, use
@@ -214,12 +214,12 @@ strings comprimidas devem seguir o workflow CLI documentado em ADDR-5:
   canonicas, avisos e falhas de parse em uma unica passada.
    O helper ignora linhas nao Local por padrao, converte cada entrada restante
    para a codificacao solicitada (IH58/comprimido/hex/JSON), e preserva o dominio
-   original quando `--append-domain` e definido. Combine com `--allow-errors`
+   original quando `legacy  suffix` e definido. Combine com `--allow-errors`
    para continuar a varredura mesmo quando um dump contem literais malformados.
 7. A automacao CI/lint pode executar `ci/check_address_normalize.sh`, que extrai
    seletores Local de `fixtures/account/address_vectors.json`, converte via
    `iroha tools address normalize`, e reexecuta
-   `iroha tools address audit --fail-on-warning` para provar que releases nao emitem
+   `iroha tools address audit` para provar que releases nao emitem
    mais digests Local.
 
 `torii_address_local8_total{endpoint}` junto com
@@ -257,7 +257,7 @@ prove que `domain_kind="local12"` permaneceu em zero na janela requerida de 30
 Inclua o seguinte bullet nas notas de release de carteira/explorador ao enviar o
 cutover:
 
-> **Enderecos:** Adicionado o helper `iroha tools address normalize --only-local --append-domain`
+> **Enderecos:** Adicionado o helper `iroha tools address normalize`
 > e conectado no CI (`ci/check_address_normalize.sh`) para que pipelines de
 > carteira/explorador possam converter seletores Local alternativos para formas
 > canonicas IH58/comprimidas antes de Local-8/Local-12 serem bloqueados na

@@ -9,9 +9,10 @@ use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr, sync::Arc};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Hash as IrohaHash, Sm3Digest};
 use iroha_data_model::{
+    account::ScopedAccountId,
     isi::transfer::TransferAssetBatch,
     nexus::{AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId},
-    prelude::{AccountId, Name, NftId},
+    prelude::{Name, NftId},
 };
 use iroha_primitives::{
     json::Json,
@@ -1411,7 +1412,9 @@ impl IVMHost for CoreHost {
                     }
                     syscalls::SYSCALL_JSON_GET_ACCOUNT_ID => {
                         let raw = field.as_str().ok_or(VMError::DecodeError)?;
-                        let acct = AccountId::from_str(raw).map_err(|_| VMError::DecodeError)?;
+                        let acct = ScopedAccountId::parse_encoded(raw)
+                            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                            .map_err(|_| VMError::DecodeError)?;
                         let body = to_bytes(&acct).map_err(|_| VMError::NoritoInvalid)?;
                         let mut out = Vec::with_capacity(7 + body.len() + 32);
                         out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
@@ -1901,26 +1904,26 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_TRANSFER_DOMAIN => {
-                // r10 = &DomainId, r11 = &AccountId(to)
+                // r10 = &DomainId, r11 = &ScopedAccountId(to)
                 Self::expect_tlv(vm, 10, PointerType::DomainId)?;
                 Self::expect_tlv(vm, 11, PointerType::AccountId)?;
                 Ok(0)
             }
             syscalls::SYSCALL_SET_ACCOUNT_DETAIL => {
-                // r10=&AccountId, r11=&Name, r12=&Json
+                // r10=&ScopedAccountId, r11=&Name, r12=&Json
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::Name)?;
                 Self::expect_tlv(vm, 12, PointerType::Json)?;
                 Ok(0)
             }
             syscalls::SYSCALL_NFT_MINT_ASSET => {
-                // r10=&NftId, r11=&AccountId
+                // r10=&NftId, r11=&ScopedAccountId
                 Self::expect_tlv(vm, 10, PointerType::NftId)?;
                 Self::expect_tlv(vm, 11, PointerType::AccountId)?;
                 Ok(0)
             }
             syscalls::SYSCALL_NFT_TRANSFER_ASSET => {
-                // r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)
+                // r10=&ScopedAccountId(from), r11=&NftId, r12=&ScopedAccountId(to)
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::NftId)?;
                 Self::expect_tlv(vm, 12, PointerType::AccountId)?;
@@ -1930,7 +1933,7 @@ impl IVMHost for CoreHost {
                 if self.fastpq_batch_active {
                     self.push_fastpq_batch_entry(vm)
                 } else {
-                    // r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId,
+                    // r10=&ScopedAccountId(from), r11=&ScopedAccountId(to), r12=&AssetDefinitionId,
                     // r13=&NoritoBytes(Numeric)
                     Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                     Self::expect_tlv(vm, 11, PointerType::AccountId)?;
@@ -2033,10 +2036,12 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_GET_AUTHORITY => {
-                // Produce a TLV with a fixed AccountId and return its INPUT pointer in x10
-                // AccountId parsing expects the canonical IH58 controller format.
-                const ACCOUNT: &str = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
-                let account: AccountId = ACCOUNT.parse().map_err(|_| VMError::NoritoInvalid)?;
+                // Produce a TLV with a fixed ScopedAccountId and return its INPUT pointer in x10.
+                // Parsing expects canonical IH58 controller format.
+                const ACCOUNT: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+                let account = ScopedAccountId::parse_encoded(ACCOUNT)
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    .map_err(|_| VMError::NoritoInvalid)?;
                 let payload = to_bytes(&account).map_err(|_| VMError::NoritoInvalid)?;
                 let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
                 tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
@@ -2367,9 +2372,15 @@ mod tests {
     fn fastpq_batch_validates_transfer_entries() {
         let mut host = CoreHost::new();
         let mut vm = IVM::new(1_000);
-        let from = make_pointer_tlv(PointerType::AccountId, b"alice@wonderland");
+        let from = make_pointer_tlv(
+            PointerType::AccountId,
+            b"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        );
         vm.memory.preload_input(0, &from).expect("preload from");
-        let to = make_pointer_tlv(PointerType::AccountId, b"bob@wonderland");
+        let to = make_pointer_tlv(
+            PointerType::AccountId,
+            b"6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
+        );
         vm.memory
             .preload_input(from.len() as u64 + 8, &to)
             .expect("preload to");

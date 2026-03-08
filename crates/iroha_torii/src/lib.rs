@@ -232,7 +232,7 @@ use iroha_data_model::sorafs::capacity::ProviderId;
 use iroha_data_model::sorafs::deal::DealUsageReport;
 use iroha_data_model::{
     ChainId,
-    account::{AccountAddress, AccountAddressFormat, AccountId},
+    account::{AccountAddress, AccountId},
     alias::AliasIndex,
     asset::{AssetDefinitionId, AssetId},
     block::{BlockHeader, proofs::BlockProofs},
@@ -335,6 +335,8 @@ pub use gov::{
     handle_gov_instances_by_ns, handle_gov_protected_get, handle_gov_protected_set,
     handle_gov_unlock_stats,
 };
+#[cfg(all(feature = "app_api", feature = "gov_vrf"))]
+pub use gov::{CouncilPersistRequest, handle_gov_council_derive_vrf, handle_gov_council_persist};
 // Routing helpers used by tests
 pub use routing::event::handle_events_stream;
 // Additional public re-exports of app endpoints used by tests
@@ -436,8 +438,8 @@ fn alias_service_from_iso_config(
             }
         };
 
-        let account_id: AccountId = match alias_cfg.account_id.parse() {
-            Ok(id) => id,
+        let account_id: AccountId = match AccountId::parse_encoded(&alias_cfg.account_id) {
+            Ok(parsed) => parsed.into_account_id(),
             Err(err) => {
                 iroha_logger::warn!(
                     iban = %alias_cfg.iban,
@@ -473,119 +475,6 @@ fn alias_service_from_iso_config(
     } else {
         Some(Arc::new(service))
     }
-}
-
-fn install_account_resolvers(state: &Arc<CoreState>) {
-    use iroha_data_model::{
-        account::{
-            AccountLabel, clear_account_alias_resolver, clear_account_domain_selector_resolver,
-            clear_account_opaque_resolver, clear_account_uaid_resolver, set_account_alias_resolver,
-            set_account_domain_selector_resolver, set_account_opaque_resolver,
-            set_account_uaid_resolver,
-        },
-        name::Name,
-    };
-
-    clear_account_alias_resolver();
-    clear_account_domain_selector_resolver();
-    clear_account_opaque_resolver();
-    clear_account_uaid_resolver();
-
-    let alias_state = Arc::clone(state);
-    set_account_alias_resolver(Arc::new(move |label, domain| {
-        let name = Name::from_str(label).ok()?;
-        let key = AccountLabel::new(domain.clone(), name);
-        let world = alias_state.world_view();
-        world.account_aliases().get(&key).cloned()
-    }));
-
-    let selector_state = Arc::clone(state);
-    set_account_domain_selector_resolver(Arc::new(move |selector| {
-        let world = selector_state.world_view();
-        world.domain_selectors().get(selector).cloned()
-    }));
-
-    let uaid_state = Arc::clone(state);
-    set_account_uaid_resolver(Arc::new(move |uaid| {
-        let world = uaid_state.world_view();
-        world.uaid_accounts().get(uaid).cloned()
-    }));
-
-    let opaque_state = Arc::clone(state);
-    set_account_opaque_resolver(Arc::new(move |opaque| {
-        let world = opaque_state.world_view();
-        world.opaque_uaids().get(opaque).copied()
-    }));
-}
-
-#[cfg(test)]
-pub(crate) fn ensure_test_domain_selector_resolver() {
-    use std::cell::Cell;
-
-    use iroha_data_model::{
-        account::{
-            AccountDomainSelector, account_domain_selector_resolver,
-            set_account_domain_selector_resolver,
-        },
-        domain::DomainId,
-    };
-
-    thread_local! {
-        static RESOLVER_INSTALLED: Cell<bool> = const { Cell::new(false) };
-    }
-
-    RESOLVER_INSTALLED.with(|flag| {
-        let existing = account_domain_selector_resolver();
-        if flag.get() && existing.is_some() {
-            return;
-        }
-
-        let resolver = std::sync::Arc::new(move |selector: &AccountDomainSelector| {
-            if let Some(ref resolver) = existing {
-                if let Some(domain) = resolver(selector) {
-                    return Some(domain);
-                }
-            }
-
-            let domains = [
-                "wonderland",
-                "garden_of_live_flowers",
-                "treasury",
-                "sora",
-                "soranet",
-                "default",
-                "iroha",
-                "alpha",
-                "omega",
-                "governance",
-                "validators",
-                "explorer",
-                "kitsune",
-                "da",
-                "council",
-                "genesis",
-                "test",
-                "payload",
-                "index_test",
-                "dummy",
-                "custom",
-                "sns",
-            ];
-
-            domains.iter().find_map(|label| {
-                let domain: DomainId = (*label).parse().ok()?;
-                let candidate = AccountDomainSelector::from_domain(&domain).ok()?;
-                if &candidate == selector {
-                    Some(domain)
-                } else {
-                    None
-                }
-            })
-        });
-
-        set_account_domain_selector_resolver(resolver);
-        flag.set(true);
-    });
 }
 
 const ALIAS_METRIC_LANE: &str = "torii";
@@ -2777,34 +2666,6 @@ async fn handler_accounts_query(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_accounts_resolve(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoJson(request): crate::utils::extractors::NoritoJson<
-        crate::routing::AccountResolveRequestDto,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_accounts_resolve(
-            crate::utils::extractors::NoritoJson(request),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/accounts/resolve", enforce).await?;
-
-    routing::handle_v1_accounts_resolve(
-        crate::utils::extractors::NoritoJson(request),
-        app.telemetry.clone(),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
 async fn handler_accounts_onboard(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -2845,7 +2706,10 @@ async fn handler_accounts_portfolio(
     AxQuery(query): AxQuery<AccountsPortfolioQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let asset_id = match query.asset_id {
-        Some(raw) => Some(parse_asset_id(&raw)?),
+        Some(raw) => {
+            let parsed = parse_asset_id(&raw)?;
+            Some(parsed.canonical_encoded())
+        }
         None => None,
     };
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
@@ -4216,8 +4080,13 @@ fn parse_account_id_for_endpoint(
     literal: &str,
     endpoint: &'static str,
 ) -> Result<AccountId, Error> {
-    routing::parse_account_path_segment(literal, &app.telemetry, endpoint)
-        .map(|(account_id, _)| account_id)
+    routing::parse_account_path_segment_with_state(
+        app.state.as_ref(),
+        literal,
+        &app.telemetry,
+        endpoint,
+    )
+    .map(|(account_id, _)| account_id)
 }
 
 #[cfg(feature = "app_api")]
@@ -4234,7 +4103,7 @@ fn parse_asset_definition_id(raw: &str) -> Result<AssetDefinitionId, Error> {
 
 #[cfg(feature = "app_api")]
 fn parse_asset_id(raw: &str) -> Result<AssetId, Error> {
-    raw.parse::<AssetId>()
+    AssetId::parse_encoded(raw)
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
 }
 
@@ -4427,6 +4296,20 @@ async fn handler_explorer_blocks_list(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_explorer_health(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<AxResponse, Error> {
+    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, None, "v1/explorer/health").await?;
+    }
+    routing::handle_v1_explorer_health(app.state.clone(), app.kura.clone(), app.telemetry.clone())
+        .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_explorer_transactions_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4466,6 +4349,58 @@ async fn handler_explorer_transactions_list(
         check_access(&app, &headers, None, "v1/explorer/transactions").await?;
     }
     crate::routing::handle_v1_explorer_transactions(
+        app.state.clone(),
+        app.telemetry.clone(),
+        pagination,
+        authority,
+        block,
+        status,
+        asset_id,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_explorer_transactions_latest(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxQuery(query): AxQuery<ExplorerTransactionsQuery>,
+) -> Result<AxResponse, Error> {
+    let ExplorerTransactionsQuery {
+        pagination,
+        authority,
+        block,
+        status,
+        asset_id,
+    } = query;
+    if let Some(block_height) = block {
+        if block_height == 0 {
+            return Err(conversion_error("block must be at least 1".to_owned()));
+        }
+    }
+    let authority = match authority {
+        Some(raw) => Some(parse_account_id_for_endpoint(
+            &app,
+            &raw,
+            CONTEXT_EXPLORER_TRANSACTIONS_AUTHORITY,
+        )?),
+        None => None,
+    };
+    let status = match status {
+        Some(raw) => Some(crate::routing::parse_transaction_status_filter(&raw)?),
+        None => None,
+    };
+    let asset_id = match asset_id {
+        Some(raw) if raw.trim().is_empty() => None,
+        Some(raw) => Some(parse_asset_id(&raw)?),
+        None => None,
+    };
+    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, None, "v1/explorer/transactions/latest").await?;
+    }
+    crate::routing::handle_v1_explorer_transactions_latest(
         app.state.clone(),
         app.telemetry.clone(),
         pagination,
@@ -4542,6 +4477,87 @@ async fn handler_explorer_instructions_list(
         check_access(&app, &headers, None, "v1/explorer/instructions").await?;
     }
     crate::routing::handle_v1_explorer_instructions(
+        app.state.clone(),
+        app.telemetry.clone(),
+        pagination,
+        crate::routing::ExplorerInstructionQuery {
+            account,
+            authority,
+            transaction_hash,
+            status,
+            block,
+            kind,
+            asset_id,
+        },
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_explorer_instructions_latest(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxQuery(query): AxQuery<ExplorerInstructionsQuery>,
+) -> Result<AxResponse, Error> {
+    let ExplorerInstructionsQuery {
+        pagination,
+        account,
+        authority,
+        transaction_hash,
+        transaction_status,
+        block,
+        kind,
+        asset_id,
+    } = query;
+    if let Some(block_height) = block {
+        if block_height == 0 {
+            return Err(conversion_error("block must be at least 1".to_owned()));
+        }
+    }
+    let authority = match authority {
+        Some(raw) if !raw.trim().is_empty() => Some(parse_account_id_for_endpoint(
+            &app,
+            &raw,
+            CONTEXT_EXPLORER_INSTRUCTIONS_AUTHORITY,
+        )?),
+        _ => None,
+    };
+    let account = match account {
+        Some(raw) if !raw.trim().is_empty() => Some(parse_account_id_for_endpoint(
+            &app,
+            &raw,
+            CONTEXT_EXPLORER_INSTRUCTIONS_ACCOUNT,
+        )?),
+        _ => None,
+    };
+    let transaction_hash = match transaction_hash {
+        Some(raw) if !raw.trim().is_empty() => Some(parse_transaction_hash(&raw)?),
+        _ => None,
+    };
+    let status = match transaction_status {
+        Some(raw) => Some(crate::routing::parse_transaction_status_filter(&raw)?),
+        None => None,
+    };
+    let kind = match kind {
+        Some(raw) if raw.trim().is_empty() => None,
+        Some(raw) if raw.trim().eq_ignore_ascii_case("all") => None,
+        Some(raw) => Some(
+            raw.parse::<explorer::ExplorerInstructionKind>()
+                .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?,
+        ),
+        None => None,
+    };
+    let asset_id = match asset_id {
+        Some(raw) if raw.trim().is_empty() => None,
+        Some(raw) => Some(parse_asset_id(&raw)?),
+        None => None,
+    };
+    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, None, "v1/explorer/instructions/latest").await?;
+    }
+    crate::routing::handle_v1_explorer_instructions_latest(
         app.state.clone(),
         app.telemetry.clone(),
         pagination,
@@ -10844,8 +10860,8 @@ fn enforce_sorafs_repair_worker_auth(
         conversion_error(format!("invalid repair worker signature payload: {err}"))
     })?;
 
-    let account_id: AccountId = worker_id
-        .parse()
+    let account_id: AccountId = AccountId::parse_encoded(worker_id)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| conversion_error(format!("invalid worker_id `{worker_id}`: {err}")))?;
     let permission = Permission::from(CanOperateSorafsRepair {
         provider_id: ProviderId::new(record.provider_id),
@@ -13374,71 +13390,6 @@ async fn handler_sumeragi_vrf_reveal(
     routing::handle_post_sumeragi_vrf_reveal(handle, request)
 }
 
-#[cfg(feature = "telemetry")]
-async fn handler_status_root_v2(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    accept: Option<utils::extractors::ExtractAccept>,
-) -> Result<impl IntoResponse, Error> {
-    // Token + rate limit only (no remote IP CIDR check here)
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(&headers, None, "status", app.api_token_enforced());
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    if enforce && !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_metrics() {
-        return Ok(telemetry_unavailable_response(uri::STATUS, &app.telemetry));
-    }
-    let nexus_enabled = app.state.nexus_snapshot().enabled;
-    routing::handle_status(&app.telemetry, accept.map(|e| e.0), None, nexus_enabled).await
-}
-
-#[cfg(feature = "telemetry")]
-async fn handler_status_tail_v2(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    accept: Option<utils::extractors::ExtractAccept>,
-    AxPath(tail): AxPath<String>,
-) -> Result<impl IntoResponse, Error> {
-    validate_api_token(&app, &headers)?;
-    let key = rate_limit_key(&headers, None, "status", app.api_token_enforced());
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    if enforce && !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_metrics() {
-        return Ok(telemetry_unavailable_response(uri::STATUS, &app.telemetry));
-    }
-    let nexus_enabled = app.state.nexus_snapshot().enabled;
-    routing::handle_status(
-        &app.telemetry,
-        accept.map(|e| e.0),
-        Some(&tail),
-        nexus_enabled,
-    )
-    .await
-}
-
 // -------------- Runtime handlers (removed AppState-based; use closures in router) --------------
 // (re-exports consolidated above)
 mod da;
@@ -14462,7 +14413,6 @@ impl Torii {
                 // Accounts listing
                 .route("/v1/accounts", get(handler_accounts_list))
                 .route("/v1/accounts/query", post(handler_accounts_query))
-                .route("/v1/accounts/resolve", post(handler_accounts_resolve))
                 .route("/v1/accounts/onboard", post(handler_accounts_onboard))
                 .route(
                     "/v1/accounts/{uaid}/portfolio",
@@ -14830,6 +14780,7 @@ impl Torii {
                 .route("/v1/explorer/assets", get(handler_explorer_assets_list))
                 .route("/v1/explorer/nfts", get(handler_explorer_nfts_list))
                 .route("/v1/explorer/blocks", get(handler_explorer_blocks_list))
+                .route("/v1/explorer/health", get(handler_explorer_health))
                 .route(
                     "/v1/explorer/blocks/stream",
                     get(handler_explorer_blocks_stream),
@@ -14839,12 +14790,20 @@ impl Torii {
                     get(handler_explorer_transactions_list),
                 )
                 .route(
+                    "/v1/explorer/transactions/latest",
+                    get(handler_explorer_transactions_latest),
+                )
+                .route(
                     "/v1/explorer/transactions/stream",
                     get(handler_explorer_transactions_stream),
                 )
                 .route(
                     "/v1/explorer/instructions",
                     get(handler_explorer_instructions_list),
+                )
+                .route(
+                    "/v1/explorer/instructions/latest",
+                    get(handler_explorer_instructions_latest),
                 )
                 .merge({
                     #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -15348,7 +15307,6 @@ impl Torii {
             config.app_api.max_fetch_size.get().into(),
             config.app_api.rate_limit_cost_per_row.get().into(),
         ));
-        install_account_resolvers(&state);
         crate::data_dir::set_base_dir(config.data_dir.clone());
         #[cfg(feature = "push")]
         let (push_bridge, push_rate_limiter) = {
@@ -16998,15 +16956,15 @@ fn build_account_id_denylist_entry(
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "account_id is required for account_id denylist entries".to_string())?;
-    let (account_address, format) = AccountAddress::parse_any(account_id_raw, None)
+    let parsed = AccountId::parse_encoded(account_id_raw)
         .map_err(|err| format!("invalid account_id `{account_id_raw}`: {err}"))?;
-    if !matches!(format, AccountAddressFormat::CanonicalHex) {
-        iroha_logger::debug!(
-            literal = %account_id_raw,
-            ?format,
-            "gateway denylist normalized account address literal"
-        );
-    }
+    let account_id = parsed.into_account_id();
+    let account_address = AccountAddress::from_account_id(&account_id)
+        .map_err(|err| format!("failed to derive account address: {err}"))?;
+    iroha_logger::debug!(
+        literal = %account_id_raw,
+        "gateway denylist normalized account id literal"
+    );
     let canonical = account_address
         .canonical_hex()
         .map_err(|err| format!("failed to encode canonical account address: {err}"))?;
@@ -17061,7 +17019,10 @@ fn build_account_alias_denylist_entry(
 #[cfg(all(test, feature = "app_api"))]
 mod gateway_denylist_loader_tests {
     use iroha_crypto::PublicKey;
-    use iroha_data_model::{account::AccountId, domain::DomainId};
+    use iroha_data_model::{
+        account::{AccountId, address::chain_discriminant},
+        domain::DomainId,
+    };
 
     use super::*;
 
@@ -17083,7 +17044,9 @@ mod gateway_denylist_loader_tests {
         let account = AccountId::new(domain, public_key);
         let address = AccountAddress::from_account_id(&account).expect("address from account_id");
         let canonical = address.canonical_hex().expect("canonical hex");
-        let ih58 = address.to_ih58(42).expect("ih58 encoding");
+        let ih58 = address
+            .to_ih58(chain_discriminant())
+            .expect("ih58 encoding");
         let compressed = address.to_compressed_sora().expect("compressed encoding");
         (canonical, ih58, compressed)
     }
@@ -17111,9 +17074,9 @@ mod gateway_denylist_loader_tests {
 
     #[test]
     fn account_id_entries_normalise_to_canonical_hex() {
-        let (sample_canonical, _, _) = sample_account_literals();
+        let (sample_canonical, sample_ih58, _) = sample_account_literals();
         let mut entry = base_account_entry();
-        entry.account_id = Some(sample_canonical.clone());
+        entry.account_id = Some(sample_ih58);
         entry.account_alias = Some("routing@sora".to_string());
         entry.jurisdiction = Some("US".to_string());
         entry.reason = Some("test".to_string());
@@ -17132,6 +17095,32 @@ mod gateway_denylist_loader_tests {
         assert_eq!(metadata.alias(), Some("routing@sora"));
         assert_eq!(metadata.jurisdiction(), Some("US"));
         assert_eq!(metadata.reason(), Some("test"));
+    }
+
+    #[test]
+    fn account_id_entries_reject_canonical_hex_literals() {
+        let (canonical, _, _) = sample_account_literals();
+        let mut entry = base_account_entry();
+        entry.account_id = Some(canonical);
+        entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
+
+        let policy = sample_policy();
+        let err = build_account_id_denylist_entry(&entry, &policy)
+            .expect_err("canonical hex account_id must be rejected");
+        assert!(err.contains("invalid account_id"));
+    }
+
+    #[test]
+    fn account_id_entries_reject_encoded_literals_with_domain_suffix() {
+        let (_, ih58, _) = sample_account_literals();
+        let mut entry = base_account_entry();
+        entry.account_id = Some(format!("{ih58}@wonderland"));
+        entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
+
+        let policy = sample_policy();
+        let err = build_account_id_denylist_entry(&entry, &policy)
+            .expect_err("encoded literal with @domain suffix must be rejected");
+        assert!(err.contains("invalid account_id"));
     }
 
     #[test]
@@ -17745,31 +17734,6 @@ pub(crate) mod tests_runtime_handlers {
             version: app.api_versions.default,
             inferred: true,
         })
-    }
-
-    #[cfg(feature = "app_api")]
-    pub(crate) struct AccountResolverGuard {
-        _lock: MutexGuard<'static, ()>,
-    }
-
-    #[cfg(feature = "app_api")]
-    impl Drop for AccountResolverGuard {
-        fn drop(&mut self) {
-            iroha_data_model::account::clear_account_alias_resolver();
-            iroha_data_model::account::clear_account_domain_selector_resolver();
-            iroha_data_model::account::clear_account_opaque_resolver();
-            iroha_data_model::account::clear_account_uaid_resolver();
-        }
-    }
-
-    #[cfg(feature = "app_api")]
-    pub(crate) fn guard_account_resolvers(app: &SharedAppState) -> AccountResolverGuard {
-        static RESOLVER_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-        let lock = RESOLVER_GUARD
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        install_account_resolvers(&app.state);
-        AccountResolverGuard { _lock: lock }
     }
 
     pub fn mk_app_state_for_tests() -> SharedAppState {
@@ -18740,7 +18704,7 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(all(feature = "app_api", feature = "push"))]
     fn mk_push_request(token: &str) -> push::RegisterDeviceRequest {
         push::RegisterDeviceRequest {
-            account_id: "alice@wonderland".to_string(),
+            account_id: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".to_string(),
             platform: "FCM".to_string(),
             token: token.to_string(),
             topics: Some(vec!["orders".into()]),
@@ -19703,7 +19667,7 @@ pub(crate) mod tests_runtime_handlers {
         app_inner.fee_policy = FeePolicy::Manual {
             asset_id: "xor#wonderland".to_string(),
             amount: 1,
-            receiver: "admin@wonderland".to_string(),
+            receiver: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".to_string(),
         };
 
         let headers = HeaderMap::new();
@@ -19713,11 +19677,15 @@ pub(crate) mod tests_runtime_handlers {
             authority: creds.account.clone(),
             private_key: clone_private_key(&creds.private_key),
             manifest: empty_manifest(),
+            gov_namespace: None,
+            gov_contract_id: None,
         };
         let dto2 = RegisterContractCodeDto {
             authority: creds.account.clone(),
             private_key: clone_private_key(&creds.private_key),
             manifest: empty_manifest(),
+            gov_namespace: None,
+            gov_contract_id: None,
         };
 
         let first = super::handler_post_contract_code(
@@ -21101,9 +21069,8 @@ mod tests {
     use crate::{
         limits,
         tests_runtime_handlers::{
-            guard_account_resolvers, mk_app_state_for_tests,
-            mk_app_state_for_tests_with_iso_bridge, mk_app_state_for_tests_with_options,
-            mk_app_state_for_tests_with_world, negotiated,
+            mk_app_state_for_tests, mk_app_state_for_tests_with_iso_bridge,
+            mk_app_state_for_tests_with_options, mk_app_state_for_tests_with_world, negotiated,
         },
     };
 
@@ -21320,9 +21287,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_returns_account_from_iso_bridge() {
-        let account_id: AccountId = format!("{}@wonderland", KeyPair::random().public_key())
-            .parse()
-            .expect("valid account id");
+        let account_id = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            KeyPair::random().public_key().clone(),
+        );
         let alias = "GB82 WEST 1234 5698 7654 32";
         let iso_cfg = sample_iso_bridge_config(alias, &account_id);
         let app = mk_app_state_for_tests_with_iso_bridge(Some(iso_cfg));
@@ -21354,17 +21322,17 @@ mod tests {
     #[tokio::test]
     async fn sorafs_repair_worker_auth_accepts_signed_worker() {
         let app = mk_app_state_for_tests();
-        let _guard = guard_account_resolvers(&app);
         let report = repair_report("REP-900", [0x11; 32], [0x22; 32], 1_701_000_000);
         app.sorafs_node
             .enqueue_repair_report(&report)
             .expect("enqueue report");
 
         let worker_key = KeyPair::random();
-        let worker_id: AccountId = format!("{}@sora", worker_key.public_key())
-            .parse()
-            .expect("valid worker id");
-        let worker_id_literal = format!("{worker_id}@{}", worker_id.domain());
+        let worker_id = AccountId::new(
+            "sora".parse().expect("domain"),
+            worker_key.public_key().clone(),
+        );
+        let worker_id_literal = worker_id.to_string();
         grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
 
         let claimed_at = report.submitted_at_unix + 10;
@@ -21400,17 +21368,17 @@ mod tests {
     #[tokio::test]
     async fn sorafs_repair_worker_auth_rejects_missing_permission() {
         let app = mk_app_state_for_tests();
-        let _guard = guard_account_resolvers(&app);
         let report = repair_report("REP-901", [0x33; 32], [0x44; 32], 1_701_000_100);
         app.sorafs_node
             .enqueue_repair_report(&report)
             .expect("enqueue report");
 
         let worker_key = KeyPair::random();
-        let worker_id: AccountId = format!("{}@sora", worker_key.public_key())
-            .parse()
-            .expect("valid worker id");
-        let worker_id_literal = format!("{worker_id}@{}", worker_id.domain());
+        let worker_id = AccountId::new(
+            "sora".parse().expect("domain"),
+            worker_key.public_key().clone(),
+        );
+        let worker_id_literal = worker_id.to_string();
 
         let failed_at = report.submitted_at_unix + 20;
         let idempotency_key = "fail-901";
@@ -21450,17 +21418,17 @@ mod tests {
     #[tokio::test]
     async fn sorafs_repair_worker_auth_rejects_manifest_digest_mismatch() {
         let app = mk_app_state_for_tests();
-        let _guard = guard_account_resolvers(&app);
         let report = repair_report("REP-902", [0x55; 32], [0x66; 32], 1_701_000_200);
         app.sorafs_node
             .enqueue_repair_report(&report)
             .expect("enqueue report");
 
         let worker_key = KeyPair::random();
-        let worker_id: AccountId = format!("{}@sora", worker_key.public_key())
-            .parse()
-            .expect("valid worker id");
-        let worker_id_literal = format!("{worker_id}@{}", worker_id.domain());
+        let worker_id = AccountId::new(
+            "sora".parse().expect("domain"),
+            worker_key.public_key().clone(),
+        );
+        let worker_id_literal = worker_id.to_string();
         grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
 
         let claimed_at = report.submitted_at_unix + 10;
@@ -21499,9 +21467,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_returns_not_found_for_unknown_alias() {
-        let account_id: AccountId = format!("{}@wonderland", KeyPair::random().public_key())
-            .parse()
-            .expect("valid account id");
+        let account_id = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            KeyPair::random().public_key().clone(),
+        );
         let iso_cfg = sample_iso_bridge_config("GB82WEST12345698765432", &account_id);
         let app = mk_app_state_for_tests_with_iso_bridge(Some(iso_cfg));
 
@@ -21532,63 +21501,6 @@ mod tests {
         .into_response();
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    }
-
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn accounts_resolve_accepts_alias_uaid_and_opaque() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
-        let key_pair = KeyPair::random();
-        let account_id = AccountId::new(domain.clone(), key_pair.public_key().clone());
-        let label = AccountLabel::new(domain.clone(), Name::from_str("alice").expect("label"));
-        let uaid = UniversalAccountId::from_hash(
-            Hash::from_str("00112233445566778899aabbccddeeff00112233445566778899aabbccddeef1")
-                .expect("uaid hash"),
-        );
-        let opaque = OpaqueAccountId::from_hash(
-            Hash::from_str("ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221101")
-                .expect("opaque hash"),
-        );
-
-        let account = Account::new(account_id.clone())
-            .with_label(Some(label))
-            .with_uaid(Some(uaid))
-            .with_opaque_ids(vec![opaque])
-            .build(&account_id);
-        let domain_entry = Domain::new(domain.clone()).build(&account_id);
-        let world = World::with_assets([domain_entry], [account], [], [], []);
-        let app = mk_app_state_for_tests_with_world(world);
-        let _guard = guard_account_resolvers(&app);
-
-        let raw_public_literal = format!("{}@{}", key_pair.public_key(), domain);
-        let cases = [
-            (format!("alice@{domain}"), "alias", None),
-            (raw_public_literal, "public_key", None),
-            (uaid.to_string(), "uaid", None),
-            (opaque.to_string(), "opaque", None),
-            (account_id.to_string(), "encoded", Some("ih58")),
-        ];
-
-        for (literal, source, format) in cases {
-            let response = routing::handle_v1_accounts_resolve(
-                NoritoJson(routing::AccountResolveRequestDto { literal }),
-                app.telemetry.clone(),
-            )
-            .await
-            .expect("handler should succeed")
-            .into_response();
-            assert_eq!(response.status(), StatusCode::OK);
-            let body = http_body_util::BodyExt::collect(response.into_body())
-                .await
-                .unwrap()
-                .to_bytes();
-            let dto: routing::AccountResolveResponseDto =
-                norito::json::from_slice(&body).expect("json decode");
-            assert_eq!(dto.account_id, account_id.to_string());
-            assert_eq!(dto.domain, domain.to_string());
-            assert_eq!(dto.source, source);
-            assert_eq!(dto.format.as_deref(), format);
-        }
     }
 
     #[tokio::test]
@@ -23047,9 +22959,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_returns_alias_record() {
-        let account_id: AccountId = format!("{}@wonderland", KeyPair::random().public_key())
-            .parse()
-            .expect("valid account id");
+        let account_id = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            KeyPair::random().public_key().clone(),
+        );
         let alias = "GB82 WEST 1234 5698 7654 32";
         let iso_cfg = sample_iso_bridge_config(alias, &account_id);
         let app = mk_app_state_for_tests_with_iso_bridge(Some(iso_cfg));
@@ -23078,9 +22991,10 @@ mod tests {
     #[tokio::test]
     async fn alias_resolve_non_account_target_returns_not_implemented() {
         let mut app = mk_app_state_for_tests();
-        let owner: AccountId = format!("{}@wonderland", KeyPair::random().public_key())
-            .parse()
-            .expect("valid account id");
+        let owner = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            KeyPair::random().public_key().clone(),
+        );
         let alias_name = Name::from_str("CUSTOM").expect("valid alias name");
 
         let service = {

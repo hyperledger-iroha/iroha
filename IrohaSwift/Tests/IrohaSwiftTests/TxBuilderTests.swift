@@ -216,6 +216,7 @@ final class TxBuilderTests: XCTestCase {
     private static let fixturePrivateKeyHex = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
     private static let fixtureChainId = "00000000-0000-0000-0000-000000000000"
     private static let fixtureDomain = "wonderland"
+    private static let fixtureExplorerAccountId = AccountId.make(publicKey: Data(repeating: 0x2A, count: 32))
     private static let fixtureAssetDefinition = "rose#wonderland"
     private static let fixtureCreationTimeMs: UInt64 = 1_700_000_000_000
     private enum FixtureError: Error { case invalidKey }
@@ -315,10 +316,10 @@ final class TxBuilderTests: XCTestCase {
         let keypair = try Keypair.generate()
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
-                                       authority: AccountId.make(publicKey: keypair.publicKey, domain: "wonderland"),
+                                       authority: AccountId.make(publicKey: keypair.publicKey),
                                        assetDefinitionId: "rose#wonderland",
                                        quantity: "1",
-                                       destination: AccountId.make(publicKey: keypair.publicKey, domain: "wonderland"),
+                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                        description: nil,
                                        ttlMs: 90)
         let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: keypair)
@@ -332,12 +333,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testCreationTimeProviderProducesDeterministicHash() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: Self.fixtureChainId,
                                        authority: authority,
                                        assetDefinitionId: Self.fixtureAssetDefinition,
@@ -370,7 +369,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         let expectation = expectation(description: "rest unavailable")
-        sdk.getAssets(accountId: "alice@wonderland") { result in
+        sdk.getAssets(accountId: Self.fixtureExplorerAccountId) { result in
             switch result {
             case .success:
                 XCTFail("expected failure when REST client is missing")
@@ -637,7 +636,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         let expectation = expectation(description: "rest unavailable")
-        sdk.getAccountTransferHistory(accountId: "alice@wonderland") { result in
+        sdk.getAccountTransferHistory(accountId: Self.fixtureExplorerAccountId) { result in
             switch result {
             case .success:
                 XCTFail("expected failure when REST client is missing")
@@ -654,7 +653,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         do {
-            _ = try await sdk.getAccountTransferHistory(accountId: "alice@wonderland")
+            _ = try await sdk.getAccountTransferHistory(accountId: Self.fixtureExplorerAccountId)
             XCTFail("expected failure when REST client is missing")
         } catch {
             XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
@@ -666,7 +665,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         let expectation = expectation(description: "rest unavailable")
-        sdk.getTransactionHistory(accountId: "alice@wonderland") { result in
+        sdk.getTransactionHistory(accountId: Self.fixtureExplorerAccountId) { result in
             switch result {
             case .success:
                 XCTFail("expected failure when REST client is missing")
@@ -683,7 +682,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         do {
-            _ = try await sdk.getTransactionHistory(accountId: "alice@wonderland")
+            _ = try await sdk.getTransactionHistory(accountId: Self.fixtureExplorerAccountId)
             XCTFail("expected failure when REST client is missing")
         } catch {
             XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
@@ -695,7 +694,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         do {
-            for try await _ in sdk.iterateAccountTransferHistory(accountId: "alice@wonderland") {
+            for try await _ in sdk.iterateAccountTransferHistory(accountId: Self.fixtureExplorerAccountId) {
                 XCTFail("expected no items when REST client is missing")
             }
             XCTFail("expected failure when REST client is missing")
@@ -765,7 +764,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         do {
-            for try await _ in sdk.streamAccountTransferHistory(accountId: "alice@wonderland") {
+            for try await _ in sdk.streamAccountTransferHistory(accountId: Self.fixtureExplorerAccountId) {
                 XCTFail("expected no items when REST client is missing")
             }
             XCTFail("expected failure when REST client is missing")
@@ -810,7 +809,7 @@ final class TxBuilderTests: XCTestCase {
         try requireEd25519Encoder()
         let stub = StubPipelineClient()
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
                                        assetDefinitionId: "rose#wonderland",
@@ -839,7 +838,7 @@ final class TxBuilderTests: XCTestCase {
                       "Native transaction encoder unavailable")
         let keypair = try makeFixtureKeypair()
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try makeRegisterZkAssetRequest(authority: authority, ttlMs: 60)
         let envelope = try sdk.buildRegisterZkAsset(request: request, keypair: keypair)
         XCTAssertEqual(String(data: envelope.norito.prefix(4), encoding: .ascii), "NRT0")
@@ -864,7 +863,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         stub.result = .failure(StubError.failure)
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
                                        assetDefinitionId: "rose#wonderland",
@@ -890,7 +889,7 @@ final class TxBuilderTests: XCTestCase {
         try requireEd25519Encoder()
         let stub = StubPipelineClient()
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
                                        assetDefinitionId: "rose#wonderland",
@@ -911,7 +910,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         stub.result = .failure(StubError.failure)
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
                                        assetDefinitionId: "rose#wonderland",
@@ -932,12 +931,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testFallbackTransferMatchesNativeBridge() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = TransferRequest(chainId: Self.fixtureChainId,
                                       authority: authority,
                                       assetDefinitionId: Self.fixtureAssetDefinition,
@@ -969,12 +966,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testSigningKeyTransferMatchesKeypairEncoding() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
         let keypair = try makeFixtureKeypair()
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = TransferRequest(chainId: Self.fixtureChainId,
                                       authority: authority,
                                       assetDefinitionId: Self.fixtureAssetDefinition,
@@ -993,12 +988,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testFallbackMintMatchesNativeBridge() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = MintRequest(chainId: Self.fixtureChainId,
                                   authority: authority,
                                   assetDefinitionId: Self.fixtureAssetDefinition,
@@ -1029,12 +1022,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testFallbackBurnMatchesNativeBridge() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = BurnRequest(chainId: Self.fixtureChainId,
                                   authority: authority,
                                   assetDefinitionId: Self.fixtureAssetDefinition,
@@ -1067,12 +1058,9 @@ final class TxBuilderTests: XCTestCase {
     func testSetMetadataMatchesNativeBridge() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Native transaction encoder unavailable")
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
 
         let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let value = try NoritoJSON("wonderland")
         let request = SetMetadataRequest(chainId: Self.fixtureChainId,
                                          authority: authority,
@@ -1109,12 +1097,9 @@ final class TxBuilderTests: XCTestCase {
     func testGovernanceProposeDeployMatchesNativeBridge() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Native transaction encoder unavailable")
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
 
         let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let codeHash = Data(repeating: 0x11, count: 32)
         let abiHash = Data(repeating: 0x22, count: 32)
         let window = GovernanceWindow(lower: 4, upper: 8)
@@ -1160,12 +1145,9 @@ final class TxBuilderTests: XCTestCase {
     func testPersistCouncilMatchesNativeBridge() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Native transaction encoder unavailable")
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
 
         let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = PersistCouncilRequest(chainId: Self.fixtureChainId,
                                             authority: authority,
                                             epoch: 7,
@@ -1201,12 +1183,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testNativeBridgeTransferWhenAvailable() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
 
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
                                        assetDefinitionId: "rose#wonderland",
@@ -1237,7 +1217,7 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
                                        assetDefinitionId: "rose#wonderland",
@@ -1256,12 +1236,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testMintNativeBridgeWhenAvailable() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
 
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let destination = authority
 
         guard let native = try? NoritoNativeBridge.shared.encodeMint(chainId: "00000000-0000-0000-0000-000000000000",
@@ -1283,12 +1261,9 @@ final class TxBuilderTests: XCTestCase {
     func testSetMetadataNativeBridgeWhenAvailable() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Native transaction encoder unavailable")
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
 
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try SetMetadataRequest(chainId: Self.fixtureChainId,
                                              authority: authority,
                                              target: .domain(Self.fixtureDomain),
@@ -1306,12 +1281,9 @@ final class TxBuilderTests: XCTestCase {
     func testProposeDeployNativeBridgeWhenAvailable() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Native transaction encoder unavailable")
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
 
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = ProposeDeployContractRequest(chainId: Self.fixtureChainId,
                                                    authority: authority,
                                                    namespace: "apps",
@@ -1335,7 +1307,7 @@ final class TxBuilderTests: XCTestCase {
         defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
 
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let destination = authority
         let request = MintRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                   authority: authority,
@@ -1357,7 +1329,7 @@ final class TxBuilderTests: XCTestCase {
         defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
 
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try SetMetadataRequest(chainId: Self.fixtureChainId,
                                              authority: authority,
                                              target: .domain(Self.fixtureDomain),
@@ -1378,7 +1350,7 @@ final class TxBuilderTests: XCTestCase {
         defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
 
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let destination = authority
         let request = BurnRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                   authority: authority,
@@ -1397,7 +1369,7 @@ final class TxBuilderTests: XCTestCase {
 
     func testShieldRequestValidatesCommitmentLength() throws {
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let payload = try ConfidentialEncryptedPayload(ephemeralPublicKey: Data(repeating: 0x11, count: 32),
                                                        nonce: Data(repeating: 0x22, count: 24),
                                                        ciphertext: Data([0xAA, 0xBB]))
@@ -1418,12 +1390,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testShieldEncodingMatchesNativeBridge() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try makeShieldRequest(authority: authority)
         let fallback = try SwiftTransactionEncoder.encodeShield(request: request,
                                                                 keypair: keypair,
@@ -1453,7 +1423,7 @@ final class TxBuilderTests: XCTestCase {
 
     func testUnshieldRequestRequiresInputs() throws {
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let proof = try makeProofAttachment()
         XCTAssertThrowsError(
             try UnshieldRequest(chainId: Self.fixtureChainId,
@@ -1472,7 +1442,7 @@ final class TxBuilderTests: XCTestCase {
 
     func testUnshieldRequestValidatesNullifierLength() throws {
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let proof = try makeProofAttachment()
         let invalidInput = Data(repeating: 0x11, count: 8)
         XCTAssertThrowsError(
@@ -1492,7 +1462,7 @@ final class TxBuilderTests: XCTestCase {
 
     func testUnshieldRequestValidatesRootHintLength() throws {
         let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let proof = try makeProofAttachment()
         let validInput = Data(repeating: 0x42, count: 32)
         let hint = Data(repeating: 0xFF, count: 8)
@@ -1513,11 +1483,9 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testUnshieldEncodingMatchesNativeBridge() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireEd25519Encoder()
         let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try makeUnshieldRequest(authority: authority)
         let fallback = try SwiftTransactionEncoder.encodeUnshield(request: request,
                                                                   keypair: keypair,
@@ -1550,10 +1518,10 @@ final class TxBuilderTests: XCTestCase {
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
-                                      authority: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
-                                      destination: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
                                       ttlMs: 60)
         let status = try await sdk.submitAndWait(transfer: request, keypair: keypair)
@@ -1568,10 +1536,10 @@ final class TxBuilderTests: XCTestCase {
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
-                                      authority: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
-                                      destination: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
                                       ttlMs: 60)
         do {
@@ -1597,10 +1565,10 @@ final class TxBuilderTests: XCTestCase {
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
-                                      authority: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
-                                      destination: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
                                       ttlMs: 60)
         do {
@@ -1627,10 +1595,10 @@ final class TxBuilderTests: XCTestCase {
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
-                                      authority: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
-                                      destination: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
                                       ttlMs: 60)
         let expectation = expectation(description: "pipeline completion")
@@ -1658,10 +1626,10 @@ final class TxBuilderTests: XCTestCase {
                                                            maxAttempts: 1)
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
-                                      authority: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
-                                      destination: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
                                       ttlMs: 60)
         do {
@@ -1684,10 +1652,10 @@ final class TxBuilderTests: XCTestCase {
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
-                                      authority: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
-                                      destination: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
                                       ttlMs: 60)
         let options = PipelineStatusPollOptions(successStates: Set([.queued]), failureStates: Set())
@@ -1706,10 +1674,10 @@ final class TxBuilderTests: XCTestCase {
                                                           backoffMultiplier: 1)
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
-                                      authority: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
-                                      destination: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
                                       ttlMs: 60)
         let envelope = try sdk.buildSignedTransfer(transfer: request, keypair: keypair)
@@ -1733,10 +1701,10 @@ final class TxBuilderTests: XCTestCase {
                            pipelineSubmitOptions: PipelineSubmitOptions(maxRetries: 2, initialBackoffSeconds: 0, backoffMultiplier: 1))
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
-                                      authority: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
-                                      destination: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
                                       ttlMs: 60)
         let envelope = try sdk.buildSignedTransfer(transfer: request, keypair: keypair)
@@ -1758,10 +1726,10 @@ final class TxBuilderTests: XCTestCase {
                            pipelineSubmitOptions: PipelineSubmitOptions(maxRetries: 1, initialBackoffSeconds: 0, backoffMultiplier: 1))
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
-                                      authority: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
-                                      destination: AccountId.make(publicKey: keypair.publicKey, domain: Self.fixtureDomain),
+                                      destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
                                       ttlMs: 60)
         let envelope = try sdk.buildSignedTransfer(transfer: request, keypair: keypair)

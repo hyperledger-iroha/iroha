@@ -161,45 +161,38 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
     let canonical =
         AccountAddress::from_canonical_bytes(&canonical_payload).expect("canonical payload decode");
 
-    // Sanity-check canonical round-trip via Torii parsing helpers.
-    let (any_addr, any_format) = AccountAddress::parse_any(&case.encodings.canonical_hex, None)
-        .expect("parse_any canonical");
-    assert_eq!(
-        any_format,
-        AccountAddressFormat::CanonicalHex,
-        "{}: canonical parse_any reported unexpected format",
-        case.case_id
-    );
-    assert_eq!(
-        canonical_bytes(&any_addr),
-        canonical_payload,
-        "{}: parse_any canonical mismatch",
+    // Strict parser rejects canonical-hex literals.
+    let err = AccountAddress::parse_encoded(&case.encodings.canonical_hex, None)
+        .expect_err("canonical hex should be rejected");
+    assert!(
+        matches!(err, AccountAddressError::UnsupportedAddressFormat),
+        "{}: canonical hex must be unsupported",
         case.case_id
     );
 
     // IH58 parsing + re-encoding
-    let (parsed_ih58, format_ih58) = AccountAddress::parse_any(
+    let (parsed_ih58, format_ih58) = AccountAddress::parse_encoded(
         &case.encodings.ih58.string,
         Some(case.encodings.ih58.prefix),
     )
-    .expect("parse_any ih58");
+    .expect("parse_encoded ih58");
     match format_ih58 {
         AccountAddressFormat::IH58 { network_prefix } => {
             assert_eq!(
                 network_prefix, case.encodings.ih58.prefix,
-                "{}: parse_any IH58 prefix mismatch",
+                "{}: parse_encoded IH58 prefix mismatch",
                 case.case_id
             );
         }
         other => panic!(
-            "{}: parse_any IH58 reported unexpected format {other:?}",
+            "{}: parse_encoded IH58 reported unexpected format {other:?}",
             case.case_id
         ),
     }
     assert_eq!(
         canonical_bytes(&parsed_ih58),
         canonical_payload,
-        "{}: parse_any IH58 canonical mismatch",
+        "{}: parse_encoded IH58 canonical mismatch",
         case.case_id
     );
 
@@ -221,19 +214,20 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         case.case_id
     );
 
-    // Compressed parse_any coverage
+    // Compressed parse_encoded coverage
     let (parsed_compressed, format_compressed) =
-        AccountAddress::parse_any(&case.encodings.compressed, None).expect("parse_any compressed");
+        AccountAddress::parse_encoded(&case.encodings.compressed, None)
+            .expect("parse_encoded compressed");
     assert_eq!(
         format_compressed,
         AccountAddressFormat::Compressed,
-        "{}: parse_any compressed reported unexpected format",
+        "{}: parse_encoded compressed reported unexpected format",
         case.case_id
     );
     assert_eq!(
         canonical_bytes(&parsed_compressed),
         canonical_payload,
-        "{}: parse_any compressed canonical mismatch",
+        "{}: parse_encoded compressed canonical mismatch",
         case.case_id
     );
 
@@ -273,7 +267,7 @@ fn validate_negative_case(case: &NegativeCase, default_prefix: u16) {
             assert_error(&err, &case.expected_error, &case.case_id);
         }
         "canonical_hex" => {
-            let err = AccountAddress::parse_any(&case.input, None)
+            let err = AccountAddress::parse_encoded(&case.input, None)
                 .expect_err("canonical negative should fail");
             assert_error(&err, &case.expected_error, &case.case_id);
         }

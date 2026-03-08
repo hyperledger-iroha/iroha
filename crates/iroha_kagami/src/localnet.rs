@@ -85,7 +85,7 @@ pub struct AssetSpec {
     /// Fully qualified asset definition ID (e.g., `tea#wonderland`).
     pub id: String,
     /// Account that should receive the minted supply.
-    pub mint_to: AccountId,
+    pub mint_to: ScopedAccountId,
     /// Quantity to mint for this asset definition.
     pub quantity: u64,
 }
@@ -701,17 +701,19 @@ struct LocalnetTxGossipOverrides {
     resend_ticks: u32,
 }
 
-fn localnet_gas_account_id(genesis_public_key: &iroha_crypto::PublicKey) -> Result<AccountId> {
+fn localnet_gas_account_id(
+    genesis_public_key: &iroha_crypto::PublicKey,
+) -> Result<ScopedAccountId> {
     let domain: DomainId = LOCALNET_IVM_DOMAIN.parse()?;
-    Ok(AccountId::new(domain, genesis_public_key.clone()))
+    Ok(ScopedAccountId::new(domain, genesis_public_key.clone()))
 }
 
-fn account_id_raw_string(account_id: &AccountId) -> String {
-    if let Some(signatory) = account_id.try_signatory() {
-        return format!("{signatory}@{}", account_id.domain());
-    }
-    // Use the encoded address when the controller is not single-signatory.
+fn account_id_raw_string(account_id: &ScopedAccountId) -> String {
     account_id.to_string()
+}
+
+fn account_id_runtime_literal(account_id: &ScopedAccountId) -> String {
+    account_id_raw_string(account_id)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -829,7 +831,7 @@ fn generate_localnet_with_line<T: Write>(
     tui::success("Genesis ready");
 
     tui::status("Writing peer configs");
-    let gas_account_id = gas_account_id.as_ref().map(account_id_raw_string);
+    let gas_account_id = gas_account_id.as_ref().map(account_id_runtime_literal);
     let trusted = peers
         .iter()
         .map(|p| format!("{}@{}", p.public_key, hosts.public.addr_literal(p.p2p_port)))
@@ -1609,7 +1611,7 @@ fn extend_genesis(
         let domain_id: DomainId = "wonderland"
             .parse()
             .expect("default genesis must include wonderland domain");
-        let account_id = AccountId::new(domain_id, pk.clone());
+        let account_id = ScopedAccountId::new(domain_id, pk.clone());
         builder = builder.append_instruction(Register::account(Account::new(account_id)));
     }
 
@@ -1777,7 +1779,7 @@ fn append_peer_pop(genesis: RawGenesisTransaction, peers: &[Peer]) -> RawGenesis
 fn append_localnet_npos_bootstrap(
     genesis: RawGenesisTransaction,
     peers: &[Peer],
-    gas_account_id: &AccountId,
+    gas_account_id: &ScopedAccountId,
     stake_amount: u64,
 ) -> Result<RawGenesisTransaction> {
     let nexus_domain: DomainId = LOCALNET_NEXUS_DOMAIN.parse()?;
@@ -1794,7 +1796,7 @@ fn append_localnet_npos_bootstrap(
     builder = builder.append_instruction(Register::asset_definition(definition));
 
     for peer in peers {
-        let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key.clone());
+        let validator_id = ScopedAccountId::new(nexus_domain.clone(), peer.public_key.clone());
         builder = builder.append_instruction(Register::account(Account::new(validator_id.clone())));
         builder = builder.append_instruction(Mint::asset_numeric(
             stake_amount,
@@ -1804,7 +1806,7 @@ fn append_localnet_npos_bootstrap(
 
     let mut builder = builder.next_transaction();
     for peer in peers {
-        let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key.clone());
+        let validator_id = ScopedAccountId::new(nexus_domain.clone(), peer.public_key.clone());
         builder = builder.append_instruction(RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
             validator: validator_id.clone(),
@@ -3243,7 +3245,7 @@ mod tests {
         let nexus_domain: DomainId = LOCALNET_NEXUS_DOMAIN.parse().expect("nexus domain");
         let expected: BTreeSet<_> = peers
             .iter()
-            .map(|peer| AccountId::new(nexus_domain.clone(), peer.public_key.clone()))
+            .map(|peer| ScopedAccountId::new(nexus_domain.clone(), peer.public_key.clone()))
             .collect();
         let actual: BTreeSet<_> = validators
             .iter()
@@ -3326,7 +3328,7 @@ mod tests {
         let nexus_domain: DomainId = LOCALNET_NEXUS_DOMAIN.parse().expect("nexus domain");
         let expected: BTreeSet<_> = peers
             .iter()
-            .map(|peer| AccountId::new(nexus_domain.clone(), peer.public_key.clone()))
+            .map(|peer| ScopedAccountId::new(nexus_domain.clone(), peer.public_key.clone()))
             .collect();
         let actual: BTreeSet<_> = validators
             .iter()
@@ -4204,7 +4206,7 @@ mod tests {
             Some(true),
             "npos iroha3 localnet should enable nexus without a sora profile"
         );
-        let gas_account_id = account_id_raw_string(&gas_account_id);
+        let gas_account_id = account_id_runtime_literal(&gas_account_id);
         let staking = nexus
             .get("staking")
             .and_then(toml::Value::as_table)
@@ -4261,8 +4263,19 @@ mod tests {
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
         let gas_account_id = localnet_gas_account_id(&genesis_public_key).expect("gas account id");
         let encoded = account_id_raw_string(&gas_account_id);
-        let parsed: AccountId = encoded.parse().expect("account id parse");
-        assert_eq!(parsed, gas_account_id);
+        let parsed = ScopedAccountId::parse_encoded(&encoded)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("account id parse");
+        assert_eq!(parsed.to_string(), gas_account_id.to_string());
+    }
+
+    #[test]
+    fn account_id_runtime_literal_uses_encoded_literal() {
+        let seed_bytes = Some(b"localnet-gas-runtime-literal".as_slice());
+        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key).expect("gas account id");
+        let literal = account_id_runtime_literal(&gas_account_id);
+        assert_eq!(literal, gas_account_id.to_string());
     }
 
     #[test]

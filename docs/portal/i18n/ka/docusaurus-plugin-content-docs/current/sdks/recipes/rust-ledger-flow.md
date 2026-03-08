@@ -133,6 +133,6 @@ ih58... now holds:
 - გამოიყენეთ `iroha --config defaults/client.toml transaction get --hash <hash>`
   შეამოწმეთ ტრანზაქციები, რომლებიც SDK-მ წარადგინა.
 - გადაამოწმეთ ნაშთები `iroha --config defaults/client.toml asset list all --table`-ით
-  ან `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+  ან `asset list filter '{"id":"norito:4e52543000000002"}'`.
 - გაიმეორეთ იგივე ნაკადი CLI-დან, რათა დაადასტუროთ ორივე ზედაპირის წარმოქმნა
   იგივე Norito დატვირთვა და ტრანზაქციის სტატუსი.

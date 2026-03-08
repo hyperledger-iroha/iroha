@@ -14,6 +14,12 @@ use iroha_data_model::{account::NewAccount, prelude::*};
 use ivm::{IVM, KotodamaCompiler};
 use mv::storage::StorageReadOnly;
 
+fn fixture_account(hex_public_key: &str) -> AccountId {
+    let domain: DomainId = "wonderland".parse().expect("domain id");
+    let public_key = hex_public_key.parse().expect("public key");
+    AccountId::new(domain, public_key)
+}
+
 #[test]
 fn kotodama_pointer_abi_asset_ops_end_to_end() {
     // Compile Kotodama sample
@@ -22,14 +28,10 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     let program = compiler.compile_source(src).expect("compile kotodama");
 
     // Prepare VM with CoreHost
-    let from: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-            .parse()
-            .unwrap();
-    let to: AccountId =
-        "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
-            .parse()
-            .unwrap();
+    let from =
+        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let to =
+        fixture_account("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
     let mut vm = IVM::new(50_000_000);
     vm.set_host(CoreHost::new(from.clone()));
     vm.load_program(&program).expect("load program");

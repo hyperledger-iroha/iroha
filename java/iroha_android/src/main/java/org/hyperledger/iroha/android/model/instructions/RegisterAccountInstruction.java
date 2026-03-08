@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 
 /** Typed builder for the `RegisterAccount` instruction. */
 public final class RegisterAccountInstruction implements InstructionTemplate {
@@ -101,7 +102,7 @@ public final class RegisterAccountInstruction implements InstructionTemplate {
     private Builder() {}
 
     public Builder setAccountId(final String accountId) {
-      this.accountId = Objects.requireNonNull(accountId, "accountId");
+      this.accountId = AccountIdLiteral.extractIh58Address(accountId);
       return this;
     }
 

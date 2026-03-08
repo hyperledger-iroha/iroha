@@ -4,11 +4,16 @@ use hex::decode;
 use iroha_crypto::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, Sm3Digest};
 use ivm::{
     CoreHost, Memory, PointerType, VMError, encoding, instruction,
-    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, WsvHost},
+    mock_wsv::{AssetDefinitionId, MockWorldStateView, ScopedAccountId, WsvHost},
 };
 
-const TEST_CALLER_ID: &str =
-    "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+const TEST_CALLER_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+
+fn test_caller_account() -> ScopedAccountId {
+    ScopedAccountId::parse_encoded(TEST_CALLER_ID)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("test account literal must be valid canonical AccountId")
+}
 
 mod common;
 use common::{assemble, payload_for_type};
@@ -32,6 +37,23 @@ fn make_blob_tlv(payload: &[u8]) -> Vec<u8> {
 
 fn core_host_with_sm(enable: bool) -> CoreHost {
     CoreHost::new().with_sm_enabled(enable)
+}
+
+fn wsv_host_with_subject_map(
+    caller: ScopedAccountId,
+    accounts: HashMap<u64, ScopedAccountId>,
+    assets: HashMap<u64, AssetDefinitionId>,
+) -> WsvHost {
+    let subject_accounts = accounts
+        .into_iter()
+        .map(|(index, account)| (index, ivm::mock_wsv::AccountSubjectId::from(&account)))
+        .collect();
+    WsvHost::new_with_subject_map(
+        MockWorldStateView::new(),
+        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        subject_accounts,
+        assets,
+    )
 }
 
 #[test]
@@ -121,14 +143,11 @@ fn core_host_sm3_hash_returns_digest_blob() {
 fn mock_wsv_sm3_hash_returns_digest_blob() {
     let message = b"mockwsv-sm3";
     let expected = Sm3Digest::hash(message);
-    let caller: AccountId = TEST_CALLER_ID
-        .parse()
-        .expect("valid account id for test host");
-    let mut accounts: HashMap<u64, AccountId> = HashMap::new();
+    let caller: ScopedAccountId = test_caller_account();
+    let mut accounts: HashMap<u64, ScopedAccountId> = HashMap::new();
     accounts.insert(1, caller.clone());
     let assets: HashMap<u64, AssetDefinitionId> = HashMap::new();
-    let host =
-        WsvHost::new(MockWorldStateView::new(), caller, accounts, assets).with_sm_enabled(true);
+    let host = wsv_host_with_subject_map(caller, accounts, assets).with_sm_enabled(true);
     let payload = run_sm3_with_host(host, message);
     assert_eq!(payload.as_slice(), expected.as_bytes());
 }
@@ -143,14 +162,11 @@ fn wsv_host_sm2_verify_succeeds_when_enabled() {
     let message = b"wsv-sm2-enabled";
     let signature = private.sign(message).to_bytes();
 
-    let caller: AccountId = TEST_CALLER_ID
-        .parse()
-        .expect("valid account id for test host");
-    let mut accounts: HashMap<u64, AccountId> = HashMap::new();
+    let caller: ScopedAccountId = test_caller_account();
+    let mut accounts: HashMap<u64, ScopedAccountId> = HashMap::new();
     accounts.insert(1, caller.clone());
     let assets: HashMap<u64, AssetDefinitionId> = HashMap::new();
-    let host =
-        WsvHost::new(MockWorldStateView::new(), caller, accounts, assets).with_sm_enabled(true);
+    let host = wsv_host_with_subject_map(caller, accounts, assets).with_sm_enabled(true);
 
     let mut vm = IVM::new(10_000);
     vm.set_host(host);
@@ -252,13 +268,11 @@ fn wsv_host_sm3_hash_requires_enable_flag() {
     let message = b"wsv-sm3-disabled";
     let tlv = make_blob_tlv(message);
 
-    let caller: AccountId = TEST_CALLER_ID
-        .parse()
-        .expect("valid account id for test host");
-    let mut accounts: HashMap<u64, AccountId> = HashMap::new();
+    let caller: ScopedAccountId = test_caller_account();
+    let mut accounts: HashMap<u64, ScopedAccountId> = HashMap::new();
     accounts.insert(1, caller.clone());
     let assets: HashMap<u64, AssetDefinitionId> = HashMap::new();
-    let host = WsvHost::new(MockWorldStateView::new(), caller, accounts, assets);
+    let host = wsv_host_with_subject_map(caller, accounts, assets);
 
     let mut vm = IVM::new(10_000);
     vm.set_host(host);
@@ -1055,13 +1069,11 @@ fn wsv_host_sm2_verify_requires_enable_flag() {
     let message = b"ivm-sm2-wsvhost-disabled";
     let signature = private.sign(message).to_bytes();
 
-    let caller: AccountId = TEST_CALLER_ID
-        .parse()
-        .expect("valid account id for test host");
-    let mut accounts: HashMap<u64, AccountId> = HashMap::new();
+    let caller: ScopedAccountId = test_caller_account();
+    let mut accounts: HashMap<u64, ScopedAccountId> = HashMap::new();
     accounts.insert(1, caller.clone());
     let assets: HashMap<u64, AssetDefinitionId> = HashMap::new();
-    let host = WsvHost::new(MockWorldStateView::new(), caller, accounts, assets);
+    let host = wsv_host_with_subject_map(caller, accounts, assets);
 
     let mut vm = IVM::new(10_000);
     vm.set_host(host);
@@ -1104,14 +1116,11 @@ fn wsv_host_sm4_gcm_seal_matches_vector_when_enabled() {
     let expected_cipher = decode("6468017fde4979a107326ee77d8a265c").expect("hex cipher");
     let expected_tag = decode("cadf422b1af7ec6df46004dc8d3ba855").expect("hex tag");
 
-    let caller: AccountId = TEST_CALLER_ID
-        .parse()
-        .expect("valid account id for test host");
-    let mut accounts: HashMap<u64, AccountId> = HashMap::new();
+    let caller: ScopedAccountId = test_caller_account();
+    let mut accounts: HashMap<u64, ScopedAccountId> = HashMap::new();
     accounts.insert(1, caller.clone());
     let assets: HashMap<u64, AssetDefinitionId> = HashMap::new();
-    let host =
-        WsvHost::new(MockWorldStateView::new(), caller, accounts, assets).with_sm_enabled(true);
+    let host = wsv_host_with_subject_map(caller, accounts, assets).with_sm_enabled(true);
 
     let mut vm = IVM::new(10_000);
     vm.set_host(host);
@@ -1165,13 +1174,11 @@ fn wsv_host_sm4_gcm_seal_requires_enable_flag() {
     let nonce = [0x22u8; 12];
     let plaintext = [0x33u8; 16];
 
-    let caller: AccountId = TEST_CALLER_ID
-        .parse()
-        .expect("valid account id for test host");
-    let mut accounts: HashMap<u64, AccountId> = HashMap::new();
+    let caller: ScopedAccountId = test_caller_account();
+    let mut accounts: HashMap<u64, ScopedAccountId> = HashMap::new();
     accounts.insert(1, caller.clone());
     let assets: HashMap<u64, AssetDefinitionId> = HashMap::new();
-    let host = WsvHost::new(MockWorldStateView::new(), caller, accounts, assets);
+    let host = wsv_host_with_subject_map(caller, accounts, assets);
 
     let mut vm = IVM::new(10_000);
     vm.set_host(host);

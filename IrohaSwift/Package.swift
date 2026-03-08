@@ -60,6 +60,7 @@ let shouldLinkBridge = hasBridgeArtifact && useBridge
 var targets: [Target] = []
 var irohaSwiftDependencies: [Target.Dependency] = []
 var testDependencies: [Target.Dependency] = ["IrohaSwift"]
+var irohaSwiftLinkerSettings: [LinkerSetting] = []
 
 if shouldLinkBridge {
     targets.append(
@@ -71,6 +72,8 @@ if shouldLinkBridge {
     let bridgeDependency: Target.Dependency = .target(name: "NoritoBridge", condition: .when(platforms: [.iOS, .macOS]))
     irohaSwiftDependencies.append(bridgeDependency)
     testDependencies.append(bridgeDependency)
+    // Ensure static bridge object files are retained so runtime dlsym lookups resolve.
+    irohaSwiftLinkerSettings.append(.unsafeFlags(["-all_load"], .when(platforms: [.iOS])))
 }
 
 var swiftSettings: [SwiftSetting] = [
@@ -102,7 +105,8 @@ let package = Package(
             path: "Sources/IrohaSwift",
             exclude: [],
             resources: [],
-            swiftSettings: swiftSettings
+            swiftSettings: swiftSettings,
+            linkerSettings: irohaSwiftLinkerSettings
         ),
         .testTarget(
             name: "IrohaSwiftTests",

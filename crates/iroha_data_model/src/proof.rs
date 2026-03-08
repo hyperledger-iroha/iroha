@@ -969,10 +969,11 @@ mod tests {
         let result_proof: iroha_crypto::MerkleProof<crate::transaction::TransactionResult> =
             iroha_crypto::MerkleProof::from_audit_path(0, vec![]);
         // Construct a minimal time-triggered entrypoint and a rejected result
-        let authority: crate::account::AccountId =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                .parse()
-                .expect("valid account id");
+        let authority = crate::account::AccountId::parse_encoded(
+            "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+        )
+        .expect("valid account id")
+        .into_account_id();
         let trigger_id: crate::trigger::TriggerId = "test_trigger".parse().expect("trigger id");
         let time_entry = crate::trigger::TimeTriggerEntrypoint {
             id: trigger_id,

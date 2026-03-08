@@ -10,6 +10,7 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
     zk::test_utils::halo2_fixture_envelope,
 };
+use iroha_crypto::KeyPair;
 use iroha_data_model::{account::NewAccount, name::Name, prelude::*};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -34,7 +35,7 @@ fn shield_and_transfer_emit_audit_roots_and_commitments() {
     let mut stx = block.transaction();
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
-    let owner: AccountId = "alice@zkd".parse().unwrap();
+    let owner = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),

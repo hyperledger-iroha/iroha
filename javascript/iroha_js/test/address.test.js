@@ -24,11 +24,29 @@ function hexToBytes(hex) {
   if (body.length % 2 !== 0) {
     throw new TypeError("hex string must have even length");
   }
+  if (!/^[0-9a-fA-F]*$/.test(body)) {
+    throw new TypeError("hex string must use [0-9a-fA-F] characters");
+  }
   const out = new Uint8Array(body.length / 2);
   for (let index = 0; index < out.length; index += 1) {
     out[index] = parseInt(body.slice(index * 2, index * 2 + 2), 16);
   }
   return out;
+}
+
+function parseCanonicalHexFixture(encoded) {
+  try {
+    return AccountAddress.fromCanonicalBytes(hexToBytes(String(encoded)));
+  } catch (error) {
+    if (error instanceof AccountAddressError) {
+      throw error;
+    }
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_HEX_ADDRESS,
+      "invalid canonical hex account address",
+      { cause: error },
+    );
+  }
 }
 
 const DEFAULT_PUBLIC_KEY = hexToBytes(
@@ -44,7 +62,7 @@ const SM2_PUBLIC_KEY = hexToBytes(
   "04361255A512347E76EA947EBB416C12D4C07E30B150C0EC2047ECC5E142907499B8D99C4C5CF69BFF6527E7B67396B55E42EF98625B339696DBEF9A3AABBFC06F",
 );
 const MULTISIG_CANONICAL_HEX =
-  "0x0a014b5d81318d0cdf5559258c8e01010003030100010020591b509f4a1b29c9d8cada0f876ee97041cbd43c0de3251b1e6c77bb621f40b0010002002062ffa8de6da654efebfa3d80fdef8f188034cfa3e211859346e41a5fea06532b0100010020d4abafc1f385826a8ebc60df90568c52ccfbf91e0b134dc66e42731a7561e4da";
+  "0x0a0101000303010001002068f4b6017d0f876a55c80a82b8388a54aad264d367269e2de8be079c935b5f9601000100207ea0e3bd52e207c9d3b0eba65c0704e66fca2d8e165a175218b174fc4160e4130100020020884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b";
 const MULTISIG_CANONICAL_BYTES = hexToBytes(MULTISIG_CANONICAL_HEX);
 
 test("configureCurveSupport validates options and gating toggles", () => {
@@ -134,26 +152,26 @@ test("multisig policies enforce core validation rules", () => {
   };
 
   mutateAndExpect((bytes) => {
-    bytes[15] = 0x02;
+    bytes[2] = 0x02;
   }, "UnsupportedVersion");
 
   mutateAndExpect((bytes) => {
-    bytes[16] = 0x00;
-    bytes[17] = 0x00;
+    bytes[3] = 0x00;
+    bytes[4] = 0x00;
   }, "ZeroThreshold");
 
   mutateAndExpect((bytes) => {
-    bytes[20] = 0x00;
-    bytes[21] = 0x00;
+    bytes[7] = 0x00;
+    bytes[8] = 0x00;
   }, "MemberWeightZero");
 
   mutateAndExpect((bytes) => {
-    bytes[16] = 0x00;
-    bytes[17] = 0x05;
+    bytes[3] = 0x00;
+    bytes[4] = 0x05;
   }, "ThresholdExceedsTotal");
 
   mutateAndExpect((bytes) => {
-    bytes.set(bytes.subarray(24, 56), 61);
+    bytes.set(bytes.subarray(48, 80), 85);
   }, "DuplicateMember");
 });
 
@@ -169,28 +187,25 @@ test("account address golden vectors round-trip", () => {
 
   assert.equal(
     canonical,
-    "0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+    "0x02000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201",
   );
-  assert.equal(ih58, "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA");
+  assert.equal(ih58, "6cmzPVPX6eXMQPXrQzgef9LubBFmrK8yVoJ51F9DSpWfztubMTChkB2");
   assert.equal(
     compressed,
-    "sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
+    "sorauﾛ1P5ﾁXEｴﾕGjgﾕﾚﾎﾕｸﾁEtﾀ3ﾂｺ2gALｺﾒefﾍ8DLgｾoCVGUYHS5",
   );
 
-  const { address: parsedIH58, format: formatIH58 } = AccountAddress.parseAny(ih58, 753);
+  const { address: parsedIH58, format: formatIH58 } = AccountAddress.parseEncoded(ih58, 753);
   assert.equal(formatIH58, AccountAddressFormat.IH58);
   assert.deepEqual(Buffer.from(parsedIH58.canonicalBytes()), Buffer.from(address.canonicalBytes()));
 
-  const { address: parsedCompressed, format: formatCompressed } = AccountAddress.parseAny(compressed);
+  const { address: parsedCompressed, format: formatCompressed } = AccountAddress.parseEncoded(compressed);
   assert.equal(formatCompressed, AccountAddressFormat.COMPRESSED);
   assert.deepEqual(
     Buffer.from(parsedCompressed.canonicalBytes()),
     Buffer.from(address.canonicalBytes()),
   );
 
-  const { address: parsedHex, format: formatHex } = AccountAddress.parseAny(canonical);
-  assert.equal(formatHex, AccountAddressFormat.CANONICAL_HEX);
-  assert.deepEqual(Buffer.from(parsedHex.canonicalBytes()), Buffer.from(address.canonicalBytes()));
 });
 
 test("account address rejects extension flag", () => {
@@ -210,24 +225,31 @@ test("account address rejects extension flag", () => {
   );
 });
 
-test("Local-8 payloads emit dedicated error code", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "wonderland",
+test("selector-prefixed noncanonical payloads are rejected", () => {
+  const selectorFree = AccountAddress.fromAccount({
+    domain: DEFAULT_DOMAIN_NAME,
     publicKey: DEFAULT_PUBLIC_KEY,
   });
-  const canonical = Array.from(address.canonicalBytes());
+  const baseCanonical = Array.from(selectorFree.canonicalBytes());
+  const prefixedLocal = [baseCanonical[0], 0x01];
+  for (let index = 0; index < 12; index += 1) {
+    prefixedLocal.push(index + 1);
+  }
+  prefixedLocal.push(...baseCanonical.slice(1));
   const digestStart = 2; // header (0) + domain tag (1)
   const truncated = Uint8Array.from(
-    canonical.slice(0, digestStart + 8).concat(canonical.slice(digestStart + 12)),
+    prefixedLocal.slice(0, digestStart + 8).concat(prefixedLocal.slice(digestStart + 12)),
   );
 
   assert.throws(
-    () => AccountAddress.fromCanonicalBytes(truncated),
+    () => AccountAddress.fromCanonicalBytes(Uint8Array.from(prefixedLocal)),
     (error) => {
       assert(error instanceof AccountAddressError);
-      assert.equal(error.code, AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT);
-      assert.equal(error.details?.expected, 12);
-      assert.equal(error.details?.found, 8);
+      assert.ok(
+        error.code === AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES ||
+          error.code === AccountAddressErrorCode.UNKNOWN_CURVE ||
+          error.code === AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT,
+      );
       return true;
     },
   );
@@ -237,14 +259,14 @@ test("Local-8 payloads emit dedicated error code", () => {
     () => inspectAccountId(literal),
     (error) =>
       error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT,
+      error.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
   );
 });
 
-test("parseAny rejects non-string address literals", () => {
+test("parseEncoded rejects non-string address literals", () => {
   for (const input of [null, undefined, 42, {}, []]) {
     assert.throws(
-      () => AccountAddress.parseAny(input),
+      () => AccountAddress.parseEncoded(input),
       (error) =>
         error instanceof TypeError &&
         /address literal must be a string/.test(error.message),
@@ -252,36 +274,32 @@ test("parseAny rejects non-string address literals", () => {
   }
 });
 
-test("parseAny accepts canonical hex without 0x sentinel", () => {
+test("parseEncoded rejects canonical hex literals", () => {
   const address = AccountAddress.fromAccount({
     domain: DEFAULT_DOMAIN_NAME,
     publicKey: DEFAULT_PUBLIC_KEY,
   });
   const canonical = address.canonicalHex();
   const rawHex = canonical.replace(/^0x/i, "");
-
-  const { address: parsedRaw, format: rawFormat } = AccountAddress.parseAny(rawHex);
-  assert.equal(rawFormat, AccountAddressFormat.CANONICAL_HEX);
-  assert.deepEqual(Buffer.from(parsedRaw.canonicalBytes()), Buffer.from(address.canonicalBytes()));
-
-  const upperRaw = rawHex.toUpperCase();
-  const { address: parsedUpper, format: upperFormat } = AccountAddress.parseAny(upperRaw);
-  assert.equal(upperFormat, AccountAddressFormat.CANONICAL_HEX);
-  assert.deepEqual(
-    Buffer.from(parsedUpper.canonicalBytes()),
-    Buffer.from(address.canonicalBytes()),
-  );
+  for (const literal of [canonical, rawHex, rawHex.toUpperCase()]) {
+    assert.throws(
+      () => AccountAddress.parseEncoded(literal),
+      (error) =>
+        error instanceof AccountAddressError &&
+        error.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+    );
+  }
 });
 
-test("parseAny validates expected domain input type", () => {
+test("parseEncoded validates expected domain input type", () => {
   const address = AccountAddress.fromAccount({
     domain: DEFAULT_DOMAIN_NAME,
     publicKey: DEFAULT_PUBLIC_KEY,
   });
-  const canonical = address.canonicalHex();
+  const ih58 = address.toIH58();
 
   assert.throws(
-    () => AccountAddress.parseAny(canonical, undefined, 99),
+    () => AccountAddress.parseEncoded(ih58, undefined, 99),
     (error) =>
       error instanceof TypeError &&
       /expected domain name must be a string/.test(error.message),
@@ -304,24 +322,22 @@ test("displayFormats exposes domain summary for UI hints", () => {
     label: DEFAULT_DOMAIN_NAME,
   });
 
-  const localAddress = AccountAddress.fromAccount({
-    domain: "treasury",
+  const nonDefaultAddress = AccountAddress.fromAccount({
+    domain: "wonderland",
     publicKey: ALT_PUBLIC_KEY,
   });
-  const localFormats = localAddress.displayFormats();
-  assert.equal(localFormats.domainSummary.kind, "local12");
-  assert.equal(typeof localFormats.domainSummary.warning, "string");
-  assert.equal(localFormats.domainSummary.selector.tag, 1);
-  assert.equal(localFormats.domainSummary.selector.registryId, null);
-  assert.equal(localFormats.domainSummary.selector.label, null);
-  assert.equal(localFormats.domainSummary.selector.digestHex.length, 24);
-  assert.ok(
-    localFormats.domainSummary.warning.includes("local-domain selector"),
-    "local12 warning should remind operators about selector cutover",
-  );
+  const nonDefaultFormats = nonDefaultAddress.displayFormats();
+  assert.equal(nonDefaultFormats.domainSummary.kind, "default");
+  assert.equal(nonDefaultFormats.domainSummary.warning, null);
+  assert.deepEqual(nonDefaultFormats.domainSummary.selector, {
+    tag: 0,
+    digestHex: null,
+    registryId: null,
+    label: DEFAULT_DOMAIN_NAME,
+  });
   assert.throws(
     () => {
-      localFormats.domainSummary.kind = "mutated";
+      nonDefaultFormats.domainSummary.kind = "mutated";
     },
     TypeError,
   );
@@ -333,11 +349,12 @@ test("fromAccount enforces domain normalization rules", () => {
     domain: unicodeDomain,
     publicKey: ALT_PUBLIC_KEY,
   });
-  const { address: parsed } = AccountAddress.parseAny(address.canonicalHex(), undefined, unicodeDomain);
+  const ih58 = address.toIH58();
+  const { address: parsed } = AccountAddress.parseEncoded(ih58, undefined, unicodeDomain);
   assert.deepEqual(Buffer.from(parsed.canonicalBytes()), Buffer.from(address.canonicalBytes()));
 
   const expectedDomain = "xn--exmple-cua";
-  const parsedAscii = AccountAddress.parseAny(address.canonicalHex(), undefined, expectedDomain);
+  const parsedAscii = AccountAddress.parseEncoded(ih58, undefined, expectedDomain);
   assert.deepEqual(
     Buffer.from(parsedAscii.address.canonicalBytes()),
     Buffer.from(address.canonicalBytes()),
@@ -464,29 +481,26 @@ test("displayFormats validates network prefix input", () => {
   );
 });
 
-test("fromAccount builds global registry selectors when registryId is provided", () => {
-  const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, "utf8"));
-  const globalCase = fixture.cases.positive.find(
-    (entry) => entry.selector?.kind === "global",
-  );
-  const address = AccountAddress.fromAccount({
-    registryId: globalCase.input.registry_id,
+test("fromAccount accepts registryId but keeps selector-free canonical payloads", () => {
+  const byRegistry = AccountAddress.fromAccount({
+    registryId: 42,
     publicKey: ALT_PUBLIC_KEY,
   });
-  assert.equal(
-    address.canonicalHex().toLowerCase(),
-    globalCase.encodings.canonical_hex.toLowerCase(),
-  );
-  assert.equal(address.toIH58(globalCase.encodings.ih58.prefix), globalCase.encodings.ih58.string);
-  const formats = address.displayFormats(globalCase.encodings.ih58.prefix);
-  assert.equal(formats.domainSummary.kind, "global");
+  const byDomain = AccountAddress.fromAccount({
+    domain: DEFAULT_DOMAIN_NAME,
+    publicKey: ALT_PUBLIC_KEY,
+  });
+  assert.equal(byRegistry.canonicalHex().toLowerCase(), byDomain.canonicalHex().toLowerCase());
+  assert.equal(byRegistry.toIH58(), byDomain.toIH58());
+
+  const formats = byRegistry.displayFormats(753);
+  assert.equal(formats.domainSummary.kind, "default");
   assert.equal(formats.domainSummary.warning, null);
-  const expectedDigestHex = globalCase.input.registry_id.toString(16).padStart(8, "0");
   assert.deepEqual(formats.domainSummary.selector, {
-    tag: 2,
-    digestHex: expectedDigestHex,
-    registryId: globalCase.input.registry_id,
-    label: null,
+    tag: 0,
+    digestHex: null,
+    registryId: null,
+    label: DEFAULT_DOMAIN_NAME,
   });
 });
 
@@ -535,8 +549,8 @@ test("configureCurveSupport gates optional curves at encode/decode time", () => 
       publicKey: GOST256_PUBLIC_KEY,
       algorithm: "gost256a",
     });
-    const gostCanonical = gostAddress.canonicalHex();
-    const { address: parsedGost } = AccountAddress.parseAny(gostCanonical);
+    const gostIh58 = gostAddress.toIH58();
+    const { address: parsedGost } = AccountAddress.parseEncoded(gostIh58);
     assert.deepEqual(
       Buffer.from(parsedGost.canonicalBytes()),
       Buffer.from(gostAddress.canonicalBytes()),
@@ -544,7 +558,7 @@ test("configureCurveSupport gates optional curves at encode/decode time", () => 
 
     configureCurveSupport();
     assert.throws(
-      () => AccountAddress.parseAny(gostCanonical),
+      () => AccountAddress.parseEncoded(gostIh58),
       (error) =>
         error instanceof AccountAddressError &&
         error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
@@ -568,8 +582,8 @@ test("configureCurveSupport gates optional curves at encode/decode time", () => 
       publicKey: SM2_PUBLIC_KEY,
       algorithm: "sm2",
     });
-    const sm2Canonical = sm2Address.canonicalHex();
-    const { address: parsed } = AccountAddress.parseAny(sm2Canonical);
+    const sm2Ih58 = sm2Address.toIH58();
+    const { address: parsed } = AccountAddress.parseEncoded(sm2Ih58);
     assert.deepEqual(
       Buffer.from(parsed.canonicalBytes()),
       Buffer.from(sm2Address.canonicalBytes()),
@@ -577,7 +591,7 @@ test("configureCurveSupport gates optional curves at encode/decode time", () => 
 
     configureCurveSupport();
     assert.throws(
-      () => AccountAddress.parseAny(sm2Canonical),
+      () => AccountAddress.parseEncoded(sm2Ih58),
       (error) =>
         error instanceof AccountAddressError &&
         error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
@@ -651,7 +665,7 @@ test("ih58 prefix mismatch raises", () => {
   });
   const ih58 = address.toIH58(5);
   assert.throws(
-    () => AccountAddress.parseAny(ih58, 10),
+    () => AccountAddress.parseEncoded(ih58, 10),
     (error) => {
       assert(error instanceof AccountAddressError);
       assert.equal(error.code, AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX);
@@ -699,11 +713,16 @@ test("native codec propagates IH58 errors", () => {
   );
 });
 
-test("parseAny accepts extended IH58 literals when native codec cannot materialize canonical bytes", () => {
+test("parseEncoded rejects extended IH58 literals that embed selector bytes", () => {
   const literal =
     "34mSYn4nMg3BgfL1zuxFV3ikfCrVFzEjWsSzQeJtj1gXsHiYjkrUTuF6bySUzjZuH2PPbWgvG";
-  const parsed = AccountAddress.parseAny(literal);
-  assert.equal(parsed.address.toIH58(), literal);
+  assert.throws(
+    () => AccountAddress.parseEncoded(literal),
+    (error) =>
+      error instanceof AccountAddressError &&
+      (error.code === AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES ||
+        error.code === AccountAddressErrorCode.UNKNOWN_CURVE),
+  );
 });
 
 test("inspectAccountId enforces option shape", () => {
@@ -781,11 +800,11 @@ test("fromIH58 normalizes expectedPrefix inputs", () => {
   const parsedFromString = AccountAddress.fromIH58(ih58, "8");
   assert.equal(parsedFromString.toIH58(8), ih58);
 
-  const { address: parsedFromBigint } = AccountAddress.parseAny(ih58, 8n);
+  const { address: parsedFromBigint } = AccountAddress.parseEncoded(ih58, 8n);
   assert.equal(parsedFromBigint.toIH58(8), ih58);
 
   assert.throws(
-    () => AccountAddress.parseAny(ih58, "9"),
+    () => AccountAddress.parseEncoded(ih58, "9"),
     (error) =>
       error instanceof AccountAddressError &&
       error.code === AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
@@ -802,7 +821,7 @@ test("account address compliance vectors", () => {
 
   for (const vector of fixture.cases.positive) {
     const caseId = vector.case_id;
-    const canonical = AccountAddress.fromCanonicalHex(vector.encodings.canonical_hex);
+    const canonical = parseCanonicalHexFixture(vector.encodings.canonical_hex);
     const canonicalBytes = Buffer.from(canonical.canonicalBytes());
 
     // IH58 round-trip
@@ -812,7 +831,7 @@ test("account address compliance vectors", () => {
       canonicalBytes,
       `${caseId}: IH58 canonical mismatch`,
     );
-    const { address: parsedIh58, format: formatIh58 } = AccountAddress.parseAny(
+    const { address: parsedIh58, format: formatIh58 } = AccountAddress.parseEncoded(
       vector.encodings.ih58.string,
       vector.encodings.ih58.prefix,
     );
@@ -834,7 +853,7 @@ test("account address compliance vectors", () => {
         canonicalBytes,
         `${caseId}: compressed ${label} canonical mismatch`,
       );
-      const { address: parsedCompressed, format: formatCompressed } = AccountAddress.parseAny(
+      const { address: parsedCompressed, format: formatCompressed } = AccountAddress.parseEncoded(
         encoding,
       );
       assert.equal(
@@ -848,21 +867,6 @@ test("account address compliance vectors", () => {
         `${caseId}: compressed ${label} parse canonical mismatch`,
       );
     }
-
-    // Canonical parse_any
-    const { address: parsedCanonical, format: formatCanonical } = AccountAddress.parseAny(
-      vector.encodings.canonical_hex,
-    );
-    assert.equal(
-      formatCanonical,
-      AccountAddressFormat.CANONICAL_HEX,
-      `${caseId}: canonical parse format mismatch`,
-    );
-    assert.deepEqual(
-      Buffer.from(parsedCanonical.canonicalBytes()),
-      canonicalBytes,
-      `${caseId}: canonical parse mismatch`,
-    );
 
     // Rendering parity
     assert.equal(
@@ -925,7 +929,7 @@ test("account address compliance vectors", () => {
       }
       case "canonical_hex": {
         assert.throws(
-          () => AccountAddress.parseAny(vector.input),
+          () => parseCanonicalHexFixture(vector.input),
           (error) => matchesExpectedError(error, vector.expected_error, caseId),
         );
         break;

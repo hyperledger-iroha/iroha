@@ -1,7 +1,6 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    str::FromStr,
 };
 
 use indexmap::{IndexMap, IndexSet};
@@ -436,9 +435,13 @@ fn analyze_trigger(
     };
 
     let authority = match &trigger.authority {
-        Some(raw) => Some(AccountId::from_str(raw).map_err(|err| SemanticError {
-            message: format!("invalid trigger authority `{raw}`: {err}"),
-        })?),
+        Some(raw) => Some(
+            AccountId::parse_encoded(raw)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .map_err(|err| SemanticError {
+                    message: format!("invalid trigger authority `{raw}`: {err}"),
+                })?,
+        ),
         None => None,
     };
 
@@ -5590,8 +5593,6 @@ mod tests {
 
     #[test]
     fn trigger_decl_builds_typed_metadata() {
-        use std::str::FromStr;
-
         use iroha_data_model::account::AccountId;
 
         let program = parse(
@@ -5602,7 +5603,7 @@ mod tests {
                     call run;
                     on time pre_commit;
                     repeats 2;
-                    authority "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland";
+                    authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
                     metadata { tag: "alpha"; count: 1; enabled: true; }
                 }
             }
@@ -5618,10 +5619,9 @@ mod tests {
         assert_eq!(
             trigger.authority,
             Some(
-                AccountId::from_str(
-                    "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
-                )
-                .expect("authority")
+                AccountId::parse_encoded("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    .expect("authority literal"),
             )
         );
         assert!(!trigger.metadata.is_empty());

@@ -32,6 +32,37 @@ public func decodePdpCommitmentHeader(from response: HTTPURLResponse) throws -> 
     return try decodePdpCommitmentHeader(normalized)
 }
 
+fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+    }
+    if trimmed.contains("@") {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must be an encoded account id (IH58 preferred, compressed accepted)."
+        )
+    }
+    let (address, _) = try AccountAddress.parseEncoded(trimmed)
+    return try address.toIH58(networkPrefix: 0x02F1)
+}
+
+fileprivate func normalizeToriiAssetIdQueryValue(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+    }
+    guard trimmed.lowercased().hasPrefix("norito:") else {
+        throw ToriiClientError.invalidPayload("\(field) must use encoded `norito:<hex>` form.")
+    }
+    let payload = String(trimmed.dropFirst("norito:".count))
+    guard !payload.isEmpty,
+          payload.count.isMultiple(of: 2),
+          Data(hexString: payload) != nil else {
+        throw ToriiClientError.invalidPayload("\(field) must use encoded `norito:<hex>` form.")
+    }
+    return "norito:\(payload.lowercased())"
+}
+
 public struct ToriiAssetBalance: Decodable, Sendable {
     public let asset_id: String
     public let quantity: String
@@ -387,13 +418,13 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
         direction == .selfTransfer
     }
 
-    /// Construct the source asset id from the asset definition and sender account when possible.
+    /// Construct the source asset id when possible.
     public var sourceAssetId: String? {
         ToriiExplorerTransferSummary.assetId(assetDefinitionId: assetDefinitionId,
                                              accountId: senderAccountId)
     }
 
-    /// Construct the destination asset id from the asset definition and receiver account when possible.
+    /// Construct the destination asset id when possible.
     public var destinationAssetId: String? {
         ToriiExplorerTransferSummary.assetId(assetDefinitionId: assetDefinitionId,
                                              accountId: receiverAccountId)
@@ -525,15 +556,15 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
 
 /// Parsed transfer details derived from explorer instruction payloads.
 public struct ToriiExplorerTransferAsset: Sendable, Equatable {
-    /// Full asset identifier literal (includes the source account).
+    /// Full asset identifier literal (encoded `norito:<hex>`).
     public let sourceAssetId: String
     /// Destination account literal.
     public let destinationAccountId: String
     /// Amount transferred (string numeric).
     public let amount: String
-    /// Source account literal (derived from the asset id when possible).
+    /// Source account literal when explicitly recoverable from payload.
     public let senderAccountId: String?
-    /// Asset definition literal (derived from the asset id when possible).
+    /// Asset descriptor captured from payload.
     public let assetDefinitionId: String?
 }
 
@@ -673,20 +704,20 @@ extension ToriiExplorerTransferSummary {
         return .unknown
     }
 
-    fileprivate static func assetId(assetDefinitionId: String, accountId: String) -> String? {
+    fileprivate static func assetId(assetDefinitionId: String, accountId _: String) -> String? {
         let trimmedDefinition = assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedAccount = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedDefinition.isEmpty, !trimmedAccount.isEmpty else {
+        guard !trimmedDefinition.isEmpty else {
             return nil
         }
-        guard let hashIndex = trimmedDefinition.firstIndex(of: "#") else {
+        let lower = trimmedDefinition.lowercased()
+        guard lower.hasPrefix("norito:") else {
             return nil
         }
-        let name = String(trimmedDefinition[..<hashIndex])
-        guard !name.isEmpty else {
+        let hex = String(trimmedDefinition.dropFirst("norito:".count))
+        guard !hex.isEmpty else {
             return nil
         }
-        return "\(name)##\(trimmedAccount)"
+        return "norito:\(hex.lowercased())"
     }
 }
 
@@ -697,8 +728,14 @@ public extension ToriiExplorerTransferRecord {
         let relativeAccount = (relative?.isEmpty ?? true) ? nil : relative
         switch details {
         case .asset(let asset):
-            guard let sender = asset.senderAccountId,
-                  let assetDefinition = asset.assetDefinitionId else {
+            let fallbackSender = instruction.authority.trimmingCharacters(in: .whitespacesAndNewlines)
+            let sender = asset.senderAccountId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? asset.senderAccountId!
+                : fallbackSender
+            guard !sender.isEmpty else {
+                return []
+            }
+            guard let assetDefinition = asset.assetDefinitionId ?? (!asset.sourceAssetId.isEmpty ? asset.sourceAssetId : nil) else {
                 return []
             }
             let receiver = asset.destinationAccountId
@@ -841,11 +878,13 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
         }
         if let account = account?.trimmingCharacters(in: .whitespacesAndNewlines),
            !account.isEmpty {
-            items.append(URLQueryItem(name: "account", value: account))
+            let normalized = try normalizeToriiAccountIdQueryValue(account, field: "account")
+            items.append(URLQueryItem(name: "account", value: normalized))
         }
         if let authority = authority?.trimmingCharacters(in: .whitespacesAndNewlines),
            !authority.isEmpty {
-            items.append(URLQueryItem(name: "authority", value: authority))
+            let normalized = try normalizeToriiAccountIdQueryValue(authority, field: "authority")
+            items.append(URLQueryItem(name: "authority", value: normalized))
         }
         if let transactionHash = transactionHash?.trimmingCharacters(in: .whitespacesAndNewlines),
            !transactionHash.isEmpty {
@@ -867,7 +906,8 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
         }
         if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !assetId.isEmpty {
-            items.append(URLQueryItem(name: "asset_id", value: assetId))
+            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
+            items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         return items.isEmpty ? nil : items
     }
@@ -920,7 +960,8 @@ public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
         }
         if let authority = authority?.trimmingCharacters(in: .whitespacesAndNewlines),
            !authority.isEmpty {
-            items.append(URLQueryItem(name: "authority", value: authority))
+            let normalized = try normalizeToriiAccountIdQueryValue(authority, field: "authority")
+            items.append(URLQueryItem(name: "authority", value: normalized))
         }
         if let block {
             guard block > 0 else {
@@ -934,7 +975,8 @@ public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
         }
         if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !assetId.isEmpty {
-            items.append(URLQueryItem(name: "asset_id", value: assetId))
+            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
+            items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         return items.isEmpty ? nil : items
     }
@@ -1042,27 +1084,16 @@ extension ToriiExplorerTransferDetails {
         guard !trimmed.isEmpty else {
             return (nil, nil)
         }
-        let account = trimmed.split(separator: "#").last.map(String.init)
-        if let range = trimmed.range(of: "##") {
-            let name = String(trimmed[..<range.lowerBound])
-            let accountLiteral = String(trimmed[range.upperBound...])
-            if let atIndex = accountLiteral.lastIndex(of: "@") {
-                let domain = String(accountLiteral[accountLiteral.index(after: atIndex)...])
-                if !name.isEmpty, !domain.isEmpty {
-                    return ("\(name)#\(domain)", account)
-                }
-            }
-            return (nil, account)
+        // Hard cut: parse encoded asset identifiers only.
+        guard (try? OfflineNorito.encodeAssetId(trimmed)) != nil else {
+            return (nil, nil)
         }
-        let parts = trimmed.split(separator: "#")
-        if parts.count >= 3 {
-            let name = String(parts[0])
-            let domain = String(parts[1])
-            if !name.isEmpty, !domain.isEmpty {
-                return ("\(name)#\(domain)", account)
-            }
+        let lower = trimmed.lowercased()
+        guard lower.hasPrefix("norito:") else {
+            return (trimmed, nil)
         }
-        return (nil, account)
+        let hex = String(trimmed.dropFirst("norito:".count)).lowercased()
+        return ("norito:\(hex)", nil)
     }
 }
 
@@ -4558,19 +4589,23 @@ public struct ToriiOfflineListParams: Sendable, Equatable {
         }
         if let controllerId = controllerId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !controllerId.isEmpty {
-            items.append(URLQueryItem(name: "controller_id", value: controllerId))
+            let normalized = try normalizeToriiAccountIdQueryValue(controllerId, field: "controllerId")
+            items.append(URLQueryItem(name: "controller_id", value: normalized))
         }
         if let receiverId = receiverId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !receiverId.isEmpty {
-            items.append(URLQueryItem(name: "receiver_id", value: receiverId))
+            let normalized = try normalizeToriiAccountIdQueryValue(receiverId, field: "receiverId")
+            items.append(URLQueryItem(name: "receiver_id", value: normalized))
         }
         if let depositAccountId = depositAccountId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !depositAccountId.isEmpty {
-            items.append(URLQueryItem(name: "deposit_account_id", value: depositAccountId))
+            let normalized = try normalizeToriiAccountIdQueryValue(depositAccountId, field: "depositAccountId")
+            items.append(URLQueryItem(name: "deposit_account_id", value: normalized))
         }
         if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !assetId.isEmpty {
-            items.append(URLQueryItem(name: "asset_id", value: assetId))
+            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
+            items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         if let certificateExpiresBeforeMs {
             items.append(URLQueryItem(name: "certificate_expires_before_ms",
@@ -4748,11 +4783,13 @@ public struct ToriiOfflineReceiptListParams: Sendable, Equatable {
         }
         if let controllerId = controllerId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !controllerId.isEmpty {
-            items.append(URLQueryItem(name: "controller_id", value: controllerId))
+            let normalized = try normalizeToriiAccountIdQueryValue(controllerId, field: "controllerId")
+            items.append(URLQueryItem(name: "controller_id", value: normalized))
         }
         if let receiverId = receiverId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !receiverId.isEmpty {
-            items.append(URLQueryItem(name: "receiver_id", value: receiverId))
+            let normalized = try normalizeToriiAccountIdQueryValue(receiverId, field: "receiverId")
+            items.append(URLQueryItem(name: "receiver_id", value: normalized))
         }
         if let bundleIdHex = Self.normalizeHex(bundleIdHex) {
             items.append(URLQueryItem(name: "bundle_id_hex", value: bundleIdHex))
@@ -4766,7 +4803,8 @@ public struct ToriiOfflineReceiptListParams: Sendable, Equatable {
         }
         if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !assetId.isEmpty {
-            items.append(URLQueryItem(name: "asset_id", value: assetId))
+            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
+            items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         return items.isEmpty ? nil : items
     }
@@ -4933,11 +4971,12 @@ public struct ToriiUaidPortfolioQuery: Sendable, Equatable {
         self.assetId = assetId
     }
 
-    public func queryItems() -> [URLQueryItem]? {
+    public func queryItems() throws -> [URLQueryItem]? {
         var items: [URLQueryItem] = []
         if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !assetId.isEmpty {
-            items.append(URLQueryItem(name: "asset_id", value: assetId))
+            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
+            items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         return items.isEmpty ? nil : items
     }
@@ -7185,10 +7224,15 @@ fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: Stri
     if trimmed.contains("@") {
         throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
     }
-    let (address, format) = try AccountAddress.parseAny(
-        trimmed,
-        expectedPrefix: 0x02F1
-    )
+    let (address, format): (AccountAddress, AccountAddressFormat)
+    do {
+        (address, format) = try AccountAddress.parseEncoded(
+            trimmed,
+            expectedPrefix: 0x02F1
+        )
+    } catch {
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
+    }
     guard format == .ih58 else {
         throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
     }
@@ -9212,7 +9256,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         var items = [URLQueryItem(name: "limit", value: String(limit))]
         if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !assetId.isEmpty {
-            items.append(URLQueryItem(name: "asset_id", value: assetId))
+            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
+            items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         let request = try makeRequest(path: "/v1/accounts/\(encodedAccountId)/assets",
                                       queryItems: items)
@@ -9230,7 +9275,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         ]
         if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !assetId.isEmpty {
-            items.append(URLQueryItem(name: "asset_id", value: assetId))
+            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
+            items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         let request = try makeRequest(path: "/v1/accounts/\(encodedAccountId)/transactions", queryItems: items)
         let data = try await data(for: request)
@@ -9663,7 +9709,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let canonical = try canonicalizeUaidLiteral(uaid)
         let encoded = encodePathComponent(canonical)
         let request = try makeRequest(path: "/v1/accounts/\(encoded)/portfolio",
-                                      queryItems: query?.queryItems())
+                                      queryItems: try query?.queryItems())
         let data = try await data(for: request)
         return try decodeJSON(ToriiUaidPortfolioResponse.self, from: data)
     }
@@ -12106,11 +12152,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     private func encodeAccountIdPath(_ accountId: String) throws -> String {
-        let trimmed = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw ToriiClientError.invalidPayload("accountId must be a non-empty string.")
-        }
-        return encodePathComponent(trimmed)
+        let canonical = try normalizeToriiAccountIdQueryValue(accountId, field: "accountId")
+        return encodePathComponent(canonical)
     }
 
     fileprivate static func explorerAddressFormatQueryValue(_ format: AccountAddressFormat,

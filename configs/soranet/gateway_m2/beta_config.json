@@ -14,8 +14,8 @@
     "usage": "../gateway_m0/billing_usage_sample.json",
     "catalog": "../gateway_m0/meter_catalog.json",
     "guardrails": "../gateway_m0/billing_guardrails.json",
-    "payer": "alice@wonderland",
-    "treasury": "treasury@wonderland",
+    "payer": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "treasury": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
     "asset": "xor#wonderland"
   },
   "hardening": {

@@ -361,32 +361,6 @@ function normalizeMultisigSpecPayload(spec, path) {
   return builder.build().toPayload();
 }
 
-function ensureSameDomain(controllerId, specPayload, path) {
-  const controllerDomain = extractDomainSuffix(controllerId);
-  if (!controllerDomain) {
-    return;
-  }
-  for (const signatory of Object.keys(specPayload.signatories)) {
-    const signatoryDomain = extractDomainSuffix(signatory);
-    if (signatoryDomain && signatoryDomain !== controllerDomain) {
-      fail(
-        ValidationErrorCode.INVALID_STRING,
-        `${path} must belong to domain ${controllerDomain}; found signatory ${signatory}`,
-        path,
-      );
-    }
-  }
-}
-
-function extractDomainSuffix(value) {
-  const at = value.lastIndexOf("@");
-  if (at === -1) {
-    return null;
-  }
-  const domain = value.slice(at + 1).trim();
-  return domain.length === 0 ? null : domain;
-}
-
 function asNonNegativeInteger(value, name) {
   if (typeof value === "bigint") {
     if (value < 0n) {
@@ -1937,7 +1911,6 @@ export function buildRegisterAccountInstruction({ accountId, metadata }) {
 export function buildRegisterMultisigInstruction({ accountId, spec }) {
   const controller = normalizeAccountId(accountId, "accountId");
   const normalizedSpec = normalizeMultisigSpecPayload(spec, "spec");
-  ensureSameDomain(controller, normalizedSpec, "accountId");
   return {
     Custom: {
       payload: {
@@ -1966,7 +1939,6 @@ export function buildProposeMultisigInstruction({
     throw new TypeError("instructions must be a non-empty array");
   }
   const normalizedSpec = normalizeMultisigSpecPayload(spec, "spec");
-  ensureSameDomain(controller, normalizedSpec, "accountId");
 
   const policyCap = normalizedSpec.transaction_ttl_ms;
   if (policyCap === undefined || policyCap === null) {

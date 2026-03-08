@@ -370,13 +370,12 @@ public struct Keypair {
     /// Build IH58 format account ID for this keypair.
     ///
     /// - Parameters:
-    ///   - domain: Account domain (e.g., "wonderland")
     ///   - networkPrefix: Network prefix for IH58 encoding (defaults to Iroha mainnet)
     /// - Returns: Account ID in format `<ih58>`
     /// - Throws: `AccountAddressError` if conversion fails
     @available(macOS 10.15, iOS 13.0, *)
-    public func accountId(domain: String, networkPrefix: UInt16 = AccountId.defaultNetworkPrefix) throws -> String {
-        try AccountId.makeIH58(publicKey: publicKey, domain: domain, networkPrefix: networkPrefix)
+    public func accountId(networkPrefix: UInt16 = AccountId.defaultNetworkPrefix) throws -> String {
+        try AccountId.makeIH58(publicKey: publicKey, networkPrefix: networkPrefix)
     }
 }
 
@@ -384,13 +383,13 @@ public enum AccountId {
     /// Default network prefix for IH58 encoding (Iroha mainnet).
     public static let defaultNetworkPrefix: UInt16 = 0x02F1
 
-    /// Build a raw public-key account literal: `ed0120<HEX>@<domain>`.
-    ///
-    /// Note: This is not the canonical IH58 rendering; it is a raw multihash-hex account literal. The multihash hex
-    /// follows Iroha canonical casing (varint bytes lower, payload bytes upper).
-    public static func make(publicKey: Data, domain: String) -> String {
-        let hex = publicKey.map { String(format: "%02X", $0) }.joined()
-        return "ed0120" + hex + "@" + domain
+    /// Build an encoded account id literal (IH58).
+    public static func make(publicKey: Data) -> String {
+        do {
+            return try makeIH58(publicKey: publicKey)
+        } catch {
+            preconditionFailure("Invalid account id inputs: \(error)")
+        }
     }
 
     /// Build IH58 format account ID string required by Torii API.
@@ -400,30 +399,25 @@ public enum AccountId {
     ///
     /// - Parameters:
     ///   - publicKey: Public key bytes (32 bytes for ed25519, 33 for secp256k1)
-    ///   - domain: Account domain (e.g., "wonderland")
     ///   - algorithm: Signing algorithm ("ed25519" or "secp256k1"), defaults to "ed25519"
     ///   - networkPrefix: Network prefix for IH58 encoding (defaults to Iroha mainnet)
     /// - Returns: Account ID in format `<ih58>`
     /// - Throws: `AccountAddressError` if conversion fails
     public static func makeIH58(
         publicKey: Data,
-        domain: String,
         algorithm: String = "ed25519",
         networkPrefix: UInt16 = defaultNetworkPrefix
     ) throws -> String {
-        let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey, algorithm: algorithm)
+        let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: algorithm)
         let ih58 = try address.toIH58(networkPrefix: networkPrefix)
         return ih58
     }
 
-    /// Normalizes account id literals for equality checks across systems that sometimes append `@domain` to IH58
-    /// addresses.
+    /// Normalizes account id literals for equality checks.
     ///
     /// Semantics:
-    /// - If the literal is an `AccountAddress` (IH58/compressed/canonical hex), returns the canonical IH58 rendering
-    ///   of the address and ignores any `@domain` suffix.
-    /// - Otherwise, trims outer whitespace and (when possible) canonicalizes the domain label casing in `addr@domain`
-    ///   forms.
+    /// - If the literal is an encoded `AccountAddress` (IH58/compressed), returns the canonical IH58 rendering.
+    /// - Otherwise, returns the trimmed literal unchanged.
     public static func normalizeForComparison(
         _ literal: String,
         expectedPrefix: UInt16 = defaultNetworkPrefix
@@ -431,25 +425,11 @@ public enum AccountId {
         let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
 
-        let addressCandidate: String
-        if let at = trimmed.firstIndex(of: "@") {
-            addressCandidate = String(trimmed[..<at])
-        } else {
-            addressCandidate = trimmed
-        }
-        if let (address, _) = try? AccountAddress.parseAny(addressCandidate, expectedPrefix: expectedPrefix),
+        if let (address, _) = try? AccountAddress.parseEncoded(trimmed, expectedPrefix: expectedPrefix),
            let ih58 = try? address.toIH58(networkPrefix: expectedPrefix) {
             return ih58
         }
 
-        if let at = trimmed.firstIndex(of: "@") {
-            let addressPart = String(trimmed[..<at])
-            let domainPart = String(trimmed[trimmed.index(after: at)...])
-            if !addressPart.isEmpty, !domainPart.isEmpty,
-               let canonicalDomain = try? AccountAddress.canonicalizeDomainLabel(domainPart) {
-                return "\(addressPart)@\(canonicalDomain)"
-            }
-        }
         return trimmed
     }
 

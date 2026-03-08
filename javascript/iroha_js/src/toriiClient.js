@@ -12725,7 +12725,7 @@ function normalizeReservedLabel(payload, context) {
 
 function normalizeSnsTokenValue(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
-  const assetId = requireNonEmptyString(record.asset_id, `${context}.asset_id`);
+  const assetId = ToriiClient._normalizeAssetId(record.asset_id, `${context}.asset_id`);
   const amount = normalizeNumericString(record.amount, `${context}.amount`);
   return { assetId, amount };
 }
@@ -12852,7 +12852,7 @@ function normalizeSnsFreezeRequest(payload, context) {
 
 function normalizeSnsPayment(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
-  const assetId = requireNonEmptyString(
+  const assetId = ToriiClient._normalizeAssetId(
     record.asset_id ?? record.assetId,
     `${context}.asset_id`,
   );
@@ -14200,7 +14200,7 @@ function normalizeUaidPortfolioOptions(options, context = "getUaidPortfolio") {
   const { signal } = normalizeSignalOption(record, context);
   let assetId;
   if (record.assetId !== undefined && record.assetId !== null) {
-    assetId = requireNonEmptyString(record.assetId, `${context}.assetId`).trim();
+    assetId = ToriiClient._normalizeAssetId(record.assetId, `${context}.assetId`);
   }
   return { signal, assetId };
 }
@@ -14263,7 +14263,7 @@ function normalizeUaidPortfolioAccount(value, context) {
     throw new TypeError(`${context}.assets must be an array`);
   }
   return {
-    account_id: requireNonEmptyString(record.account_id, `${context}.account_id`),
+    account_id: ToriiClient._normalizeAccountId(record.account_id, `${context}.account_id`),
     label: optionalString(record.label, `${context}.label`),
     assets: assetsValue.map((entry, index) =>
       normalizeUaidPortfolioAsset(entry, `${context}.assets[${index}]`),
@@ -14274,7 +14274,7 @@ function normalizeUaidPortfolioAccount(value, context) {
 function normalizeUaidPortfolioAsset(value, context) {
   const record = ensureRecord(value, context);
   return {
-    asset_id: requireNonEmptyString(record.asset_id, `${context}.asset_id`),
+    asset_id: ToriiClient._normalizeAssetId(record.asset_id, `${context}.asset_id`),
     asset_definition_id: requireNonEmptyString(
       record.asset_definition_id,
       `${context}.asset_definition_id`,
@@ -15022,7 +15022,7 @@ function formatSorafsEvaluation(evaluation) {
 
 function normalizeAuthorityCredentials(source, context) {
   const record = ensureRecord(source, context);
-  const authority = requireNonEmptyString(
+  const authority = ToriiClient._normalizeAccountId(
     record.authority,
     `${context}.authority`,
   );
@@ -15555,6 +15555,8 @@ function normalizeSpaceDirectoryManifestPayload(input, context) {
     normalized.accounts = requireStringArray(
       manifest.accounts,
       `${context}.accounts`,
+    ).map((account, index) =>
+      ToriiClient._normalizeAccountId(account, `${context}.accounts[${index}]`),
     );
   }
   const entriesRaw = manifest.entries ?? manifest.Entries;
@@ -16015,7 +16017,7 @@ function normalizeGovernancePlainBallotPayload(input) {
   const record = ensureRecord(input, "governanceSubmitPlainBallot payload");
   const direction = record.direction;
   const payload = {
-    authority: requireNonEmptyString(
+    authority: ToriiClient._normalizeAccountId(
       record.authority,
       "governanceSubmitPlainBallot.authority",
     ),
@@ -16027,7 +16029,10 @@ function normalizeGovernancePlainBallotPayload(input) {
       record.referendum_id ?? record.referendumId,
       "governanceSubmitPlainBallot.referendumId",
     ),
-    owner: requireNonEmptyString(record.owner, "governanceSubmitPlainBallot.owner"),
+    owner: ToriiClient._normalizeAccountId(
+      record.owner,
+      "governanceSubmitPlainBallot.owner",
+    ),
     amount: normalizeNumericString(record.amount, "governanceSubmitPlainBallot.amount"),
     duration_blocks: ToriiClient._normalizeUnsignedInteger(
       record.duration_blocks ?? record.durationBlocks,
@@ -16153,7 +16158,7 @@ function ensureGovernanceLockHintsComplete(source, name) {
 function normalizeGovernanceZkBallotPayload(input) {
   const record = ensureRecord(input, "governanceSubmitZkBallot payload");
   const payload = {
-    authority: requireNonEmptyString(
+    authority: ToriiClient._normalizeAccountId(
       record.authority,
       "governanceSubmitZkBallot.authority",
     ),
@@ -16182,7 +16187,7 @@ function normalizeGovernanceZkBallotPayload(input) {
 function normalizeGovernanceZkBallotV1Payload(input) {
   const record = ensureRecord(input, "governanceSubmitZkBallotV1 payload");
   const payload = {
-    authority: requireNonEmptyString(
+    authority: ToriiClient._normalizeAccountId(
       record.authority,
       "governanceSubmitZkBallotV1.authority",
     ),
@@ -16451,7 +16456,7 @@ function normalizeContractCallRequest(input) {
   }
   const gasAsset = record.gas_asset_id ?? record.gasAssetId;
   if (gasAsset !== undefined && gasAsset !== null) {
-    normalized.gas_asset_id = requireNonEmptyString(
+    normalized.gas_asset_id = ToriiClient._normalizeAssetId(
       gasAsset,
       "contractCall.gasAssetId",
     );

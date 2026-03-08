@@ -17,7 +17,7 @@ Ações:
 2. **Entradas aceitas:** parsers DEVEM aceitar IH58 (preferido), `sora`
    comprimido e hex canônico (somente `0x...`; hex sem prefixo é rejeitado).
    Entradas PODEM carregar sufixo `@<domain>` para dicas de roteamento;
-   aliases `<label>@<domain>` exigem resolver. `public_key@domain`
+   aliases `<label>@<domain>` (rejected legacy form) exigem resolver. 
    (hex multihash) continua suportado.
 3. **Resolvers:** parsing IH58/sora sem domínio requer resolver de seletor de
    domínio, a menos que o seletor seja o default implícito (usar o rótulo de

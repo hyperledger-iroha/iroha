@@ -284,8 +284,6 @@ pub mod secret_string {
 #[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod account_metadata_map {
-    use std::str::FromStr;
-
     use super::*;
     use crate::{account::AccountId, metadata::Metadata};
 
@@ -313,7 +311,8 @@ pub mod account_metadata_map {
         object
             .into_iter()
             .map(|(key, value)| {
-                let account = AccountId::from_str(&key)
+                let account = AccountId::parse_encoded(&key)
+                    .map(crate::account::ParsedAccountId::into_account_id)
                     .map_err(|err| norito::json::Error::Message(err.to_string()))?;
                 let metadata: Metadata = json::from_value(value)?;
                 Ok((account, metadata))

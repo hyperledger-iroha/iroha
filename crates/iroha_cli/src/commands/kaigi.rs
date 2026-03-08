@@ -62,7 +62,7 @@ pub struct CreateArgs {
     /// Call name within the domain (e.g. `daily-sync`).
     #[arg(long, value_name = "NAME")]
     pub call_name: String,
-    /// Host account identifier responsible for the call (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain).
+    /// Host account identifier responsible for the call (IH58 (preferred) or sora compressed literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub host: String,
     /// Optional human friendly title.
@@ -77,7 +77,7 @@ pub struct CreateArgs {
     /// Gas rate charged per minute (defaults to 0).
     #[arg(long, value_name = "U64", default_value_t = 0)]
     pub gas_rate_per_minute: u64,
-    /// Optional billing account that will cover usage (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain).
+    /// Optional billing account that will cover usage (IH58 (preferred) or sora compressed literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub billing_account: Option<String>,
     /// Optional scheduled start timestamp (milliseconds since epoch).
@@ -139,7 +139,7 @@ pub struct QuickstartArgs {
     /// Call name within the domain (defaults to a timestamp-based identifier).
     #[arg(long, value_name = "NAME")]
     pub call_name: Option<String>,
-    /// Host account identifier responsible for the call (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain).
+    /// Host account identifier responsible for the call (IH58 (preferred) or sora compressed literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub host: Option<String>,
     /// Privacy mode for the session (defaults to `transparent`).
@@ -339,7 +339,7 @@ pub struct JoinArgs {
     /// Call name within the domain.
     #[arg(long, value_name = "NAME")]
     pub call_name: String,
-    /// Participant account joining the call (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain).
+    /// Participant account joining the call (IH58 (preferred) or sora compressed literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub participant: String,
     /// Commitment hash (hex) for privacy mode joins.
@@ -443,7 +443,7 @@ pub struct LeaveArgs {
     /// Call name within the domain.
     #[arg(long, value_name = "NAME")]
     pub call_name: String,
-    /// Participant account leaving the call (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain).
+    /// Participant account leaving the call (IH58 (preferred) or sora compressed literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub participant: String,
     /// Commitment hash (hex) identifying the participant in privacy mode.
@@ -586,7 +586,7 @@ pub struct ReportRelayHealthArgs {
     /// Call name within the domain.
     #[arg(long, value_name = "NAME")]
     pub call_name: String,
-    /// Relay account identifier being reported (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain).
+    /// Relay account identifier being reported (IH58 (preferred) or sora compressed literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub relay: String,
     /// Observed health status for the relay.
@@ -681,6 +681,9 @@ mod tests {
     use clap::Parser;
     use std::path::Path;
 
+    const HOST_ACCOUNT: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const PARTICIPANT_ACCOUNT: &str = "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV";
+
     #[derive(Parser, Debug)]
     struct TestCli {
         #[command(subcommand)]
@@ -702,7 +705,7 @@ mod tests {
             "--call-name",
             "daily",
             "--host",
-            "alice@kaigi",
+            HOST_ACCOUNT,
             "--privacy-mode",
             "zk",
             "--gas-rate-per-minute",
@@ -727,7 +730,7 @@ mod tests {
             "--call-name",
             "daily",
             "--participant",
-            "bob@kaigi",
+            PARTICIPANT_ACCOUNT,
             "--commitment-hex",
             "0xdeadbeef",
             "--commitment-alias",
@@ -744,7 +747,7 @@ mod tests {
             Command::Join(args) => {
                 assert_eq!(args.domain, "kaigi");
                 assert_eq!(args.call_name, "daily");
-                assert_eq!(args.participant, "bob@kaigi");
+                assert_eq!(args.participant, PARTICIPANT_ACCOUNT);
                 assert_eq!(args.commitment_hex.as_deref(), Some("0xdeadbeef"));
                 assert_eq!(args.commitment_alias.as_deref(), Some("bob"));
                 assert_eq!(args.nullifier_hex.as_deref(), Some("cafebabe"));
@@ -765,12 +768,12 @@ mod tests {
             "--call-name",
             "daily",
             "--participant",
-            "bob@kaigi",
+            PARTICIPANT_ACCOUNT,
         ]) {
             Command::Leave(args) => {
                 assert_eq!(args.domain, "kaigi");
                 assert_eq!(args.call_name, "daily");
-                assert_eq!(args.participant, "bob@kaigi");
+                assert_eq!(args.participant, PARTICIPANT_ACCOUNT);
                 assert!(args.commitment_hex.is_none());
                 assert!(args.nullifier_hex.is_none());
                 assert!(args.proof_hex.is_none());
@@ -891,7 +894,7 @@ mod tests {
             call_id: "call-1".to_string(),
             domain: "kaigi".to_string(),
             call_name: "daily".to_string(),
-            host: "alice@kaigi".to_string(),
+            host: HOST_ACCOUNT.to_string(),
             torii_url: "http://localhost:8080".to_string(),
             room_policy: "Public".to_string(),
             privacy_mode: "Transparent".to_string(),

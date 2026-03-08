@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
 import {
+  AccountAddress,
   ToriiClient,
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
   buildTransaction,
   generateKeyPair,
+  publicKeyFromPrivate,
   submitSignedTransaction,
 } from "../src/index.js";
 
@@ -73,18 +75,13 @@ function normalizeBinding(raw) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const toriiUrl = requireValue(args, "--torii", process.env.TORII_URL ?? "http://localhost:8080");
-  const sponsorId = requireValue(
-    args,
-    "--sponsor",
-    process.env.SPONSOR_ID ?? "sponsor@wonderland",
-  );
   const chainId = requireValue(args, "--chain-id", process.env.CHAIN_ID ?? "dev-chain");
   const bindingRaw = requireValue(args, "--binding", process.env.BINDING_HASH);
   const amount = requireValue(args, "--amount", process.env.SEND_AMOUNT ?? "10");
   const sessionAccount = requireValue(
     args,
     "--session-account",
-    process.env.SESSION_ACCOUNT ?? "session@walletless",
+    process.env.SESSION_ACCOUNT ?? "walletless-session",
   );
   const dryRun = args.has("--dry-run") || String(process.env.WALLETLESS_DRY_RUN ?? "").length > 0;
 
@@ -101,6 +98,14 @@ async function main() {
     sessionPrivate = normalizePrivateKeySeed(generated.privateKey);
     sessionPublicHex = generated.publicKey.toString("hex");
   }
+
+  const sponsorId =
+    trimToNull(args.get("--sponsor")) ??
+    trimToNull(process.env.SPONSOR_ID) ??
+    AccountAddress.fromAccount({
+      domain: "wonderland",
+      publicKey: publicKeyFromPrivate(sessionPrivate),
+    }).toIH58();
 
   const instructions = [
     buildSendToTwitterInstruction({ bindingHash: binding, amount }),
@@ -143,3 +148,11 @@ main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
+
+function trimToNull(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const trimmed = String(value).trim();
+  return trimmed.length === 0 ? null : trimmed;
+}

@@ -66,7 +66,7 @@ scripts/address_local_toolkit.sh \
 Flags of note:
 
 - `--format compressed` converts to the `sora…` Sora alphabet instead of IH58.
-- `--no-append-domain` emits bare IH58 (preferred)/sora (second-best) values (useful for systems
+- `domainless output (default)` emits bare IH58 (preferred)/sora (second-best) values (useful for systems
   that store the domain separately).
 - `--audit-only` trims the run to the JSON report (no conversion).
 - `--allow-errors` keeps scanning when malformed rows are present; the behaviour
@@ -105,7 +105,7 @@ already powers SDK heuristics. Each entry contains:
 1. Check the script out as part of your pipeline (point it at your export).
 2. Archive both `audit.json` and `normalized.txt` as build artefacts; reference
    them from release tickets or readiness reports.
-3. Run `iroha tools address normalize --fail-on-warning --only-local` during PR
+3. Run `iroha tools address normalize` during PR
    validation once dashboards show zero legitimate Local usage. This blocks
    regressions before enforcement gates activate and keeps Local selectors out
    of new releases.

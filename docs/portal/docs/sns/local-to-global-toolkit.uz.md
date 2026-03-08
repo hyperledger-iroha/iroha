@@ -40,7 +40,7 @@ scripts/address_local_toolkit.sh \
 Variantlar:
 
 - IH58 o'rniga `sora…` chiqishi uchun `--format compressed`.
-- Yalang'och harflarni chiqarish uchun `--no-append-domain`.
+- Yalang'och harflarni chiqarish uchun `domainless output (default)`.
 - O'tkazish bosqichini o'tkazib yuborish uchun `--audit-only`.
 - Noto'g'ri shakllangan qatorlar paydo bo'lganda skanerlashni davom ettirish uchun `--allow-errors` (CLI xatti-harakatlariga mos keladi).
 
@@ -54,7 +54,7 @@ Mahalliy-8 aniqlash va ≥30 kun davomida nol Mahalliy-12 to'qnashuvi.
 2. `audit.json` mahalliy selektorlar (`domain.kind = local12`) haqida xabar berganda blok birlashadi.
    standart `true` qiymatida (faqat ishlab/sinov klasterlarida `false` ni bekor qilish
    regressiyalarni tashxislash) va qo'shing
-   `iroha tools address normalize --fail-on-warning --only-local` dan CI gacha regressiya
+   `iroha tools address normalize` dan CI gacha regressiya
    ishlab chiqarishga urishdan oldin urinishlar muvaffaqiyatsizlikka uchraydi.
 
 Batafsil ma'lumot, namunaviy dalillarni tekshirish ro'yxatlari va mijozlarga kesish haqida e'lon qilishda qayta ishlatishingiz mumkin bo'lgan reliz yozuvi parchasi uchun manba hujjatiga qarang.

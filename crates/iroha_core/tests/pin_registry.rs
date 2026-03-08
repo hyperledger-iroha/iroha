@@ -1,7 +1,7 @@
 //! Integration tests covering the `SoraFS` pin registry flows.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-use std::{convert::TryInto, fs, num::NonZeroU64, path::PathBuf, str::FromStr};
+use std::{convert::TryInto, fs, num::NonZeroU64, path::PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_core::{
@@ -823,7 +823,7 @@ fn default_policy() -> PinPolicy {
 fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     let alice = alice();
     {
-        let world = tx.world_mut_for_testing();
+        let world = &mut tx.world;
         for perm in [
             Permission::from(CanRegisterSorafsPin),
             Permission::from(CanApproveSorafsPin),
@@ -1026,10 +1026,12 @@ fn build_envelope(record: &PinManifestRecord, keypair: &KeyPair) -> Vec<u8> {
 }
 
 fn alice() -> AccountId {
-    AccountId::from_str(
-        "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@sora",
+    AccountId::new(
+        "sora".parse().expect("domain"),
+        "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
+            .parse()
+            .expect("public key"),
     )
-    .expect("valid account id")
 }
 
 fn snapshot_json(

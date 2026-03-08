@@ -34,7 +34,7 @@ El parseur exige la línea de ente siguiente (el orden es flexible):| columna | 
 |---------|--------|-------------|
 | `label` | Sí | Libelle demande (caso mixto aceptado; la herramienta se normaliza según la norma v1 y UTS-46). |
 | `suffix_id` | Sí | Número de sufijo identificador (decimal o `0x` hexadecimal). |
-| `owner` | Sí | Chaine AccountId (literal IH58; sugerencia @domain opcional) para el propietario del registro. |
+| `owner` | Sí | Chaine AccountId codificado sin dominio (IH58 preferido, compressed aceptado; se rechaza el sufijo @domain) para el propietario del registro. |
 | `term_years` | Sí | Entier `1..=255`. |
 | `payment_asset_id` | Sí | Actif de liquidación (por ejemplo `xor#sora`). |
 | `payment_gross` / `payment_net` | Sí | Entiers non signes representant des unites nativos de l'actif. |

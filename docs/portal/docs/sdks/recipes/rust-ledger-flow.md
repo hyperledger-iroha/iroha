@@ -126,6 +126,6 @@ a new name.
 - Use `iroha --config defaults/client.toml transaction get --hash <hash>` to
   inspect the transactions that the SDK submitted.
 - Cross-check balances with `iroha --config defaults/client.toml asset list all --table`
-  or `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+  or `asset list filter '{"id":"norito:4e52543000000002"}'`.
 - Repeat the same flow from the CLI walkthrough to confirm both surfaces produce
   the same Norito payloads and transaction statuses.

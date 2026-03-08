@@ -2,11 +2,12 @@
 
 use std::{collections::HashMap, str::FromStr};
 
+use iroha_crypto::PublicKey;
 use iroha_data_model::prelude::Name;
 use ivm::{
     CoreHost, IVM, PointerType, encoding, instruction,
     kotodama::{compiler::Compiler as KotodamaCompiler, ir, parser, semantic},
-    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
+    mock_wsv::{DomainId, MockWorldStateView, ScopedAccountId, WsvHost},
     syscalls,
 };
 use norito::{decode_from_bytes, to_bytes};
@@ -26,6 +27,12 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
 
 fn encoded_state_path(name: &str, key: impl std::fmt::Display) -> String {
     format!("{name}/{}", key)
+}
+
+fn account(domain: &str, public_key: &str) -> ScopedAccountId {
+    let domain: DomainId = domain.parse().expect("domain id");
+    let public_key: PublicKey = public_key.parse().expect("public key");
+    ScopedAccountId::new(domain, public_key)
 }
 
 #[test]
@@ -164,11 +171,15 @@ fn kotodama_foreach_reads_durable_state_map_entries() {
         to_bytes(&9_i64).expect("encode state value 9"),
     )
     .expect("write state index 1");
-    let alice: AccountId =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-            .parse()
-            .expect("parse account id");
-    let host = WsvHost::new(wsv, alice, HashMap::new(), HashMap::new());
+    let alice = account(
+        "wonderland",
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    );
+    let host = WsvHost::new_with_subject(
+        wsv,
+        ivm::mock_wsv::AccountSubjectId::from(&alice),
+        HashMap::new(),
+    );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&code).expect("load loop program");

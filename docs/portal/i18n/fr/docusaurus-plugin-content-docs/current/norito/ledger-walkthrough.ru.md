@@ -76,7 +76,7 @@ Le colis est activé pour le `(asset definition, account)`. Замитьте 250
 
 ```sh
 iroha --config defaults/client.toml asset mint \
-  --id coffee#wonderland##${ADMIN_ACCOUNT} \
+  --id norito:4e52543000000002 \
   --quantity 250
 ```
 
@@ -91,7 +91,7 @@ ou alors, que pouvez-vous faire avec de nouvelles activités :
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${ADMIN_ACCOUNT}\"}" \
+  "{\"id\":\"norito:4e52543000000002\"}" \
   --limit 1 | jq .
 ```
 
@@ -101,7 +101,7 @@ Effectuez 50 données sur le compte de l'opérateur pour `$RECEIVER_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
-  --id coffee#wonderland##${ADMIN_ACCOUNT} \
+  --id norito:4e52543000000002 \
   --to ${RECEIVER_ACCOUNT} \
   --quantity 50
 ```
@@ -111,10 +111,10 @@ que faire pour prouver de nouveaux équilibres :
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${ADMIN_ACCOUNT}\"}" --limit 1 | jq .
+  "{\"id\":\"norito:4e52543000000002\"}" --limit 1 | jq .
 
 iroha --config defaults/client.toml asset list filter \
-  "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
+  "{\"id\":\"norito:4e52543000000003\"}" --limit 1 | jq .
 ```
 
 ## 5. Vérifiez votre restaurant

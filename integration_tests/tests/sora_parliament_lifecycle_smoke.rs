@@ -77,6 +77,12 @@ fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
 }
 
+fn governance_escrow_account_literal() -> String {
+    ALICE_ID
+        .canonical_ih58()
+        .expect("alice account id should encode to canonical ih58")
+}
+
 fn tune_client_timeouts(client: &mut Client) {
     client.transaction_status_timeout = TX_STATUS_TIMEOUT;
     client.torii_request_timeout = TORII_REQUEST_TIMEOUT;
@@ -504,9 +510,12 @@ fn proposal_snapshot_body_members(
         let raw = entry
             .as_str()
             .ok_or_else(|| eyre!("invalid non-string roster member in `{body_key}`: {entry:?}"))?;
-        parsed.push(raw.parse().wrap_err_with(|| {
-            format!("failed to parse roster member account id `{raw}` in `{body_key}`")
-        })?);
+        let account_id = iroha::data_model::account::AccountId::parse_encoded(raw)
+            .map(|parsed| parsed.into_account_id())
+            .wrap_err_with(|| {
+                format!("failed to parse roster member account id `{raw}` in `{body_key}`")
+            })?;
+        parsed.push(account_id);
     }
     if parsed.is_empty() {
         return Err(eyre!(
@@ -852,11 +861,12 @@ async fn wait_for_tx_rejected(
 }
 
 fn governance_builder_for_hostile_takeover() -> NetworkBuilder {
-    let alice_escrow_account = format!("{}@wonderland", ALICE_KEYPAIR.public_key());
+    let alice_escrow_account = governance_escrow_account_literal();
     NetworkBuilder::new()
         .with_peers(4)
         .with_config_layer(move |layer| {
             layer
+                .write(["default_account_domain_label"], "wonderland")
                 .write(["gov", "voting_asset_id"], GOV_ASSET_ID)
                 .write(["gov", "citizenship_asset_id"], GOV_ASSET_ID)
                 .write(
@@ -1965,7 +1975,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         ready_peer_idx,
         alice,
         citizens,
-        council_members,
         asset_def_id,
         alice_asset_id,
     };

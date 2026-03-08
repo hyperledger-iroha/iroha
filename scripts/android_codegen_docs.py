@@ -288,7 +288,7 @@ MANIFEST_TYPE_TABLES: dict[str, dict] = {
             {
                 "name": "read_keys",
                 "type": "Vec<String>",
-                "description": "Canonical keys (e.g., `account:alice@wonderland`) the contract expects to read.",
+                "description": "Canonical keys (e.g., `account:6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9`) the contract expects to read.",
             },
             {
                 "name": "write_keys",

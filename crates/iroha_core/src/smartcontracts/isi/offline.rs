@@ -8565,6 +8565,22 @@ mod attestation {
         }
     }
 
+    fn app_attest_signature_prehash(
+        authenticator_data: &[u8],
+        client_data_hash_component: &[u8],
+    ) -> [u8; 32] {
+        // App Attest signatures are produced over `nonce = SHA256(authData || clientDataHash...)`
+        // as a message, so ECDSA hashes that nonce once more internally.
+        let mut nonce_digest = Sha256::new();
+        nonce_digest.update(authenticator_data);
+        nonce_digest.update(client_data_hash_component);
+        let nonce: [u8; 32] = nonce_digest.finalize().into();
+
+        let mut final_digest = Sha256::new();
+        final_digest.update(nonce);
+        final_digest.finalize().into()
+    }
+
     fn verify_apple_signature(
         verifying_key: &VerifyingKey,
         assertion: &AppleAssertion,
@@ -8572,10 +8588,8 @@ mod attestation {
         receipt_challenge_hash: &[u8; 32],
         settlement_cfg: &actual::Offline,
     ) -> Result<(), InstructionExecutionError> {
-        let mut primary_digest = Sha256::new();
-        primary_digest.update(&assertion.authenticator_data);
-        primary_digest.update(client_data_hash);
-        let primary_prehash = primary_digest.finalize();
+        let primary_prehash =
+            app_attest_signature_prehash(&assertion.authenticator_data, client_data_hash);
         if verifying_key
             .verify_prehash(primary_prehash.as_ref(), &assertion.signature)
             .is_ok()
@@ -8593,10 +8607,8 @@ mod attestation {
         }
 
         if client_data_hash != receipt_challenge_hash {
-            let mut raw_challenge_digest = Sha256::new();
-            raw_challenge_digest.update(&assertion.authenticator_data);
-            raw_challenge_digest.update(receipt_challenge_hash);
-            let raw_challenge_prehash = raw_challenge_digest.finalize();
+            let raw_challenge_prehash =
+                app_attest_signature_prehash(&assertion.authenticator_data, receipt_challenge_hash);
             if verifying_key
                 .verify_prehash(raw_challenge_prehash.as_ref(), &assertion.signature)
                 .is_ok()
@@ -8612,10 +8624,10 @@ mod attestation {
         // Some App Attest clients sign against SHA256(clientDataHash) rather
         // than the raw 32-byte clientDataHash.
         let hashed_client_data = Sha256::digest(client_data_hash);
-        let mut fallback_digest = Sha256::new();
-        fallback_digest.update(&assertion.authenticator_data);
-        fallback_digest.update(hashed_client_data.as_slice());
-        let fallback_prehash = fallback_digest.finalize();
+        let fallback_prehash = app_attest_signature_prehash(
+            &assertion.authenticator_data,
+            hashed_client_data.as_ref(),
+        );
         if verifying_key
             .verify_prehash(fallback_prehash.as_ref(), &assertion.signature)
             .is_ok()
@@ -9636,18 +9648,15 @@ mod attestation {
                 .expect("fixture signing key must be a valid P-256 scalar");
             let verifying_key = signing_key.verifying_key();
 
-            let mut fallback_digest = Sha256::new();
-            fallback_digest.update(&authenticator_data);
-            fallback_digest.update(Sha256::digest(client_data_hash).as_slice());
-            let fallback_prehash = fallback_digest.finalize();
+            let hashed_client_data = Sha256::digest(client_data_hash);
+            let fallback_prehash =
+                app_attest_signature_prehash(&authenticator_data, hashed_client_data.as_ref());
             let signature = signing_key
                 .sign_prehash(fallback_prehash.as_ref())
                 .expect("fixture signing key must sign fallback prehash");
 
-            let mut primary_digest = Sha256::new();
-            primary_digest.update(&authenticator_data);
-            primary_digest.update(client_data_hash);
-            let primary_prehash = primary_digest.finalize();
+            let primary_prehash =
+                app_attest_signature_prehash(&authenticator_data, &client_data_hash);
             assert!(
                 verifying_key
                     .verify_prehash(primary_prehash.as_ref(), &signature)
@@ -10691,13 +10700,13 @@ mod attestation {
                 spend_pair: &iroha_crypto::KeyPair,
                 operator_pair: &iroha_crypto::KeyPair,
             ) -> OfflineWalletCertificate {
-                let controller = test_account_id("sbp", 0xA1);
+                let controller = test_account_id("acme", 0xA1);
                 let operator = AccountId::new(
                     controller.domain().clone(),
                     operator_pair.public_key().clone(),
                 );
                 let definition =
-                    AssetDefinitionId::from_str("usd#sbp").expect("asset definition id");
+                    AssetDefinitionId::from_str("usd#acme").expect("asset definition id");
                 let asset = AssetId::new(definition, controller.clone());
                 let mut certificate = OfflineWalletCertificate {
                     controller: controller.clone(),
@@ -10754,7 +10763,7 @@ mod attestation {
                 let mut receipt = OfflineSpendReceipt {
                     tx_id: Hash::new(b"apple-offline"),
                     from: certificate.controller.clone(),
-                    to: test_account_id("sbp", 0xB1),
+                    to: test_account_id("acme", 0xB1),
                     asset: certificate.allowance.asset.clone(),
                     amount: Numeric::new(250, 0),
                     issued_at_ms: certificate.issued_at_ms + 1_000,
@@ -10949,16 +10958,17 @@ mod attestation {
             let signature: P256Signature = match encoding {
                 AppleAssertionEncoding::CompactHashedClientData => {
                     let hashed_client_data = Sha256::digest(client_data_hash);
-                    let mut digest = Sha256::new();
-                    digest.update(&auth_data);
-                    digest.update(hashed_client_data.as_slice());
-                    signing_key.sign_digest(digest)
+                    let prehash =
+                        app_attest_signature_prehash(&auth_data, hashed_client_data.as_ref());
+                    signing_key
+                        .sign_prehash(prehash.as_ref())
+                        .expect("fixture signing key must sign compatibility prehash")
                 }
                 _ => {
-                    let mut digest = Sha256::new();
-                    digest.update(&auth_data);
-                    digest.update(client_data_hash);
-                    signing_key.sign_digest(digest)
+                    let prehash = app_attest_signature_prehash(&auth_data, client_data_hash);
+                    signing_key
+                        .sign_prehash(prehash.as_ref())
+                        .expect("fixture signing key must sign assertion prehash")
                 }
             };
             match encoding {
@@ -11105,12 +11115,12 @@ mod attestation {
             spend_pair: &KeyPair,
             operator_pair: &KeyPair,
         ) -> OfflineWalletCertificate {
-            let controller = test_account_id("sbp", 0xC3);
+            let controller = test_account_id("acme", 0xC3);
             let operator = AccountId::new(
                 controller.domain().clone(),
                 operator_pair.public_key().clone(),
             );
-            let definition = AssetDefinitionId::from_str("usd#sbp").expect("asset definition id");
+            let definition = AssetDefinitionId::from_str("usd#acme").expect("asset definition id");
             let asset = AssetId::new(definition, controller.clone());
             let mut certificate = OfflineWalletCertificate {
                 controller,
@@ -11178,7 +11188,7 @@ mod attestation {
             let mut receipt = OfflineSpendReceipt {
                 tx_id: Hash::new(b"android-offline"),
                 from: certificate.controller.clone(),
-                to: test_account_id("sbp", 0xD1),
+                to: test_account_id("acme", 0xD1),
                 asset: certificate.allowance.asset.clone(),
                 amount: Numeric::new(250, 0),
                 issued_at_ms: certificate.issued_at_ms + 1_000,
@@ -11513,8 +11523,7 @@ mod attestation {
     #[cfg(test)]
     fn test_account_id(domain: &str, seed: u8) -> AccountId {
         let pair = iroha_crypto::KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        let raw = format!("{}@{domain}", pair.public_key());
-        AccountId::from_str(&raw).expect("test account id")
+        AccountId::new(domain.parse().expect("domain"), pair.public_key().clone())
     }
 }
 
@@ -11802,7 +11811,7 @@ mod aggregate_proof_tests {
     #[allow(clippy::too_many_lines)]
     fn sample_transfer_with_aggregate_proof() -> OfflineToOnlineTransfer {
         let controller: AccountId = test_account_id("agg", 1);
-        let receiver: AccountId = test_account_id("sbp", 2);
+        let receiver: AccountId = test_account_id("acme", 2);
         let asset_definition: AssetDefinitionId =
             AssetDefinitionId::from_str("xor#agg").expect("asset definition");
         let asset = AssetId::new(asset_definition, controller.clone());
@@ -12025,7 +12034,6 @@ mod aggregate_proof_tests {
 
     fn test_account_id(domain: &str, seed: u8) -> AccountId {
         let pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        let raw = format!("{}@{domain}", pair.public_key());
-        AccountId::from_str(&raw).expect("test account id")
+        AccountId::new(domain.parse().expect("domain"), pair.public_key().clone())
     }
 }

@@ -18,8 +18,14 @@ fn encode_pointer_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn parse_account_id_literal(id: &str) -> AccountId {
+    AccountId::parse_encoded(id)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("account literal must be canonical IH58 or sora compressed")
+}
+
 fn account_pointer_tlvs(id: &str) -> (Vec<u8>, Vec<u8>) {
-    let account: AccountId = id.parse().expect("valid AccountId literal");
+    let account = parse_account_id_literal(id);
     let payload = to_bytes(&account).expect("encode account id");
     let raw = encode_pointer_tlv(PointerType::AccountId, &payload);
     let norito = encode_pointer_tlv(PointerType::NoritoBytes, &raw);
@@ -43,8 +49,7 @@ fn encode_int_norito(value: i64) -> Vec<u8> {
 
 #[test]
 fn durable_map_account_id_path_hashes() {
-    const OWNER_ID: &str =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+    const OWNER_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
     let (raw_ptr, _norito_ptr) = account_pointer_tlvs(OWNER_ID);
     let path = map_path("balances", &raw_ptr);
     assert!(path.starts_with("balances/"));
@@ -74,8 +79,7 @@ fn durable_map_name_value_roundtrip() {
 
 #[test]
 fn durable_map_account_id_value_roundtrip() {
-    const OWNER_ID: &str =
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+    const OWNER_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
     let (_raw_ptr, norito_ptr) = account_pointer_tlvs(OWNER_ID);
     let mut host = CoreHost::new();
     host.insert_state_value("owners/7", norito_ptr.clone());

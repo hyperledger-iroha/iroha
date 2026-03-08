@@ -18,15 +18,15 @@ $ scripts/offline_topup/run.sh \
 ```jsonc
 {
   "operator": {
-    "account": "ed0120…@wonderland",    // required unless overridden per allowance
+    "account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",    // required unless overridden per allowance
     "private_key": "ed25519:..."        // optional, per-entry overrides take precedence
   },
   "allowances": [
     {
       "label": "retail-demo",           // folder name, used in logs
-      "controller": "ed0120…@wonderland",    // canonical multihash account id
-      "operator": "ed0120…@wonderland", // optional per entry override for operator account
-      "allowance_asset": "xor#sora#ed0120…@wonderland",
+      "controller": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+      "operator": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn", // optional per entry override for operator account
+      "allowance_asset": "norito:<hex>",
       "amount": "250.00",
       "issued_at_ms": 1730314876000,
       "expires_at_ms": 1745900000000,
@@ -49,8 +49,8 @@ $ scripts/offline_topup/run.sh \
 }
 ```
 
-Controller and asset IDs must use the canonical multihash format (`ed0120…@domain`), just like the
-account strings that appear on-chain. The `allowance_asset` account must match the controller (the
+Controller IDs must use encoded account IDs (IH58 preferred, `sora…` compressed accepted), and
+asset IDs must use encoded `norito:<hex>`. The `allowance_asset` account must match the controller (the
 allowance is funded from the controller account, not an operator pool). Spend keys accept either
 the multihash literal or the `algo:hex` helper format used elsewhere in the spec. Each allowance
 must provide an operator account, either via `operator.account` or the per-entry `operator` override.

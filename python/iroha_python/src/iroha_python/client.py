@@ -64,7 +64,7 @@ from iroha_torii_client.client import (
     ToriiClient as _BaseToriiClient,
 )
 
-from .address import AccountAddress, AccountAddressError, AccountAddressFormat
+from .address import AccountAddress, AccountAddressError
 from .connect import ConnectSessionInfo
 from .event_filter import DataEventFilter, ensure_event_filter
 from .query import (
@@ -749,11 +749,9 @@ def _ensure_governance_owner_canonical(owner: Any, *, context: str) -> None:
     if "@" in trimmed:
         raise ValueError(f"{context}.owner must be a canonical IH58 account id")
     try:
-        address, fmt = AccountAddress.parse_any(trimmed, expected_prefix=DEFAULT_IH58_PREFIX)
+        address = AccountAddress.from_ih58(trimmed, expected_prefix=DEFAULT_IH58_PREFIX)
     except AccountAddressError as exc:
         raise ValueError(f"{context}.owner must be a canonical IH58 account id") from exc
-    if fmt is not AccountAddressFormat.IH58:
-        raise ValueError(f"{context}.owner must be a canonical IH58 account id")
     canonical = address.to_ih58(DEFAULT_IH58_PREFIX)
     if canonical != owner:
         raise ValueError(f"{context}.owner must be a canonical IH58 account id")

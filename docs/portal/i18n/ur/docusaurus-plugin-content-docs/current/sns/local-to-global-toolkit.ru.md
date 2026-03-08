@@ -34,7 +34,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 اختیارات:
 
 - `--format compressed (`SORA`)` `sora...` سے IH58 کی بجائے آؤٹ پٹ۔
-- ننگے لٹریلز آؤٹ پٹ کے لئے `--no-append-domain`۔
+- ننگے لٹریلز آؤٹ پٹ کے لئے `domainless output (default)`۔
 - تبادلوں کے قدم کو چھوڑنے کے لئے `--audit-only`۔
 - `--allow-errors` اسکیننگ جاری رکھنے کے لئے جب غلط لکیریں ہوں (سلوک CLI کی طرح ہی ہے)۔
 
@@ -47,7 +47,7 @@ Grafana اسکرین شاٹ کے ساتھ تبدیل کریں
 1. اسکرپٹ کو علیحدہ ملازمت اور بوجھ کے نتائج میں چلائیں۔
 2. بلاک ضم ہوجاتا ہے جب `audit.json` مقامی سلیکٹرز (`domain.kind = local12`) کی اطلاع دیتا ہے۔
    ڈیفالٹ ویلیو `true` کے ساتھ (جب رجعت پسندی کی تشخیص کرتے ہو تو صرف دیو/ٹیسٹ میں `false` میں تبدیل ہوتا ہے) اور
-   رجعت کی کوششوں کی اجازت دینے کے لئے CI میں `iroha tools address normalize --fail-on-warning --only-local` شامل کریں
+   رجعت کی کوششوں کی اجازت دینے کے لئے CI میں `iroha tools address normalize` شامل کریں
    پیداوار میں گر گیا۔
 
 تفصیلات ، شواہد چیک لسٹس اور ریلیز نوٹ کے اسنیپٹ کے لئے ماخذ دستاویز دیکھیں ، جو ہوسکتا ہے

@@ -19,7 +19,7 @@ def _fixture_entry(creation_time_ms: int) -> dict:
     return {
         "name": "alpha",
         "chain": "00000002",
-        "authority": "alice@wonderland",
+        "authority": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
         "payload_hash": "payload-hash",
         "signed_hash": "signed-hash",
         "encoded_len": 10,
@@ -72,7 +72,7 @@ def test_compare_manifests_flags_authority_drift(tmp_path: Path) -> None:
     target_path = _write_manifest(tmp_path / "target.json", creation_time_ms=100)
 
     payload = json.loads(target_path.read_text(encoding="utf-8"))
-    payload["fixtures"][0]["authority"] = "bob@wonderland"
+    payload["fixtures"][0]["authority"] = "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"
     target_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     canonical = MODULE.load_manifest(canonical_path)

@@ -1,5 +1,5 @@
 import XCTest
-import IrohaSwift
+@testable import IrohaSwift
 
 private final class OfflineStubURLProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data?))?
@@ -101,8 +101,8 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testOfflineEndpointsRequests() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
-        let assetId = "rose#wonderland#\(accountId)"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        let assetId = try makeNoritoAssetId(name: "rose", domain: "wonderland", accountId: accountId)
         let receiptsPayload = """
         {
           "items": [{
@@ -397,8 +397,8 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testOfflineTopUpRequests() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
-        let assetId = "rose#wonderland#\(accountId)"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        let assetId = try makeNoritoAssetId(name: "rose", domain: "wonderland", accountId: accountId)
         let issuePayload = """
         {
           "certificate_id_hex": "cafe",
@@ -495,8 +495,8 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testOfflineTopUpRenewalRequests() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
-        let assetId = "rose#wonderland#\(accountId)"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        let assetId = try makeNoritoAssetId(name: "rose", domain: "wonderland", accountId: accountId)
         let issuePayload = """
         {
           "certificate_id_hex": "beadfeed",
@@ -590,8 +590,8 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testOfflineTopUpRejectsInvalidAttestationNonceLength() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
-        let assetId = "rose#wonderland#\(accountId)"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        let assetId = try makeNoritoAssetId(name: "rose", domain: "wonderland", accountId: accountId)
         let draft = OfflineWalletCertificateDraft(
             controller: accountId,
             allowance: OfflineAllowanceCommitment(assetId: assetId,
@@ -620,8 +620,8 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testOfflineReprovisionRequestsPreserveAmountAndPolicy() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
-        let assetId = "rose#wonderland#\(accountId)"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        let assetId = try makeNoritoAssetId(name: "rose", domain: "wonderland", accountId: accountId)
         let existingCertificate = OfflineWalletCertificate(
             controller: accountId,
             operatorId: accountId,
@@ -736,8 +736,8 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testOfflineReprovisionRejectsInvalidCommitmentLength() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
-        let assetId = "rose#wonderland#\(accountId)"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        let assetId = try makeNoritoAssetId(name: "rose", domain: "wonderland", accountId: accountId)
         let existingCertificate = OfflineWalletCertificate(
             controller: accountId,
             operatorId: accountId,
@@ -776,8 +776,8 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testOfflineReprovisionCompletionAPI() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
-        let assetId = "rose#wonderland#\(accountId)"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        let assetId = try makeNoritoAssetId(name: "rose", domain: "wonderland", accountId: accountId)
         let existingCertificate = OfflineWalletCertificate(
             controller: accountId,
             operatorId: accountId,
@@ -877,8 +877,8 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testGetSettlementStatusReturnsSettledWhenSettlementRecordExists() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
-        let assetId = "rose#wonderland#\(accountId)"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        let assetId = try makeNoritoAssetId(name: "rose", domain: "wonderland", accountId: accountId)
         let settlementPayload = """
         {
           "items": [{
@@ -932,7 +932,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testGetSettlementStatusReturnsPendingAfterAcceptedSubmit() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         let submitPayload = """
         {"bundle_id_hex": "aa"}
         """.data(using: .utf8)!
@@ -978,7 +978,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testSubmitOfflineSettlementEncodesBuildClaimOverridesAndRepairFlag() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         let txIdHex = "hash:\(String(repeating: "AB", count: 32))#B99E"
         let submitPayload = """
         {"bundle_id_hex": "aa"}
@@ -1021,7 +1021,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testSubmitOfflineSettlementAndWaitPollsPipelineStatus() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         let txHashHex = String(repeating: "ca", count: 32)
         var step = 0
         OfflineStubURLProtocol.handler = { request in
@@ -1136,7 +1136,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testSubmitOfflineSettlementAndWaitSupportsTaskCancellation() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         let txHashHex = String(repeating: "de", count: 32)
         let firstPollStarted = DispatchSemaphore(value: 0)
         var step = 0
@@ -1199,7 +1199,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testSubmitOfflineSettlementAndWaitSurfacesRejectionReason() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         let txHashHex = String(repeating: "cb", count: 32)
         OfflineStubURLProtocol.handler = { request in
             if request.url?.path == "/v1/offline/settlements" {
@@ -1254,7 +1254,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testSubmitOfflineSettlementAndWaitCachesRejectedStatusForBundle() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         let txHashHex = String(repeating: "cc", count: 32)
         var step = 0
         OfflineStubURLProtocol.handler = { request in
@@ -1326,7 +1326,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testSubmitOfflineSettlementAndWaitRejectsMissingTxHashBeforePolling() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         var calls = 0
         OfflineStubURLProtocol.handler = { request in
             calls += 1
@@ -1463,7 +1463,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         }
 
         let request = ToriiOfflineSettlementSubmitRequest(
-            authority: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+            authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
             privateKey: "ed0120deadbeef",
             transfer: .object(["bundle_id": .string("aa")]),
             buildClaimOverrides: [
@@ -1488,7 +1488,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testGetSettlementStatusReturnsRejectedFromSubmitRejectCode() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         let emptyListPayload = """
         {"items": [], "total": 0}
         """.data(using: .utf8)!
@@ -1543,7 +1543,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testGetSettlementStatusReturnsRejectedFromDuplicateBundleSubmitRejectCode() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         let emptyListPayload = """
         {"items": [], "total": 0}
         """.data(using: .utf8)!
@@ -1598,7 +1598,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testGetSettlementStatusReturnsRejectedAfterAcceptedSubmitWhenServerRowAppears() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         let submitPayload = """
         {"bundle_id_hex": "aa"}
         """.data(using: .utf8)!
@@ -1663,7 +1663,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testGetSettlementStatusReturnsSettledAfterAcceptedSubmitWhenServerRowAppears() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         let submitPayload = """
         {"bundle_id_hex": "aa"}
         """.data(using: .utf8)!
@@ -1727,7 +1727,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testGetSettlementStatusReturnsRejectedReasonFromRevocation() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         let settlementPayload = """
         {
           "items": [{
@@ -1803,7 +1803,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testGetSettlementStatusReturnsRejectedReasonFromTopLevelField() async throws {
-        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         let settlementPayload = """
         {
           "items": [{
@@ -1866,5 +1866,14 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         let status = try await client.getSettlementStatus(bundleIdHex: "aa")
         XCTAssertEqual(status, .unknown)
         XCTAssertTrue(invoked)
+    }
+
+    private func makeNoritoAssetId(name: String,
+                                   domain: String,
+                                   accountId: String) throws -> String {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(try OfflineNorito.encodeAssetDefinitionId(name: name, domain: domain))
+        writer.writeField(try OfflineNorito.encodeAccountId(accountId))
+        return "norito:\(writer.data.hexLowercased())"
     }
 }

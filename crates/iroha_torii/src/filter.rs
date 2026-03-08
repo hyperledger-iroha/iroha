@@ -410,9 +410,7 @@ mod tests {
     fn filter_expr_serialization_matches_expected_value() {
         let expr = FilterExpr::Eq(
             FieldPath("id".into()),
-            Value::from(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
-            ),
+            Value::from("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"),
         );
         let value = filter_expr_to_value(&expr);
         let expected = obj(vec![
@@ -421,9 +419,7 @@ mod tests {
                 "args",
                 arr(vec![
                     val("id"),
-                    val(
-                        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
-                    ),
+                    val("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"),
                 ]),
             ),
         ]);
@@ -444,7 +440,10 @@ mod tests {
                         ("op", val("eq")),
                         (
                             "args",
-                            arr(vec![val("authority"), val("ed0120...@wonderland")]),
+                            arr(vec![
+                                val("authority"),
+                                val("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"),
+                            ]),
                         ),
                     ]),
                     obj(vec![
