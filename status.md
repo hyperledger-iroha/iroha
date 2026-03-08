@@ -5,6 +5,8 @@ Last update: 2026-03-08
   - Implemented in:
     - `crates/iroha_core/src/sumeragi/main_loop.rs`
     - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+    - `crates/iroha_core/src/{executor.rs,queue.rs,tx.rs}`
+    - `crates/iroha_core/src/smartcontracts/isi/{asset.rs,triggers/set.rs,triggers/specialized.rs}`
     - `crates/iroha_executor_data_model/src/isi.rs`
   - Changes:
     - aligned the roster-unavailability reducer/runtime path by removing unreachable roster-recovery branches (`CatchUpIsolated`/`Rejoin` + unused events) and keeping catch-up isolation in the dedicated round-liveness FSM only,
@@ -14,8 +16,12 @@ Last update: 2026-03-08
     - prevented telemetry clobbering by removing round-liveness writes to the roster-recovery state status field.
   - Validation commands (current tree):
     - `cargo fmt --all` (ok)
-    - `cargo check -p iroha_core --lib` (fails; blocked by pre-existing AccountId parsing API drift in `iroha_core` paths such as `executor.rs`, `queue.rs`, `tx.rs`, and `smartcontracts/isi/asset.rs`)
-    - blocker surfaced earlier in the same chain was fixed in `iroha_executor_data_model/src/isi.rs` (`AccountId::from_str` -> `AccountId::parse_encoded(...).into_account_id()`), but additional parse-callsite drift remains outside this tranche.
+    - `cargo check -p iroha_executor_data_model` (ok)
+    - `cargo check -p iroha_core --lib` (ok)
+    - `cargo test -p iroha_core --lib roster_recovery_ -- --nocapture` (ok; 2 passed)
+    - `cargo test -p iroha_core --lib deterministic_roster_election_is_order_invariant_for_permissioned_and_npos -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib roster_unavailability_candidate_source_matches_consensus_mode -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib round_liveness_ -- --nocapture` (ok; 2 passed)
 - Latest sync (2026-03-07 deterministic roster-unavailability FSM unification):
   - Implemented in:
     - `crates/iroha_core/src/sumeragi/main_loop.rs`
