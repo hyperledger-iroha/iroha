@@ -1222,7 +1222,7 @@ mod tests {
         events::execute_trigger::ExecuteTriggerEventFilter,
         metadata::Metadata,
         prelude::{
-            AccountId, Executable, ExecutionTime, InstructionBox, Level, Log, TimeEvent,
+            AccountId, DomainId, Executable, ExecutionTime, InstructionBox, Level, Log, TimeEvent,
             TimeEventFilter, TimeInterval, TriggerId,
         },
     };
@@ -1235,6 +1235,11 @@ mod tests {
     fn sample_hash() -> HashOf<IvmBytecode> {
         let bytecode = IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]);
         HashOf::new(&bytecode)
+    }
+
+    fn sample_authority() -> AccountId {
+        let domain_id: DomainId = "wonderland".parse().expect("valid domain");
+        AccountId::new(domain_id, KeyPair::random().public_key().clone())
     }
 
     #[test]
@@ -1371,8 +1376,7 @@ mod tests {
             {
                 let mut tx = block.transaction();
                 let trigger_id: TriggerId = "time_trigger".parse().expect("valid id");
-                let authority: AccountId =
-                    "alice@wonderland".parse().expect("authority must parse");
+                let authority = sample_authority();
                 let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
                 let executable = Executable::Instructions(ConstVec::from(vec![instruction]));
                 let mut action = SpecializedAction::new(
@@ -1441,8 +1445,7 @@ mod tests {
             {
                 let mut tx = block.transaction();
                 let trigger_id: TriggerId = "time_trigger_disabled".parse().expect("valid id");
-                let authority: AccountId =
-                    "alice@wonderland".parse().expect("authority must parse");
+                let authority = sample_authority();
                 let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
                 let executable = Executable::Instructions(ConstVec::from(vec![instruction]));
                 let mut action = SpecializedAction::new(
@@ -1496,8 +1499,7 @@ mod tests {
             {
                 let mut tx = block.transaction();
                 let trigger_id: TriggerId = "time_trigger_missing_meta".parse().expect("valid id");
-                let authority: AccountId =
-                    "alice@wonderland".parse().expect("authority must parse");
+                let authority = sample_authority();
                 let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
                 let executable = Executable::Instructions(ConstVec::from(vec![instruction]));
                 let action = SpecializedAction::new(
