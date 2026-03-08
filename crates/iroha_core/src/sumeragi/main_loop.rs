@@ -5416,7 +5416,6 @@ enum RosterRecoveryState {
     AcquireDependencies,
     ReelectRoster,
     WaitCandidates,
-    EscalateEpoch,
     RotateView,
 }
 
@@ -5427,7 +5426,6 @@ impl RosterRecoveryState {
             Self::AcquireDependencies => "acquire_dependencies",
             Self::ReelectRoster => "reelect_roster",
             Self::WaitCandidates => "wait_candidates",
-            Self::EscalateEpoch => "escalate_epoch",
             Self::RotateView => "rotate_view",
         }
     }
@@ -5439,24 +5437,20 @@ enum RosterRecoveryEvent {
     DependencyResolved,
     DependencyTimeout,
     RosterUnavailable,
-    CandidatesChanged,
-    CandidatesNoop,
+    CandidatesAvailable,
     CandidatesEmpty,
-    EscalationReady,
     RoundAdvanced,
 }
 
 impl RosterRecoveryEvent {
     #[cfg(test)]
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 7] = [
         Self::DependencyMissing,
         Self::DependencyResolved,
         Self::DependencyTimeout,
         Self::RosterUnavailable,
-        Self::CandidatesChanged,
-        Self::CandidatesNoop,
+        Self::CandidatesAvailable,
         Self::CandidatesEmpty,
-        Self::EscalationReady,
         Self::RoundAdvanced,
     ];
 }
@@ -5476,28 +5470,22 @@ fn step_roster_recovery_state(
             RosterRecoveryState::Steady
         }
         (RosterRecoveryState::AcquireDependencies, RosterRecoveryEvent::DependencyTimeout) => {
-            RosterRecoveryState::EscalateEpoch
+            RosterRecoveryState::RotateView
         }
         (RosterRecoveryState::AcquireDependencies, RosterRecoveryEvent::RosterUnavailable) => {
             RosterRecoveryState::ReelectRoster
         }
-        (RosterRecoveryState::ReelectRoster, RosterRecoveryEvent::CandidatesChanged) => {
+        (RosterRecoveryState::ReelectRoster, RosterRecoveryEvent::CandidatesAvailable) => {
             RosterRecoveryState::RotateView
-        }
-        (RosterRecoveryState::ReelectRoster, RosterRecoveryEvent::CandidatesNoop) => {
-            RosterRecoveryState::EscalateEpoch
         }
         (RosterRecoveryState::ReelectRoster, RosterRecoveryEvent::CandidatesEmpty) => {
             RosterRecoveryState::WaitCandidates
         }
-        (RosterRecoveryState::WaitCandidates, RosterRecoveryEvent::CandidatesChanged) => {
+        (RosterRecoveryState::WaitCandidates, RosterRecoveryEvent::CandidatesAvailable) => {
             RosterRecoveryState::ReelectRoster
         }
         (RosterRecoveryState::WaitCandidates, RosterRecoveryEvent::RoundAdvanced) => {
             RosterRecoveryState::Steady
-        }
-        (RosterRecoveryState::EscalateEpoch, RosterRecoveryEvent::EscalationReady) => {
-            RosterRecoveryState::RotateView
         }
         (RosterRecoveryState::RotateView, _) => RosterRecoveryState::Steady,
         _ => state,
@@ -5543,7 +5531,6 @@ struct RosterRecoveryEntry {
     dependency_requested_at: Option<Instant>,
     last_observed_dependency_seq: u64,
     election_attempts: BTreeSet<RosterElectionAttemptKey>,
-    target_roster_len: usize,
     dwell_ms: BTreeMap<&'static str, u64>,
 }
 
@@ -21512,7 +21499,6 @@ impl Actor {
                 dependency_requested_at: None,
                 last_observed_dependency_seq: dependency_seq,
                 election_attempts: BTreeSet::new(),
-                target_roster_len: baseline_roster_len,
                 dwell_ms: BTreeMap::new(),
             }
         });
@@ -21604,8 +21590,7 @@ impl Actor {
                         canonical_view,
                         latest_committed_hash,
                     );
-                    let mut target_roster_len =
-                        entry.target_roster_len.max(1).min(candidates.len());
+                    let mut target_roster_len = baseline_roster_len.max(1).min(candidates.len());
                     if matches!(consensus_mode, ConsensusMode::Npos) {
                         let max_validators =
                             usize::try_from(self.config.npos.election.max_validators)
@@ -21620,45 +21605,54 @@ impl Actor {
                         seed,
                         target_roster_len,
                     );
-                    let active_roster = roster::canonicalize_roster_for_mode(
-                        self.roster_for_live_vote_with_mode(height, consensus_mode),
-                        consensus_mode,
-                    );
                     if elected.is_empty() {
                         let _ = self.transition_roster_recovery_state(
                             &mut entry,
                             RosterRecoveryEvent::CandidatesEmpty,
                             now,
                         );
-                    } else if elected == active_roster {
-                        let _ = self.transition_roster_recovery_state(
-                            &mut entry,
-                            RosterRecoveryEvent::CandidatesNoop,
-                            now,
-                        );
-                    } else if let Err(err) = self.install_elected_roster(&elected) {
-                        warn!(
-                            ?err,
-                            height,
-                            view = canonical_view,
-                            roster_len = elected.len(),
-                            "failed to install deterministically elected roster during recovery"
-                        );
                     } else {
-                        if elected.len() < baseline_roster_len {
-                            self.recovery_pending_baseline_restore
-                                .entry(height)
-                                .or_insert_with(|| initial_roster.clone());
+                        let active_roster = roster::canonicalize_roster_for_mode(
+                            self.roster_for_live_vote_with_mode(height, consensus_mode),
+                            consensus_mode,
+                        );
+                        let mut effective_roster = active_roster.clone();
+                        if elected != active_roster {
+                            if let Err(err) = self.install_elected_roster(&elected) {
+                                warn!(
+                                    ?err,
+                                    height,
+                                    view = canonical_view,
+                                    roster_len = elected.len(),
+                                    "failed to install deterministically elected roster during recovery"
+                                );
+                            } else {
+                                effective_roster = elected.clone();
+                                if elected.len() < baseline_roster_len {
+                                    self.recovery_pending_baseline_restore
+                                        .entry(height)
+                                        .or_insert_with(|| initial_roster.clone());
+                                }
+                                super::status::inc_consensus_roster_unavailable_election_success();
+                            }
                         }
-                        let _ = self.refresh_commit_topology_state(&elected);
-                        super::status::inc_consensus_roster_unavailable_election_success();
+                        let _ = self.refresh_commit_topology_state(&effective_roster);
                         let _ = self.transition_roster_recovery_state(
                             &mut entry,
-                            RosterRecoveryEvent::CandidatesChanged,
+                            RosterRecoveryEvent::CandidatesAvailable,
                             now,
                         );
                         should_rotate = true;
                     }
+                } else {
+                    // Election for this deterministic key is already consumed; rotate to
+                    // guarantee progress and avoid hanging in `ReelectRoster`.
+                    let _ = self.transition_roster_recovery_state(
+                        &mut entry,
+                        RosterRecoveryEvent::CandidatesAvailable,
+                        now,
+                    );
+                    should_rotate = true;
                 }
             }
             RosterRecoveryState::WaitCandidates => {
@@ -21669,7 +21663,7 @@ impl Actor {
                 } else {
                     let _ = self.transition_roster_recovery_state(
                         &mut entry,
-                        RosterRecoveryEvent::CandidatesChanged,
+                        RosterRecoveryEvent::CandidatesAvailable,
                         now,
                     );
                     handled = true;
@@ -21686,30 +21680,6 @@ impl Actor {
                     );
                     handled = true;
                 }
-            }
-            RosterRecoveryState::EscalateEpoch => {
-                let min_target_roster_len =
-                    network_topology::commit_quorum_from_len(baseline_roster_len).max(1);
-                if entry.target_roster_len > min_target_roster_len {
-                    entry.target_roster_len = entry
-                        .target_roster_len
-                        .saturating_sub(1)
-                        .max(min_target_roster_len);
-                    info!(
-                        height,
-                        view = canonical_view,
-                        min_target_roster_len,
-                        target_roster_len = entry.target_roster_len,
-                        "escalating roster recovery by shrinking election target length"
-                    );
-                }
-                let _ = self.transition_roster_recovery_state(
-                    &mut entry,
-                    RosterRecoveryEvent::EscalationReady,
-                    now,
-                );
-                should_rotate = true;
-                handled = true;
             }
             RosterRecoveryState::RotateView => {
                 should_rotate = true;

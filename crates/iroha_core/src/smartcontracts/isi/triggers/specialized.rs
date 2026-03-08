@@ -486,10 +486,11 @@ impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for Loaded
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "json")]
     use iroha_crypto::KeyPair;
     #[cfg(feature = "json")]
     use iroha_data_model::prelude::{
-        AccountId, DataEventFilter, DomainId, InstructionBox, Level, Log, Metadata, Repeats,
+        AccountId, DataEventFilter, InstructionBox, Level, Log, Metadata, Repeats,
     };
     #[cfg(feature = "json")]
     use iroha_primitives::const_vec::ConstVec;
@@ -535,7 +536,7 @@ mod tests {
             executable,
             repeats: Repeats::Exactly(3),
             authority: AccountId::new(
-                "wonderland".parse::<DomainId>().expect("valid domain id"),
+                "wonderland".parse().expect("valid domain"),
                 KeyPair::random().public_key().clone(),
             ),
             filter: DataEventFilter::Any,
