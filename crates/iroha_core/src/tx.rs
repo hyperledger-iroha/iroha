@@ -2245,7 +2245,9 @@ fn collect_manifest_approvals(
                 "`gov_manifest_approvers` metadata entries must not be blank",
             ));
         }
-        let canonical = if let Ok(account) = AccountId::from_str(trimmed) {
+        let canonical = if let Ok(account) = AccountId::parse_encoded(trimmed)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        {
             account.canonical_ih58().map_err(|err| {
                 reject_lane_policy(
                     alias,
@@ -2254,15 +2256,12 @@ fn collect_manifest_approvals(
             })?
         } else {
             let prefix = iroha_data_model::account::address::chain_discriminant();
-            let (address, _) =
-                IrohaAccountAddress::parse_any(trimmed, Some(prefix)).map_err(|err| {
-                    reject_lane_policy(
-                        alias,
-                        format!(
-                            "invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"
-                        ),
-                    )
-                })?;
+            let address = IrohaAccountAddress::from_ih58(trimmed, Some(prefix)).map_err(|err| {
+                reject_lane_policy(
+                    alias,
+                    format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
+                )
+            })?;
             address.to_ih58(prefix).map_err(|err| {
                 reject_lane_policy(
                     alias,

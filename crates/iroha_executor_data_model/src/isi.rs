@@ -54,10 +54,7 @@ macro_rules! impl_custom_instruction {
 
 /// Types for multisig instructions
 pub mod multisig {
-    use core::{
-        num::{NonZeroU16, NonZeroU64},
-        str::FromStr,
-    };
+    use core::num::{NonZeroU16, NonZeroU64};
     #[allow(unused_imports)]
     use std::eprintln;
     use std::{borrow::ToOwned, collections::BTreeSet};
@@ -389,12 +386,15 @@ pub mod multisig {
                         };
                         let mut parsed = BTreeMap::new();
                         for (account, weight_value) in map {
-                            let account_id = AccountId::from_str(&account).map_err(|err| {
-                                json::Error::InvalidField {
-                                    field: format!("signatories.{account}"),
-                                    message: err.to_string(),
-                                }
-                            })?;
+                            let account_id = AccountId::parse_encoded(&account).map_or_else(
+                                |err| {
+                                    Err(json::Error::InvalidField {
+                                        field: format!("signatories.{account}"),
+                                        message: err.to_string(),
+                                    })
+                                },
+                                |parsed| Ok(parsed.into_account_id()),
+                            )?;
                             let weight: Weight = json::from_value(weight_value)?;
                             parsed.insert(account_id, weight);
                         }

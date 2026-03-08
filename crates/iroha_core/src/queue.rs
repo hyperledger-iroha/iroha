@@ -796,7 +796,9 @@ impl Queue {
                     "`gov_manifest_approvers` metadata entries must not be blank",
                 ));
             }
-            let canonical = if let Ok(account) = AccountId::from_str(trimmed) {
+            let canonical = if let Ok(account) = AccountId::parse_encoded(trimmed)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            {
                 account.canonical_ih58().map_err(|err| {
                     Self::enforcement_error(
                         alias,
@@ -807,7 +809,7 @@ impl Queue {
                 })?
             } else {
                 let prefix = iroha_data_model::account::address::chain_discriminant();
-                let (address, _) = iroha_data_model::account::address::AccountAddress::parse_any(
+                let address = iroha_data_model::account::address::AccountAddress::from_ih58(
                     trimmed,
                     Some(prefix),
                 )
