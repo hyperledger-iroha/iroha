@@ -3888,10 +3888,6 @@ pub struct SumeragiRecovery {
     pub missing_qc_reacquire_window: Duration,
     /// Maximum forced self-proposal attempts allowed for a single (height, view).
     pub max_forced_proposal_attempts_per_view: u32,
-    /// Number of views where no-roster fallback broadcasts remain allowed.
-    pub no_roster_fallback_views: u32,
-    /// Number of deterministic no-roster topology refresh retries allowed per view.
-    pub no_roster_refresh_retry_per_view: u32,
     /// Rotate immediately when the missing-QC reacquire window is exhausted.
     pub rotate_after_reacquire_exhausted: bool,
     /// Missing-block fetch attempts before falling back to the full commit topology.

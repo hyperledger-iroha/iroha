@@ -89,6 +89,9 @@ fn merge_with_overrides(
     if is_cli_source(matches, "progress_timeout") {
         base.progress_timeout = overrides.progress_timeout;
     }
+    if is_cli_source(matches, "latency_p95_threshold") {
+        base.latency_p95_threshold = overrides.latency_p95_threshold;
+    }
     if is_cli_source(matches, "seed") {
         base.seed = overrides.seed;
     }
@@ -246,6 +249,29 @@ mod tests {
         assert_eq!(merged.target_blocks, persisted.target_blocks);
         assert_eq!(merged.progress_interval, persisted.progress_interval);
         assert_eq!(merged.progress_timeout, persisted.progress_timeout);
+    }
+
+    #[test]
+    fn cli_overrides_latency_p95_threshold() {
+        let defaults = config::IzanamiArgs::defaults();
+        let mut persisted = defaults.clone();
+        persisted.target_blocks = Some(50);
+        persisted.latency_p95_threshold = Some(Duration::from_millis(2_000));
+
+        let (cli_args, matches) = parse_cli_arguments(vec![
+            "izanami".to_string(),
+            "--tui".to_string(),
+            "--target-blocks".to_string(),
+            "50".to_string(),
+            "--latency-p95-threshold".to_string(),
+            "900ms".to_string(),
+        ]);
+
+        let merged = merge_with_overrides(persisted, &cli_args, &matches);
+        assert_eq!(
+            merged.latency_p95_threshold,
+            Some(Duration::from_millis(900))
+        );
     }
 
     #[test]

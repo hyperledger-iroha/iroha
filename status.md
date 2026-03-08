@@ -1,6 +1,298 @@
 # Status
 
-Last update: 2026-03-04
+Last update: 2026-03-08
+- Latest sync (2026-03-08 roster-unavailability anti-loop FSM hardening):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/{commit.rs,mode.rs,tests.rs}`
+  - Changes:
+    - extended the finite recovery reducer with explicit `EscalateEpoch` flow (`CandidatesNoop -> EscalateEpoch -> RotateView`) to break repeated no-op re-election loops,
+    - switched consensus recovery slot identity from `(height, view)` to deterministic episode key `(height, latest_committed_hash)` so recovery context is preserved across view bumps in the same stalled tip episode,
+    - added deterministic no-op handling in re-election: no-op outcomes escalate instead of being treated as success, with dead-end order-only fallback for the `f=1` case and temporary target-size shrink (bounded by security floor) when candidates allow,
+    - added temporary-shrink baseline restore plumbing (`recovery_pending_baseline_restore`) applied on commit of the recovered height.
+  - Validation commands (current tree):
+    - `cargo test -p iroha_core --lib roster_recovery_transitions_are_total_and_finite -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib roster_unavailable_recovery_ -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib deterministic_roster_election_is_order_invariant_for_permissioned_and_npos -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib roster_recovery_wait_candidates_does_not_rotate -- --nocapture` (ok)
+    - Note: broad `cargo test -p iroha_core` still fails on unrelated pre-existing integration drift (`CoreHost::with_host` in `iroha_core/tests/*`) outside this tranche.
+- Latest sync (2026-03-07 deterministic roster-unavailability FSM unification):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/{propose.rs,commit.rs,votes.rs,roster.rs,tests.rs}`
+    - `crates/iroha_core/src/sumeragi/status.rs`
+    - `crates/iroha_torii/src/routing/consensus.rs`
+    - `crates/iroha_torii/src/routing.rs`
+    - `crates/iroha_config/src/parameters/{defaults.rs,user.rs,actual.rs}`
+    - `crates/iroha_config/tests/fixtures.rs`
+    - `crates/izanami/src/chaos.rs`
+  - Changes:
+    - replaced split no-roster/empty-topology logic with one finite roster-unavailability FSM (`Steady -> AcquireDependencies -> ReelectRoster -> WaitCandidates -> RotateView`) and unified recovery entrypoint `handle_roster_unavailable_recovery(...)`,
+    - removed legacy no-roster machine paths/types and deleted disabled legacy no-roster tests,
+    - enforced deterministic election seed material `chain_id || height(be) || view(be) || latest_committed_hash` and mode-specific candidate sourcing (`NPoS=stake-active`, `permissioned=trusted validators`) with one attempt key per `(height, view, latest_committed_hash)` recovery slot,
+    - wired `ViewChangeCause::RosterUnavailable`, added roster FSM status telemetry (state, dwell, detection/election/wait counters), and removed the obsolete `sumeragi.recovery.no_roster_refresh_retry_per_view` config knob across schema/defaults/fixtures/initializers.
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo check -p iroha_core -p iroha_torii -p izanami` (ok)
+    - `cargo test -p iroha_core --lib roster_unavailable_recovery_ -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib roster_unavailability_candidate_source_matches_consensus_mode -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib deterministic_roster_election_is_order_invariant_for_permissioned_and_npos -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib roster_recovery_transitions_are_total_and_finite -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib roster_recovery_wait_candidates_does_not_rotate -- --nocapture` (ok)
+- Latest sync (2026-03-07 deterministic round-recovery bundle gating):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/{mode.rs,commit.rs}`
+  - Changes:
+    - removed the `ConsensusRecoveryState::ViewChangeEscalation -> ViewChangeEscalation` self-loop by making escalation a one-step transition back to `RefreshTopology`,
+    - added a per-height deterministic round-recovery bundle window gate (`RoundRecoveryBundleWindowGateState`) to bound same-window repeated recovery churn across `commit_quorum_missing` reschedules and `no_proposal_cutoff` view-change rotations,
+    - tagged roster-proof-missing block-sync fallback attempts into the same per-height recovery-bundle context for deterministic diagnostics,
+    - cleared the new gate state on mode-flip and roster-change consensus resets to keep behavior finite and deterministic across topology transitions.
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core --lib consensus_recovery_transitions_are_total_and_finite -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib round_recovery_bundle_window_gate_is_single_use_per_window -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib missing_qc_view_change_suppressed_when_frontier_reanchor_already_emitted -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib reschedule_uses_reduced_timeout_for_near_quorum_missing_payload -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib force_view_change_if_idle_records_missing_qc_and_advances_view -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib reschedule_near_quorum_reduced_timeout_is_suppressed_by_queue_backlog -- --nocapture` (ok)
+- Latest sync (2026-03-07 consensus recovery hardening + focused/full p95 soak reruns):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+    - `crates/izanami/src/chaos.rs`
+  - Changes:
+    - hardened no-roster invariant handling so `recover_no_roster_only_when_active_set_empty(...)` now escalates fail-closed when deterministic active targets are non-empty (instead of silently skipping recovery),
+    - damped sidecar mismatch churn by suppressing repeated post-final-drop recovery actions and throttling mismatch warnings through `allow_roster_sidecar_mismatch_warning(...)`,
+    - reduced lock-lag prune thrash by skipping destructive prune when stall-mode reanchor pull is still gated and prior cycles already churned without pull progress,
+    - added sidecar-quarantine/no-progress guard to missing-QC idle rotation so same-height rotation is suppressed unless reservation window admission succeeds,
+    - extended ingress backpressure resilience with bounded extra retries for `NoEndpointBackpressure`, plus immediate healthy promotion when all endpoints are unhealthy and a probe succeeds,
+    - tightened progress safety in `wait_for_target_blocks(...)` with strict-min-height stall detection and strict p95 enforcement alongside quorum p95.
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p izanami queue_timeout -- --nocapture` (ok)
+    - `cargo test -p izanami strict_divergence_ -- --nocapture` (ok)
+    - `cargo test -p izanami wait_for_target_blocks_reaches_target -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib no_roster_recovery_fail_closed -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib sidecar_mismatch_ -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib lock_lag_prune_ -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib lock_lag_frontier_stall_mode_ -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib missing_qc_rotation_ -- --nocapture` (ok)
+    - Note: broad `cargo test -p iroha_core` still fails on unrelated pre-existing integration drift (`CoreHost::with_host`, `world_mut_for_testing`) outside this tranche.
+  - Soak reruns:
+    - focused diagnostic gate: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo run -p izanami -- --allow-net --nexus --peers 4 --faulty 0 --duration 600s --target-blocks 600 --progress-interval 10s --progress-timeout 300s --latency-p95-threshold 1000ms --tps 5 --max-inflight 8 --workload-profile stable`
+    - focused log/network: `/tmp/izanami_focused_diag_20260307T103258.log`, `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_asyIzQ`
+    - focused outcome: duration-bound stop at strict/quorum `372/372` (`samples=60`, gap max `1`, strict p50 `1429ms`, strict p95 `2501ms`, successes `1776`, failures `0`, ingress unhealthy `0` pre-stop),
+    - full envelope gate: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo run -p izanami -- --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 3600 --progress-interval 10s --progress-timeout 300s --latency-p95-threshold 1000ms --tps 5 --max-inflight 8 --workload-profile stable`
+    - full log/network: `/tmp/izanami_full_soak_20260307T105016.log`, `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_sCf2kL`
+    - full outcome: stopped at `07:05:04Z` with `no strict block height progress for 600s` at strict/quorum `163/163`; summary `successes=775 failures=77`, ingress `failover_total=16`, `endpoint_unhealthy_total=16`; pre-stop ingress pressure dominated (`failure_class=\"queue_pressure\"=247`, `transaction queued for too long=145`, status-timeout(20s)=86), post-stop `Connection refused` only during teardown.
+- Latest sync (2026-03-07 Izanami localnet cadence + p95 SLO gate):
+  - Implemented in:
+    - `crates/izanami/src/{chaos.rs,config.rs,main.rs,persistence.rs}`
+  - Changes:
+    - tuned Izanami baseline localnet timings for faster cadence (`block_time_ms=120`, `commit_time_ms=180`) and tightened DA/recovery windows (`da_quorum_timeout_multiplier=1`, `da_availability_timeout_multiplier=1`, `da_availability_timeout_floor_ms=750`, shorter missing-QC/deferred-QC/retry-backoff caps),
+    - added optional CLI/config/persistence knob `latency_p95_threshold` (requires `target_blocks`) to enforce block-interval p95 SLO during target-block runs,
+    - extended `wait_for_target_blocks(...)` with weighted block-interval tracking (`p50`/`p95` logs) and hard-fail when measured p95 exceeds configured threshold,
+    - added regression coverage for latency-threshold validation/merge/persistence plus cadence quantile/progress-state helpers.
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p izanami` (ok)
+- Latest sync (2026-03-06 deterministic active-set gate + explicit roster-evidence states):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - Changes:
+    - introduced explicit finite roster-evidence states for block-sync updates (`Verifiable | MissingCommitProof | MissingStakeSnapshot`) via `classify_block_sync_roster_evidence(...)`,
+    - hardened `prepare_block_sync_update_for_broadcast(...)` to log deterministic evidence diagnostics when frame-cap trimming or missing evidence blocks `BlockSyncUpdate` broadcast,
+    - tightened `recover_no_roster_only_when_active_set_empty(...)` invariant so no-roster bootstrap can run only when both callsite targets and deterministic global fallback targets are empty,
+    - added regression coverage that distinguishes caller-local empty targets from true deterministic active-set emptiness (single-peer extreme case only).
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core --lib no_roster_recovery_ -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib deterministic_block_sync_fallback_targets_ -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib hintless_block_sync_policy_requires_explicit_requester_roster_proof -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib fetch_pending_block_npos_downgrades_hintless_update_without_requester_roster_proof -- --nocapture` (ok)
+- Latest sync (2026-03-06 no-roster telemetry cleanup + 4-peer liveness rerun):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/status.rs`
+    - `crates/iroha_torii/src/routing/consensus.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - Changes:
+    - removed stale no-roster fallback counters/snapshot fields from core status (`CONSENSUS_NO_ROSTER_FALLBACK_TOTAL`, `consensus_no_roster_fallback_total`, and increment helper),
+    - removed Torii status JSON keys `consensus_no_roster_fallback_total` and `consensus_no_roster_fallback_allowed_total`,
+    - updated status JSON regression expectations and no-roster FSM tests to the fail-closed-only telemetry contract.
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo check -p iroha_core -p iroha_config -p iroha_torii -p izanami` (ok)
+    - `cargo test -p iroha_core --lib missing_block_fetch_counters_surface_in_snapshot -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib no_roster_bootstrap_ -- --nocapture` (ok)
+    - `cargo test -p iroha_torii --lib status_snapshot_json_includes_recovery_reacquire_fields --features "iroha_core/iroha-core-tests" -- --nocapture` (ok)
+    - `cargo test -p integration_tests --test sumeragi_da sumeragi_idle_view_change_recovers_after_leader_shutdown -- --nocapture --test-threads=1` (ok, 4-peer scenario).
+- Latest sync (2026-03-06 no-roster fail-closed cutover + deterministic reducer aggregation):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/commit.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/votes.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+    - `crates/iroha_config/src/parameters/{defaults.rs,actual.rs,user.rs}`
+    - `crates/iroha_core/src/{kiso.rs,sumeragi/penalties.rs}`
+    - `crates/iroha_torii/src/test_utils.rs`
+    - `crates/iroha_torii/tests/connect_gating.rs`
+    - `crates/iroha_config/tests/fixtures.rs`
+    - `crates/izanami/src/chaos.rs`
+  - Changes:
+    - removed `sumeragi.recovery.no_roster_fallback_views` from config schema/defaults and all in-repo initializers,
+    - removed no-roster payload fallback broadcast allowance (`AllowFallback` path) and enforced bounded bootstrap-then-fail-closed behavior only (`BootstrapPending | FailClosed`),
+    - updated commit/vote/reschedule no-roster branches to never emit `BlockCreated` fallback when roster verification is unavailable,
+    - kept deterministic per-view bootstrap retry+dwell bounds and once-per-view fail-closed escalation semantics,
+    - updated `step_recovery_fsm(...)` to aggregate all deterministically ordered observations instead of only the first observation,
+    - clarified phase timing semantics by reclassifying the phase enum as `ConsensusTimingPhase` (with `PipelinePhase` alias retained for compatibility).
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo check -p iroha_core -p iroha_config -p iroha_torii -p izanami` (ok)
+    - `cargo test -p iroha_core --lib no_roster_bootstrap_ -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib recovery_fsm_ -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib deterministic_reducer_replay_same_input_same_actions -- --nocapture` (ok)
+    - `cargo test -p iroha_config --test fixtures -- --nocapture` (ok)
+    - `cargo test -p izanami make_network_builder_injects_npos_parameters -- --nocapture` (ok)
+    - `cargo test -p iroha_torii status_snapshot_json_includes_recovery_reacquire_fields -- --nocapture` is blocked by unrelated pre-existing `iroha_torii` test compile drift (`iroha_core::zk::test_utils`, `world_mut_for_testing`, `transactions_latest_height_for_testing`) outside this tranche.
+- Latest sync (2026-03-05 deterministic FSM cutover for Sumeragi stall + ingress collapse):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+    - `crates/izanami/src/chaos.rs`
+  - Changes:
+    - added internal deterministic recovery FSM primitives (`RecoveryFsmState`, `RecoveryFsmEvent`, `RecoveryFsmReason`, `RecoveryFsmObservations`, `RecoveryFsmActions`) and pure reducer `step_recovery_fsm(...)` with deterministic transition ordering (`height`, `reason_rank`, `peer_id`),
+    - wired reducer actions into range-pull recovery gating for frontier-equivalent emits, in-window missing-QC rotation suppression, and committed-edge conflict bundle suppression; kept validity/safety semantics unchanged,
+    - preserved/validated adaptive reanchor stride schedule (`1/2/4/8`) and stalled QC far-ahead replay boundary (`replay_height > local_height_at_entry + 1` with one far-ahead replay per window),
+    - added explicit ingress endpoint FSM state (`IngressEndpointState`) and lag snapshot shape (`IngressLagSnapshot { quorum_min_height, peer_heights, observed_at }`) with deterministic lag-aware endpoint selection and bounded queue-pressure cooldown state tracking.
+  - Test updates:
+    - `recovery_fsm_hysteresis_persists_across_transient_frontier_blips`
+    - `recovery_fsm_stride_schedule_1_2_4_8`
+    - `recovery_fsm_shared_gate_single_emit_across_reasons`
+    - `missing_qc_rotation_suppressed_after_in_window_reanchor`
+    - `committed_sidecar_conflict_emits_single_bundle_per_window`
+    - `deterministic_reducer_replay_same_input_same_actions`
+    - `qc_far_ahead_boundary_local_plus_one_when_stalled`
+    - `ingress_fsm_excludes_lagging_when_healthy_alternative_exists`
+    - `ingress_fsm_forced_probe_when_all_excluded_or_unhealthy`
+    - `ingress_queue_pressure_exponential_cooldown_blocks_early_reprobe`
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo check -p iroha_core --lib` (ok)
+    - `cargo test -p iroha_core --features iroha-core-tests --lib recovery_fsm_ -- --nocapture` (ok)
+    - `cargo test -p iroha_core --features iroha-core-tests --lib missing_qc_rotation_suppressed_after_in_window_reanchor -- --nocapture` (ok)
+    - `cargo test -p iroha_core --features iroha-core-tests --lib committed_sidecar_conflict_emits_single_bundle_per_window -- --nocapture` (ok)
+    - `cargo test -p iroha_core --features iroha-core-tests --lib deterministic_reducer_replay_same_input_same_actions -- --nocapture` (ok)
+    - `cargo test -p iroha_core --features iroha-core-tests --lib qc_far_ahead_boundary_local_plus_one_when_stalled -- --nocapture` (ok)
+    - `cargo test -p izanami ingress_fsm_ -- --nocapture` (ok)
+    - `cargo test -p izanami ingress_queue_pressure_exponential_cooldown_blocks_early_reprobe -- --nocapture` (ok)
+    - broad default `cargo test -p iroha_core ...` (without `--features iroha-core-tests --lib`) remains blocked by pre-existing branch-wide compile/test API drift (`push_block_hash_for_testing`, `world_mut_for_testing`, `CoreHost::with_host`, `take_axt_reject_for_tests`) outside this tranche.
+- Latest sync (2026-03-05 Tranche 7C lock-realign deterministic cleanup + full unchanged-envelope soak):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - Core FSM change:
+    - added deterministic post-lock-realignment cleanup (`reset_diverged_recovery_state_after_locked_realign(...)`) so when `maybe_realign_locked_to_committed_tip()` detects lock/commit divergence, the node prunes diverged frontier/future recovery artifacts in one transition (`prune_future_consensus_state_above_height(frontier)` + `prune_consensus_state_for_missing_block_height(frontier)`), clears per-height recovery gates, and emits a single contiguous `frontier_gap_realign` reanchor from committed+1.
+    - added regression `realign_locked_qc_prunes_diverged_frontier_and_future_state`.
+  - Local validation in this tree:
+    - `cargo fmt --all` (ok)
+    - `cargo check -p iroha_core --lib` (ok)
+    - `cargo check -p izanami` (ok)
+    - targeted `cargo test -p iroha_core realign_locked_qc_prunes_diverged_frontier_and_future_state -- --nocapture` is still blocked by unrelated branch-wide compile failures (`push_block_hash_for_testing`, `world_mut_for_testing`, `CoreHost::with_host`) outside this tranche.
+  - Full unchanged-envelope soak replay:
+    - command: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo run -p izanami -- --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 3600 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`
+    - log: `/private/tmp/izanami_soak_tranche7c_postpatch14_20260305_090931.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_0QQGiw`
+    - outcome: failed with `no block height progress for 600s` (error at `crates/izanami/src/chaos.rs:2061`), last progress at `05:15:28Z` with `quorum_min_height=49` and `strict_min_height=49`, timeout triggered at `05:25:28Z`.
+    - dominant bottlenecks at the stall height:
+      - view-change churn: `height=50` -> `missing_qc=301`, `stake_quorum_timeout=238`, `missing_payload=103`, `quorum_timeout=35`,
+      - canonical reanchor storm (all at local `height=49`): `highest_qc_committed_conflict=212`, `missing_block_height_hard_cap=101`, `idle_missing_qc_reacquire=68`, `missing_block_range_pull_no_progress=44`,
+      - large sustained `highest QC block missing locally; deferring proposal` loop at `height=50` (`205,694` total hits; concentrated on `evident_guanaco` + `legible_grubworm`),
+      - ingress pressure is broad (not one endpoint): queue-pressure failures `232` distributed across all four endpoints (`23.3%..28.0%` each), `no ingress endpoints available` occurrences `106`, `transaction queued for too long` `329`, status-timeout (`20s`) `111`.
+- Latest sync (2026-03-05 Tranche 7C shared-gate identity + unchanged-envelope 3600s soak replay):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - Changes:
+    - aligned frontier-equivalent canonical reanchor gate identity across emission and missing-QC suppression paths via `canonical_frontier_reanchor_gate_heights(...)`, collapsing shared-window keys to deterministic frontier identity so in-window suppression observes the same canonical bucket as emit paths,
+    - updated missing-QC suppression regressions to cover far-ahead QC-head conditions while asserting canonical shared-window keying remains stable (`height`-scoped frontier identity).
+  - Validation commands (current tree):
+    - `cargo test -p iroha_core --features iroha-core-tests frontier_catchup_stall_mode_persists_across_transient_unresolved_blips -- --nocapture` (ok)
+    - `cargo test -p iroha_core --features iroha-core-tests frontier_catchup_reanchor_stride_expands_with_long_no_progress -- --nocapture` (ok)
+    - `cargo test -p iroha_core --features iroha-core-tests frontier_shared_window_gate_all_reasons_single_emit -- --nocapture` (ok)
+    - `cargo test -p iroha_core --features iroha-core-tests missing_qc_view_change_suppressed_when_frontier_reanchor_already_emitted -- --nocapture` (ok)
+    - `cargo test -p iroha_core --features iroha-core-tests committed_edge_sidecar_conflict_emits_one_bundle_per_window -- --nocapture` (ok)
+    - `cargo test -p iroha_core --features iroha-core-tests deferred_qc_far_ahead_boundary_uses_local_plus_one_under_stall -- --nocapture` (ok)
+    - `cargo test -p izanami ingress_pool_excludes_lagging_endpoint_when_healthy_alternatives_exist -- --nocapture` (ok)
+    - `cargo test -p izanami ingress_pool_forced_probe_when_all_endpoints_excluded_or_unhealthy -- --nocapture` (ok)
+    - `cargo test -p izanami queue_pressure_sticky_cooldown_blocks_early_reprobe -- --nocapture` (ok)
+  - Unchanged-envelope soak replay:
+    - command envelope: `IROHA_TEST_NETWORK_KEEP_DIRS=1 target/debug/izanami --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 3600 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`
+    - log: `/tmp/izanami_soak_tranche7c_20260305_003051.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_vP9Lyu`
+    - outcome: failed on progress timeout at `h=336` (`no block height progress for 600s`, `successes=1591`, `failures=34`, `izanami_ingress_failover_total=126`, `izanami_ingress_endpoint_unhealthy_total=5`)
+    - strict/quorum behavior improved vs prior strict-lagger mode: `max strict/quorum gap=1`, last progress `quorum=336 strict=336`
+    - dominant new hotspot moved to `h=337`:
+      - range-pull emits: `highest_qc_committed_conflict@337=152`, `qc_missing_payload_quorum_fast_recovery@337=126`, `missing_block_height_hard_cap@337=45`, `frontier_gap_realign@337=0`, `frontier_stall_reset@337=0`
+      - view-change churn: `missing_qc@337=334`, `quorum_timeout@337=82`, `stake_quorum_timeout@337=79`, `missing_payload@337=88`
+      - ingress pressure is broad, not single-endpoint concentrated: pre-summary queue-pressure unhealthy transitions `4` total (`:42273/:42275/:42277/:42279` each `1`), failed queue-pressure attempts `236` spread across all four endpoints (`57..62` each)
+    - queue/latency symptom at stall band: pacemaker peaks reached `queue_len=237` and `since_last_success_ms=608240` at `height=336`.
+- Latest sync (2026-03-04 Tranche 7C follow-up after full-envelope replay attempt):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - Changes:
+    - applied adaptive reanchor stride to canonical-frontier shared-window gating even when frontier stall mode is not active (`1/2/4/8` by no-progress window index), with deterministic 2-peer cohort + every-3rd all-peer sweep on emit-eligible windows,
+    - tightened missing-QC same-height suppression by honoring canonical stride eligibility and dependency-progress stasis since the last canonical emit before allowing rotation,
+    - preserved frontier/canonical shared-window state when clearing missing-block recovery at the contiguous frontier edge while contiguous pressure is still active (prevents repeated gate reinitialization under no-progress loops).
+  - New/updated regressions:
+    - `canonical_frontier_reanchor_stride_applies_without_frontier_stall_mode`
+    - `clear_missing_block_recovery_keeps_frontier_window_state_under_contiguous_pressure`
+    - `missing_qc_view_change_suppressed_when_canonical_reanchor_stride_window_not_eligible`
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo build -p iroha_core` (ok)
+    - `cargo test -p iroha_core <targeted test>` is still blocked by unrelated branch-wide test API drift (`push_block_hash_for_testing`, `world_mut_for_testing`) outside this tranche.
+  - Unchanged-envelope soak replay (same command line, manually stopped after bottleneck convergence evidence):
+    - log: `/tmp/izanami_tranche7c_full_afterpatch_20260304T191155.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_roudeA`
+    - last sampled progress before stop: `quorum_min_height=606`, `strict_min_height=247`, `max strict/quorum gap=359`
+    - ingress pressure signature improved vs prior run: `queue_pressure` failures remained low and concentrated (`6` total, all endpoint `:39553`), no `Connection refused` bursts
+    - remaining bottleneck shifted and persisted in core: lagging peer `suitable_ling` remained pinned around `h=248` with concentrated `frontier_gap_realign@248=41`, `lock_lag_future_prune@248=10`, `missing_qc view-change@248=10`; hotspot no longer dominated by `highest_qc_committed_conflict`.
+- Latest sync (2026-03-04 Tranche 7C post-soak follow-up, contiguous-frontier gate stability):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - Changes:
+    - preserved frontier/canonical shared-window gate state when pruning far-future consensus state at the contiguous frontier edge (`keep_through_height + 1`) so canonical reanchor gating is not repeatedly reset in no-progress loops,
+    - strengthened contiguous-frontier targeting by treating frontier-height consensus state as pressure (`>= frontier_height`) and allowing equal highest-known height to retain contiguous frontier targeting under active pressure,
+    - expanded regression coverage for contiguous-frontier targeting and prune/gate preservation:
+      - `frontier_catchup_target_keeps_contiguous_frontier_at_equal_highest_known_height`
+      - `frontier_catchup_target_keeps_contiguous_frontier_with_pending_frontier_block`
+      - `prune_future_consensus_state_preserves_frontier_window_state_for_contiguous_frontier`
+      - `frontier_catchup_stall_mode_enters_despite_transient_unresolved_blips`
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo check -p iroha_core --lib` (ok)
+    - `cargo test -p izanami ingress_pool_excludes_lagging_endpoint_when_healthy_alternatives_exist -- --nocapture` (ok)
+    - `cargo test -p izanami ingress_pool_forced_probe_when_all_endpoints_excluded_or_unhealthy -- --nocapture` (ok)
+    - `cargo test -p izanami queue_pressure_sticky_cooldown_blocks_early_reprobe -- --nocapture` (ok)
+    - `cargo check -p izanami` (ok; existing warning: unused `is_ingress_failover_retryable`)
+    - `cargo test -p iroha_core --lib ...` remains blocked by unrelated branch-wide test API drift (`push_block_hash_for_testing`, `world_mut_for_testing`) outside this tranche.
+  - Short soak replay (same envelope, reduced duration for hotspot verification):
+    - command: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo run -p izanami -- --allow-net --nexus --peers 4 --faulty 0 --duration 480s --target-blocks 480 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable`
+    - log: `/tmp/izanami_tranche7c_short_20260304T.log`
+    - network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_DHcLW1`
+    - observed progress crossed hotspot bands cleanly (`h=179`, `h=264`) with `max strict/quorum gap = 1` in progress samples and zero peer-log hits for:
+      - `frontier_gap_realign@179/@264`
+      - `missing_block_height_hard_cap@179/@264`
+      - `view_change(cause=missing_qc)@179/@264`
+      - ingress `queue_pressure` failure-class lines in the run log.
+    - run ended at duration horizon before target blocks (`285/480`), so this is a hotspot sanity replay, not the final 3600s acceptance run.
 - Latest sync (2026-03-04 Tranche 7C h=178/179 stall-loop closure, core + ingress / no new public knobs):
   - Implemented in:
     - `crates/iroha_core/src/sumeragi/main_loop.rs`
@@ -3932,3 +4224,4 @@ Last update: 2026-02-18
 - Swift fixture contract coverage added in `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift` (`testGetTransactionStatusMatchesSharedErrorMessageContractFixture`) loading the shared fixture and asserting status/reject/message/length/suffix behavior.
 - JavaScript fixture contract coverage added in `javascript/iroha_js/test/toriiClient.test.js` (`getTransactionStatus matches shared error-message contract fixture`) and dist rebuilt after source changes.
 - Validation reruns: `cd IrohaSwift && swift test --filter ToriiClientTests/testGetTransactionStatus` (ok; `10 passed`), `cd java/iroha_android && JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.10/libexec/openjdk.jdk/Contents/Home ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportStatusTests,org.hyperledger.iroha.android.client.OfflineToriiClientTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks` (ok), `IROHA_JS_DISABLE_NATIVE=1 node --test --test-name-pattern "getTransactionStatus|waitForTransactionStatus|submitOfflineSettlementAndWait" javascript/iroha_js/test/toriiClient.test.js` (ok; `34 passed`, `0 failed`), `cd javascript/iroha_js && npm run build:dist` (ok).
+- Deterministic Sumeragi/ingress FSM completion pass (2026-03-05): finalized reducer event ordering to stable `(height, reason_rank, peer_id)` in `crates/iroha_core/src/sumeragi/main_loop.rs`, made frontier-stall hysteresis persist across transient unresolved/gap blips until commit progress or frontier identity change, updated reducer/hysteresis regressions in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, and cleaned ingress retry dead code in `crates/izanami/src/chaos.rs` after dynamic no-endpoint backpressure delay wiring. Validation: `cargo check -p iroha_core --lib` (ok), `cargo check -p izanami` (ok), `cargo test -p izanami ingress_fsm_ -- --nocapture` (ok), `cargo test -p izanami ingress_queue_pressure_exponential_cooldown_blocks_early_reprobe -- --nocapture` (ok), `cargo test -p izanami queue_timeout_retry_delay_uses_dynamic_floor_for_no_endpoint_backpressure -- --nocapture` (ok). Note: `cargo test -p iroha_core --lib recovery_fsm_ -- --nocapture` is still blocked by unrelated branch-wide test API drift (`push_block_hash_for_testing`, `world_mut_for_testing`, etc.).

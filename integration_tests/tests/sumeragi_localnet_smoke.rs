@@ -39,17 +39,17 @@ const SMOKE_BLOCK_TIME_MS: u64 = 1_000;
 const SMOKE_COMMIT_TIME_MS: u64 = 1_000;
 const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(15);
 const STATUS_LOG_INTERVAL: Duration = Duration::from_secs(2);
-const SOAK_PIPELINE_TIME: Duration = Duration::from_secs(2);
-const SOAK_BLOCK_TIME_MS: u64 = 1_000;
-const SOAK_COMMIT_TIME_MS: u64 = 1_000;
+const SOAK_PIPELINE_TIME: Duration = Duration::from_millis(300);
+const SOAK_BLOCK_TIME_MS: u64 = 100;
+const SOAK_COMMIT_TIME_MS: u64 = 100;
 const SOAK_STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(20);
 const SOAK_TARGET_BLOCKS: u64 = 2_000;
-const SOAK_SUBMIT_BATCH: u64 = 25;
-const SOAK_QUEUE_SOFT_LIMIT: u64 = 200;
+const SOAK_SUBMIT_BATCH: u64 = 200;
+const SOAK_QUEUE_SOFT_LIMIT: u64 = 2_000;
 const SOAK_QUEUE_PROGRESS_TIMEOUT: Duration = Duration::from_secs(3 * 60);
 const SOAK_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(1);
-const SOAK_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
-const SOAK_STALL_THRESHOLD: Duration = Duration::from_secs(40);
+const SOAK_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(5);
+const SOAK_STALL_THRESHOLD: Duration = Duration::from_secs(90);
 const SOAK_CLIENT_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const THROUGHPUT_PIPELINE_TIME: Duration = Duration::from_secs(2);
 const THROUGHPUT_BLOCK_TIME_MS: u64 = 1_000;
@@ -643,6 +643,8 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "permissioned")
+                .write(["sumeragi", "collectors", "k"], 3_i64)
+                .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
                 .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
                 .write(
@@ -902,6 +904,11 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
         .lock()
         .await;
 
+    let soak_block_time_ms = env_or_default("IROHA_SOAK_BLOCK_TIME_MS", SOAK_BLOCK_TIME_MS);
+    let soak_commit_time_ms =
+        env_or_default("IROHA_SOAK_COMMIT_TIME_MS", SOAK_COMMIT_TIME_MS).max(soak_block_time_ms);
+    let soak_max_secs_per_block = env_or_default_f64("IROHA_SOAK_MAX_SEC_PER_BLOCK", 1.0);
+
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     // Extend TTL so early transactions do not expire during the soak run.
     set_env_var(
@@ -918,19 +925,27 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(SOAK_BLOCK_TIME_MS),
+            SumeragiParameter::BlockTimeMs(soak_block_time_ms),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(SOAK_COMMIT_TIME_MS),
+            SumeragiParameter::CommitTimeMs(soak_commit_time_ms),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CollectorsK(1),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::RedundantSendR(1),
         )))
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "permissioned")
-                .write(["network", "transaction_gossip_period_ms"], 200_i64)
-                .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
+                .write(["logger", "level"], "WARN")
+                .write(["telemetry_profile"], "full")
+                .write(["network", "transaction_gossip_period_ms"], 20_i64)
+                .write(["network", "transaction_gossip_public_target_cap"], 8_i64)
                 .write(
                     ["network", "transaction_gossip_restricted_target_cap"],
-                    3_i64,
+                    8_i64,
                 )
                 .write(
                     ["network", "transaction_gossip_restricted_fallback"],
@@ -944,31 +959,10 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
                 .write(["network", "disconnect_on_post_overflow"], false)
-                // Tighten local timeouts to keep proposal/view-change cadence bounded.
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                    200_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                    400_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                    600_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                    800_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                    400_i64,
-                )
                 // Give DA quorum extra breathing room under sustained load.
                 .write(
                     ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
-                    7_i64,
+                    1_i64,
                 )
                 .write(
                     [
@@ -977,15 +971,33 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                         "da",
                         "availability_timeout_multiplier",
                     ],
-                    3_i64,
+                    1_i64,
+                )
+                .write(
+                    [
+                        "sumeragi",
+                        "advanced",
+                        "da",
+                        "availability_timeout_floor_ms",
+                    ],
+                    100_i64,
                 )
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    10_000_i64,
+                    1_000_i64,
                 )
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    2_i64,
+                    1_i64,
+                )
+                // Keep soak timing deterministic for perf assertions by pinning pacing at 1.0x.
+                .write(
+                    ["sumeragi", "advanced", "pacing_governor", "min_factor_bps"],
+                    10_000_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "pacing_governor", "max_factor_bps"],
+                    10_000_i64,
                 );
         });
 
@@ -999,6 +1011,10 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
             return Ok(());
         };
 
+        eprintln!(
+            "localnet soak timing profile: block_time_ms={soak_block_time_ms}, commit_time_ms={soak_commit_time_ms}"
+        );
+
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let baseline_non_empty = baseline_statuses
@@ -1006,6 +1022,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
             .map(|status| status.blocks_non_empty)
             .min()
             .unwrap_or_default();
+        let soak_start = Instant::now();
 
         // Allow shorter local runs via IROHA_SOAK_TARGET_BLOCKS while keeping the default.
         let target_blocks = env_or_default("IROHA_SOAK_TARGET_BLOCKS", SOAK_TARGET_BLOCKS);
@@ -1036,6 +1053,8 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
             .checked_sub(SOAK_PROGRESS_LOG_INTERVAL)
             .unwrap_or_else(Instant::now);
         let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
+        let mut last_phase_snapshot: Option<SoakPhaseSnapshot> = None;
+        let mut phase_poll_enabled = true;
 
         loop {
             if let Ok(statuses) = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await {
@@ -1058,9 +1077,36 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                     .map(StatusSnapshot::from_status)
                     .collect();
                 if last_log.elapsed() >= SOAK_PROGRESS_LOG_INTERVAL {
+                    if phase_poll_enabled {
+                        match collect_sumeragi_phase_snapshot(&network, SOAK_STATUS_POLL_TIMEOUT)
+                            .await
+                        {
+                            Ok(phase_snapshot) => {
+                                last_phase_snapshot = Some(phase_snapshot);
+                            }
+                            Err(err) => {
+                                phase_poll_enabled = false;
+                                eprintln!(
+                                    "localnet soak phase snapshot unavailable; disabling phase polling: {err:?}"
+                                );
+                            }
+                        }
+                    }
                     eprintln!(
                         "localnet soak progress (target_non_empty={target_height}, min_non_empty={min_non_empty}, max_non_empty={max_non_empty}): {last_snapshot:?}"
                     );
+                    if let Some(phases) = last_phase_snapshot {
+                        eprintln!(
+                            "localnet soak phases avg_ms: propose={}, availability={}, prevote={}, precommit={}, commit={}, total={}, ema_total={}",
+                            phases.propose_ms,
+                            phases.availability_ms,
+                            phases.prevote_ms,
+                            phases.precommit_ms,
+                            phases.commit_ms,
+                            phases.pipeline_total_ms,
+                            phases.pipeline_total_ema_ms,
+                        );
+                    }
                     last_log = Instant::now();
                 }
                 if statuses
@@ -1073,8 +1119,8 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
 
             if last_progress.elapsed() >= SOAK_STALL_THRESHOLD {
                 return Err(eyre!(
-                    "localnet soak stalled for {:?} (min_non_empty={last_min_non_empty}, target_non_empty={target_height}): last_snapshot={last_snapshot:?}",
-                    SOAK_STALL_THRESHOLD
+                    "localnet soak stalled for {:?} (min_non_empty={last_min_non_empty}, target_non_empty={target_height}): last_snapshot={last_snapshot:?}, last_phases={last_phase_snapshot:?}",
+                    SOAK_STALL_THRESHOLD,
                 ));
             }
 
@@ -1087,6 +1133,39 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                 .iter()
                 .all(|status| status.blocks_non_empty >= target_height),
             "not all peers reached target non-empty height {target_height}: {after_statuses:?}"
+        );
+        let phase_summary = if phase_poll_enabled {
+            collect_sumeragi_phase_snapshot(&network, SOAK_STATUS_POLL_TIMEOUT)
+                .await
+                .ok()
+        } else {
+            None
+        };
+        let elapsed = soak_start.elapsed();
+        let secs_per_block = if target_blocks == 0 {
+            0.0
+        } else {
+            elapsed.as_secs_f64() / target_blocks as f64
+        };
+        eprintln!(
+            "localnet soak summary: target_blocks={}, elapsed={:?}, secs_per_block={:.3}",
+            target_blocks, elapsed, secs_per_block
+        );
+        if let Some(phases) = phase_summary {
+            eprintln!(
+                "localnet soak phase summary avg_ms: propose={}, availability={}, prevote={}, precommit={}, commit={}, total={}, ema_total={}",
+                phases.propose_ms,
+                phases.availability_ms,
+                phases.prevote_ms,
+                phases.precommit_ms,
+                phases.commit_ms,
+                phases.pipeline_total_ms,
+                phases.pipeline_total_ema_ms,
+            );
+        }
+        ensure!(
+            secs_per_block <= soak_max_secs_per_block,
+            "localnet soak too slow: secs_per_block={secs_per_block:.3}, target<={soak_max_secs_per_block:.3}"
         );
 
         network.shutdown().await;
@@ -2461,6 +2540,67 @@ async fn collect_sumeragi_statuses(
         }
     }))
     .await
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SoakPhaseSnapshot {
+    propose_ms: u64,
+    availability_ms: u64,
+    prevote_ms: u64,
+    precommit_ms: u64,
+    commit_ms: u64,
+    pipeline_total_ms: u64,
+    propose_ema_ms: u64,
+    availability_ema_ms: u64,
+    prevote_ema_ms: u64,
+    precommit_ema_ms: u64,
+    commit_ema_ms: u64,
+    pipeline_total_ema_ms: u64,
+}
+
+impl SoakPhaseSnapshot {
+    fn from_json(value: &Value) -> Option<Self> {
+        let object = value.as_object()?;
+        let ema = object.get("ema_ms").and_then(Value::as_object);
+        Some(Self {
+            propose_ms: json_object_u64(object, "propose_ms"),
+            availability_ms: json_object_u64(object, "collect_da_ms"),
+            prevote_ms: json_object_u64(object, "collect_prevote_ms"),
+            precommit_ms: json_object_u64(object, "collect_precommit_ms"),
+            commit_ms: json_object_u64(object, "commit_ms"),
+            pipeline_total_ms: json_object_u64(object, "pipeline_total_ms"),
+            propose_ema_ms: ema.map_or(0, |obj| json_object_u64(obj, "propose_ms")),
+            availability_ema_ms: ema.map_or(0, |obj| json_object_u64(obj, "collect_da_ms")),
+            prevote_ema_ms: ema.map_or(0, |obj| json_object_u64(obj, "collect_prevote_ms")),
+            precommit_ema_ms: ema.map_or(0, |obj| json_object_u64(obj, "collect_precommit_ms")),
+            commit_ema_ms: ema.map_or(0, |obj| json_object_u64(obj, "commit_ms")),
+            pipeline_total_ema_ms: ema.map_or(0, |obj| json_object_u64(obj, "pipeline_total_ms")),
+        })
+    }
+}
+
+fn json_object_u64(map: &Map, key: &str) -> u64 {
+    map.get(key).and_then(Value::as_u64).unwrap_or_default()
+}
+
+async fn collect_sumeragi_phase_snapshot(
+    network: &Network,
+    status_timeout: Duration,
+) -> Result<SoakPhaseSnapshot> {
+    let client = network.client();
+    let handle = task::spawn_blocking(move || client.get_sumeragi_phases_json());
+    let value = if let Ok(joined) = tokio::time::timeout(status_timeout, handle).await {
+        joined
+            .map_err(|err| eyre!("sumeragi phase join failed: {err:?}"))?
+            .wrap_err("sumeragi phase request failed")?
+    } else {
+        return Err(eyre!(
+            "sumeragi phase request timed out after {:?}",
+            status_timeout
+        ));
+    };
+    SoakPhaseSnapshot::from_json(&value)
+        .ok_or_else(|| eyre!("sumeragi phase payload malformed: {:?}", value))
 }
 
 async fn collect_metrics_snapshots(

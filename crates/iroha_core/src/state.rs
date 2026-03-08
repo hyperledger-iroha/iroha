@@ -5312,7 +5312,7 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         *self.confidential_registry_dirty = true;
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Returns a mutable handle to the world view; available only in test builds.
     #[inline]
     pub fn world_mut_for_testing(&mut self) -> &mut WorldTransaction<'block, 'state> {
@@ -11298,7 +11298,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         core::mem::take(&mut *self.external_event_buf)
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the pin-manifest registry for test scaffolding.
     pub fn pin_manifests_mut_for_testing(
         &mut self,
@@ -11306,7 +11306,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.pin_manifests
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the alias-manifest registry during tests.
     pub fn manifest_aliases_mut_for_testing(
         &mut self,
@@ -11314,7 +11314,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.manifest_aliases
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to replication orders for deterministic test setup.
     pub fn replication_orders_mut_for_testing(
         &mut self,
@@ -11322,7 +11322,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.replication_orders
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to resolver directory records for deterministic tests.
     pub fn soradns_directory_records_mut_for_testing(
         &mut self,
@@ -11330,7 +11330,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_directory_records
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to pending directory drafts for tests.
     pub fn soradns_directory_pending_mut_for_testing(
         &mut self,
@@ -11338,7 +11338,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_directory_pending
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the latest directory pointer for tests.
     pub fn soradns_directory_latest_mut_for_testing(
         &mut self,
@@ -11346,7 +11346,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_directory_latest
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the directory history index for tests.
     pub fn soradns_directory_history_mut_for_testing(
         &mut self,
@@ -11354,7 +11354,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_directory_history
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the directory predecessor pointers for tests.
     pub fn soradns_directory_prev_of_mut_for_testing(
         &mut self,
@@ -11362,7 +11362,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_directory_prev_of
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to resolver revocation records for tests.
     pub fn soradns_directory_revocations_mut_for_testing(
         &mut self,
@@ -11370,7 +11370,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_directory_revocations
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the release signer allowlist for tests.
     pub fn soradns_release_signers_mut_for_testing(
         &mut self,
@@ -11378,7 +11378,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_release_signers
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the directory rotation policy snapshot for tests.
     pub fn soradns_rotation_policy_mut_for_testing(
         &mut self,
@@ -11386,7 +11386,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_rotation_policy
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the last publish timestamp for tests.
     pub fn soradns_last_publish_ms_mut_for_testing(
         &mut self,
@@ -11394,7 +11394,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_last_publish_ms
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the rotation history length counter for tests.
     pub fn soradns_history_len_mut_for_testing(
         &mut self,
@@ -13065,14 +13065,14 @@ impl State {
     }
 
     /// Push a committed block hash when constructing scenarios in tests.
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn push_block_hash_for_testing(&mut self, block_hash: HashOf<BlockHeader>) {
         let mut block = self.block_hashes.block();
         block.push(block_hash);
         block.commit();
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Latest committed block height recorded in the transactions storage (0 when empty).
     pub fn transactions_latest_height_for_testing(&self) -> usize {
         self.transactions.view().latest_height_for_tests()

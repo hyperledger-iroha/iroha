@@ -23844,16 +23844,35 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.consensus_forced_proposal_success_total,
         ),
         json_entry(
-            "consensus_no_roster_refresh_retry_total",
-            snap.consensus_no_roster_refresh_retry_total,
+            "consensus_roster_unavailable_detected_total",
+            snap.consensus_roster_unavailable_detected_total,
         ),
         json_entry(
-            "consensus_no_roster_refresh_attempt_total",
-            snap.consensus_no_roster_refresh_attempt_total,
+            "consensus_roster_unavailable_election_attempt_total",
+            snap.consensus_roster_unavailable_election_attempt_total,
         ),
         json_entry(
-            "consensus_no_roster_refresh_success_total",
-            snap.consensus_no_roster_refresh_success_total,
+            "consensus_roster_unavailable_election_success_total",
+            snap.consensus_roster_unavailable_election_success_total,
+        ),
+        json_entry(
+            "consensus_roster_unavailable_wait_candidates_total",
+            snap.consensus_roster_unavailable_wait_candidates_total,
+        ),
+        json_entry(
+            "consensus_roster_recovery_state",
+            snap.consensus_roster_recovery_state
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "consensus_roster_recovery_dwell_ms",
+            json_object(
+                snap.consensus_roster_recovery_dwell_ms
+                    .iter()
+                    .map(|(state, ms)| json_entry(*state, *ms))
+                    .collect::<Vec<_>>(),
+            ),
         ),
         json_entry(
             "blocksync_range_pull_candidate_exhausted_total",
@@ -25001,9 +25020,15 @@ mod status_tests {
             consensus_missing_qc_rotation_deferred_total: 4,
             consensus_forced_proposal_attempt_total: 5,
             consensus_forced_proposal_success_total: 2,
-            consensus_no_roster_refresh_retry_total: 6,
-            consensus_no_roster_refresh_attempt_total: 3,
-            consensus_no_roster_refresh_success_total: 1,
+            consensus_roster_unavailable_detected_total: 6,
+            consensus_roster_unavailable_election_attempt_total: 3,
+            consensus_roster_unavailable_election_success_total: 1,
+            consensus_roster_unavailable_wait_candidates_total: 2,
+            consensus_roster_recovery_state: Some("wait_candidates"),
+            consensus_roster_recovery_dwell_ms: std::collections::BTreeMap::from([
+                ("steady", 10_u64),
+                ("wait_candidates", 20_u64),
+            ]),
             blocksync_range_pull_candidate_exhausted_total: 7,
             ..Default::default()
         };
@@ -25046,21 +25071,33 @@ mod status_tests {
         );
         assert_eq!(
             payload
-                .get("consensus_no_roster_refresh_retry_total")
+                .get("consensus_roster_unavailable_detected_total")
                 .and_then(Value::as_u64),
             Some(6)
         );
         assert_eq!(
             payload
-                .get("consensus_no_roster_refresh_attempt_total")
+                .get("consensus_roster_unavailable_election_attempt_total")
                 .and_then(Value::as_u64),
             Some(3)
         );
         assert_eq!(
             payload
-                .get("consensus_no_roster_refresh_success_total")
+                .get("consensus_roster_unavailable_election_success_total")
                 .and_then(Value::as_u64),
             Some(1)
+        );
+        assert_eq!(
+            payload
+                .get("consensus_roster_unavailable_wait_candidates_total")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            payload
+                .get("consensus_roster_recovery_state")
+                .and_then(Value::as_str),
+            Some("wait_candidates")
         );
         assert_eq!(
             payload

@@ -110,7 +110,7 @@ fn retransmit_cooldown_multiplier(pressure_score: u8) -> u32 {
 
 pub(super) fn near_quorum_payload_timeout(rebroadcast_cooldown: Duration) -> Duration {
     super::saturating_mul_duration(rebroadcast_cooldown, 2)
-        .clamp(Duration::from_millis(400), Duration::from_millis(2_000))
+        .clamp(Duration::from_millis(200), Duration::from_millis(800))
 }
 
 impl Actor {
@@ -468,10 +468,10 @@ impl Actor {
                 let backlog_extension_active = consensus_queue_backlog || rbc_session_incomplete;
                 let near_quorum_recent_progress_grace =
                     super::saturating_mul_duration(self.rebroadcast_cooldown(), 4)
-                        .max(Duration::from_millis(500));
+                        .max(Duration::from_millis(200));
                 let zero_vote_backlog_grace =
                     super::saturating_mul_duration(self.rebroadcast_cooldown(), 8)
-                        .max(Duration::from_secs(2));
+                        .max(Duration::from_millis(400));
                 let zero_vote_backlog_deadline_base = effective_quorum_timeout
                     .saturating_add(zero_vote_backlog_grace)
                     .max(availability_timeout);
@@ -481,7 +481,7 @@ impl Actor {
                 );
                 let vote_backlog_grace =
                     super::saturating_mul_duration(self.rebroadcast_cooldown(), 8)
-                        .max(Duration::from_secs(2));
+                        .max(Duration::from_millis(400));
                 let vote_backlog_deadline_base =
                     availability_timeout.saturating_add(vote_backlog_grace);
                 let vote_backlog_deadline = self.backlog_extended_view_change_timeout(
@@ -967,6 +967,22 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return;
         }
+        if !self.try_reserve_round_recovery_bundle_window(
+            height,
+            super::RoundRecoveryBundleSource::CommitQuorumReschedule,
+            now,
+        ) {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                pending_age_ms = pending_age.as_millis(),
+                quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                "suppressing repeated commit-quorum reschedule in current deterministic recovery bundle window"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return;
+        }
 
         let precommit_vote_count = self
             .vote_log
@@ -1223,15 +1239,13 @@ impl Actor {
             true,
         );
         let mut block_sync = false;
-        let mut allow_blockcreated_fallback = true;
+        let mut forced_hintless_block_sync = false;
         if !drop_pending && !retransmit_targets.is_empty() {
-            let mut update = block_sync_update_with_roster(
+            let mut update = block_sync_update_with_certified_roster(
                 &pending.block,
                 self.state.as_ref(),
                 self.kura.as_ref(),
                 self.config.consensus_mode,
-                self.common_config.trusted_peers.value(),
-                self.common_config.peer.id(),
                 &self.roster_validation_cache,
             );
             let expected_epoch = self.epoch_for_height(height);
@@ -1254,40 +1268,35 @@ impl Actor {
                     self.broadcast_block_sync_update(update, &retransmit_targets);
                     block_sync = true;
                 } else {
-                    let decision = self.decide_no_roster_fallback_or_fail_closed(
-                        height,
-                        view,
-                        block_hash,
-                        ViewChangeCause::MissingQc,
-                        "reschedule_rebroadcast_no_roster",
-                    );
-                    allow_blockcreated_fallback =
-                        matches!(decision, super::NoRosterFallbackDecision::AllowFallback);
-                    match decision {
-                        super::NoRosterFallbackDecision::AllowFallback => {
-                            debug!(
-                                height,
-                                view,
-                                block = %block_hash,
-                                "skipping block sync update rebroadcast: no verifiable roster"
-                            );
-                        }
-                        super::NoRosterFallbackDecision::BootstrapPending => {
-                            debug!(
-                                height,
-                                view,
-                                block = %block_hash,
-                                "deferring block rebroadcast fallback while no-roster bootstrap is pending"
-                            );
-                        }
-                        super::NoRosterFallbackDecision::FailClosed => {
-                            warn!(
-                                height,
-                                view,
-                                block = %block_hash,
-                                "no-roster fallback budget exhausted; parking block rebroadcast"
-                            );
-                        }
+                    // Keep commit-recovery on BlockSyncUpdate when commit evidence exists even if
+                    // the roster proof bundle is unavailable.
+                    let hintless_forced =
+                        commit_votes > 0 && self.trim_block_sync_update_for_frame_cap(&mut update);
+                    if hintless_forced {
+                        self.broadcast_block_sync_update(update, &retransmit_targets);
+                        block_sync = true;
+                        forced_hintless_block_sync = true;
+                        warn!(
+                            height,
+                            view,
+                            block = %block_hash,
+                            commit_votes,
+                            targets = retransmit_targets.len(),
+                            "roster proof unavailable for block sync update; forcing hintless BlockSyncUpdate retransmit to active targets"
+                        );
+                    } else {
+                        self.note_round_recovery_bundle_source(
+                            height,
+                            super::RoundRecoveryBundleSource::RosterProofFallback,
+                            now,
+                        );
+                        warn!(
+                            height,
+                            view,
+                            block = %block_hash,
+                            targets = retransmit_targets.len(),
+                            "roster proof unavailable for block sync update; falling back to BlockCreated retransmit"
+                        );
                     }
                 }
             } else {
@@ -1305,9 +1314,15 @@ impl Actor {
         // allowing a fresh proposal to be assembled from the requeued transactions.
         let block = if drop_pending {
             false
-        } else if !allow_blockcreated_fallback {
-            false
         } else if retransmit_targets.is_empty() {
+            false
+        } else if forced_hintless_block_sync {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "skipping BlockCreated payload rebroadcast after forced hintless BlockSyncUpdate retransmit"
+            );
             false
         } else {
             let cooldown = self.payload_rebroadcast_cooldown();

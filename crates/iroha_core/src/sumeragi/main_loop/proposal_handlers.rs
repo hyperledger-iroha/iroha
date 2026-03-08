@@ -130,6 +130,45 @@ impl Actor {
             .is_some_and(|known_hash| known_hash != hash)
     }
 
+    fn trigger_active_height_lock_reject_recovery(
+        &mut self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        source: &'static str,
+    ) {
+        let active_height = self.committed_height_snapshot().saturating_add(1);
+        if height != active_height {
+            return;
+        }
+        let now = Instant::now();
+        let highest_qc_fetch_requested = self
+            .highest_qc
+            .or(self.latest_committed_qc())
+            .is_some_and(|highest| {
+                self.request_missing_block_for_highest_qc_force(highest, source)
+            });
+        let view_change_triggered = if self.try_reserve_missing_qc_height_stall_rotation_window(
+            height,
+            ViewChangeCause::MissingQc,
+            now,
+        ) {
+            self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingQc);
+            true
+        } else {
+            false
+        };
+        warn!(
+            height,
+            view,
+            block = %block_hash,
+            source,
+            highest_qc_fetch_requested,
+            view_change_triggered,
+            "triggered deterministic active-height recovery after lock-rejected BlockCreated"
+        );
+    }
+
     #[allow(clippy::unnecessary_wraps)]
     pub(super) fn handle_consensus_params(
         &self,
@@ -1208,6 +1247,47 @@ impl Actor {
                 "accepting BlockCreated for stale view to recover missing payload"
             );
         }
+        if let Some(sink) = self.active_lock_rejected_block_sink(height, block_hash) {
+            let (
+                lock_reject_votes_purged,
+                lock_reject_qc_cache_purged,
+                lock_reject_qc_tally_purged,
+                lock_reject_deferred_roster_purged,
+                lock_reject_known_work_purged,
+                lock_reject_deferred_updates_purged,
+                lock_reject_defer_markers_purged,
+                lock_reject_pending_purged,
+                lock_reject_hints_purged,
+                lock_reject_proposals_purged,
+            ) = self.purge_lock_rejected_block_artifacts(height, view, block_hash);
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                locked_height = sink.locked_height,
+                locked_hash = %sink.locked_hash,
+                lock_reject_sink_rejections = sink.rejections,
+                lock_reject_sink_fetch_suppressions = sink.fetch_suppressions,
+                lock_reject_sink_last_source = sink.last_reject_source,
+                lock_reject_votes_purged,
+                lock_reject_qc_cache_purged,
+                lock_reject_qc_tally_purged,
+                lock_reject_deferred_roster_purged,
+                lock_reject_known_work_purged,
+                lock_reject_deferred_updates_purged,
+                lock_reject_defer_markers_purged,
+                lock_reject_pending_purged,
+                lock_reject_hints_purged,
+                lock_reject_proposals_purged,
+                "dropping BlockCreated for an active lock-rejected branch sink"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::BlockCreated,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::LockedQc,
+            );
+            return Ok(());
+        }
         let expected_height = committed_height.saturating_add(1);
         let is_active_height = height == expected_height;
         if height > expected_height {
@@ -1765,13 +1845,24 @@ impl Actor {
                         );
                         hint_highest = lock;
                     } else {
+                        if let Some(lock) = self.locked_qc {
+                            self.note_lock_rejected_block(
+                                height,
+                                block_hash,
+                                lock.height,
+                                lock.subject_block_hash,
+                                "block_created_hint_locked_qc_gate",
+                            );
+                            let _ =
+                                self.purge_lock_rejected_block_artifacts(height, view, block_hash);
+                        }
                         super::status::inc_block_created_dropped_by_lock();
                         #[cfg(feature = "telemetry")]
                         self.telemetry.inc_block_created_dropped_by_lock();
                         warn!(
-                            ?reason,
-                            locked_qc_height = self.locked_qc.map(|qc| qc.height),
-                            locked_qc_view = self.locked_qc.map(|qc| qc.view),
+                                ?reason,
+                                locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                                locked_qc_view = self.locked_qc.map(|qc| qc.view),
                             locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
                             hint_highest_qc_height = hint.highest_qc.height,
                             hint_highest_qc_view = hint.highest_qc.view,
@@ -1820,7 +1911,36 @@ impl Actor {
                     self.locked_qc.map_or((0, 0, 0), |lock| {
                         self.purge_locked_conflicting_branch_state(height, lock.subject_block_hash)
                     });
+                let mut lock_reject_votes_purged = 0usize;
+                let mut lock_reject_qc_cache_purged = 0usize;
+                let mut lock_reject_qc_tally_purged = 0usize;
+                let mut lock_reject_deferred_roster_purged = 0usize;
+                let mut lock_reject_known_work_purged = 0usize;
+                let mut lock_reject_deferred_updates_purged = 0usize;
+                let mut lock_reject_defer_markers_purged = 0usize;
+                let mut lock_reject_pending_purged = 0usize;
+                let mut lock_reject_hints_purged = 0usize;
+                let mut lock_reject_proposals_purged = 0usize;
                 if let Some(lock) = self.locked_qc {
+                    self.note_lock_rejected_block(
+                        height,
+                        block_hash,
+                        lock.height,
+                        lock.subject_block_hash,
+                        "block_created_hint_lock_gate",
+                    );
+                    (
+                        lock_reject_votes_purged,
+                        lock_reject_qc_cache_purged,
+                        lock_reject_qc_tally_purged,
+                        lock_reject_deferred_roster_purged,
+                        lock_reject_known_work_purged,
+                        lock_reject_deferred_updates_purged,
+                        lock_reject_defer_markers_purged,
+                        lock_reject_pending_purged,
+                        lock_reject_hints_purged,
+                        lock_reject_proposals_purged,
+                    ) = self.purge_lock_rejected_block_artifacts(height, view, block_hash);
                     if self.should_clear_missing_request_on_locked_reject(
                         block_hash,
                         height,
@@ -1886,6 +2006,16 @@ impl Actor {
                     pending_conflicts_purged,
                     missing_conflicts_purged,
                     deferred_conflicts_purged,
+                    lock_reject_votes_purged,
+                    lock_reject_qc_cache_purged,
+                    lock_reject_qc_tally_purged,
+                    lock_reject_deferred_roster_purged,
+                    lock_reject_known_work_purged,
+                    lock_reject_deferred_updates_purged,
+                    lock_reject_defer_markers_purged,
+                    lock_reject_pending_purged,
+                    lock_reject_hints_purged,
+                    lock_reject_proposals_purged,
                     "BlockCreated rejected: highest QC does not extend locked chain"
                 );
                 self.record_consensus_message_handling(
@@ -2005,6 +2135,27 @@ impl Actor {
                                 missing_conflicts_purged,
                                 deferred_conflicts_purged,
                             ) = self.purge_locked_conflicting_branch_state(height, locked_hash);
+                            let (
+                                lock_reject_votes_purged,
+                                lock_reject_qc_cache_purged,
+                                lock_reject_qc_tally_purged,
+                                lock_reject_deferred_roster_purged,
+                                lock_reject_known_work_purged,
+                                lock_reject_deferred_updates_purged,
+                                lock_reject_defer_markers_purged,
+                                lock_reject_pending_purged,
+                                lock_reject_hints_purged,
+                                lock_reject_proposals_purged,
+                            ) = {
+                                self.note_lock_rejected_block(
+                                    height,
+                                    block_hash,
+                                    lock.height,
+                                    locked_hash,
+                                    "block_created_no_hint_lock_gate",
+                                );
+                                self.purge_lock_rejected_block_artifacts(height, view, block_hash)
+                            };
                             // Invariant A: a lock-conflicting branch must not keep stale
                             // missing-parent requests alive after deterministic rejection.
                             if self.should_clear_missing_request_on_locked_reject(
@@ -2027,19 +2178,30 @@ impl Actor {
                                     "preserving missing request for lock-rejected block: hash is not yet committed-conflicting"
                                 );
                             }
-                            if let Some(parent_hash) = parent_hash {
+                            let parent_hash_for_reclear = parent_hash;
+                            let mut cleared_existing_parent_request = false;
+                            let mut parent_request_tracked = false;
+                            if let Some(parent_hash) = parent_hash_for_reclear.as_ref() {
+                                let parent_had_request = self
+                                    .pending
+                                    .missing_block_requests
+                                    .contains_key(parent_hash);
+                                parent_request_tracked = parent_had_request;
                                 let parent_height = height.saturating_sub(1);
                                 if self.should_clear_missing_request_on_locked_reject(
-                                    parent_hash,
+                                    *parent_hash,
                                     parent_height,
                                     locked_hash,
                                     lock.height,
                                     None,
                                 ) {
                                     self.clear_missing_block_request(
-                                        &parent_hash,
+                                        parent_hash,
                                         MissingBlockClearReason::Obsolete,
                                     );
+                                    if parent_had_request {
+                                        cleared_existing_parent_request = true;
+                                    }
                                 } else {
                                     debug!(
                                         height,
@@ -2054,6 +2216,24 @@ impl Actor {
                             super::status::inc_block_created_dropped_by_lock();
                             #[cfg(feature = "telemetry")]
                             self.telemetry.inc_block_created_dropped_by_lock();
+                            if !cleared_existing_parent_request && !parent_request_tracked {
+                                self.trigger_active_height_lock_reject_recovery(
+                                    height,
+                                    view,
+                                    block_hash,
+                                    "block_created_no_hint_lock_gate",
+                                );
+                            }
+                            // Active-height recovery can schedule immediate fetches; keep lock-rejected
+                            // parent requests removed when this branch already proved they are obsolete.
+                            if cleared_existing_parent_request
+                                && let Some(parent_hash) = parent_hash_for_reclear.as_ref()
+                            {
+                                self.clear_missing_block_request(
+                                    parent_hash,
+                                    MissingBlockClearReason::Obsolete,
+                                );
+                            }
                             warn!(
                                 locked_qc_height = lock.height,
                                 locked_qc_view = lock.view,
@@ -2064,6 +2244,16 @@ impl Actor {
                                 pending_conflicts_purged,
                                 missing_conflicts_purged,
                                 deferred_conflicts_purged,
+                                lock_reject_votes_purged,
+                                lock_reject_qc_cache_purged,
+                                lock_reject_qc_tally_purged,
+                                lock_reject_deferred_roster_purged,
+                                lock_reject_known_work_purged,
+                                lock_reject_deferred_updates_purged,
+                                lock_reject_defer_markers_purged,
+                                lock_reject_pending_purged,
+                                lock_reject_hints_purged,
+                                lock_reject_proposals_purged,
                                 "BlockCreated rejected without hint: block does not extend locked chain"
                             );
                             self.record_consensus_message_handling(

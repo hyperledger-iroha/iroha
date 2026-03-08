@@ -3250,6 +3250,7 @@ mod tests {
             height: 0,
             view: 0,
             priority: None,
+            requester_roster_proof_known: None,
         };
         handle.incoming_block_message(BlockMessage::FetchPendingBlock(request.clone()));
 
@@ -3850,6 +3851,7 @@ mod tests {
             height: 0,
             view: 0,
             priority: None,
+            requester_roster_proof_known: None,
         };
         block_tx_fill
             .send(inbound(BlockMessage::FetchPendingBlock(request)))
@@ -4069,6 +4071,7 @@ mod tests {
             height: 0,
             view: 0,
             priority: None,
+            requester_roster_proof_known: None,
         };
         block_tx_fill
             .send(inbound(BlockMessage::FetchPendingBlock(request)))
@@ -10228,7 +10231,7 @@ fn vote_rx_drain_budget(
     cap_vote_drain_budget(budget, Duration::from_millis(1), cap)
 }
 
-const TIME_BUDGET_FLOOR_MS: u64 = 200;
+const TIME_BUDGET_FLOOR_MS: u64 = 50;
 const TIME_BUDGET_CAP_MS: u64 = 2_000;
 const IDLE_TICK_GAP_FLOOR_MS: u64 = 50;
 const BUSY_TICK_GAP_FLOOR_MS: u64 = 10;
