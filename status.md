@@ -10,6 +10,14 @@ Last updated: 2026-03-08
   - `../pk-deploy/scripts/deploy-sbp-aed-pkr-interceptor.sh` no longer performs prior-layout trigger cleanup loops.
 - Wallet docs describe only current QR modes in neutral terms.
 
+## 2026-03-08 Telemetry Test Helper Duplication
+- Removed a duplicate async helper definition in `crates/iroha_telemetry/src/ws.rs` that caused
+  `error[E0428]` for `broadcast_lag_does_not_stop_client_with_suite`.
+- Kept a single canonical helper implementation; the `broadcast_lag_does_not_stop_client` test path is unchanged.
+
+### Validation Matrix (Telemetry Duplication)
+- `cargo test -p iroha_telemetry broadcast_lag_does_not_stop_client -- --nocapture`
+
 ## Changes Completed In This Pass
 - Replaced deploy scanner interface with a neutral strict entrypoint.
 - Updated deploy callsites/docs to the new scanner path and strict wording:
